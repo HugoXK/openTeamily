@@ -631,6 +631,131 @@ test('a slow send moves the draft into the conversation and submits only once', 
   } finally { restore(); }
 });
 
+function nativeReplyChat(transport) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const restore = installChatGlobals();
+  globalThis.location.hash = '#workspace=ws-1&agent=agent-1&conversation=private-1';
+  const {fetcher: fallback} = sessionFetcher();
+  const agent = {id: 'agent-1', name: '助手'};
+  const conversation = {id: 'private-1', agent_id: agent.id, title: '私聊', updated: 40};
+  const path = '/v1/workspaces/ws-1/agents/agent-1/conversations/private-1';
+  const fetcher = (url, opts) => url.endsWith('/agents?limit=100&include=conversations')
+    ? json(200, {items: [agent], conversations: [conversation]})
+    : url.startsWith(path) ? transport(url.slice(path.length), opts, {agent, conversation}) : fallback(url);
+  return {doc, el, restore, fetcher};
+}
+
+test('a native reply streams as plain text without rebuilding history or changing an unsent draft', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const previous = {id: 'earlier', role: 'user', body: '更早的消息'};
+  const snapshots = [null, '正在回答 <img src=x>', '正在回答 <img src=x>\n后续内容'];
+  const progressKeys = [];
+  let historyReads = 0;
+  let finishPost;
+  let requestKey;
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {...scope, items: [previous]});
+    }
+    if (path === '/messages' && opts.method === 'POST') {
+      requestKey = opts.headers['Idempotency-Key'];
+      return new Promise(resolve => { finishPost = resolve; });
+    }
+    const key = new URL(path, 'https://openteamily.test').searchParams.get('key');
+    progressKeys.push(key);
+    const next = snapshots.shift();
+    return next == null ? json(404, {}) : json(200, {state: 'running', text: next});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const original = list.children[0];
+    const field = el('chat-body');
+    field.value = '回复这个问题';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    const pending = list.children.at(-1);
+    const preview = pending.children.find(node => node.className.includes('reply-preview'));
+    assert.equal(pending.dataset.replyProgress, requestKey);
+    assert.equal(preview.hidden, true);
+    assert.equal(field.value, '');
+    field.value = '下一条草稿';
+
+    t.mock.timers.tick(400); await settle();
+    assert.equal(preview.hidden, true, '404 during reservation leaves the pending reply intact');
+    t.mock.timers.tick(400); await settle();
+    assert.equal(preview.textContent, '正在回答 <img src=x>');
+    assert.equal(preview.children.length, 0);
+    assert.equal(preview.getAttribute('aria-live'), 'off');
+    assert.equal(list.children[0], original);
+    assert.equal(list.children.at(-1), pending);
+
+    const scroller = el('message-scroller');
+    scroller.clientHeight = 200;
+    scroller.scrollHeight = 1000;
+    scroller.scrollTop = 130;
+    doc.visibilityState = 'hidden';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(1200); await settle();
+    assert.equal(progressKeys.length, 2);
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(400); await settle();
+    assert.match(preview.textContent, /后续内容/);
+    assert.equal(scroller.scrollTop, 130);
+    assert.deepEqual(progressKeys, [requestKey, requestKey, requestKey]);
+
+    finishPost(json(201, {
+      message: {id: 'new-user', role: 'user', body: '回复这个问题', client_key: requestKey},
+      reply: {id: 'new-reply', role: 'assistant', status: 'succeeded', body: '**最终回复**', client_key: requestKey},
+    }));
+    await settle();
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(historyReads, 1, 'live progress and final POST do not re-fetch previous messages');
+    assert.equal(progressKeys.length, 3);
+    assert.deepEqual(list.children.map(node => node.dataset.messageId), ['earlier', 'new-user', 'new-reply']);
+    assert.ok(descendants(list.children.at(-1)).some(node => node.tagName === 'STRONG' && node.textContent === '最终回复'));
+    assert.equal(field.value, '下一条草稿');
+    assert.equal(scroller.scrollTop, 130);
+  } finally { restore(); }
+});
+
+test('an already running native reply resumes in its existing bubble and loads the final history once', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const key = 'msg-reloaded-reply';
+  const user = {id: 'saved-user', role: 'user', body: '等待中的问题', client_key: key};
+  const reply = {id: 'saved-reply', role: 'assistant', status: 'running', client_key: key};
+  let historyReads = 0;
+  let polls = 0;
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, _opts, scope) => {
+    if (!path) {
+      historyReads += 1;
+      const current = polls < 2 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
+      return json(200, {...scope, items: [user, current]});
+    }
+    assert.equal(path, '/reply-progress?key=' + key);
+    polls += 1;
+    return json(200, polls === 1 ? {state: 'running', text: '正在继续回复'} : {state: 'succeeded'});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const pending = list.children.at(-1);
+    assert.equal(pending.dataset.messageId, reply.id);
+    t.mock.timers.tick(400); await settle();
+    assert.equal(list.children.at(-1), pending);
+    assert.equal(pending.children.at(-1).textContent, '正在继续回复');
+    t.mock.timers.tick(400); await settle();
+    assert.deepEqual(list.children.map(node => node.dataset.messageId), [user.id, reply.id]);
+    assert.equal(list.children.at(-1).dataset.replyProgress, undefined);
+    assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === '已保存的答复'));
+    t.mock.timers.tick(3000); await settle();
+    assert.equal(historyReads, 2);
+    assert.equal(polls, 2);
+  } finally { restore(); }
+});
+
 test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: fallback, requests} = sessionFetcher();

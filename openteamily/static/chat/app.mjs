@@ -812,6 +812,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
   let attachmentSender;
   const pendingSends = new Map();
+  const agentReplyViews = new Map();
+  let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
   const publicDraft = mountPublicDraft(document);
@@ -938,7 +940,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const queue = pendingSends.get(scope);
     document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
     syncMemoryRecall(scope);
+    const replying = queue?.replying;
+    if (replying && !replying.replyView) {
+      replying.replyView = makeAgentMessage({role: 'assistant', status: 'queued', client_key: replying.key}).replyView;
+      if (replying.replyView) replying.replyView.bubble.dataset.sendPending = 'reply';
+    }
+    const replyBubble = replying?.replyView?.bubble;
     const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
+    if (replyBubble) bubbles.add(replyBubble);
     for (const child of Array.from(list.children)) {
       if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
       bubbles.delete(child);
@@ -946,12 +955,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const job of queue?.jobs || []) {
       paintSendJob(job);
       if (bubbles.has(job.bubble)) list.append(job.bubble);
+      if (job === replying && bubbles.has(replyBubble)) {
+        const children = Array.from(list.children);
+        const next = children[children.indexOf(job.bubble) + 1];
+        if (next) list.insertBefore(replyBubble, next);
+        else list.append(replyBubble);
+      }
+    }
+    if (currentSource === 'agent' && currentAgent) {
+      const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
+      setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     }
     document.getElementById('chat-empty').hidden = list.children.length > 0;
   }
 
   function paintSendJob(job) {
     if (job.status.textContent !== job.state) job.status.textContent = job.state;
+    job.status.hidden = Boolean(job.replyView);
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
@@ -1006,11 +1026,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function removeSendJob(queue, job) {
     queue.jobs = queue.jobs.filter(item => item !== job);
     job.bubble.remove();
+    job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
     if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
   }
 
   function clearPendingSends() {
+    stopReplyProgress();
+    stopPolling();
     for (const queue of pendingSends.values()) {
       for (const job of queue.jobs) removeSendJob(queue,job);
     }
@@ -1397,52 +1420,160 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  function renderAgentMessages(items) {
-    const list = document.getElementById('message-list');
-    list.replaceChildren();
-    lastAgentItems = items || [];
-    syncCaptureButton();
-    document.getElementById('chat-empty').hidden = (items || []).length > 0;
-    let pending = false;
-    const pendingKeys = pendingMessageKeys();
-    for (const item of items || []) {
-      if (pendingKeys.has(item.client_key)) continue;
-      const li = document.createElement('li');
-      li.dataset.messageId = item.id;
-      li.className = item.role === 'user' ? 'user' : 'assistant';
-      const role = document.createElement('p');
-      role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
-      const body = document.createElement('div');
-      const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
-      const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
+  function waitingAgentReply(item) {
+    return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
+  }
+
+  function agentAtBottom(scroller) {
+    return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
+  }
+
+  function makeAgentMessage(item) {
+    const bubble = document.createElement('li');
+    if (item.id) bubble.dataset.messageId = item.id;
+    bubble.className = item.role === 'user' ? 'user' : 'assistant';
+    const role = document.createElement('p');
+    role.className = 'role';
+    role.textContent = item.role === 'user' ? '你' : (currentAgent?.name || '智能体');
+    const body = document.createElement('div');
+    const waiting = waitingAgentReply(item);
+    const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+    const partial = waiting && servedByDsbot && item.client_key;
+    body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
+    if (partial) {
+      bubble.dataset.replyProgress = item.client_key;
+      body.setAttribute('aria-live', 'off');
+      body.hidden = true;
+    } else {
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
       if (item.attachments?.length && !item.body) body.hidden = true;
-      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
-      if (waiting) {
-        const heading = document.createElement('p');
-        heading.className = 'reply-state';
-        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
-        li.append(role, heading, body);
-      } else {
-        li.append(role, body);
-      }
-      for (const attachment of item.attachments || []) li.append(renderChatFile(document,attachment));
-      const sources = memorySources(item);
-      if (sources) li.append(sources);
-      if (item.role === 'assistant' && saveableAgentMessage(item)) {
-        li.append(saveMessageButton(item, currentAgent.id));
-      }
-      list.append(li);
-      if (waiting) pending = true;
     }
-    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
-    renderPendingSend();
-    attachmentSender?.render();
+    if (waiting || failed) bubble.dataset.state = waiting ? item.status : 'failed';
+    bubble.append(role);
+    let replyView;
+    if (waiting) {
+      const heading = document.createElement('p');
+      heading.className = 'reply-state';
+      heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+      bubble.append(heading);
+      if (partial) replyView = {bubble, heading, body};
+    }
+    bubble.append(body);
+    for (const attachment of item.attachments || []) bubble.append(renderChatFile(document, attachment));
+    const sources = memorySources(item);
+    if (sources) bubble.append(sources);
+    if (item.role === 'assistant' && saveableAgentMessage(item)) {
+      bubble.append(saveMessageButton(item, currentAgent.id));
+    }
+    return {bubble, replyView};
+  }
+
+  function renderAgentMessages(items, {followLatest = true, anchor} = {}) {
     const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
-    return pending;
+    const top = anchor?.top ?? scroller.scrollTop;
+    const follow = anchor?.follow ?? (followLatest || agentAtBottom(scroller));
+    const list = document.getElementById('message-list');
+    list.replaceChildren();
+    agentReplyViews.clear();
+    lastAgentItems = items || [];
+    syncCaptureButton();
+    const pendingKeys = pendingMessageKeys();
+    for (const item of lastAgentItems) {
+      if (pendingKeys.has(item.client_key)) continue;
+      const {bubble, replyView} = makeAgentMessage(item);
+      if (replyView) agentReplyViews.set(item.client_key, replyView);
+      list.append(bubble);
+    }
+    renderPendingSend();
+    const tracking = syncReplyProgress();
+    attachmentSender?.render();
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+    return lastAgentItems.some(waitingAgentReply) && !tracking;
+  }
+
+  function stopReplyProgress() {
+    const watch = replyWatch;
+    if (!watch) return;
+    replyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+  }
+
+  function isCurrentReply(watch) {
+    return replyWatch === watch && sendScope() === watch.scope && canWatchReply();
+  }
+
+  function canWatchReply() {
+    return document.visibilityState !== 'hidden'
+      && !(narrowScreen() && document.body.classList.contains('sessions-open'));
+  }
+
+  function paintReplyProgress(view, snapshot) {
+    const state = snapshot.state === 'running' ? 'running' : 'queued';
+    if (view.bubble.dataset.state !== state) {
+      view.bubble.dataset.state = state;
+      view.heading.textContent = state === 'running' ? '正在生成回复' : '正在准备回复';
+    }
+    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
+    const scroller = document.getElementById('message-scroller');
+    const follow = agentAtBottom(scroller);
+    view.body.textContent = snapshot.text;
+    view.body.hidden = !snapshot.text;
+    if (follow) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function scheduleReplyProgress(watch, delay = 400) {
+    if (!isCurrentReply(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
+  }
+
+  async function pollReplyProgress(watch) {
+    if (!isCurrentReply(watch)) return;
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!isCurrentReply(watch)) return;
+    const snapshot = result?.status === 200 ? result.body : null;
+    if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
+      watch.failures = 0;
+      watch.snapshot = snapshot;
+      paintReplyProgress(watch.view, snapshot);
+      scheduleReplyProgress(watch);
+      return;
+    }
+    const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
+    if (terminal && watch.posting) return;
+    watch.failures += 1;
+    if (terminal || (!watch.posting && watch.failures >= 4)) {
+      await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+      scheduleReplyProgress(watch, 1500);
+      return;
+    }
+    scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
+  }
+
+  function syncReplyProgress() {
+    const scope = sendScope();
+    const job = pendingSends.get(scope)?.replying;
+    const [key, view] = job ? [job.key, job.replyView] : (agentReplyViews.entries().next().value || []);
+    if (!servedByDsbot || currentSource !== 'agent' || !currentConversation || !canWatchReply() || !view) {
+      stopReplyProgress();
+      return false;
+    }
+    if (replyWatch?.scope === scope && replyWatch.key === key) {
+      replyWatch.view = view;
+      replyWatch.posting = Boolean(job);
+      if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
+      return true;
+    }
+    stopReplyProgress();
+    const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
+    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0};
+    scheduleReplyProgress(replyWatch);
+    return true;
   }
 
   let selecting = false;
@@ -2761,6 +2892,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openEmptyAgentChat(agentId) {
     const agent = agents.find(item => item.id === agentId);
     if (!agent) return;
+    stopReplyProgress();
     socialOpen += 1;
     currentConversation = null;
     currentAgent = agent;
@@ -2789,13 +2921,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncPlusState();
   }
 
-  async function openAgentConversation(agentId, conversationId) {
+  async function openAgentConversation(agentId, conversationId, {refresh = false} = {}) {
+    if (!refresh) {
+      stopReplyProgress();
+      stopPolling();
+    }
     const open = ++socialOpen;
     const wid = workspaceId();
-    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`);
+    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`)
+      .catch(() => ({status: 0, body: {}}));
     if (open !== socialOpen || workspaceId() !== wid) return false;
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
+      if (!refresh) {
+        show('error', messageFor(result.body.error, '无法打开对话。'));
+        syncReplyProgress();
+      }
       return false;
     }
     const agent = agents.find(item => item.id === agentId) || result.body.agent;
@@ -2828,7 +2968,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     publicDraft.enter(sendScope());
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items);
+    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
     const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}/read`,
@@ -2846,6 +2986,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, refresh = false} = {}) {
+    stopReplyProgress();
     const open = ++socialOpen;
     const wid = workspaceId();
     if (currentConversation?.id !== conversationId) {
@@ -2951,10 +3092,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function schedulePoll(delay = 2000) {
     stopPolling();
+    if (currentSource === 'agent' && !canWatchReply()) return;
     pollTimer = globalThis.setTimeout(() => {
       pollTimer = 0;
-      if (currentConversation && currentAgent && currentSource === 'agent') {
-        openAgentConversation(currentAgent.id, currentConversation.id);
+      if (currentConversation && currentAgent && currentSource === 'agent' && canWatchReply()) {
+        openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
       } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
         if (document.visibilityState !== 'hidden' && viewingSocialMessages() && (!servedByDsbot || !readingSocialContext())) {
           openSocialConversation(currentConversation.id, {refresh: true});
@@ -2966,6 +3108,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.addEventListener('visibilitychange', () => {
+    if (currentSource === 'agent') {
+      if (!canWatchReply()) stopPolling();
+      if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
+      return;
+    }
     if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
       || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
     if (servedByDsbot) scheduleSocialPoll(currentConversation);
@@ -3813,6 +3960,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
+    stopReplyProgress();
     socialOpen += 1;
     setSocialHistory(null);
     if (liveBanner) liveBanner.hidden = true;
@@ -4299,6 +4447,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('chat-back').addEventListener('click', () => {
+    stopReplyProgress();
+    if (currentSource === 'agent') stopPolling();
     setSessionsOpen(true);
     document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
   });
@@ -4570,6 +4720,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           job.state = state;
           if (isCurrent()) paintSendJob(job);
         };
+        const beginReply = () => {
+          if (!servedByDsbot || queue.social || queue.replying === job) return;
+          queue.replying = job;
+          if (isCurrent()) {
+            const scroller = document.getElementById('message-scroller');
+            const follow = agentAtBottom(scroller);
+            stopPolling();
+            renderPendingSend();
+            syncReplyProgress();
+            if (follow) scroller.scrollTop = scroller.scrollHeight;
+          }
+        };
         try {
           if (!queue.conversationId) {
             feedback('正在创建对话…');
@@ -4600,12 +4762,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const path = `${queue.base}/${queue.conversationId}/messages`;
           const headers = {'Idempotency-Key':job.key};
           feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
-          const result = job.files.length
-            ? await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-              {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
-              })
-            : await request('POST', path, job.message, headers);
+          let result;
+          let anchor;
+          try {
+            if (job.files.length) {
+              result = await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                  feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
+                  if (percent >= 100) beginReply();
+                });
+            } else {
+              const response = request('POST', path, job.message, headers);
+              beginReply();
+              result = await response;
+            }
+          } finally {
+            if (queue.replying === job) {
+              if (isCurrent()) {
+                const scroller = document.getElementById('message-scroller');
+                anchor = {top: scroller.scrollTop, follow: agentAtBottom(scroller)};
+                if (replyWatch?.key === job.key) stopReplyProgress();
+              }
+              queue.replying = null;
+              job.replyView?.bubble.remove();
+              job.replyView = null;
+            }
+          }
           if (![200, 201].includes(result.status) || !result.body.message?.id) {
             const code = result.body.error?.code;
             if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
@@ -4633,8 +4815,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             } else {
               const reply = result.body.reply;
               if (reply?.id) {
-                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply))) schedulePoll();
-              } else void openAgentConversation(queue.agentId, queue.conversationId);
+                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply), {followLatest: false, anchor})) schedulePoll();
+              } else void openAgentConversation(queue.agentId, queue.conversationId, {refresh: true});
               const notice = sendNotice(reply);
               show(notice.kind, notice.text, notice);
             }
@@ -4643,6 +4825,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         } catch (error) {
           job.failed = true;
           feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);
+          if (isCurrent() && !queue.social) syncReplyProgress();
         }
       }
     } finally {

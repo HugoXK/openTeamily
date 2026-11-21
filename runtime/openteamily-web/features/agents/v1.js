@@ -44,6 +44,15 @@ const publicMessage = (row, workspaceId, agentId) => {
 export function agentsV1({ endpoints, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-progress$`),
+      handle: wrap(async (req, workspaceId, id, conversationId) => {
+        if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
+        const [key, extra] = req.query.getAll('key')
+        if (!key || extra !== undefined || [...req.query.keys()].length !== 1) {
+          throw new FeatureError(400, 'invalid', 'Supply one message send key')
+        }
+        return {body:await call('replyProgress', {workspace_id:workspaceId,id,conversation_id:conversationId,key})}
+      }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/attachments$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
