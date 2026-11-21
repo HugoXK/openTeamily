@@ -15,7 +15,8 @@ service:
   and tmpfs `/tmp` need to be writable.
 - Listens on **8080**, which is the port `openteamily.manager.engine.manifest`
   publishes to `127.0.0.1`.
-- Ships a Docker HEALTHCHECK.
+- Uses Docker Engine 25 or newer to probe the web listener every second during
+  startup and every ten seconds once healthy.
 - Loads `@openteamily/flybot-runtime`, which calls upstream `createRuntime()`
   and then `applyOnRuntime()` from `runtime/flybot-social-host/` so
   `@flybot/social` injects a `flybot` service. The vendor tree is not edited.
@@ -159,25 +160,17 @@ See `openteamily/manager/engine.py` `manifest()`: service `flybot`, user
 of the model API secret at `/run/secrets/openteamily-model-api.json`,
 published `127.0.0.1:<port>->8080/tcp`, optional HEALTHCHECK.
 
-## Chat runs on DS-Bot (ds-bot-bridge.mjs)
+## Chat runs on DS-Bot
 
-Management chat tasks are no longer answered by a direct `/chat/completions`
-call. The DSH plugin starts `ds-bot-bridge.mjs` in-process, which:
+The runtime plugin sends OpenTeamily messages to the owner's native DS-Bot sessions.
+Its loopback-only OpenAI-compatible proxy listens at
+`127.0.0.1:${OPENTEAMILY_BRIDGE_PORT:-18731}` and serves DS-Bot's
+`openteamily` provider. DS-Bot uses a per-boot token to call the proxy.
+The proxy uses the owner's configured model or the platform default.
+Provider keys stay out of the DSH environment.
 
-- polls `/v1/agent` (same bounded backoff/stop rules as `agent-loop.mjs`) and
-  hands each `infer` task to this runtime's DS-Bot Main Bot via `rt.sendUser`;
-  the Bot's reply from that DS-Bot turn is posted as the task result with
-  `engine: "ds-bot"` and the bot/session/request ids;
-- serves a loopback-only (`127.0.0.1:${OPENTEAMILY_BRIDGE_PORT:-18731}`)
-  OpenAI-compatible proxy registered as DS-Bot provider `openteamily`
-  (model `openteamily-model`). DS-Bot holds only a per-boot placeholder token;
-  the proxy injects the task-scoped `model_api` (exact-HTTP grant: no
-  redirects, IPv4, granted path only; otherwise HTTPS). `launch.mjs` no longer
-  exports provider keys into DSH's environment;
-- installs digest-verified skills as native DS-Bot skill capabilities
-  (`ot-skill-<hash>`) attached to the Bot, then sends the skills ack;
-- exposes connected app tools (Composio) as the `ot-tools` streamable-HTTP MCP
-  capability that proxies `/v1/agent/tasks/{id}/tools`; credentials stay on
-  the server and every call still needs the owner's approval there.
+The OpenTeamily plugin manages attached skills and connected app tools using
+DS-Bot capabilities. On first provision, it reads the personal agent bundle
+from the mounted provisioning file and imports it into the owner's instance.
 
-Set `OPENTEAMILY_DS_BOT_BRIDGE=0` to disable the bridge (no management chat).
+Set `OPENTEAMILY_DS_BOT_BRIDGE=0` to disable the model proxy and native chat.

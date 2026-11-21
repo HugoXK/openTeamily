@@ -1,4 +1,5 @@
-import { NIGHT_WINDOW, resolveTheme } from '../shell/app.mjs';
+import { NIGHT_WINDOW, resolveTheme, syncAppearanceButton } from '../shell/app.mjs';
+import {applySystemLocale, supportsSystemLocale, systemLocale, uiText} from '../shell/system-locale.mjs';
 
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
@@ -16,7 +17,7 @@ export function readForm(form) {
     appearance_schedule: data.get('appearance_schedule'),
     appearance_start: data.get('appearance_start'),
     appearance_end: data.get('appearance_end'),
-    language: data.get('language'),
+    language: form.elements?.language?.value ?? data.get('language'),
     chat_language: data.get('chat_language'),
     auto_translate: data.has('auto_translate'),
     send_shortcut: data.get('send_shortcut'),
@@ -38,7 +39,7 @@ export function diff(current, next) {
 }
 
 export function applyTheme(document, values) {
-  document.documentElement.lang = values.language || 'zh-CN';
+  if (document.documentElement.lang !== systemLocale(values.language)) applySystemLocale(document, values.language);
   document.body.dataset.theme = values.appearance === 'system' ? '' : values.appearance;
   if (values.appearance === 'auto') {
     document.body.dataset.schedule = values.appearance_schedule || 'sunset_sunrise';
@@ -99,6 +100,7 @@ const PATH_VIEWS = {
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
   '/settings/skill-configuration': 'skill-configuration',
+  '/settings/model-api': 'model-api',
 };
 
 const HASH_VIEWS = {
@@ -111,6 +113,10 @@ const HASH_VIEWS = {
   'send-shortcut': 'shortcuts',
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
+  'image-api': 'model-api',
+  'video-api': 'model-api',
+  'music-api': 'model-api',
+  'model3d-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -371,15 +377,14 @@ export function newlineBinding(sendShortcut) {
 
 // The stored value is a code; the sentence a user reads has to say what the
 // choice actually does when a message is sent, not just echo the label.
-export function chatLanguageEffect(value, label = '') {
-  if (!value || value === 'auto') {
-    return '跟随界面语言：发消息时不指定语言，智能体按你消息的语种回复。';
-  }
-  return '发消息时会带上「' + (label || value) + '」：智能体按这个语言回复。';
+export function chatLanguageEffect(value, label = '', locale) {
+  return !value || value === 'auto'
+    ? uiText(locale, 'settings.language.auto-hint')
+    : uiText(locale, 'settings.language.reply-hint', {language:label || value});
 }
 
 export function syncChatLanguageNote(document, value, label = '') {
-  const text = chatLanguageEffect(value, label);
+  const text = chatLanguageEffect(value, label, document);
   const note = document.getElementById('chat-language-effect');
   if (note) note.textContent = text;
   return text;
@@ -429,6 +434,80 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function mountMediaApi(document, request, type, noun) {
+  const id = type + '-api';
+  const form = document.getElementById(id + '-form');
+  if (!form) return null;
+  const fields = document.getElementById(id);
+  const status = document.getElementById(id + '-status');
+  const remove = document.getElementById('clear-' + id);
+  const keyInput = form.elements.api_key;
+  const endpoint = '/v1/model-api/' + type;
+  const responseKey = type + '_api';
+  let config = null;
+
+  function fill(view, message) {
+    config.revision = view.revision;
+    remove.hidden = !view.has_api_key;
+    status.textContent = message || (view.has_api_key ? noun + '密钥已保存。' : '尚未配置' + noun + '密钥。');
+    fields.disabled = false;
+  }
+
+  async function load(message) {
+    const active = config;
+    if (!active || active.busy) return;
+    active.busy = fields.disabled = true;
+    status.textContent = '正在读取' + noun + '配置…';
+    const response = await request('GET', endpoint).catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = false;
+    if (response.status === 200 && response.body[responseKey]) fill(response.body[responseKey], message);
+    else status.textContent = '无法读取' + noun + '配置，请刷新后重试。';
+  }
+
+  async function save(api_key) {
+    const active = config;
+    if (!active || active.revision === null || active.busy) return;
+    active.busy = fields.disabled = true;
+    keyInput.value = '';
+    status.textContent = '正在保存…';
+    const response = await request('POST', endpoint, {revision: active.revision, api_key})
+      .catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = fields.disabled = false;
+    if (response.status === 200 && response.body[responseKey]) {
+      fill(response.body[responseKey], api_key === null ? '已移除' + noun + '密钥。' : noun + '配置已保存。');
+    } else if (response.status === 409) {
+      await load(noun + '配置已在其他窗口更新，请重新输入密钥。');
+    } else {
+      status.textContent = messageFor(response.body.error, '无法保存' + noun + '配置，请重试。');
+    }
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const secret = keyInput.value.trim();
+    if (secret) void save(secret);
+    else status.textContent = '请输入' + noun + ' API 密钥。';
+  });
+  remove.addEventListener('click', () => void save(null));
+
+  return {
+    setAccount(account) {
+      if (config?.account === account) return;
+      config = account === null ? null : {account, revision: null, busy: false};
+      keyInput.value = '';
+      fields.disabled = true;
+      remove.hidden = true;
+      status.textContent = '';
+    },
+    render(hash) {
+      if (config?.revision === null) void load();
+      if (hash === '#' + id) fields.scrollIntoView?.({block: 'start'});
+    },
+  };
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -436,8 +515,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const imageForm = document.getElementById('image-api-form');
+  const imageFields = document.getElementById('image-api');
+  const imageStatus = document.getElementById('image-api-status');
+  const removeImageKey = document.getElementById('clear-image-api');
+  const mediaApis = [
+    mountMediaApi(document, request, 'video', '视频'),
+    mountMediaApi(document, request, 'music', '音乐'),
+    mountMediaApi(document, request, 'model3d', '3D 模型'),
+  ].filter(Boolean);
+  let imageAccount = null;
+  let imageRevision = null;
+  let imageLoading = false;
+  let imageSaving = false;
   let revision = 0;
   let current = null;
+  let loadSequence = 0;
+  let languageSave = null;
   let modelRevision = 0;
   let pendingSecretConfirm = null;
   let secretConfirmSeq = 0;
@@ -495,10 +589,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const view = settingsViewFromLocation(location.pathname, location.hash);
     applySettingsView(document, view);
     if (current) syncAppearanceExtras(document, current);
+    if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
+    if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
+    if (view === 'model-api') for (const api of mediaApis) api.render(location.hash);
   }
 
   function refreshAppearance() {
     applyTheme(document, current);
+    syncAppearanceButton(document, current);
     syncAppearanceExtras(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
@@ -507,6 +605,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (languageCurrent && languageSelect) {
       const option = languageSelect.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
+    }
+    const fallback = document.getElementById('system-language-fallback');
+    if (fallback) {
+      fallback.hidden = supportsSystemLocale(current.language);
+      languageSelect?.setAttribute('aria-describedby',
+        fallback.hidden ? 'system-language-scope' : 'system-language-scope system-language-fallback');
     }
     const chatLanguageSelect = form.elements.chat_language;
     if (chatLanguageSelect) {
@@ -538,8 +642,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function load() {
+    const sequence = ++loadSequence;
+    if (languageSave) {
+      languageSave.input.disabled = false;
+      languageSave = null;
+    }
     const session = await request('GET', '/v1/auth/session');
+    if (sequence !== loadSequence) return;
     if (session.status === 401) {
+      current = null;
+      if (document.documentElement.lang !== 'zh-CN') applySystemLocale(document, 'zh-CN');
+      switchImageAccount(null);
+      for (const api of mediaApis) api.setAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -550,9 +664,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
+    const account = session.body.user.id ?? session.body.user.username;
+    switchImageAccount(account);
+    for (const api of mediaApis) api.setAccount(account);
     const settings = await request('GET', '/v1/settings');
+    if (sequence !== loadSequence) return;
     if (settings.status !== 200) {
-      show('error', messageFor(settings.body.error, '无法读取设置。'));
+      show('error', uiText(document, 'settings.load.error'));
       return;
     }
     current = settings.body.settings.values;
@@ -573,8 +691,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
         const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
         document.getElementById('model-effective').textContent = label;
-        const keyText = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
-        document.getElementById('model-key-state').textContent = keyText;
+        const keyText = uiText(document, model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
+        const keyState = document.getElementById('model-key-state');
+        keyState.setAttribute('data-ui-text', model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
+        keyState.textContent = keyText;
         const keyDetail = document.getElementById('model-key-state-detail');
         if (keyDetail) keyDetail.textContent = keyText;
       }
@@ -620,36 +740,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  async function autosave(successMessage) {
+  async function autosave(successKey, language = false) {
     if (!current) return;
     const changes = diff(current, readForm(form));
     const selected = {};
     for (const key of AUTOSAVE_KEYS) {
+      if ((key === 'language') !== language) continue;
       if (Object.prototype.hasOwnProperty.call(changes, key)) selected[key] = changes[key];
     }
     if (!Object.keys(selected).length) return;
-    const result = await request('POST', '/v1/settings', {revision, changes: selected});
+    const sequence = loadSequence;
+    const result = await request('POST', '/v1/settings', {revision, changes: selected}).catch(() => ({status:0, body:{}}));
+    if (sequence !== loadSequence) return;
     if (result.status === 409) {
       current = result.body.error.current.values;
       revision = result.body.error.current.revision;
       fillForm(form, current);
       refreshAppearance();
-      show('error', '设置已在别处更新，已重新加载。');
+      show('error', uiText(document, 'settings.save.conflict'));
       return;
     }
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, successMessage === '外观已更新。' ? '无法更新外观。' : '无法保存设置。'));
+      if (language) form.elements.language.value = current.language;
+      show('error', uiText(document, 'settings.save.error'));
       return;
     }
     current = result.body.settings.values;
     revision = result.body.settings.revision;
     fillForm(form, current);
     refreshAppearance();
-    show('ok', successMessage);
+    show('ok', uiText(document, successKey));
   }
 
   settingsPanel.addEventListener('change', (event) => {
     const name = event.target && event.target.name;
+    if (name === 'language') {
+      const input = event.target;
+      if (!current || languageSave || !supportsSystemLocale(input.value)) return;
+      const attempt = {input, focused:document.activeElement === input};
+      languageSave = attempt;
+      input.disabled = true;
+      return autosave('settings.saved', true).finally(() => {
+        if (languageSave !== attempt) return;
+        input.disabled = false;
+        languageSave = null;
+        if (attempt.focused && document.activeElement === document.body) input.focus({preventScroll:true});
+      });
+    }
     if (name === 'likes_visible' || name === 'favorites_visible') {
       const field = event.target;
       if (field && field.getAttribute('role') === 'switch') {
@@ -667,19 +804,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       syncChatLanguageNote(document, event.target.value, selected ? selected.textContent : '');
     }
     if (!AUTOSAVE_KEYS.includes(name)) return;
-    const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
-      ? '外观已更新。' : '已保存。';
-    autosave(message);
+    const key = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
+      ? 'settings.appearance.saved' : 'settings.saved';
+    autosave(key);
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (!current) return;
     const changes = diff(current, readForm(form));
+    delete changes.language;
     if (!Object.keys(changes).length) {
       show('ok', '没有需要保存的更改。');
       return;
     }
+    const sequence = loadSequence;
     const result = await request('POST', '/v1/settings', {revision, changes});
+    if (sequence !== loadSequence) return;
     if (result.status === 409) {
       current = result.body.error.current.values;
       revision = result.body.error.current.revision;
@@ -759,6 +900,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+  function switchImageAccount(account) {
+    if (!imageForm || imageAccount === account) return;
+    imageAccount = account;
+    imageRevision = null;
+    imageLoading = imageSaving = false;
+    imageForm.reset?.();
+    imageFields.disabled = true;
+    removeImageKey.hidden = true;
+    imageStatus.textContent = '';
+  }
+
+  function fillImageApi(config,message) {
+    imageRevision = config.revision;
+    imageForm.elements.base_url.value = config.base_url;
+    imageForm.elements.model.value = config.model;
+    imageForm.elements.api_key.value = '';
+    removeImageKey.hidden = !config.api_key_set;
+    imageStatus.textContent = message || (config.api_key_set ? '图片密钥已保存。' : '尚未配置图片密钥。');
+    imageFields.disabled = false;
+  }
+
+  async function loadImageApi() {
+    if (imageLoading) return;
+    const account = imageAccount;
+    imageLoading = true;
+    imageStatus.textContent = '正在读取图片配置…';
+    const response = await request('GET','/v1/model-api/image').catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageLoading = false;
+    if (response.status === 200 && response.body.image_api) fillImageApi(response.body.image_api);
+    else imageStatus.textContent = '无法读取图片配置，请刷新后重试。';
+  }
+
+  async function saveImageApi(changes) {
+    if (imageRevision === null || imageLoading || imageSaving) return;
+    const account = imageAccount;
+    imageSaving = imageFields.disabled = true;
+    imageStatus.textContent = '正在保存…';
+    const response = await request('POST','/v1/model-api/image',{revision:imageRevision,changes})
+      .catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageSaving = imageFields.disabled = false;
+    imageForm.elements.api_key.value = '';
+    if (response.status === 200 && response.body.image_api) {
+      fillImageApi(response.body.image_api,changes.api_key === null ? '已移除图片密钥。' : '图片配置已保存。');
+    } else if (response.status === 409) await loadImageApi();
+    else imageStatus.textContent = messageFor(response.body.error,'无法保存图片配置，请重试。');
+  }
+
+  imageForm?.addEventListener('submit',event => {
+    event.preventDefault();
+    const {base_url,model,api_key} = imageForm.elements;
+    const secret = api_key.value.trim();
+    void saveImageApi({base_url:base_url.value.trim(),model:model.value.trim(),...(secret ? {api_key:secret} : {})});
+  });
+  removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
+
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -792,6 +990,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     current = null;
     revision = 0;
+    switchImageAccount(null);
+    for (const api of mediaApis) api.setAccount(null);
     await load();
   });
 

@@ -13,11 +13,13 @@ function currentPath() {
 function markNavigation() {
   const here = currentPath();
   for (const link of document.querySelectorAll('nav a[href]')) {
+    if (link.closest('.catalog-tabs')) continue;
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     const works = (value) => value === '/space' || value === '/artifacts';
-    if (target === here || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
+    const inSettings = target === '/settings' && here.startsWith('/settings/');
+    if (target === here || inSettings || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
 }
@@ -288,15 +290,12 @@ function bindHelpMenu(doc) {
   });
 }
 
-function appearanceLabel(theme) {
-  return theme === 'dark' ? '深色' : '浅色';
-}
-
-function syncAppearanceButton(doc, values, now, media) {
+export function syncAppearanceButton(doc, values, now, media) {
   const button = doc.getElementById('appearance-toggle');
   if (!button) return;
   const theme = resolveTheme(values || { appearance: 'system' }, now, media);
-  button.textContent = appearanceLabel(theme);
+  const labels = doc.documentElement?.lang === 'en' ? {light:'Light', dark:'Dark'} : {light:'浅色', dark:'深色'};
+  button.textContent = labels[theme];
   button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
 }
 

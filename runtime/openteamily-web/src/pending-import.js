@@ -18,7 +18,7 @@ export async function importPending({ host, db, migrate }) {
       if (bundle.feature !== host.name) continue
       // New manager deliveries are target-bound. Existing v1 files without a
       // target remain readable only via this private-volume import surface.
-      if (bundle.instance_id && bundle.instance_id !== host.identity.instanceId) throw new Error('import target mismatch')
+      if (bundle.instance_id && bundle.instance_id !== (host.identity.routingInstanceId || host.identity.instanceId)) throw new Error('import target mismatch')
       const digest = createHash('sha256').update(text).digest('hex')
       if (!db.prepare('SELECT 1 FROM ot_boot_imports WHERE digest=?').get(digest)) {
         await migrate(bundle)
@@ -26,9 +26,11 @@ export async function importPending({ host, db, migrate }) {
       }
       unlinkSync(path)
       results.push({ status: 'imported' })
-    } catch {
+    } catch (error) {
+      // A bounded classifier, never arbitrary thrown messages or bundle data.
+      const reason = error?.code === 'EACCES' ? 'permission' : error?.message === 'import target mismatch' ? 'target' : 'validation'
       // Never log bundle data, secret material, or arbitrary thrown messages.
-      host.log('pending import rejected; file retained')
+      host.log('pending import rejected (' + reason + '); file retained')
       results.push({ status: 'rejected' })
     }
   }
