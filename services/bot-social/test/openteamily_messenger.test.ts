@@ -133,6 +133,57 @@ test("live calls notify members and relay signals only to their target peer", as
   assert.deepEqual(await member.ok("GET", root), {call: null});
 });
 
+test("shared group memory is scoped, cited by group agents and retired when a source changes", async () => {
+  const owner = await home(S.base, "memory-owner");
+  const member = await home(S.base, "memory-member");
+  const other = await home(S.base, "memory-outsider");
+  const team = await teamOf(owner, member, other);
+  const group = await owner.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Launch planning", team_id: team.id, members: [member.handle],
+  });
+  const elsewhere = await owner.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Different group", team_id: team.id, members: [member.handle],
+  });
+  const room = `/v1/ot/conversations/${group.id}`;
+  const memory = room + "/memories";
+  const author = await owner.ok("POST", room + "/messages", {body:"Launch discussion"});
+  const decision = await member.ok("POST", room + "/messages", {body:"Launch on Friday"});
+  const unrelated = await owner.ok("POST", `/v1/ot/conversations/${elsewhere.id}/messages`, {body:"Unrelated"});
+  const draft = {
+    title:"Launch date", body:"The rollout is scheduled for Friday.",
+    client_key:"launch-note-revision-one", source_message_id:decision.id,
+    sources:[{id:author.id,revision:author.revision}, {id:decision.id,revision:decision.revision}],
+  };
+  assert.equal((await other.call("POST", memory, draft)).status,404);
+  assert.equal((await other.call("GET", memory)).status,404);
+  assert.equal((await owner.call("POST", memory, {
+    ...draft,sources:[...draft.sources, {id:unrelated.id,revision:unrelated.revision}],
+  })).status,409);
+  const {item} = await owner.ok("POST", memory, draft);
+  assert.equal((await owner.ok("POST", memory, draft)).item.id,item.id);
+  assert.equal((await member.ok("GET",memory)).items[0].body,draft.body);
+  assert.equal((await member.call("DELETE", `${memory}/${item.id}`)).status,404);
+  assert.deepEqual((await owner.ok("GET", `/v1/ot/conversations/${elsewhere.id}/memories`)).items,[]);
+
+  await member.ok("PUT", room + "/agents/launch-helper", {name:"Launch Helper",auto_reply:false});
+  await owner.ok("POST",room + "/messages",{body:"@launch-helper launch date?"});
+  const inbox = await member.ok("GET","/v1/ot/agent-inbox");
+  assert.deepEqual(inbox.items[0].group_memories,[{id:item.id,title:draft.title,body:draft.body}]);
+  const reply = {agent_ref:"launch-helper", body:"Friday", reply_to:inbox.items[0].message.id, mode:"mention"};
+  const sent = await member.ok("POST",room + "/agent-messages",{...reply,group_memory_ids:[item.id]});
+  assert.deepEqual(sent.group_memory_refs,[{id:item.id,title:draft.title}]);
+
+  await owner.ok("PATCH",`/v1/ot/messages/${author.id}`,{body:"Changed secondary source"});
+  assert.deepEqual((await member.ok("GET", memory)).items,[]);
+  assert.equal((await owner.call("POST",memory,draft)).status,409);
+  const next = await owner.ok("POST",room + "/messages",{body:"@launch-helper new launch date?"});
+  assert.equal((await member.call("POST",room + "/agent-messages",{
+    ...reply,reply_to:next.id,group_memory_ids:[item.id],
+  })).status,409);
+  const after = await owner.ok("GET",room + "/messages");
+  assert.deepEqual(after.messages.find((m: any) => m.id === sent.id).group_memory_refs,[]);
+});
+
 test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto replies capped at 3/hour", async () => {
   const A = await home(S.base, "agowner");
   const B = await home(S.base, "agpeer");

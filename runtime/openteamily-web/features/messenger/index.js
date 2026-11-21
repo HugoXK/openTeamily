@@ -3,7 +3,7 @@
 // DS-Bot (lib/c/agent-replies.js); nothing is executed by the platform or by another user's DS-Bot.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
 import { createAgentReplier, defaultStateFile } from '../../lib/c/agent-replies.js'
-import { groupMemorySources, messengerV1 } from '../../lib/c/legacy-v1.js'
+import { groupMemorySources, messengerV1, shareGroupMemory } from '../../lib/c/legacy-v1.js'
 
 export default function messenger(host) {
   const bs = () => sharedBotSocial(host)
@@ -20,6 +20,10 @@ export default function messenger(host) {
     pages: ['messenger'],
     endpoints: {
       v1: messengerV1(host, wakeReplies),
+      shareGroupMemory: async (payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'messenger/not-found'})
+        return shareGroupMemory(host,payload)
+      },
       captureSources: async (payload, call) => {
         if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'messenger/not-found'})
         return groupMemorySources(host,payload)

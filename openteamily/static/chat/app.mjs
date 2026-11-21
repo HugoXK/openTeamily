@@ -1903,6 +1903,100 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return rows;
   }
 
+  const groupMemoryDialog = document.getElementById('group-memory-dialog');
+  const groupMemoryStatus = document.getElementById('group-memory-status');
+  const groupMemoryList = document.getElementById('group-memory-list');
+  let groupMemoryView = null;
+
+  function groupMemoryButton(label, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  async function openGroupMemory(highlight) {
+    if (!servedByDsbot || currentSource !== 'social' ||
+        currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const view = {scope:sendScope(), path:`${socialBase()}/${currentConversation.id}/shared-memory`};
+    groupMemoryView = view;
+    const active = () => groupMemoryDialog.open && groupMemoryView === view && sendScope() === view.scope;
+    groupMemoryList.replaceChildren();
+    groupMemoryStatus.textContent = '正在读取群记忆…';
+    if (!groupMemoryDialog.open) groupMemoryDialog.showModal();
+    const result = await request('GET', view.path).catch(() => ({status:0,body:{}}));
+    if (!active()) return;
+    if (result.status !== 200) {
+      groupMemoryStatus.textContent = messageFor(result.body.error,'群记忆加载失败，请重试。');
+      return;
+    }
+    const items = result.body.items || [];
+    const selected = items.find(item => item.id === highlight);
+    groupMemoryStatus.textContent = highlight && !selected ? '这条群记忆已失效或被移除。'
+      : items.length ? '' : '还没有共享的记忆。';
+    const rows = items.map(item => {
+      const row = document.createElement('li');
+      const title = document.createElement('h3');
+      title.textContent = item.title;
+      const body = document.createElement('p');
+      body.className = 'group-memory-body';
+      body.textContent = item.body;
+      const author = document.createElement('p');
+      author.className = 'note';
+      author.textContent = item.author;
+      const actions = document.createElement('div');
+      actions.className = 'group-memory-actions';
+      const source = groupMemoryButton('查看原消息', async () => {
+        groupMemoryDialog.close();
+        setGroupInfoOpen(false);
+        if (await jumpToMessage(item.source_message_id, null) === false && sendScope() === view.scope) {
+          show('error', '这条原消息已无法查看。');
+        }
+      });
+      actions.append(source);
+      if (item.can_remove) {
+        const remove = groupMemoryButton('移除', () => {
+          const confirm = groupMemoryButton('确认移除', async () => {
+            confirm.disabled = cancel.disabled = true;
+            const result = await request('POST', `${view.path}/${encodeURIComponent(item.id)}/remove`, {})
+              .catch(() => ({status:0,body:{}}));
+            if (!active()) return;
+            if (result.status === 200) await openGroupMemory();
+            else {
+              confirm.disabled = cancel.disabled = false;
+              groupMemoryStatus.textContent = messageFor(result.body.error,'移除失败，请重试。');
+            }
+          });
+          const cancel = groupMemoryButton('取消', () => {
+            actions.replaceChildren(source, remove);
+            remove.focus();
+          });
+          actions.replaceChildren(source, confirm, cancel);
+          confirm.focus();
+        });
+        actions.append(remove);
+      }
+      row.append(title, author, body, actions);
+      return row;
+    });
+    groupMemoryList.replaceChildren(...rows);
+    if (selected) {
+      const row = rows[items.indexOf(selected)];
+      row.tabIndex = -1;
+      row.focus();
+    }
+  }
+
+  function renderGroupMemoryRefs(refs) {
+    const block = document.createElement('div');
+    block.className = 'group-memory-refs';
+    const label = document.createElement('span');
+    label.textContent = '参考群记忆';
+    block.append(label, ...refs.map(ref => groupMemoryButton(ref.title, () => openGroupMemory(ref.id))));
+    return block;
+  }
+
   function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
@@ -1947,6 +2041,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
       li.append(body, time);
       if (!item.retracted && item.reply_jobs?.length) li.insertBefore(renderReplyJobs(item), time);
+      if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
@@ -2555,6 +2650,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!toggle || !panel) return;
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
+    if (groupMemoryDialog?.open && (!group || groupMemoryView?.scope !== sendScope())) groupMemoryDialog.close();
+    const memoryOpen = document.getElementById('group-memory-open');
+    if (memoryOpen) memoryOpen.hidden = !group || !servedByDsbot;
     toggle.hidden = !group;
     if (!group) {
       panel.hidden = true;
@@ -3926,6 +4024,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setGroupInfoOpen(false);
       document.getElementById('conversation-search-open').click();
     });
+    document.getElementById('group-memory-open')?.addEventListener('click', () => openGroupMemory());
     document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     document.getElementById('group-info-pin').addEventListener('click', async () => {

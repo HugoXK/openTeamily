@@ -1350,7 +1350,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (button) button.addEventListener('click', () => dreamDecide(action));
   }
 
+  const groupShareButton = document.getElementById('memory-share-group');
+  const groupShareDialog = document.getElementById('memory-share-dialog');
+  const groupShareStatus = document.getElementById('memory-share-status');
+  const groupShareSubmit = document.getElementById('memory-share-submit');
+  let groupShare = null;
+  groupShareButton?.addEventListener('click', () => {
+    if (currentPage?.source?.kind !== 'group') return;
+    groupShare = {user:currentUser?.id, workspace:workspaceId(), page:currentPage, pending:false};
+    document.getElementById('memory-share-title').textContent = currentPage.title;
+    document.getElementById('memory-share-body').textContent = currentPage.body;
+    groupShareStatus.textContent = '';
+    groupShareSubmit.disabled = false;
+    groupShareDialog.showModal();
+  });
+  document.getElementById('memory-share-cancel')?.addEventListener('click', () => groupShareDialog.close());
+  groupShareDialog?.addEventListener('close', () => {
+    if (!groupShareDialog.open) groupShare = null;
+  });
+  document.getElementById('memory-share-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = groupShare;
+    if (!draft || draft.pending) return;
+    if (draft.user !== currentUser?.id || draft.workspace !== workspaceId() ||
+        draft.page.id !== currentPage?.id || draft.page.revision !== currentPage.revision) {
+      groupShareDialog.close();
+      return;
+    }
+    draft.pending = groupShareSubmit.disabled = true;
+    groupShareStatus.textContent = '正在分享…';
+    const result = await request('POST', `/v1/workspaces/${draft.workspace}/memory/${draft.page.id}/share-group`,
+      {revision:draft.page.revision}).catch(() => ({status:0,body:{}}));
+    if (groupShare !== draft || !groupShareDialog.open) return;
+    draft.pending = groupShareSubmit.disabled = false;
+    if (result.status !== 200) {
+      groupShareStatus.textContent = messageFor(result.body.error,'分享失败，请重试。');
+      return;
+    }
+    groupShareDialog.close();
+    show('ok', '已分享到来源群。');
+  });
+
   async function openPage(pageId, revision) {
+    if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
@@ -1379,6 +1421,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const source = document.getElementById('memory-page-chat-source');
     const href = sourceHref(workspaceId(), page.source);
     if (source) source.hidden = !href;
+    if (groupShareButton) groupShareButton.hidden = !href || page.source.kind !== 'group';
     if (href) document.getElementById('memory-page-chat-link').href = href;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;

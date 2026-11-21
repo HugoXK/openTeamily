@@ -10,7 +10,7 @@ import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
-import { replyPrompt } from './agent-replies.js'
+import { replyPrompt, selectGroupMemories } from './agent-replies.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const WORK_LABELS = {
@@ -129,6 +129,7 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
+    ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
     ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
       path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
     } } : {}),
@@ -555,18 +556,31 @@ async function messengerScope(host, bs, workspace, conversationId, messageId) {
   return {personal: true, conversation}
 }
 
-export async function groupMemorySources(host, payload) {
-  const {workspace_id:workspace, conversation_id:id, message_ids:ids} = payload || {}
-  if (typeof workspace !== 'string' || !HEX.test(workspace) || !Array.isArray(ids) || ids.length > 12 || new Set(ids).size !== ids.length) {
-    throw new Fault(400,'invalid','请选择当前群聊中的文字消息。')
-  }
-  const bs = client(host)
-  const cid = seg(id,'conversation_id')
+async function requireGroupMemoryScope(host,bs,workspace,cid) {
+  if (typeof workspace !== 'string' || !HEX.test(workspace)) throw new Fault(400,'invalid','无效的工作区。')
   const scope = await messengerScope(host,bs,workspace,cid)
   const group = scope.conversation || await bs.get('/v1/ot/conversations/' + cid)
   if (group.kind !== 'group' || group.public_agent || (scope.personal ? !group.account_group : group.team_id !== scope.team.id)) {
     throw new Fault(404,'not_found','该群聊不在当前工作区。')
   }
+  return group
+}
+
+export async function shareGroupMemory(host, payload) {
+  const {workspace_id,conversation_id,title,body,source_message_id,sources,client_key} = payload || {}
+  const bs = client(host), cid = seg(conversation_id,'conversation_id')
+  await requireGroupMemoryScope(host,bs,workspace_id,cid)
+  return bs.post(`/v1/ot/conversations/${cid}/memories`,{title,body,source_message_id,sources,client_key})
+}
+
+export async function groupMemorySources(host, payload) {
+  const {workspace_id:workspace, conversation_id:id, message_ids:ids} = payload || {}
+  if (!Array.isArray(ids) || ids.length > 12 || new Set(ids).size !== ids.length) {
+    throw new Fault(400,'invalid','请选择当前群聊中的文字消息。')
+  }
+  const bs = client(host)
+  const cid = seg(id,'conversation_id')
+  const group = await requireGroupMemoryScope(host,bs,workspace,cid)
   const rows = await Promise.all(ids.map(async id => {
     try { return await bs.get('/v1/ot/messages/' + seg(id,'message_id') + qs({conversation_id:cid})) }
     catch (error) { if (error?.status === 404) return null; throw error }
@@ -679,6 +693,26 @@ function messengerRoutes(host, wakeReplies) {
           const conversation = seg(match[2], 'conversation_id')
           const message = seg(match[3], 'message_id')
           return [200, await bs.get(`/v1/ot/conversations/${conversation}/messages/${message}/voice`)]
+        })
+      },
+    },
+    {
+      method:'GET', path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/shared-memory$/,
+      async handle({match}) {
+        return wrap(async () => {
+          const bs = client(host)
+          await requireGroupMemoryScope(host,bs,match[1],match[2])
+          return [200,await bs.get(`/v1/ot/conversations/${match[2]}/memories`)]
+        })
+      },
+    },
+    {
+      method:'POST', path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/shared-memory\/([A-Za-z0-9._-]{1,80})\/remove$/,
+      async handle({match}) {
+        return wrap(async () => {
+          const bs = client(host)
+          await requireGroupMemoryScope(host,bs,match[1],match[2])
+          return [200,await bs.del(`/v1/ot/conversations/${match[2]}/memories/${match[3]}`)]
         })
       },
     },
@@ -962,16 +996,20 @@ function messengerExtraRoutes(host, wakeReplies) {
           const conversation = await bs.get(conv(match[2]))
           if (conversation.public_agent) throw new Fault(409, 'public_chat_fixed', '公开智能体会话会自动回复。')
           const context = (await page(bs, match[2])).slice(-12).map((m) => ({ author: m.author, body: m.body }))
+          const memories = conversation.kind === 'group'
+            ? selectGroupMemories(prompt,(await bs.get(`${conv(match[2])}/memories`)).items) : []
           const tag = String(key || Date.now()).slice(0, 40)
           const me = await meOf(bs, env)
           const replies = []
           for (const id of ids) {
             const agent = (conversation.agents || []).find((a) => a.agent_ref === id && a.mine)
             if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
-            const turn = await host.call('agents/turn', { agent_id: id, key: `social:${match[2]}`, text: replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }), request_id: `otr:${tag}:${id}` })
+            const turn = await host.call('agents/turn', { agent_id: id, key: `social:${match[2]}`, text: replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }, memories), request_id: `otr:${tag}:${id}` })
             const text = String(turn?.text ?? '').trim()
             if (!text) continue
-            const posted = await bs.post(`${conv(match[2])}/agent-messages`, { agent_ref: id, body: text.slice(0, 4000), mode: 'mention', client_key: `m:${tag}:${id}`.slice(0, 80) })
+            const posted = await bs.post(`${conv(match[2])}/agent-messages`, { agent_ref: id, body: text.slice(0, 4000), mode: 'mention', client_key: `m:${tag}:${id}`.slice(0, 80),
+              ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
+            })
             replies.push(messageItem({ ...posted, conversation_id: match[2] }, me, env, match[1]))
           }
           return [201, { replies }]

@@ -235,7 +235,7 @@
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
-          <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
+          <button type="button" id="memory-share-group" aria-haspopup="dialog" hidden>分享到来源群</button>
           <button type="button" id="page-history-open" title="查看此页的历史版本">历史</button>
           <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
           <p id="page-export-status" class="note editor-export-status" hidden></p>
@@ -316,6 +316,19 @@
         </div>
       </div>
     </form>
+    <dialog id="memory-share-dialog" class="profile-dream-dialog" aria-labelledby="memory-share-heading">
+      <form id="memory-share-form">
+        <h2 id="memory-share-heading">分享到来源群</h2>
+        <p class="note">群成员和群内智能体可以查看以下已保存的内容。</p>
+        <h3 id="memory-share-title"></h3>
+        <p id="memory-share-body"></p>
+        <p id="memory-share-status" role="status"></p>
+        <div class="profile-dream-actions">
+          <button type="button" id="memory-share-cancel">取消</button>
+          <button type="submit" id="memory-share-submit">确认分享</button>
+        </div>
+      </form>
+    </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>

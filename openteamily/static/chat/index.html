@@ -242,6 +242,7 @@
         <p id="group-info-count" class="group-info-count"></p>
       </div>
       <button type="button" id="group-info-search" class="group-info-row group-info-search">搜索聊天记录</button>
+      <button type="button" id="group-memory-open" class="group-info-row" aria-haspopup="dialog" hidden>群记忆</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open">查看 / 编辑</button></div>
         <p class="group-info-sub" id="group-announcement-preview" style="white-space:pre-wrap">正在读取公告…</p>
@@ -342,6 +343,14 @@
       <button type="button" id="selection-meeting" disabled>整理会议纪要</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="group-memory-dialog" class="chat-save-dialog" aria-labelledby="group-memory-title">
+      <div class="group-memory-head">
+        <h2 id="group-memory-title">群记忆</h2>
+        <form method="dialog"><button type="submit" autofocus>关闭</button></form>
+      </div>
+      <p id="group-memory-status" class="note" role="status"></p>
+      <ul id="group-memory-list"></ul>
+    </dialog>
     <dialog id="group-capture-dialog" class="chat-save-dialog" aria-labelledby="group-capture-title">
       <form id="group-capture-form">
         <h2 id="group-capture-title">提炼群聊记忆</h2>

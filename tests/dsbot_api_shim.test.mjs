@@ -17,6 +17,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/dream/${ID}`, ORIGIN).feature, 'memory');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/share-group`, ORIGIN).feature, 'memory');
   for (const rest of ['actions', `actions/${ID}/remove`, 'links', 'graph', 'profile', 'profile/dream', 'candidates', `candidates/${ID}`, `preferences/${ID}/remove`]) {
     assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${rest}`, ORIGIN).feature, 'memory', rest);
   }

@@ -80,7 +80,29 @@ async function inbox(req, workspace, id) {
   })
 }
 
-export const captureRoutes = [{pattern:new RegExp(`^/v1/workspaces/${ROUTE}/memory/candidates(?:/${ROUTE})?$`),handle:inbox}]
+async function sharePage(req, workspace, pageId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400,'invalid','Invalid memory share request')
+  const {revision} = requireBodyKeys(await req.json(),['revision'])
+  const page = loadPage(req.store,workspace,pageId)
+  const row = req.store.get("SELECT * FROM memory_capture_items WHERE workspace_id=? AND page_id=? AND state='saved' AND source_message_id IS NOT NULL",workspace,pageId)
+  if (!page || !row) refuse(404,'not_found','找不到该群聊记忆。')
+  if (revision !== page.revision) refuse(409,'conflict','记忆已有新版本，请重新打开后分享。')
+  try {
+    const shared = await req.host.call('messenger/shareGroupMemory',{
+      ...groupScope(row), title:page.title, body:page.body, source_message_id:row.source_message_id,
+      sources:JSON.parse(row.source_batch), client_key:`memory-${page.id}-r${page.revision}`,
+    })
+    return {body:shared}
+  } catch (error) {
+    const status = [400,403,404,409,429].includes(error?.status) ? error.status : 502
+    refuse(status,'share_failed',status === 502 ? '群聊暂时无法接收记忆，请重试。' : error.message)
+  }
+}
+
+export const captureRoutes = [
+  {pattern:new RegExp(`^/v1/workspaces/${ROUTE}/memory/candidates(?:/${ROUTE})?$`),handle:inbox},
+  {pattern:new RegExp(`^/v1/workspaces/${ROUTE}/memory/${ROUTE}/share-group$`),handle:sharePage},
+]
 
 function candidate(output) {
   if (!validTitle(output?.title) || !validBody(output?.body) || !output.body.trim() || output.body.length > 1500) {
