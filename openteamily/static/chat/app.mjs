@@ -854,6 +854,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
   const publicDraft = mountPublicDraft(document);
+  const starterPanel = document.getElementById('agent-quick-starts');
+  const starterList = document.getElementById('agent-quick-starts-list');
+  const starterStatus = document.getElementById('agent-quick-starts-status');
+  const starterComposer = document.getElementById('chat-body');
+  let starterView = null;
+  let starterRefresh = null;
+  starterComposer.addEventListener('input', () => setAgentStarterStatus(''));
 
   const memoryRecall = document.getElementById('agent-memory-recall');
   const memoryDrafts = new Map();
@@ -971,6 +978,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false);
   }
 
+  function setAgentStarterStatus(message) {
+    if (starterStatus.hidden && !message) return;
+    starterStatus.textContent = message;
+    starterStatus.hidden = !message;
+  }
+
+  function nativeStarterAgent(agent) {
+    return servedByDsbot && currentUser?.id && currentSource === 'agent' && agent?.id
+      && agent.id === currentAgent?.id && agent.workspace_id === workspaceId() && agent.served_by === 'ds-bot';
+  }
+
+  function renderAgentQuickStarts(agent) {
+    const eligible = nativeStarterAgent(agent) && !agent.archived && !agent.native_deleted
+      && !currentConversation?.archived && currentConversation?.open !== false;
+    const values = eligible && Array.isArray(agent.quick_starts)
+      ? agent.quick_starts.slice(0, 5).flatMap(value =>
+        typeof value === 'string' && value.trim() && value.trim().length <= 80 ? [value.trim()] : [])
+      : [];
+    const scope = sendScope();
+    const key = values.length ? JSON.stringify([scope, values]) : '';
+    if (key === (starterView?.key ?? '')) return;
+    const view = values.length ? {key, scope} : null;
+    starterView = view;
+    starterPanel.hidden = !view;
+    setAgentStarterStatus('');
+    const buttons = values.map(text => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.title = text;
+      button.addEventListener('click', () => {
+        if (starterView !== view || view.scope !== sendScope() || mainPanel.hidden || starterComposer.disabled) return;
+        const original = starterComposer.value;
+        const next = original && original !== text ? original + '\n\n' + text : text;
+        const limit = starterComposer.maxLength > 0 ? starterComposer.maxLength : 4000;
+        if (next.length > limit) {
+          setAgentStarterStatus('输入框里的草稿已保留。缩短后可添加这条开场。');
+          return;
+        }
+        starterComposer.value = next;
+        starterComposer.dispatchEvent(new Event('input', {bubbles: true}));
+        starterComposer.focus({preventScroll: true});
+        starterComposer.setSelectionRange?.(next.length, next.length);
+      });
+      return button;
+    });
+    starterList.replaceChildren(...buttons);
+    starterList.scrollLeft = 0;
+  }
+
+  async function refreshAgentQuickStarts() {
+    if (!nativeStarterAgent(currentAgent) || mainPanel.hidden || !viewingSocialMessages()) return;
+    const scope = sendScope();
+    const open = socialOpen;
+    if (starterRefresh?.scope === scope && starterRefresh.open === open) return;
+    const next = {scope, open};
+    starterRefresh = next;
+    const result = await request('GET', agentBase()).catch(() => ({status: 0}));
+    if (starterRefresh !== next) return;
+    starterRefresh = null;
+    if (open !== socialOpen || scope !== sendScope() || document.visibilityState === 'hidden') return;
+    const agent = result.body?.agent;
+    if (result.status === 200 && nativeStarterAgent(agent)) {
+      currentAgent = agent;
+      renderAgentQuickStarts(currentAgent);
+    } else if ([200, 403, 404, 410].includes(result.status)) {
+      currentAgent = {...currentAgent, quick_starts: []};
+      renderAgentQuickStarts();
+    }
+  }
+
   function renderPendingSend() {
     const list = document.getElementById('message-list');
     const scope = sendScope();
@@ -1003,7 +1081,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
       setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     }
-    document.getElementById('chat-empty').hidden = list.children.length > 0;
+    const empty = document.getElementById('chat-empty');
+    empty.dataset.agent = String(currentSource === 'agent' && Boolean(currentAgent));
+    empty.hidden = list.children.length > 0;
   }
 
   function paintSendJob(job) {
@@ -3172,11 +3252,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     writeHash({workspace:workspaceId(), agent:agentId});
     setSessionsOpen(false);
     renderAgentMessages([]);
+    renderAgentQuickStarts(agent);
     syncPlusState();
   }
 
   async function openAgentConversation(agentId, conversationId, {refresh = false} = {}) {
     if (!refresh) {
+      renderAgentQuickStarts();
       stopReplyProgress();
       stopGroupReplyProgress();
       stopPolling();
@@ -3187,6 +3269,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       .catch(() => ({status: 0, body: {}}));
     if (open !== socialOpen || workspaceId() !== wid) return false;
     if (result.status !== 200) {
+      if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
       if (!refresh) {
         show('error', messageFor(result.body.error, '无法打开对话。'));
         syncReplyProgress();
@@ -3194,8 +3277,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return false;
     }
-    const agent = agents.find(item => item.id === agentId) || result.body.agent;
-    if (!agent) return false;
+    const detailAgent = result.body.agent?.id === agentId ? result.body.agent : null;
+    const listedAgent = agents.find(item => item.id === agentId);
+    const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
+    const conversation = result.body.conversation;
+    if (!agent || conversation?.id !== conversationId) return false;
     setSocialHistory(null);
     agentMentions.clear();
     voiceRecorder.clear();
@@ -3215,13 +3301,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setDirectoryLink({source: 'agent'});
     syncPlusState();
     applyChatIdentity(document, agent.name);
-    if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
+    if (currentConversation?.id !== conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
       closeInChatSearch({restoreScroll: false, focus: false});
     }
-    currentConversation = result.body.conversation;
+    currentConversation = conversation;
     publicDraft.enter(sendScope());
+    renderAgentQuickStarts(detailAgent);
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
     const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
@@ -3243,6 +3330,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent} = {}) {
     stopReplyProgress();
+    renderAgentQuickStarts();
     const open = ++socialOpen;
     const wid = workspaceId();
     if (currentSource !== 'social' || currentConversation?.id !== conversationId) {
@@ -3367,6 +3455,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.addEventListener('visibilitychange', () => {
     if (currentSource === 'agent') {
+      if (document.visibilityState === 'visible') void refreshAgentQuickStarts();
       if (!canWatchReply()) stopPolling();
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
@@ -3876,6 +3965,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      currentAgent = null;
+      renderAgentQuickStarts();
       resetNotifications();
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
@@ -3901,6 +3992,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      currentAgent = null;
+      currentConversation = null;
+      socialOpen += 1;
+      renderAgentQuickStarts();
       resetNotifications();
       attachmentSender?.reset();
       clearPendingSends();
@@ -4234,7 +4329,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       void loadNotifications();
     }
   });
-  globalThis.addEventListener('pageshow', event => { if (event.persisted) void loadNotifications(); });
+  globalThis.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    void loadNotifications();
+    void refreshAgentQuickStarts();
+  });
   const readAll = document.getElementById('notifications-read-all');
   if (readAll) readAll.addEventListener('click', async () => {
     const scope = notificationScope();
@@ -4261,6 +4360,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    renderAgentQuickStarts();
     publicDraft.enter(sendScope());
     syncCaptureButton();
     chatCalls.sync();
@@ -5065,6 +5165,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             pendingSends.set(queue.scope, queue);
             if (visible) {
               currentConversation = conversation;
+              publicDraft.move(previous, queue.scope);
+              renderAgentQuickStarts(currentAgent);
               lastAgentItems = [];
               writeHash({workspace: queue.wid, agent: queue.agentId, conversation: conversation.id});
               attachmentSender?.moveDraft(previous, queue.scope);
@@ -5308,7 +5410,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   if (attachInput) attachInput.addEventListener('change', () => attachInput.setAttribute('accept', defaultAccept));
 
-  globalThis.addEventListener('hashchange', () => load());
+  globalThis.addEventListener('hashchange', () => {
+    renderAgentQuickStarts();
+    return load();
+  });
   return load();
 }
 

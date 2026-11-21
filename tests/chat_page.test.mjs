@@ -272,6 +272,10 @@ class FakeElement {
   getAttribute(name) { return this.attributes[name]; }
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  dispatchEvent(event) {
+    for (const listener of this.handlers[event.type] || []) listener(event);
+    return true;
+  }
   removeEventListener(type, handler) {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
@@ -647,6 +651,108 @@ function nativeReplyChat(transport) {
     : url.startsWith(path) ? transport(url.slice(path.length), opts, {agent, conversation}) : fallback(url);
   return {doc, el, restore, fetcher};
 }
+
+test('private agent starters stage safe text, preserve drafts, and follow the latest native scope', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const {fetcher: fallback} = sessionFetcher();
+  const agentA = {id:'agent-a', workspace_id:'ws-1', served_by:'ds-bot', name:'甲',
+    quick_starts:['核对 <原文>', '测试开场', 'x'.repeat(81), null]};
+  const agentB = {...agentA, id:'agent-b', name:'乙', quick_starts:['旧目录开场']};
+  const thread = {id:'thread-b', agent_id:agentB.id, title:'既有对话', updated:50};
+  let latest = {...agentB, quick_starts:['既有会话的新开场']};
+  let deferredAgent;
+  const calls = [];
+  const fetcher = (url, options = {}) => {
+    calls.push({url, method:options.method || 'GET'});
+    if (url.endsWith('/agents?limit=100&include=conversations')) {
+      return json(200, {items:[agentA, agentB], conversations:[thread]});
+    }
+    if (url.endsWith('/agents/agent-b/conversations/thread-b')) {
+      return json(200, {agent:latest, conversation:thread, items:[{role:'user', body:'已有历史'}]});
+    }
+    if (url.endsWith('/agents/agent-b')) return deferredAgent || json(200, {agent:latest});
+    return fallback(url, options);
+  };
+  const restore = installChatGlobals({narrow:true});
+  globalThis.location.hash = '#workspace=ws-1&agent=agent-a';
+  try {
+    await mount(doc, {fetcher});
+    const input = el('chat-body');
+    const list = el('agent-quick-starts-list');
+    const panel = el('agent-quick-starts');
+    const notice = el('agent-quick-starts-status');
+    const buttons = [...list.children];
+    assert.equal(panel.hidden, false);
+    assert.deepEqual(buttons.map(button => [button.type,button.textContent]), [['button','核对 <原文>'],['button','测试开场']]);
+    let changes = 0;
+    input.addEventListener('input', () => { changes += 1; });
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, '核对 <原文>');
+    await fire(buttons[1], 'click');
+    assert.equal(input.value, '核对 <原文>\n\n测试开场');
+    assert.equal(input.focused, true);
+    assert.equal(changes, 2);
+    const oversized = '草'.repeat(3999);
+    input.value = oversized;
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, oversized);
+    assert.equal(changes, 2);
+    assert.equal(notice.hidden, false);
+    assert.match(notice.textContent, /草稿已保留/);
+    input.value = '改过的甲草稿';
+    await fire(input, 'input');
+    assert.equal(notice.hidden, true);
+    assert.equal(calls.filter(call => call.method === 'POST' && /conversations|messages/.test(call.url)).length, 0);
+
+    const row = sessionRows(el).find(button => button.dataset.conversation === thread.id);
+    await fire(el('conversation-list'), 'click', {target:row});
+    assert.equal(input.value, '');
+    assert.deepEqual(list.children.map(button => button.textContent), ['既有会话的新开场']);
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, '', 'detached controls from another native agent cannot edit this draft');
+    await fire(list.children[0], 'click');
+    assert.equal(input.value, '既有会话的新开场');
+    assert.equal(el('message-list').children.length, 1, 'staging does not change the existing transcript');
+
+    latest = {...agentB, quick_starts:['编辑后的开场']};
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    await settle();
+    assert.deepEqual(list.children.map(button => button.textContent), ['编辑后的开场']);
+    assert.equal(input.value, '既有会话的新开场');
+    assert.equal(calls.filter(call => call.url.endsWith('/agents/agent-b/conversations/thread-b')).length, 1);
+    latest = {...latest, archived:1};
+    const stale = list.children[0];
+    await fire(doc, 'visibilitychange');
+    await settle();
+    assert.equal(panel.hidden, true);
+    await fire(stale, 'click');
+    assert.equal(input.value, '既有会话的新开场');
+
+    let finishAgent;
+    deferredAgent = new Promise(resolve => { finishAgent = resolve; });
+    await fire(doc, 'visibilitychange');
+    const direct = sessionRows(el).find(button => button.dataset.conversation === 'conv-1');
+    await fire(el('conversation-list'), 'click', {target:direct});
+    finishAgent(json(200, {agent:agentB}));
+    await settle();
+    assert.equal(panel.hidden, true);
+    assert.equal(input.value, '');
+  } finally { restore(); }
+});
+
+test('private quick starts are suppressed for an agent returned outside the current workspace', async () => {
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, options, scope) => {
+    assert.equal(path, '');
+    return json(200, {...scope, agent:{...scope.agent, workspace_id:'another-workspace', served_by:'ds-bot', quick_starts:['私密开场']}, items:[]});
+  });
+  try {
+    await mount(doc, {fetcher});
+    assert.equal(el('agent-quick-starts').hidden, true);
+    assert.equal(el('agent-quick-starts-list').children.length, 0);
+  } finally { restore(); }
+});
 
 test('a native reply streams as plain text without rebuilding history or changing an unsent draft', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -1347,6 +1453,20 @@ test('public draft preserves the edited text for its owner and thread, clearing 
   field('chat-body').value = '';
   restored.persist();
   assert.equal(saved.size,0);
+});
+
+test('draft typing during native conversation creation follows the committed thread', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const draft = mountPublicDraft(doc);
+  const input = el('chat-body');
+  draft.enter('alice/agent/new');
+  input.value = '第一条正在发送时的下一份草稿';
+  await fire(input, 'input');
+  draft.move('alice/agent/new', 'alice/agent/thread');
+  draft.enter('alice/agent/new');
+  assert.equal(input.value, '');
+  draft.enter('alice/agent/thread');
+  assert.equal(input.value, '第一条正在发送时的下一份草稿');
 });
 
 test('an over-limit homepage draft stays recoverable without changing the owner and thread composer', async () => {

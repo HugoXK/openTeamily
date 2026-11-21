@@ -18,6 +18,7 @@ function wrap(fn) {
 }
 
 const publicAgent = (agent) => ({ ...agent, archived: agent.archived ? 1 : 0, homepage: agent.homepage ?? { visibility: 'restricted' } })
+const chatAgent = (agent) => publicAgent(agent.archived || agent.native_deleted ? {...agent, quick_starts: []} : agent)
 const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
@@ -113,7 +114,7 @@ export function agentsV1({ endpoints, log }) {
       }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
-      return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: publicAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
+      return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: chatAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations$`), handle: wrap(async (req, workspaceId, id) => {
       if (req.method === 'GET') {
@@ -138,15 +139,16 @@ export function agentsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
         const includeArchived = req.query.get('include_archived') === '1'
+        const includeConversations = req.query.get('include') === 'conversations'
         const active = await call('list', { workspace_id: workspaceId })
         const archived = includeArchived ? await call('list', { workspace_id: workspaceId, archived: true }) : { items: [] }
         const rows = [...active.items, ...archived.items].sort((a, b) => a.id.localeCompare(b.id))
         const cursor = req.query.get('cursor') || ''
         const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         const sliced = rows.filter((row) => row.id > cursor).slice(0, limit + 1)
-        const items = sliced.slice(0, limit).map(publicAgent)
+        const items = sliced.slice(0, limit).map(includeConversations ? chatAgent : publicAgent)
         const body = { items, cursor: sliced.length > limit ? sliced[limit - 1].id : null }
-        if (req.query.get('include') === 'conversations') {
+        if (includeConversations) {
           const directory = await call('conversationSummaries', { workspace_id: workspaceId, agent_ids: items.map(item => item.id) })
           body.conversations = directory.items
         }

@@ -235,6 +235,11 @@
         </div>
       </div>
     </header>
+    <section id="agent-quick-starts" aria-labelledby="agent-quick-starts-label" hidden>
+      <h2 id="agent-quick-starts-label">快捷开场</h2>
+      <div id="agent-quick-starts-list"></div>
+      <p id="agent-quick-starts-status" role="status" hidden></p>
+    </section>
     <aside id="group-info-panel" class="group-info" hidden aria-labelledby="group-info-title">
       <button type="button" id="group-info-close" class="group-info-close" aria-label="关闭群信息">×</button>
       <div class="group-info-head">
@@ -569,7 +574,8 @@
     </section>
     <div id="message-scroller">
       <div id="chat-empty" class="note">
-        <p>选择左侧的对话，或从这里开始。</p>
+        <p class="empty-generic">选择左侧的对话，或从这里开始。</p>
+        <p class="empty-agent">发送第一条消息，开始新对话。</p>
         <p class="empty-next">
           <a href="/agents">浏览智能体</a>
           <a href="/guide">查看功能指引</a>

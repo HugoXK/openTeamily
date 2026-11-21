@@ -57,6 +57,12 @@ export function mountPublicDraft(document) {
         ? previous : (publicChat ? '' : initialText);
       showRecovery(publicChat ? recovered.get(scope) ?? read(scope, recoveryPrefix) : '');
     },
+    move(fromScope, toScope) {
+      if (active?.scope !== fromScope || active.publicChat) return;
+      memory.delete(fromScope);
+      active.scope = toScope;
+      persist();
+    },
     fill(text) {
       if (!active?.publicChat || input.disabled) return false;
       if (!input.value) {

@@ -464,8 +464,13 @@ export function createAgents({ db, host }) {
       const agent = load(ws(p), p.id)
       const row = conversation(agent, p.conversation_id)
       const {native_name, ...mapping} = await native.readSession(agent, `agent:${agent.id}:${row.id}`, row.title)
+      const current = load(agent.workspace_id, agent.id)
+      // An already-bound Session stays readable while a turn holds the native lock.
+      // Honour a recent roster archive without taking that lock to reconcile it.
+      const rosterBot = host.currentRuntime?.()?.rt?.botOf(mapping.native_bot_id)
       return {
-        agent: view({...load(agent.workspace_id, agent.id), native_bot_id: mapping.native_bot_id, native_name}),
+        agent: view({...current, archived: current.archived || Number(Boolean(rosterBot?.hidden)),
+          native_bot_id: mapping.native_bot_id, native_name}),
         conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
         items: conversationMessages(row.id),
       }
