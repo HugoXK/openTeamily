@@ -1,16 +1,18 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
-import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
-// Authorized saved-result links select a real workspace and fetch the actual editor record.
+// A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
-  const params=new URLSearchParams(search||'');
-  if(!params.has('workspace')&&!params.has('artifact'))return null;
-  const workspace=params.get('workspace'),artifact=params.get('artifact');
-  if([...params.keys()].some(key=>!['workspace','artifact'].includes(key))||params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
-  return {workspace,artifact};
+  const params = new URLSearchParams(search || '');
+  if (!params.has('workspace') && !params.has('artifact')) return null;
+  const id = /^[0-9a-f]{32}$/;
+  const workspace = params.get('workspace');
+  const artifact = params.get('artifact');
+  if ([...params.keys()].some(key => !['workspace', 'artifact'].includes(key))
+    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
+    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))) return {invalid: true};
+  return artifact ? {workspace, artifact} : {workspace};
 }
 
-import { bindDocumentEditor } from '../shell/rich-editor.mjs';
-import { mountSpreadsheet } from './spreadsheet.mjs';
+import { mountArtifactNotifications } from './notifications.mjs';
 import {
   artifactKindLabel as kindLabel, renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
@@ -37,13 +39,42 @@ export function csrfCookie(raw) {
   return '';
 }
 
-export function listQuery(search) {
-  const needle = (search || '').trim();
-  return needle ? ('?q=' + encodeURIComponent(needle)) : '';
-}
+const CATALOG_PAGE_SIZE = 20;
+const CATALOG_READ_LIMIT = 100;
+const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
 
-export const FILE_TYPE_LABELS = ['云文档', 'Markdown', 'DOCX', 'PDF', '电子表格', '幻灯片',
-  'Web 应用', '网页', '图片', '视频', '音频', '3D 模型', '白板', '消息'];
+const FILE_TYPES = {
+  云文档: 'document',
+  电子表格: 'spreadsheet',
+  幻灯片: 'slides',
+  看板: 'dashboard',
+  网页: 'website',
+  图片: 'image',
+  视频: 'video',
+  音频: 'audio',
+  '3D 模型': 'model3d',
+  白板: 'whiteboard',
+  消息: 'messages',
+};
+
+export const FILE_TYPE_LABELS = Object.keys(FILE_TYPES);
+
+export function listQuery(search, {
+  kind = 'all', scope = 'all', types = [], creators = [], sessions = [], updated = {},
+} = {}) {
+  const needle = (search || '').trim();
+  const parameters = [];
+  if (needle) parameters.push('q=' + encodeURIComponent(needle));
+  if (kind !== 'all') parameters.push('kind=' + encodeURIComponent(kind));
+  if (scope !== 'all') parameters.push('scope=' + encodeURIComponent(scope));
+  const filterTypes = types.filter(label => Object.hasOwn(FILE_TYPES, label)).map(label => FILE_TYPES[label]);
+  for (const [name, values] of [['type', filterTypes], ['creator', creators], ['session', sessions]]) {
+    for (const value of [...new Set(values)].sort()) parameters.push(name + '=' + encodeURIComponent(value));
+  }
+  if (Number.isSafeInteger(updated.since)) parameters.push('updated_since=' + updated.since);
+  if (Number.isSafeInteger(updated.before)) parameters.push('updated_before=' + updated.before);
+  return parameters.length ? '?' + parameters.join('&') : '';
+}
 
 const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
 
@@ -58,23 +89,54 @@ export function artifactMatchesType(item, type) {
   if (type === '白板') return item.kind === 'whiteboard';
   if (type === '电子表格') return item.kind === 'spreadsheet';
   if (type === '幻灯片') return item.kind === 'slides';
+  if (type === '看板') return item.kind === 'dashboard';
   if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
   return false;
 }
 
-export function artifactMatchesModified(item, window, now = Date.now()) {
-  if (!window || window === 'any' || window === 'custom') return true;
-  const updated = Number(item && item.updated ? item.updated : 0) * 1000;
-  if (!updated) return false;
-  const day = 24 * 60 * 60 * 1000;
+function localDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const [year, month, day] = match.slice(1).map(Number);
+  if (year < 1) return null;
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+}
+
+function localDayAfter(date) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 0, 0, 0);
+  return next.getTime() / 1000;
+}
+
+export function artifactModifiedBounds(window, now = Date.now(), {start, end} = {}) {
+  if (window === 'custom') {
+    const from = localDate(start);
+    const through = localDate(end);
+    if (!from || !through || through < from) return null;
+    return {since: from.getTime() / 1000, before: localDayAfter(through)};
+  }
   if (window === 'today') {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
-    return updated >= start.getTime();
+    return {since: start.getTime() / 1000, before: localDayAfter(start)};
   }
   const days = {d7: 7, d30: 30, d90: 90};
-  if (days[window]) return updated >= now - days[window] * day;
-  return true;
+  return Object.hasOwn(days, window) ? {since: Math.ceil(now / 1000 - days[window] * 86400)} : {};
+}
+
+function artifactWithinBounds(item, {since, before}) {
+  if (since == null && before == null) return true;
+  const updated = Number(item?.updated);
+  return item?.updated != null && Number.isFinite(updated) &&
+    (since == null || updated >= since) && (before == null || updated < before);
+}
+
+export function artifactMatchesModified(item, window, now = Date.now(), range) {
+  return artifactWithinBounds(item, artifactModifiedBounds(window, now, range) || {});
 }
 
 export function visibleArtifacts(items, options = {}) {
@@ -82,10 +144,9 @@ export function visibleArtifacts(items, options = {}) {
   const scope = options.scope || 'all';
   const username = options.username || '';
   const types = options.types || [];
-  const modified = options.modified || 'any';
   const creators = options.creators || [];
   const sessions = options.sessions || [];
-  const now = options.now == null ? Date.now() : options.now;
+  const updated = options.updated ?? artifactModifiedBounds(options.modified, options.now ?? Date.now(), options.range) ?? {};
   if (kind === 'meetings') return [];
   let rows = [...(items || [])];
   if (scope === 'favorites') rows = rows.filter(item => item.favorited);
@@ -103,7 +164,7 @@ export function visibleArtifacts(items, options = {}) {
   if (types.length) {
     rows = rows.filter((item) => types.some((type) => artifactMatchesType(item, type)));
   }
-  rows = rows.filter((item) => artifactMatchesModified(item, modified, now));
+  rows = rows.filter((item) => artifactWithinBounds(item, updated));
   if (creators.length) rows = rows.filter((item) => creators.includes(item.created_by));
   if (sessions.length) {
     rows = rows.filter((item) => item.source && sessions.includes(item.source.conversation_id));
@@ -392,6 +453,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     .map(id => document.getElementById(id)).filter(Boolean);
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
+  const nativeCatalog = servedByDsBot(document);
+  const pageMore = document.getElementById('more-artifacts');
+  const pageFooter = document.getElementById('artifact-pagination');
+  const pageNote = document.getElementById('artifact-pagination-note');
+  const filterButton = document.getElementById('filter-button');
+  const filterPanel = document.getElementById('filter-panel');
+  const filterReset = document.getElementById('filter-reset');
+  const filterDates = document.getElementById('custom-range');
+  const dateStart = document.getElementById('filter-date-start');
+  const dateEnd = document.getElementById('filter-date-end');
+  const dateMessage = document.getElementById('filter-date-message');
   let currentUser = null;
   let workspaceLoad = 0;
   let current = null;
@@ -404,9 +476,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let catalogLayout = 'grid';
   let meetingScope = 'all';
   let filterTypes = [];
-  let filterModified = 'any';
+  let filterUpdated = {};
   let filterCreators = [];
   let filterSessions = [];
+  let facets = null;
   let allItems = [];
   let meetingItems = [];
   let meetingError = '';
@@ -435,12 +508,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders, signal) {
+  async function request(method, path, body, extraHeaders, signal, keepalive = false) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin', signal,
+      method, headers, credentials: 'same-origin', signal, keepalive,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -451,6 +524,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function workspaceId() {
     return workspaceSelect.value;
   }
+
+  const notifications = mountArtifactNotifications(document, {
+    request: (method, path, body, options = {}) =>
+      request(method, path, body, undefined, options.signal, options.keepalive),
+  });
 
   async function renderProviders() {
     const box = document.getElementById('oidc-providers');
@@ -795,25 +873,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (add) add.disabled = dashboardState.widgets.length >= 20;
   }
 
-  const richDocument = bindDocumentEditor(document, form);
-  const spreadsheet = mountSpreadsheet(document, {
-    async onDraft(prompt) {
-      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
-      if (result.status !== 200 || !result.body.spreadsheet) {
-        throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
-      }
-      return result.body;
-    },
-    onTitle(title) {
-      if (!form.elements.title.value.trim()) form.elements.title.value = title;
-    },
+  function lazyEditor(initialize) {
+    let pending;
+    let instance;
+    return {
+      get instance() { return instance; },
+      prepare() {
+        pending ??= initialize().then(tool => {
+          instance = tool;
+        }).catch(error => {
+          pending = undefined;
+          throw error;
+        });
+        return pending;
+      },
+    };
+  }
+
+  const richDocument = lazyEditor(async () => {
+    const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
+    return bindDocumentEditor(document, form);
+  });
+  const spreadsheet = lazyEditor(async () => {
+    const { mountSpreadsheet } = await import('./spreadsheet.mjs');
+    return mountSpreadsheet(document, {
+      async onDraft(prompt) {
+        const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
+        if (result.status !== 200 || !result.body.spreadsheet) {
+          throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
+        }
+        return result.body;
+      },
+      onTitle(title) {
+        if (!form.elements.title.value.trim()) form.elements.title.value = title;
+      },
+    });
   });
   const sendSpreadsheet = document.getElementById('send-saved-spreadsheet');
   const downloadSpreadsheet = document.getElementById('download-spreadsheet');
   const model3dPanel = document.getElementById('media-model3d');
   const model3dDownload = document.getElementById('media-model3d-download');
-  const model3dPreview = bindModel3dPreview(document.getElementById('media-model3d-toggle'),
-    document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
+  const model3dPreview = lazyEditor(async () => {
+    const { bindModel3dPreview } = await import('../shell/model3d-preview.mjs');
+    return bindModel3dPreview(document.getElementById('media-model3d-toggle'),
+      document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
+  });
+
+  function editorTools(item) {
+    if (item?.kind === 'document') return richDocument;
+    if (item?.kind === 'spreadsheet') return spreadsheet;
+    if (isModel3d(item)) return model3dPreview;
+    return null;
+  }
 
   const websitePreview = document.getElementById('website-preview');
   const websiteControls = document.getElementById('website-preview-controls');
@@ -864,7 +975,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
-    richDocument.load(form.elements.body.value, kind === 'document');
+    richDocument.instance?.load(form.elements.body.value, kind === 'document');
     updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
@@ -876,7 +987,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const button of [sendSpreadsheet, downloadSpreadsheet]) {
       if (button) button.hidden = kind !== 'spreadsheet' || !item?.id;
     }
-    if (kind === 'spreadsheet') spreadsheet.load(item?.spreadsheet, item?.id, !item?.id);
+    if (kind === 'spreadsheet') spreadsheet.instance.load(item?.spreadsheet, item?.id, !item?.id);
     for (const button of [sendSlides, downloadSlides]) {
       if (button) button.hidden = kind !== 'slides' || !item?.id;
     }
@@ -933,7 +1044,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         mediaMeta.textContent = '选择一张图片或一段音视频，大小不超过 2 MB。';
       }
     }
-    model3dPreview.setSource(model3dSource);
+    model3dPreview.instance?.setSource(model3dSource);
     if (kind === 'whiteboard') {
       boardState = item && item.board ? item.board : {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
       drawBoard();
@@ -1000,21 +1111,107 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog();
   }
 
-  function closeFilterPanel() {
-    const panel = document.getElementById('filter-panel');
-    const button = document.getElementById('filter-button');
-    if (panel) panel.hidden = true;
-    if (button) button.setAttribute('aria-expanded', 'false');
+  function closeFilterPanel({focus = false} = {}) {
+    if (!filterPanel || filterPanel.hidden) return;
+    filterPanel.hidden = true;
+    filterButton?.setAttribute('aria-expanded', 'false');
+    if (focus) filterButton?.focus();
   }
 
-  function readFilters() {
-    filterTypes = [...document.querySelectorAll('input[name="file-type"]:checked')].map((input) => input.value);
-    const modified = document.querySelector('input[name="modified"]:checked');
-    filterModified = modified ? modified.value : 'any';
-    const customNote = document.getElementById('custom-range-note');
-    if (customNote) customNote.hidden = filterModified !== 'custom';
-    filterCreators = [...document.querySelectorAll('input[name="creator"]:checked')].map((input) => input.value);
-    filterSessions = [...document.querySelectorAll('input[name="session"]:checked')].map((input) => input.value);
+  const dateMode = () => document.querySelector('#filter-panel input[name="modified"]:checked')?.value || 'any';
+  const appliedFilters = () => filterTypes.length + filterCreators.length + filterSessions.length +
+    Number(filterUpdated.since != null || filterUpdated.before != null);
+
+  function renderFilterControls() {
+    const count = appliedFilters();
+    if (filterButton) filterButton.textContent = count ? `筛选 · ${count}` : '筛选';
+    if (filterReset) filterReset.disabled = !count && dateMode() === 'any';
+  }
+
+  function readFilterDates() {
+    const mode = dateMode();
+    const start = dateStart?.value;
+    const end = dateEnd?.value;
+    const bounds = artifactModifiedBounds(mode, Date.now(), {start, end});
+    const invalid = mode === 'custom' && Boolean(start && end && !bounds);
+    if (filterDates) filterDates.hidden = mode !== 'custom';
+    for (const field of [dateStart, dateEnd]) {
+      if (invalid) field?.setAttribute('aria-invalid', 'true');
+      else field?.removeAttribute('aria-invalid');
+    }
+    if (dateMessage) dateMessage.textContent = invalid ? '请选择有效日期，结束日期不能早于开始日期。' :
+      bounds ? '包含开始和结束日期。' : '选好开始和结束日期后应用筛选。';
+    if (bounds) filterUpdated = bounds;
+  }
+
+  function clearFilters() {
+    for (const input of document.querySelectorAll('#filter-panel input[type="checkbox"]')) input.checked = false;
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) input.checked = input.value === 'any';
+    if (dateStart) dateStart.value = '';
+    if (dateEnd) dateEnd.value = '';
+    filterTypes = [];
+    filterCreators = [];
+    filterSessions = [];
+    filterUpdated = {};
+    readFilterDates();
+    renderFilterControls();
+  }
+
+  function refreshFilters(previous) {
+    renderFilterControls();
+    if (nativeCatalog && catalogQuery() !== previous) return loadList({reuse: true});
+    if (!nativeCatalog) renderCatalog({preserve: true});
+  }
+
+  function applyFilters({dates = false} = {}) {
+    const previous = catalogQuery();
+    const selected = name => [...document.querySelectorAll(`#filter-panel input[name="${name}"]:checked`)].map(input => input.value);
+    filterTypes = selected('file-type');
+    filterCreators = selected('creator');
+    filterSessions = selected('session');
+    if (dates) readFilterDates();
+    return refreshFilters(previous);
+  }
+
+  function matchingArtifacts() {
+    if (nativeCatalog) {
+      if (catalogKind === 'meetings') return [];
+      return catalogScope === 'favorites' ? allItems.filter(item => item.favorited) : allItems;
+    }
+    return visibleArtifacts(allItems, {
+      kind: catalogKind, scope: catalogScope,
+      username: currentUser?.username,
+      types: filterTypes, updated: filterUpdated, creators: filterCreators, sessions: filterSessions,
+    });
+  }
+
+  function renderFacetInputs(box, name, choices, selected) {
+    if (!box) return;
+    const signature = JSON.stringify(choices);
+    if (box.dataset.choiceSignature === signature) {
+      for (const label of box.children) {
+        const input = label.children[0];
+        input.checked = selected.includes(input.value);
+      }
+      return;
+    }
+    const focused = document.activeElement?.name === name ? document.activeElement.value : null;
+    const nodes = choices.map(({id, label}) => {
+      const row = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = name;
+      input.value = id;
+      input.checked = selected.includes(id);
+      row.appendChild(input);
+      row.appendChild(document.createTextNode(' ' + label));
+      return row;
+    });
+    box.replaceChildren(...nodes);
+    box.dataset.choiceSignature = signature;
+    if (focused !== null) {
+      nodes.find(row => row.children[0].value === focused)?.children[0].focus();
+    }
   }
 
   function renderFilterChoices() {
@@ -1022,40 +1219,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const creatorEmpty = document.getElementById('filter-creator-empty');
     const sessionBox = document.getElementById('filter-session-list');
     const sessionEmpty = document.getElementById('filter-session-empty');
-    const names = [...new Set((allItems || []).map((item) => item.created_by).filter(Boolean))].sort();
-    if (creatorBox) {
-      creatorBox.replaceChildren();
-      for (const name of names) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'creator';
-        input.value = name;
-        input.checked = filterCreators.includes(name);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + name));
-        creatorBox.appendChild(label);
-      }
-    }
+    const currentFacets = facets?.workspace === workspaceId() && facets.account === currentUser ? facets : null;
+    const loadedNames = allItems.map(item => item.created_by).filter(Boolean);
+    const names = [...new Set([...(currentFacets?.creators || []), ...loadedNames, ...filterCreators])].sort();
+    renderFacetInputs(creatorBox, 'creator', names.map(id => ({id, label: id})), filterCreators);
     if (creatorEmpty) creatorEmpty.hidden = names.length > 0;
-    const sessions = sessionFilterChoices(allItems);
-    if (sessionBox) {
-      sessionBox.replaceChildren();
-      for (const session of sessions) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'session';
-        input.value = session.id;
-        input.checked = filterSessions.includes(session.id);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + session.label));
-        sessionBox.appendChild(label);
-      }
+    const sessions = currentFacets?.sessions?.slice() ?? sessionFilterChoices(allItems);
+    for (const id of filterSessions) {
+      if (!sessions.some(session => session.id === id)) sessions.push({id, label: '对话'});
     }
+    renderFacetInputs(sessionBox, 'session', sessions, filterSessions);
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
+  }
+
+  async function loadFacets() {
+    const workspace = workspaceId();
+    if (!nativeCatalog || !workspace || !currentUser ||
+        (facets?.workspace === workspace && facets.account === currentUser)) return;
+    const pending = {workspace, account: currentUser};
+    facets = pending;
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts?facets=1`).catch(() => null);
+    if (facets !== pending || workspace !== workspaceId() || pending.account !== currentUser) return;
+    if (result?.status !== 200) {
+      facets = null;
+      return;
+    }
+    pending.creators = Array.isArray(result.body.creators) ? result.body.creators : [];
+    pending.sessions = Array.isArray(result.body.sessions) ? result.body.sessions : [];
+    renderFilterChoices();
   }
 
   async function loadMeetings({appendShared = false} = {}) {
@@ -1177,11 +1368,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   function renderCatalog({preserve = false} = {}) {
-    const username = currentUser && currentUser.username;
-    const items = visibleArtifacts(allItems, {
-      kind: catalogKind, scope: catalogScope, username,
-      types: filterTypes, modified: filterModified, creators: filterCreators, sessions: filterSessions,
-    });
+    const items = matchingArtifacts();
+    renderPageFooter(items.length);
     if (catalogKind === 'meetings') renderMeetings();
     else {
       renderList(items, {preserve});
@@ -1202,6 +1390,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const emptyStarred = document.getElementById('empty-starred');
     const emptyMemory = document.getElementById('empty-memory');
     const emptyKind = document.getElementById('empty-kind');
+    const emptyMatches = document.getElementById('empty-no-match');
     const emptyMeetings = document.getElementById('empty-meetings');
     const emptyMessage = document.getElementById('list-empty-message');
     const newWebsite = document.getElementById('new-website');
@@ -1211,20 +1400,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const layoutNote = document.getElementById('layout-note');
     if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
-    const isEmpty = items.length === 0 && (!catalog || catalog.state === 'ready');
+    const isEmpty = items.length === 0 && (!catalog || (catalog.state === 'ready' && !catalog.cursor));
     empty.hidden = !isEmpty;
     if (!isEmpty) return;
     const noWorkspace = emptyMessage && emptyMessage.textContent === '还没有工作区。';
+    const noMatches = !noWorkspace && Boolean(search.value.trim() || appliedFilters());
     const showMeetings = catalogKind === 'meetings' && !noWorkspace;
-    const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace;
-    const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace;
+    const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace && !noMatches;
+    const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace && !noMatches;
     const showAllEmpty = (catalogKind === 'all' && (catalogScope === 'all' || catalogScope === 'mine')
-      && !showStarred && !showMemory && !noWorkspace);
+      && !showStarred && !showMemory && !noWorkspace && !noMatches);
     if (emptyAll) emptyAll.hidden = !showAllEmpty;
     if (emptyStarred) emptyStarred.hidden = !showStarred;
     if (emptyMemory) emptyMemory.hidden = !showMemory;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
-    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace;
+    if (emptyMatches) emptyMatches.hidden = !noMatches;
+    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
     if (emptyKind && !emptyKind.hidden) {
@@ -1591,8 +1782,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           const result = await request('POST', path + '/favorite', {enabled: !item.favorited});
           if (!inScope()) return;
           if (result.status !== 200) { show('error', messageFor(result.body.error, '收藏未保存。')); return; }
-          item.favorited = result.body.favorited;
-          if (!listPanel.hidden) renderCatalog();
+          allItems = allItems.map(row => row.id === item.id ? {...row, favorited: result.body.favorited} : row);
+          if (!listPanel.hidden) renderCatalog({preserve: true});
         } catch {
           if (inScope()) show('error', '网络错误，收藏未保存。');
         } finally {
@@ -1668,7 +1859,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         media.load?.();
       }
     }
-    model3dPreview.setSource('');
+    model3dPreview.instance?.setSource('');
     setWebsitePreview();
     form.hidden = true;
     form.inert = false;
@@ -1707,6 +1898,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (main) main.scrollTop = 0;
     if (item?.id) {
       editorLoading.hidden = false;
+      // The catalog can identify the editor before the exact record arrives.
+      void editorTools(item)?.prepare().catch(() => {});
       const seen = await request('GET', `/v1/workspaces/${workspace}/artifacts/${item.id}`, undefined, undefined, selection.controller.signal)
         .catch(() => ({status: 0, body: {}}));
       if (!activeEditor(selection)) return;
@@ -1718,6 +1911,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return;
       }
       item = seen.body.artifact;
+    }
+    const tools = editorTools(item);
+    if (tools && !tools.instance) {
+      // Chat-linked creation captures the draft during the new button's click.
+      if (!item?.id) current = item;
+      editorLoading.hidden = false;
+      try {
+        await tools.prepare();
+      } catch {
+        if (!activeEditor(selection)) return;
+        hideEditor();
+        showCatalog();
+        show('error', '无法加载编辑器，请刷新页面后重试。');
+        return;
+      }
+      if (!activeEditor(selection)) return;
     }
     current = item;
     fillEditor(current);
@@ -1908,7 +2117,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (!listPanel.hidden) {
         if (!changed || catalog?.activityVersion === snapshot.version) return snapshot.version;
         if (pendingBookmarks.size || openItemMenu || document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true' ||
-            catalog?.state === 'loading') return 'defer';
+            catalog?.state === 'loading' || catalog?.more) return 'defer';
+        facets = null;
         return loadList({background: true, signal});
       }
       if (catalog?.state === 'ready' && catalog.activityVersion !== snapshot.version) catalog.state = 'stale';
@@ -1964,9 +2174,144 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.getElementById('retry-artifact-list').hidden = !retry;
   }
 
-  async function loadList({reuse = false, background = false, signal} = {}) {
+  function catalogQuery() {
+    return listQuery(search.value, nativeCatalog ? {
+      kind: catalogKind,
+      scope: catalogScope,
+      types: filterTypes,
+      creators: filterCreators,
+      sessions: filterSessions,
+      updated: filterUpdated,
+    } : undefined);
+  }
+
+  function sameSelection(page) {
+    return page && page.workspace === workspaceId() && page.account === currentUser && page.query === catalogQuery();
+  }
+
+  function renderPageFooter(visible) {
+    if (!pageFooter || !pageMore || !pageNote) return;
+    const canPage = catalogKind !== 'meetings' && sameSelection(catalog) && catalog.state === 'ready' && catalog.cursor;
+    pageFooter.hidden = !canPage;
+    if (!canPage) return;
+    pageMore.setAttribute('aria-disabled', String(Boolean(catalog.more)));
+    pageMore.textContent = catalog.more ? '正在加载…' : catalog.moreError ? '重试加载更多' : '加载更多作品';
+    pageNote.textContent = catalog.moreError ||
+      (!visible && !catalog.more ? '已加载的作品中没有符合条件的结果。' : '');
+    pageNote.hidden = !pageNote.textContent;
+  }
+
+  async function fetchCatalogPage(workspace, query, {cursor = '', limit = CATALOG_PAGE_SIZE, signal} = {}) {
+    const options = [];
+    if (nativeCatalog) options.push('order=recent');
+    if (cursor) options.push('cursor=' + encodeURIComponent(cursor));
+    if (limit !== CATALOG_PAGE_SIZE) options.push('limit=' + limit);
+    const tail = options.length ? (query ? '&' : '?') + options.join('&') : '';
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}${tail}`, undefined, undefined, signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (result.status === 200 && !Array.isArray(result.body?.items)) return {status: 502, body: {}};
+    return result;
+  }
+
+  function followingCursor(body, previous = '') {
+    return body.cursor !== previous && CATALOG_CURSOR.test(body.cursor || '') ? body.cursor : '';
+  }
+
+  async function readCatalogDepth(workspace, query, depth, signal) {
+    let remaining = depth;
+    let cursor = '';
+    let version;
+    const items = [];
+    const seen = new Set();
+    while (remaining > 0 && !signal.aborted) {
+      const limit = Math.min(remaining, CATALOG_READ_LIMIT);
+      const result = await fetchCatalogPage(workspace, query, {limit, cursor, signal});
+      if (result.status !== 200) return result;
+      if (version && result.body.activity_version && result.body.activity_version !== version) {
+        return {status: 409, body: {error: {message: '作品列表已更新，请重试。'}}};
+      }
+      version = result.body.activity_version;
+      items.push(...result.body.items);
+      remaining -= limit;
+      cursor = followingCursor(result.body, cursor);
+      if (!cursor || !result.body.items.length || seen.has(cursor)) break;
+      seen.add(cursor);
+    }
+    return {status: 200, body: {items, cursor, activity_version: version}};
+  }
+
+  function replaceCatalogItems(items, preserve) {
+    const prior = new Map(preserve ? allItems.map(item => [item.id, item]) : []);
+    allItems = items.map(item => {
+      const old = prior.get(item.id);
+      return old && JSON.stringify(old) === JSON.stringify(item) ? old : item;
+    });
+  }
+
+  async function loadMoreArtifacts() {
+    // Give an explicit pagination click priority over a quiet refresh.
+    if (catalog?.background && sameSelection(catalog) && catalog.before?.cursor) {
+      catalog.controller.abort();
+      catalog = catalog.before;
+    }
+    const page = catalog;
+    if (!sameSelection(page) || page.state !== 'ready' || !page.cursor || page.more || catalogKind === 'meetings') return;
+    const controller = new AbortController();
+    const {signal} = controller;
+    page.more = controller;
+    page.moreError = '';
+    renderPageFooter(matchingArtifacts().length);
+    const initialCursor = page.cursor;
+    const depth = page.depth + CATALOG_PAGE_SIZE;
+    let listed = await fetchCatalogPage(page.workspace, page.query, {cursor: initialCursor, signal});
+    const valid = () => catalog === page && sameSelection(page) && !signal.aborted && page.more === controller;
+    if (!valid()) {
+      if (page.more === controller) page.more = null;
+      return;
+    }
+    let replace = listed.status === 400 || listed.status === 404;
+    if (listed.status === 200 && page.activityVersion && listed.body.activity_version &&
+        page.activityVersion !== listed.body.activity_version) replace = true;
+    if (replace) {
+      let before;
+      do {
+        before = bookmarkRevision;
+        listed = await readCatalogDepth(page.workspace, page.query, depth, signal);
+      } while (valid() && before !== bookmarkRevision);
+    }
+    if (!valid()) {
+      if (page.more === controller) page.more = null;
+      return;
+    }
+    page.more = null;
+    if (listed.status !== 200) {
+      page.moreError = '无法加载更多作品，请重试。';
+      renderPageFooter(matchingArtifacts().length);
+      return;
+    }
+    const earlierIds = new Set(allItems.map(item => item.id));
+    if (replace) replaceCatalogItems(listed.body.items, true);
+    else allItems = [...allItems, ...listed.body.items.filter(item => !earlierIds.has(item.id))];
+    page.depth = depth;
+    page.cursor = followingCursor(listed.body, replace ? '' : initialCursor);
+    page.activityVersion = listed.body.activity_version;
+    activity.seed(page.workspace, page.activityVersion);
+    if (listPanel.hidden || catalogKind === 'meetings') return;
+    const focusNewRow = document.activeElement === pageMore;
+    showCatalog({preserve: true});
+    if (focusNewRow) {
+      const firstAdded = [...document.getElementById('artifact-list').children]
+        .find(row => row.dataset.artifactId && !earlierIds.has(row.dataset.artifactId));
+      if (firstAdded) firstAdded.firstElementChild?.focus();
+      else if (!page.cursor) search.focus();
+    }
+  }
+
+  async function loadList({reuse = false, background = false, signal, initial} = {}) {
     if (catalogKind === 'meetings') {
       if (background) return 'defer';
+      catalog?.more?.abort();
+      if (catalog) catalog.more = null;
       listStatus();
       activity.setScope('');
       await loadMeetings();
@@ -1975,24 +2320,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const workspace = workspaceId();
     if (!workspace || !currentUser) return;
     activity.setScope(workspace);
-    const query = listQuery(search.value);
-    const sameCatalog = catalog?.workspace === workspace && catalog.account === currentUser;
-    if (reuse && sameCatalog && catalog.query === query && catalog.state !== 'stale') {
+    const query = catalogQuery();
+    const sameCatalog = sameSelection(catalog);
+    if (reuse && sameCatalog && catalog.state !== 'stale') {
       listStatus(catalog.message, catalog.state === 'error');
       if (!listPanel.hidden) showCatalog();
       return;
     }
     const before = catalog;
+    before?.controller?.abort();
+    before?.more?.abort();
+    if (before) before.more = null;
+    const controller = new AbortController();
+    const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const bookmarkBefore = bookmarkRevision;
     if (!sameCatalog) allItems = [];
-    const loading = {workspace, account: currentUser, query, state: 'loading', message: '正在加载资料…'};
+    const depth = sameCatalog ? before.depth : CATALOG_PAGE_SIZE;
+    const loading = {
+      workspace, account: currentUser, query, depth, controller, state: 'loading', message: '正在加载资料…',
+      ...(background ? {background, before} : {}),
+    };
     catalog = loading;
     if (!background) {
       listStatus(loading.message);
       if (!listPanel.hidden && (!sameCatalog || !allItems.length)) showCatalog();
+      else renderPageFooter(matchingArtifacts().length);
     }
-    const listed = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}`, undefined, undefined, signal)
-      .catch(() => ({status: 0, body: {}}));
+    const listed = initial && !query && depth === CATALOG_PAGE_SIZE ? {status: 200, body: initial} :
+      await readCatalogDepth(workspace, query, depth, requestSignal);
     if (catalog !== loading || workspaceId() !== workspace || currentUser !== loading.account) return 'defer';
     if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || openItemMenu ||
         bookmarkBefore !== bookmarkRevision ||
@@ -2000,6 +2355,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       catalog = before;
       return signal?.aborted ? false : 'defer';
     }
+    if (!background && bookmarkBefore !== bookmarkRevision) return loadList();
     if (listed.status !== 200) {
       if (background) { catalog = before; return false; }
       loading.state = 'error';
@@ -2009,20 +2365,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     loading.state = 'ready';
     loading.message = '';
+    loading.controller = null;
+    delete loading.background;
+    delete loading.before;
+    loading.cursor = followingCursor(listed.body);
     loading.activityVersion = listed.body.activity_version;
     activity.seed(workspace, loading.activityVersion);
-    const items = listed.body.items || [];
-    if (background && sameCatalog) {
-      const previous = new Map(allItems.map(item => [item.id, item]));
-      allItems = items.map(item => {
-        const prior = previous.get(item.id);
-        return prior && JSON.stringify(prior) === JSON.stringify(item) ? prior : item;
-      });
-    } else {
-      allItems = items;
-    }
+    replaceCatalogItems(listed.body.items || [], sameCatalog);
     if (catalogKind !== 'meetings') listStatus();
-    if (!listPanel.hidden && catalogKind !== 'meetings') showCatalog({preserve: background});
+    if (!listPanel.hidden && catalogKind !== 'meetings') showCatalog({preserve: sameCatalog});
     return loading.activityVersion;
   }
 
@@ -2035,17 +2386,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceSelect.appendChild(option);
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    notifications.setWorkspace(workspaceId());
   }
 
   async function load() {
     const seq = ++workspaceLoad;
     activity.setScope('');
-    const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    notifications.setWorkspace('');
+    const location = document.defaultView?.location;
+    const requested = artifactTargetFromSearch(location?.search);
+    const fragment = new URLSearchParams((location?.hash || '').slice(1));
+    const newKind = newKindFromSearch(location?.search);
+    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
+      !requested?.artifact && !requested?.invalid && !catalogQuery()
+      ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
+          (linkedWorkspace ? '&workspace=' + linkedWorkspace : '')).catch(() => null)
+      : null;
+    const session = await sessionRequest;
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
       hideEditor();
       currentUser = null;
       catalog = null;
+      facets = null;
+      clearFilters();
       allItems = [];
       listStatus();
       loginPanel.hidden = false;
@@ -2064,11 +2430,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
-    const requested = artifactTargetFromSearch(document.defaultView?.location?.search);
-    const fragment = new URLSearchParams((document.defaultView?.location?.hash || '').slice(1));
-    const newKind = newKindFromSearch(document.defaultView?.location?.search);
-    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    const personalRequest = initialCatalog?.then(result => {
+      const items = result?.body?.items;
+      if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
+      const owner = items[0]?.owner_id;
+      const viewer = result.body.viewer_username;
+      if ((!owner && !viewer) || (owner && owner !== session.body.user.id) ||
+          (viewer && viewer !== session.body.user.username)) return null;
+      return result;
+    });
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -2101,12 +2472,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     hideEditor();
     if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      notifications.setWorkspace('');
       meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
       renderCatalog();
       return;
     }
     if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      notifications.setWorkspace('');
       show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
       return;
     }
@@ -2116,10 +2489,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void loadList();
         return;
       }
-      const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
-      void loadList();
-      await opening;
-      return;
+      if (requested.artifact) {
+        const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
+        void loadList();
+        await opening;
+        return;
+      }
     }
     if (newKind) {
       const view = document.defaultView;
@@ -2135,7 +2510,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       view.history?.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
       return;
     }
-    await loadList();
+    const initial = workspaces.length === 1 && workspaces[0].id === workspaceId() &&
+      Array.isArray(space.body.catalog?.items) ? space.body.catalog : undefined;
+    await loadList({initial});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -2154,6 +2531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   workspaceSelect.addEventListener('change', () => {
     workspaceLoad += 1;
+    notifications.setWorkspace(workspaceId());
     hideEditor();
     show('', '');
     meetingLoadedFor = '';
@@ -2161,14 +2539,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     meetingItems = [];
     meetingError = '';
     meetingLoading = false;
+    facets = null;
+    filterCreators = [];
+    filterSessions = [];
+    renderFilterControls();
     if (catalogKind === 'meetings' || artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     void loadList();
   });
-  search.addEventListener('input', () => {
+  function updateSearch() {
     if (catalogKind === 'meetings') renderMeetings();
-    else void loadList();
+    else void loadList({reuse: true});
+  }
+  search.addEventListener('input', event => {
+    if (!event.isComposing) updateSearch();
   });
+  search.addEventListener('compositionend', updateSearch);
   document.getElementById('retry-artifact-list').addEventListener('click', () => loadList());
+  pageMore?.addEventListener('click', loadMoreArtifacts);
   document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
   document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
 
@@ -2281,7 +2668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeNewMenu();
-      closeFilterPanel();
+      closeFilterPanel({focus: true});
     }
   });
 
@@ -2290,14 +2677,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const kind = button.getAttribute('data-kind') || 'all';
       const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
       applyView(kind, scope);
-      await loadList();
+      await loadList({reuse: true});
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
-    button.addEventListener('click', () => {
-      const leavingMeetings = catalogKind === 'meetings';
+    button.addEventListener('click', async () => {
       applyView('all', button.getAttribute('data-scope') || 'all');
-      if (leavingMeetings) void loadList();
+      await loadList({reuse: true});
     });
   }
   for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
@@ -2335,15 +2721,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       applyDirectoryCollapsed(document, false);
     });
   }
-  const filterButton = document.getElementById('filter-button');
-  if (filterButton) {
+  if (filterButton && filterPanel) {
     filterButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      const panel = document.getElementById('filter-panel');
-      if (!panel) return;
-      const open = panel.hidden;
-      panel.hidden = !open;
-      filterButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!filterPanel.hidden) {
+        closeFilterPanel();
+        return;
+      }
+      filterPanel.hidden = false;
+      filterButton.setAttribute('aria-expanded', 'true');
+      void loadFacets();
     });
   }
   for (const button of document.querySelectorAll('.filter-accordion')) {
@@ -2359,9 +2746,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     });
   }
-  for (const input of document.querySelectorAll('#filter-panel input[name="file-type"], #filter-panel input[name="modified"]')) {
-    input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-  }
+  filterPanel?.addEventListener('change', ({target}) => {
+    if (['file-type', 'creator', 'session', 'modified', 'modified-start', 'modified-end'].includes(target?.name)) {
+      return applyFilters({dates: target.name.startsWith('modified')});
+    }
+  });
+  filterReset?.addEventListener('click', () => {
+    const previous = catalogQuery();
+    clearFilters();
+    return refreshFilters(previous);
+  });
   document.addEventListener('click', (event) => {
     const wrap = document.querySelector('.filter-wrap');
     if (wrap && !wrap.contains(event.target)) closeFilterPanel();
@@ -2445,7 +2839,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const selection = editor;
-    if (!activeEditor(selection) || !current || selection.saving) return;
+    if (!activeEditor(selection) || !current || form.hidden || selection.saving) return;
     if (websiteInteractive) renderWebsitePreview();
     selection.saving = true;
     setSaving(true);
@@ -2456,7 +2850,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     const inputTitle = form.elements.title.value;
     const title = inputTitle.trim();
-    richDocument.flush();
+    richDocument.instance?.flush();
     const body = form.elements.body.value;
     const kind = (current && current.kind) || draftKind;
     if (!title) {
@@ -2499,7 +2893,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     } else if (kind === 'spreadsheet') {
       form.inert = true;
-      const workbook = spreadsheet.value();
+      const workbook = spreadsheet.instance.value();
       if (current?.id) {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                                {revision: current.revision, changes: {title, spreadsheet: workbook}});
@@ -3178,6 +3572,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     currentUser = null;
     workspaceSelect.textContent = '';
     catalog = null;
+    facets = null;
+    clearFilters();
     allItems = [];
     meetingItems = [];
     meetingLoadedFor = '';
@@ -3188,6 +3584,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   const view = document.defaultView;
   const initial = viewFromSearch(view && view.location && view.location.search);
+  readFilterDates();
+  renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
     view.addEventListener('popstate', () => {

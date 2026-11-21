@@ -44,14 +44,7 @@ export const validTitle = (v) => typeof v === 'string' && v.trim().length >= 1 &
 export const validBody = (v) => validLongText(v, BODY_MAX)
 export const titleHash = (title) => digest(casefold(title.trim()))
 
-// Row = artifacts.* plus the joined columns the legacy ROW_SELECT produced.
-export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
- s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
- md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
- b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
- cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
- sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json
- FROM artifacts a
+export const ROW_JOINS = ` FROM artifacts a
  LEFT JOIN artifact_meta m ON m.artifact_id=a.id
  LEFT JOIN artifact_sources s ON s.artifact_id=a.id
  LEFT JOIN artifact_media md ON md.artifact_id=a.id
@@ -60,6 +53,14 @@ export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS sour
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
  LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
  LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
+
+// Row = artifacts.* plus the saved kinds, sources and previews.
+export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
+ s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
+ md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
+ b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
+ cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
+ sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json` + ROW_JOINS
 
 export function publicKind(row) {
   if (row.media_mime) return 'media'

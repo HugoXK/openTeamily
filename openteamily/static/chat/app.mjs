@@ -7,6 +7,7 @@ import { mountImageCreator } from './image-create.mjs';
 import { mountModel3dCreator, mountMusicCreator, mountVideoCreator, mountWebsiteCreator } from './video-create.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
+import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
@@ -524,10 +525,8 @@ export function notificationBadgeText(count) {
 }
 
 export function notificationSummary(item) {
-  if (item.kind === 'follow_work') {
-    const author = item.actor_username || '你关注的作者';
-    return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
-  }
+  const workSummary = workNotificationSummary(item);
+  if (workSummary) return workSummary;
   if (item.kind === 'discover.published') {
     const author = item.actor_username || '你关注的作者';
     const type = item.listing_kind === 'agent' ? '智能体' : '作品';
@@ -709,7 +708,7 @@ export function reminderNotice(status, body = {}) {
 const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
 const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
-const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'automation_reminder']);
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder']);
 
 export function notificationTarget(item, workspace) {
   if (item?.kind === 'automation_reminder') return '/automations';
@@ -721,9 +720,10 @@ export function notificationTarget(item, workspace) {
     const target = '/meetings#' + new URLSearchParams({workspace, shared: share});
     return item.path == null || item.path === target ? target : null;
   }
-  const listing = item?.kind === 'follow_work' ? 'work' : item?.kind === 'discover.published' ? item.listing_kind : '';
-  const prefix = listing === 'work' ? '/w/' : listing === 'agent' ? '/a/' : '';
-  if (!prefix) return null;
+  if (item?.kind !== 'discover.published' || item.listing_kind !== 'agent') {
+    return workNotificationTarget(item, workspace);
+  }
+  const prefix = '/a/';
   const slug = item.slug ?? (typeof item.path === 'string' && item.path.startsWith(prefix) ? item.path.slice(prefix.length) : '');
   if (typeof slug !== 'string' || !NOTIFICATION_SLUG.test(slug)) return null;
   const target = prefix + slug;

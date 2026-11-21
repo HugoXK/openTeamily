@@ -463,13 +463,25 @@ function teamsRoutes(host) {
   return [
     {
       method: 'GET', path: /^\/v1\/workspaces$/,
-      async handle({ query }) {
+      async handle({ query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           const binding = host.call('agents/personal-binding', {})
           if (q.get('scope') === 'personal') {
             const personal = personalWorkspace(await binding, env)
-            return [200, { items: personal ? [personal] : [], cursor: null }]
+            const result = { items: personal ? [personal] : [], cursor: null }
+            if (q.get('include') === 'artifacts') {
+              Object.assign(result, platformViewer(call))
+              if (personal && (personal.owner_id || result.viewer_username) &&
+                  (!q.has('workspace') || q.get('workspace') === personal.id)) {
+                const order = q.get('order') === 'recent' ? '?order=recent' : ''
+                const catalog = await host.call('artifacts/v1', {
+                  method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts${order}`,
+                }).catch(() => null)
+                if (catalog?.status === 200 && Array.isArray(catalog.body?.items)) result.catalog = catalog.body
+              }
+            }
+            return [200, result]
           }
           const bs = client(host)
           const limit = Math.min(Math.max(Number(q.get('limit') || 20) || 20, 1), 100)
@@ -1132,7 +1144,7 @@ function workCommentItem(row) {
   }
 }
 
-function discoverViewer(call) {
+function platformViewer(call) {
   // The platform gateway sets this header from the session that selected this runtime.
   const viewer = call?.request?.headers?.get('x-ot-owner-username')
   return typeof viewer === 'string' && PLATFORM_USERNAME.test(viewer) ? {viewer_username: viewer} : {}
@@ -1159,7 +1171,7 @@ function discoverRoutes(host) {
       ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, {items, cursor: (popular ? data.next_cursor : data.next_before) ?? null, ...discoverViewer(call)}]
+    return [200, {items, cursor: (popular ? data.next_cursor : data.next_before) ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
@@ -1318,7 +1330,7 @@ function discoverRoutes(host) {
           const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null
-          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...discoverViewer(call)}]
+          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...platformViewer(call)}]
         })
       },
     },

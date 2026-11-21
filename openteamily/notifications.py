@@ -4,11 +4,8 @@ Self-written for OpenTeamily; no upstream or Teamily source. A notification is
 created only when a human message names another human member of the same
 conversation as ``@username``. Visibility is re-checked on every read: a
 recipient who left the conversation or a retracted message stops showing.
-Group agent request completion is also listed for the requester, and saving a work
-in the artifact library notifies the other workspace members who can see it. The
-artifact write side only; the /artifacts notification button is a later slice.
-A due message reminder is listed too, derived from the one-shot automation run it fires.
-Creator publication notices and their settings live on Bot Social.
+Group agent request completion and due message reminders are also listed.
+Work shares and creator publication notices live on Bot Social.
 """
 import json
 import re
@@ -33,19 +30,6 @@ CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  PRIMARY KEY(reply_id, user_id));
-CREATE TABLE IF NOT EXISTS artifact_notifications (
- id TEXT PRIMARY KEY,
- workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
- user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
- action TEXT NOT NULL CHECK(action IN ('created','updated')),
- seq INTEGER NOT NULL,
- created INTEGER NOT NULL,
- read INTEGER NOT NULL DEFAULT 0 CHECK(read IN (0,1)),
- UNIQUE(artifact_id, user_id));
-CREATE INDEX IF NOT EXISTS artifact_notification_inbox
- ON artifact_notifications(workspace_id, user_id, seq);
 CREATE TABLE IF NOT EXISTS automation_reminder_reads (
  run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -101,75 +85,6 @@ VISIBLE = '''
  LEFT JOIN social_message_state st ON st.message_id=n.message_id
  WHERE n.workspace_id=? AND n.user_id=? AND COALESCE(st.retracted,0)=0
 '''
-
-
-# Workspace members who can see the artifact library: the owner plus every member
-# who is not suspended. Roles do not filter the library (artifacts.listing has no
-# role predicate), so suspension is the only exclusion here.
-ARTIFACT_RECIPIENTS = '''
-SELECT w.owner_id AS user_id FROM workspaces w WHERE w.id=?
-UNION
-SELECT m.user_id FROM workspace_members m WHERE m.workspace_id=?
- AND NOT EXISTS (SELECT 1 FROM workspace_member_suspensions s
-                 WHERE s.workspace_id=m.workspace_id AND s.user_id=m.user_id)
-'''
-
-
-def wants_artifact(db, workspace_id, user_id):
-    """Per-user opt-out for workspace artifact saves.
-
-    #284 (notification_prefs) has not landed, so there is no preference row to read
-    yet: everyone with library access gets the notice. When the preference table
-    lands, this is the one place that has to return False for members who switched
-    artifact notices off.
-    """
-    return True
-
-
-def record_artifact(db, workspace_id, actor_id, artifact_id, action, now):
-    """Insert one unread notice per recipient; saving the same artifact again never duplicates.
-
-    The row is keyed (artifact_id, user_id), so a later edit of the same work does not
-    add a second line; the first save keeps the row a member already saw.
-    """
-    rows = db.execute(ARTIFACT_RECIPIENTS, (workspace_id, workspace_id)).fetchall()
-    seq = db.execute('SELECT COALESCE(MAX(seq),0) FROM artifact_notifications').fetchone()[0]
-    written = 0
-    for row in rows:
-        user_id = row['user_id']
-        if user_id == actor_id or not wants_artifact(db, workspace_id, user_id):
-            continue
-        seq += 1
-        cursor = db.execute(
-            'INSERT OR IGNORE INTO artifact_notifications '
-            '(id,workspace_id,user_id,actor_id,artifact_id,action,seq,created,read) '
-            'VALUES(?,?,?,?,?,?,?,?,0)',
-            (uuid4().hex, workspace_id, user_id, actor_id, artifact_id, action, seq, now))
-        written += 1 if cursor.rowcount > 0 else 0
-    return written
-
-
-# Visibility is re-checked on every read, like the mention source: a recipient who was
-# suspended or removed, or a work that was deleted, stops showing.
-VISIBLE_ARTIFACTS = '''
- FROM artifact_notifications n
- JOIN artifacts a ON a.id=n.artifact_id AND a.workspace_id=n.workspace_id
- JOIN users ac ON ac.id=n.actor_id
- JOIN workspaces w ON w.id=n.workspace_id
- WHERE n.workspace_id=? AND n.user_id=?
-  AND (w.owner_id=n.user_id OR EXISTS (
-        SELECT 1 FROM workspace_members m
-        WHERE m.workspace_id=n.workspace_id AND m.user_id=n.user_id
-         AND NOT EXISTS (SELECT 1 FROM workspace_member_suspensions s
-                         WHERE s.workspace_id=m.workspace_id AND s.user_id=m.user_id)))
-'''
-
-
-def artifact_view(row):
-    return {'id': row['id'], 'kind': 'artifact', 'artifact_id': row['artifact_id'],
-            'artifact_title': row['artifact_title'], 'action': row['action'],
-            'actor_id': row['actor_id'], 'actor_username': row['actor_username'],
-            'created': row['created'], 'read': bool(row['read'])}
 
 
 def view(row):
@@ -268,13 +183,8 @@ def listing(db, workspace_id, user_id, unread_only=False, now=0):
         'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
         '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
         + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    artifacts_listed = db.execute(
-        'SELECT n.*, a.title AS artifact_title, ac.username AS actor_username' + VISIBLE_ARTIFACTS
-        + (' AND n.read=0' if unread_only else '') + ' ORDER BY n.seq DESC LIMIT ?',
-        (workspace_id, user_id, LIMIT)).fetchall()
     reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL' if unread_only else '')
     items = ([view(row) for row in rows] + [reply_view(row) for row in replies]
-             + [artifact_view(row) for row in artifacts_listed]
              + [reminder_view(row) for row in reminders])
     items.sort(key=lambda item: item['created'], reverse=True)
     return items[:LIMIT]
@@ -283,10 +193,8 @@ def listing(db, workspace_id, user_id, unread_only=False, now=0):
 def unread_count(db, workspace_id, user_id, now=0):
     mentions = db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
     replies = db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL', (workspace_id, user_id)).fetchone()[0]
-    saved = db.execute('SELECT COUNT(*)' + VISIBLE_ARTIFACTS + ' AND n.read=0',
-                       (workspace_id, user_id)).fetchone()[0]
     reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL')
-    return mentions + replies + saved + len(reminders)
+    return mentions + replies + len(reminders)
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -299,8 +207,6 @@ def mark_read(db, workspace_id, user_id, notification_id=None, now=0):
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_replies(db, workspace_id, user_id)
-        db.execute('UPDATE artifact_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
-                   (workspace_id, user_id))
         _mark_reminders(db, workspace_id, user_id, now)
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',

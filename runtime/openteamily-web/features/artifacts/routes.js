@@ -3,9 +3,9 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
-  canEdit, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
+  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
-  unlinkMedia, updateArtifact, view, versionView,
+  unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
 import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
@@ -45,15 +45,52 @@ function activity(req, workspaceId) {
   return { body: artifactId ? {version, revision: rows.find((row) => row.id === artifactId)?.revision ?? null} : {version} }
 }
 
+const FILE_TYPES = new Set([
+  'document', 'website', 'image', 'video', 'audio', 'model3d',
+  'whiteboard', 'spreadsheet', 'slides', 'dashboard', 'messages',
+])
+
+function catalogQuery(query) {
+  const types = new Set(query.getAll('type'))
+  const creators = new Set(query.getAll('creator'))
+  const sessions = new Set(query.getAll('session'))
+  const single = new URLSearchParams(query)
+  for (const key of ['type', 'creator', 'session']) single.delete(key)
+  const { limit, cursor, args } = pagination(single, ['q', 'scope', 'kind', 'order', 'updated_since', 'updated_before'])
+  const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
+  const scope = args.get('scope') ?? 'all'
+  const kind = args.get('kind') ?? 'all'
+  const order = args.get('order') ?? 'id'
+  const since = catalogTime(args.get('updated_since'))
+  const before = catalogTime(args.get('updated_before'))
+  const validLabel = (value, max) => value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value)
+  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
+      !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
+      !['id', 'recent'].includes(order) || [...types].some(type => !FILE_TYPES.has(type)) ||
+      [...creators].some(value => !validLabel(value, 100)) || [...sessions].some(value => !validLabel(value, 128)) ||
+      (since !== null && before !== null && since >= before)) refuse(400, 'invalid', 'Invalid artifact request')
+  return {limit, cursor, filters: {needle, scope, kind, recent: order === 'recent', types, creators, sessions, since, before}}
+}
+
+function catalogTime(value) {
+  if (value === null) return null
+  if (!/^-?[0-9]{1,12}$/.test(value)) refuse(400, 'invalid', 'Invalid artifact dates')
+  return Number(value)
+}
+
 export async function dispatch(req, workspaceId, artifactId, action) {
   const context = ctx(req)
   if (!artifactId && req.method === 'GET') {
-    const { limit, cursor, args } = pagination(req.query, ['q'])
-    const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
-    if (needle.length > 80) refuse(400, 'invalid', 'Invalid artifact request')
+    if (req.query.has('facets')) {
+      if (req.query.size !== 1 || req.query.get('facets') !== '1') refuse(400, 'invalid', 'Invalid artifact request')
+      return { body: catalogFacets(req.store, workspaceId) }
+    }
+    const {limit, cursor, filters} = catalogQuery(req.query)
     const { rows: activityRows, version } = workspaceActivity(req, workspaceId)
-    const rows = listing(req.store, workspaceId, cursor, limit + 1, needle)
     const favorites = new Set(activityRows.filter((row) => row.favorited).map((row) => row.id))
+    const rows = listing(req.store, workspaceId, cursor, limit + 1, {
+      ...filters, favorites, owner: req.owner, ownerUsername: req.ownerUsername,
+    })
     const items = rows.slice(0, limit).map((row) => view(row, false, { favorited: favorites.has(row.id) }))
     return { body: { items, cursor: rows.length > limit ? rows[limit - 1].id : null, activity_version: version } }
   }
@@ -140,8 +177,11 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   recordVersion(req.store, row)
   if (req.method !== 'GET' || (req.queryString && !exporting)) refuse(400, 'invalid', 'Invalid artifact request')
   if (!version) {
-    const items = req.store.all('SELECT * FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC', row.id)
-      .map((item) => versionView(item, false, req.store))
+    const user = usernames(req.store)
+    const items = req.store.all(`SELECT revision, title, kind, created, created_by, mime, byte_count, filename,
+      CASE WHEN kind='document' THEN body ELSE '' END AS body
+      FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC`, row.id)
+      .map((item) => versionView(item, false, user))
     return { body: { items } }
   }
   const revision = Number(version)
@@ -149,7 +189,7 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   const snapshot = req.store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, revision)
   if (!snapshot) refuse(404, 'not_found', 'Version not found')
   if (exporting) return exportResult(snapshot, context.featureDir, workspaceId, true, parseExportFormat(req.query))
-  return { body: { version: versionView(snapshot, true, req.store) } }
+  return { body: { version: versionView(snapshot, true, usernames(req.store)) } }
 }
 
 export async function shares(req, workspaceId, artifactId, shareId, revoking) {

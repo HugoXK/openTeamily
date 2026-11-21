@@ -121,6 +121,32 @@ function ensureProfileColumns(ot: OtContext) {
 
 const ACTIVE_NOTIFICATION_LISTING = `FROM ot_listings listing
   WHERE listing.id=json_extract(ot_notifications.data,'$.listing_id') AND listing.listed=1`;
+const VISIBLE_ARTIFACT_NOTICE = `SELECT 1 FROM ot_messages message
+  JOIN ot_message_attachments attachment ON attachment.message_id=message.id
+  JOIN ot_conversations conversation ON conversation.id=message.conversation_id
+  JOIN ot_conversation_members viewer ON viewer.conversation_id=conversation.id
+    AND viewer.owner_id=ot_notifications.owner_id
+  WHERE message.id=json_extract(ot_notifications.data,'$.message_id')
+    AND conversation.id=json_extract(ot_notifications.data,'$.conversation_id')
+    AND message.retracted=0 AND attachment.resource IS NOT NULL
+    AND COALESCE(conversation.dm_key,'') NOT LIKE 'agent:%'
+    AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages hidden
+      WHERE hidden.message_id=message.id AND hidden.owner_id=viewer.owner_id)
+    AND (
+      EXISTS (SELECT 1 FROM ot_team_members member
+        WHERE member.team_id=conversation.team_id AND member.owner_id=viewer.owner_id AND member.suspended=0)
+      OR (conversation.team_id IS NULL AND (conversation.account_group=1 OR (conversation.kind='dm' AND (
+        EXISTS (SELECT 1 FROM ot_contacts contact
+          WHERE contact.owner_a=MIN(viewer.owner_id,message.author_id)
+            AND contact.owner_b=MAX(viewer.owner_id,message.author_id) AND contact.status='accepted')
+        OR EXISTS (SELECT 1 FROM ot_team_members viewer_team
+          JOIN ot_team_members sender_team ON sender_team.team_id=viewer_team.team_id
+          WHERE viewer_team.owner_id=viewer.owner_id AND viewer_team.suspended=0
+            AND sender_team.owner_id=message.author_id AND sender_team.suspended=0)
+      ))))
+    )`;
+const WORK_NOTIFICATION = `(kind='artifact.shared' OR (kind='discover.published' AND EXISTS (
+  SELECT 1 ${ACTIVE_NOTIFICATION_LISTING} AND listing.kind='work')))`;
 const NOTIFICATION_DATA = `CASE WHEN kind='discover.published' THEN (
   SELECT json_set(ot_notifications.data,'$.slug',listing.slug,'$.kind',listing.kind,
     '$.listing_kind',listing.kind,'$.title',listing.title) ${ACTIVE_NOTIFICATION_LISTING}
@@ -133,7 +159,8 @@ function notificationVisibility(workspace: string | null | undefined, otherEvent
       AND s.workspace_id IS json_extract(ot_notifications.data,'$.workspace_id')
       ${workspace === undefined ? "" : "AND s.workspace_id IS ?"} AND ${MEETING_RECIPIENT_VISIBLE})
       ELSE (${otherEvents}) AND (kind<>'discover.published' OR EXISTS (
-        SELECT 1 ${ACTIVE_NOTIFICATION_LISTING})) END`,
+        SELECT 1 ${ACTIVE_NOTIFICATION_LISTING}))
+        AND (kind<>'artifact.shared' OR EXISTS (${VISIBLE_ARTIFACT_NOTICE})) END`,
     args: workspace === undefined ? args : [workspace, ...args],
   };
 }
@@ -186,6 +213,11 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
       OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL AND json_extract(data,'$.conversation_id') IS NULL)`,
     [wid, team.id, team.id]);
   };
+  const scopedNotifications = (owner: string, source: Record<string, unknown>) => {
+    assert(source.kind === undefined || source.kind === "work", 400, "invalid_request", "invalid notification kind");
+    const scope = notificationScope(owner, source);
+    return source.kind === "work" ? {...scope, sql: scope.sql + ` AND ${WORK_NOTIFICATION}`} : scope;
+  };
   app.get("/v1/ot/notifications", async (req, reply) => {
     reply.header("cache-control", "private, no-store");
     const me = ot.me(req), q = query(req);
@@ -194,7 +226,7 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
     const latest = one(q.latest, "latest");
     assert(latest === undefined || latest === "1", 400, "invalid_request", "latest must be 1");
     const order = latest ? "DESC" : "ASC";
-    const scope = notificationScope(me.ownerId, q);
+    const scope = scopedNotifications(me.ownerId, q);
     const rows = ot.all<any>(`SELECT id,seq,kind,created_at,read_at,${NOTIFICATION_DATA}
       FROM ot_notifications WHERE owner_id = ? AND seq > ?` + scope.sql
       + (q.unread === "1" ? " AND read_at IS NULL" : "") + ` ORDER BY seq ${order} LIMIT ?`, me.ownerId, after, ...scope.args, limit);
@@ -203,7 +235,7 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
   });
   app.post("/v1/ot/notifications/read", async (req, reply) => {
     reply.header("cache-control", "private, no-store");
-    const me = ot.me(req), b = body(req), scope = notificationScope(me.ownerId, b);
+    const me = ot.me(req), b = body(req), scope = scopedNotifications(me.ownerId, b);
     let suffix = "", args: any[] = [];
     if (b.all === true && b.notification_id === undefined) { /* all visible */ }
     else if (typeof b.notification_id === "string" && b.all === undefined) {

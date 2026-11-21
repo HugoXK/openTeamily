@@ -84,10 +84,11 @@ export function movedTarget(input, origin, table = MOVED) {
   return row ? { feature: row[1], path: url.pathname + url.search } : null;
 }
 
-export async function readWorkspaceChoices(request, sharedPath) {
+export async function readWorkspaceChoices(request, sharedPath, personalRequest) {
   const unavailable = {status: 0, body: {}};
   const shared = request('GET', sharedPath).catch(() => unavailable);
-  const initial = await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
+  const initial = await personalRequest ??
+    await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
   const local = initial.status === 200 ? (initial.body.items || []) : [];
   if (!local.length) return {initial: await shared, supplemental: null};
   const supplemental = shared.then(result => {

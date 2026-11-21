@@ -35,6 +35,51 @@ function fakeFetch(answer = () => ({ ok: true })) {
   return { fetch, calls }
 }
 
+test('personal workspace can include its native catalog and never reads a linked team catalog', async t => {
+  const workspace = 'a'.repeat(32)
+  const owner = 'c'.repeat(32)
+  const previousOwner = process.env.OPENTEAMILY_OWNER_USER_ID
+  process.env.OPENTEAMILY_OWNER_USER_ID = owner
+  t.after(() => {
+    if (previousOwner === undefined) delete process.env.OPENTEAMILY_OWNER_USER_ID
+    else process.env.OPENTEAMILY_OWNER_USER_ID = previousOwner
+  })
+  const catalog = { items: [{ id: 'd'.repeat(32) }], cursor: null, activity_version: 'version' }
+  const reads = []
+  let available = true
+  const endpoint = teams({ call: async (endpoint, payload) => {
+    if (endpoint === 'agents/personal-binding') return { workspace_id: workspace, agent_id: 'b'.repeat(32) }
+    assert.equal(endpoint, 'artifacts/v1')
+    reads.push(payload)
+    if (!available) throw new Error('unavailable')
+    return { status: 200, body: catalog }
+  } }).endpoints.v1
+  const get = (query, call) => endpoint({ method: 'GET', path: '/v1/workspaces?scope=personal' + query }, call)
+  const normal = await get('')
+  assert.equal(normal.status, 200)
+  assert.equal(normal.body.items[0].owner_id, owner)
+  assert.equal(normal.body.catalog, undefined)
+  assert.deepEqual((await get('&include=artifacts&workspace=' + 'e'.repeat(32))).body, normal.body)
+  assert.equal(reads.length, 0)
+  for (const query of ['&include=artifacts', '&include=artifacts&workspace=' + workspace]) {
+    const result = await get(query)
+    assert.deepEqual(result.body, { ...normal.body, catalog })
+  }
+  assert.deepEqual(reads, Array(2).fill({ method: 'GET', path: '/v1/workspaces/' + workspace + '/artifacts' }))
+  assert.deepEqual((await get('&include=artifacts&order=recent')).body.catalog, catalog)
+  assert.equal(reads.at(-1).path, '/v1/workspaces/' + workspace + '/artifacts?order=recent')
+  available = false
+  assert.deepEqual((await get('&include=artifacts')).body, normal.body)
+  available = true
+  delete process.env.OPENTEAMILY_OWNER_USER_ID
+  assert.equal((await get('&include=artifacts')).body.catalog, undefined)
+  const request = { headers: new Headers({ 'x-ot-owner-username': 'personal-test' }) }
+  const gateway = await get('&include=artifacts', { request })
+  assert.equal(gateway.body.viewer_username, 'personal-test')
+  assert.equal(gateway.body.items[0].owner_id, null)
+  assert.deepEqual(gateway.body.catalog, catalog)
+})
+
 test('requests carry the saved connector token to exactly the configured server', async () => {
   const f = fakeFetch(() => ({ handle: 'ann.home', display_name: 'Ann' }))
   const bs = createBotSocial({ server: SERVER + '/', credentialsPath: creds(), fetch: f.fetch })
@@ -186,4 +231,32 @@ test('the native inbox requests recent scoped notices and constructs safe meetin
   assert.deepEqual(f.calls.at(-1).body,{notification_id:'notice-7',workspace_id:team})
   assert.equal((await endpoint({method:'GET',path:`/v1/workspaces/${'e'.repeat(32)}/notifications`})).status,404)
   assert.equal(f.calls.length,4)
+})
+
+test('Space work notices map account messages to the recipient workspace and scope their read updates', async t => {
+  const workspace = 'a'.repeat(32)
+  const conversation = 'otc_' + 'B'.repeat(26)
+  const message = 'otm_' + 'C'.repeat(26)
+  const notice = {id:'fixture-notice',seq:8,kind:'artifact.shared',created_at:9500,read:false,
+    data:{conversation_id:conversation,message_id:message,title:'排期表',actor_username:'Alice'}}
+  const f = fakeFetch((url, init) => init.method === 'GET' ? {unread:3,notifications:[
+    notice, {...notice,id:'malformed',data:{...notice.data,conversation_id:'../profile'}},
+  ]} : {unread:0})
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
+  t.after(() => setSharedBotSocial(undefined))
+  const endpoint = social({async call() { return {workspace_id:workspace} }}).endpoints.v1
+  const base = `/v1/workspaces/${workspace}/notifications`
+  const list = await endpoint({method:'GET',path:base+'?kind=work&limit=1'})
+  assert.deepEqual(list, {status:200,body:{limit:1,unread_count:3,items:[{
+    id:'fixture-notice',seq:8,kind:'artifact.shared',created:9,read:false,
+    conversation_id:conversation,message_id:message,workspace_id:workspace,title:'排期表',actor_username:'Alice',
+    path:`/chat#workspace=${workspace}&social=${conversation}&message=${message}`,
+  }]}})
+  assert.equal(f.calls[0].url,SERVER+'/v1/ot/notifications?limit=1&latest=1&personal=1&kind=work')
+  const read = await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'work'}})
+  assert.deepEqual(read,{status:200,body:{unread_count:0}})
+  assert.deepEqual(f.calls[1].body,{all:true,personal:true,kind:'work'})
+  assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
+  assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
+  assert.equal(f.calls.length,2)
 })
