@@ -1,4 +1,5 @@
 import { rank } from '../chat/recall.js'
+import { personalMemoryWorkspace, sharedMemoryWorkspaces } from './access.js'
 // Memory pages (legacy app.py memory_* + memory.py): page CRUD, bounded
 // revision history with restore, Markdown export and the "做梦" duplicate-
 // paragraph consolidation, all executed inside the user's DS-Bot.
@@ -255,9 +256,10 @@ async function versions(req, workspaceId, pageId, revision, restoring) {
       const rows = req.store.all('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision<? ORDER BY revision DESC LIMIT ?', workspaceId, pageId, row.revision, 20)
       return { body: { current: row.revision, items: rows.map((item) => versionView(item, user)) } }
     }
-    const seen = loadVersion(number)
+    const seen = loadVersion(number) ?? (number === row.revision
+      ? {...row, created:row.updated, created_by:row.updated_by} : null)
     if (!seen) refuse(404, 'not_found', 'Version not found')
-    return { body: { version: versionBodyView(seen, user) } }
+    return { body: { version: versionBodyView(seen, user), current: row.revision } }
   }
   if (req.queryString || req.method !== 'POST' || number === null || restoring !== 'restore') refuse(400, 'invalid', 'Invalid version request')
   const body = requireBodyKeys(await req.json(), ['revision'])
@@ -393,19 +395,16 @@ export function allPages(store, payload) {
 }
 
 export async function recallAcrossWorkspaces(store, host, payload) {
-  recallWorkspace(payload)
+  const workspace = recallWorkspace(payload)
   const query = payload?.query
   if (typeof query !== 'string' || query.length > 4000 || !query.trim()) return []
-  const [binding, teams] = await Promise.all([
-    host.call('agents/personal-binding',{}).catch(() => null),
-    host.call('teams/activeWorkspaces',{}).catch(() => []),
+  const [personal, teams] = await Promise.all([
+    personalMemoryWorkspace(host),
+    sharedMemoryWorkspaces(host),
   ])
-  const workspaces = new Map()
-  if (/^[0-9a-f]{32}$/.test(binding?.workspace_id || '')) workspaces.set(binding.workspace_id,'个人工作区')
-  for (const team of teams) {
-    if (/^[0-9a-f]{32}$/.test(team?.id || '')) workspaces.set(team.id,team.name)
-  }
-  if (!workspaces.size) return []
+  const workspaces = new Map(teams.map(team => [team.id, team.name]))
+  if (personal) workspaces.set(personal,'个人工作区')
+  if (!workspaces.has(workspace)) return []
   const ids = JSON.stringify([...workspaces.keys()])
   const pages = store.all(`SELECT id,workspace_id,revision,title,body FROM memory_pages
     WHERE workspace_id IN (SELECT value FROM json_each(?))`,ids)
@@ -422,8 +421,14 @@ export async function recallAcrossWorkspaces(store, host, payload) {
   return rank(query,pages,{limit:6})
 }
 
-export function search(store, needle, limit) {
+export async function search(store, host, needle, limit) {
   const key = casefold(needle)
-  return store.all('SELECT * FROM memory_pages ORDER BY updated DESC, id').filter((row) => casefold(row.title).includes(key) || casefold(row.body).includes(key))
+  const candidates = store.all('SELECT id, workspace_id, title, body, updated FROM memory_pages ORDER BY updated DESC, id')
+    .filter(row => casefold(row.title).includes(key) || casefold(row.body).includes(key))
+  if (!candidates.length) return []
+  const personal = await personalMemoryWorkspace(host)
+  const scopes = candidates.some(row => row.workspace_id !== personal) ? await sharedMemoryWorkspaces(host) : []
+  const allowed = new Set([personal, ...scopes.map(team => team.id)])
+  return candidates.filter(row => allowed.has(row.workspace_id))
     .slice(0, limit).map((row) => ({ kind: 'memory', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: snippet(row.body), updated: row.updated, href: `/memory?workspace=${row.workspace_id}&page=${row.id}` }))
 }

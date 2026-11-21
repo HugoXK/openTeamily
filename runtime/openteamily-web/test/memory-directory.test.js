@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
-import { boot, key, WS } from './helpers.js'
+import { bootMemory as boot, key, WS } from './helpers.js'
 
 const OTHER_WS = 'b'.repeat(32)
 const route = (workspace = WS) => `/v1/workspaces/${workspace}/memory`
@@ -55,7 +55,7 @@ test('directory uses stable recent keyset paging across tied timestamps and a de
 })
 
 test('directory searches titles, topics and full body with bounded highlight offsets and workspace filters', async () => {
-  const bot = await boot()
+  const bot = await boot(undefined, {teams:[OTHER_WS]})
   const title = await add(bot, {title: 'Launch Plan', body: 'Nothing else.'})
   const topic = await add(bot, {title: '发布会议', body: 'Launch plan in body too.', topics: ['Launch Plan', '团队']})
   const long = await add(bot, {
@@ -103,7 +103,7 @@ test('directory searches titles, topics and full body with bounded highlight off
 })
 
 test('recent cursors are bound to their workspace and filters while authorization stays volume-local', async () => {
-  const bot = await boot()
+  const bot = await boot(undefined, {teams:[OTHER_WS]})
   await add(bot, {title: '备忘一', body: '结果', topics: ['工作']})
   await add(bot, {title: '备忘二', body: '结果', topics: ['工作']})
   const query = {q: '结果', topic: '工作', limit: '1'}

@@ -60,6 +60,45 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
   assert.equal((await call('GET', base(meeting.id))).status, 404)
 })
 
+test('meeting creation replays an omitted start time across clock changes', async t => {
+  const bot = await boot()
+  const call = (...args) => bot.call('meetings', ...args)
+  const startedAt = 1795212000
+  let now = startedAt * 1000
+  t.mock.method(Date, 'now', () => now)
+  const k = key()
+  const saved = await call('POST', base(), body, k)
+  assert.equal(saved.status, 201)
+  assert.equal(saved.body.meeting.started_at, startedAt)
+
+  now += 2000
+  assert.deepEqual(await call('POST', base(), body, k), {status: 200, body: saved.body})
+  assert.deepEqual(await call('POST', base(), {...body, started_at: null}, k), {status: 200, body: saved.body})
+  assert.equal((await call('POST', base(), {...body, started_at: startedAt}, k)).status, 409)
+  assert.equal((await call('POST', base(), {...body, transcript: '更新后的正文'}, k)).status, 409)
+  assert.equal((await call('GET', base())).body.items.length, 1)
+})
+
+test('meeting creation recognizes the original fingerprint of older saved meetings after editing the start time', async t => {
+  const bot = await boot()
+  const call = (...args) => bot.call('meetings', ...args)
+  const startedAt = 1795212000
+  let now = startedAt * 1000
+  t.mock.method(Date, 'now', () => now)
+  const k = key()
+  // An explicit time equal to creation time yields the fingerprint stored by an older implicit save.
+  const request = {...body, started_at: startedAt}
+  const saved = await call('POST', base(), request, k)
+  assert.equal(saved.status, 201)
+  now += 2000
+  const edited = await call('POST', base(saved.body.meeting.id), {revision: 1, changes: {started_at: startedAt + 60}})
+  assert.equal(edited.status, 200)
+  assert.deepEqual(await call('POST', base(), body, k), edited)
+  assert.deepEqual(await call('POST', base(), request, k), edited)
+  assert.equal((await call('POST', base(), {...request, started_at: startedAt + 60}, k)).status, 409)
+  assert.equal((await call('POST', base(), {...body, transcript: '更新后的正文'}, k)).status, 409)
+})
+
 test('meeting list filters all saved metadata before paging in start-time order', async () => {
   const bot = await boot()
   const otherWorkspace = 'b'.repeat(32)

@@ -11,6 +11,7 @@ import { createAgentReplier, replyPrompt } from '../lib/c/agent-replies.js'
 import messenger from '../features/messenger/index.js'
 
 const SERVER = 'https://social.example.test'
+const CLAIM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'ot-cm-'))
   mkdirSync(join(dir, 'bot'))
@@ -130,12 +131,14 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   const replier = createAgentReplier({bs,host,stateFile:join(fixture(),'inbox.json')})
   const pass = replier.once()
   await first.promise
+  const claim_id = posts[0].body.claim_id
+  assert.match(claim_id, CLAIM_ID)
   assert.deepEqual(posts.slice(0,2),[
-    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,source_revision:3}},
-    {path:'/v1/ot/agent-reply-jobs/otj_live/progress',body:{attempt:2,revision:1,text:'First visible'}},
+    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3}},
+    {path:'/v1/ot/agent-reply-jobs/otj_live/progress',body:{attempt:2,claim_id,revision:1,text:'First visible'}},
   ])
   await Promise.all([second.promise,delay(350)])
-  assert.deepEqual(posts[2].body,{attempt:2,revision:2,text:'界'.repeat(4000)})
+  assert.deepEqual(posts[2].body,{attempt:2,claim_id,revision:2,text:'界'.repeat(4000)})
   final.resolve('Complete answer')
   assert.equal((await pass).replied,1)
   publish('late delta')
@@ -144,12 +147,140 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   assert.equal(posts[3].body.reply_to,'otm_source')
   assert.equal(posts[3].body.body,'Complete answer')
   assert.equal(posts[3].body.attempt,2)
+  assert.equal(posts[3].body.claim_id,claim_id)
+})
+
+test('a managed start replays its claim after a transient failure but a stale contender cannot run', {timeout:3000}, async t => {
+  for (const missedResponse of ['connection dropped', '503']) {
+    await t.test(missedResponse, async () => {
+      const dir = fixture()
+      const committed = Promise.withResolvers()
+      const job = {job_id:'otj_claim',attempt:4,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+        mode:'mention',message:{id:'otm_source',revision:7}}
+      const claims = [], final = [], turns = []
+      let claimed
+      const bs = createBotSocial({
+        server:SERVER, credentialsPath:join(dir,'bot','flybot-social.json'),
+        async fetch(url, options) {
+          const path = url.slice(SERVER.length)
+          if (path.startsWith('/v1/ot/agent-inbox?')) return Response.json({cursor:0,jobs:[job]})
+          const body = JSON.parse(options.body)
+          if (path === '/v1/ot/agent-reply-jobs/otj_claim') {
+            assert.equal(body.action,'start')
+            assert.match(body.claim_id,CLAIM_ID)
+            claims.push(options.body)
+            if (!claimed) {
+              claimed = body.claim_id
+              committed.resolve()
+              if (missedResponse === '503') return Response.json({}, {status:503})
+              throw new TypeError('connection dropped after claim')
+            }
+            if (body.claim_id !== claimed) {
+              return Response.json({error:{code:'reply_job_unavailable'}}, {status:409})
+            }
+            return Response.json({ok:true})
+          }
+          assert.equal(path,'/v1/ot/conversations/otc_group/agent-messages')
+          assert.equal(body.claim_id,claimed)
+          final.push(body)
+          return Response.json({id:'otm_reply'}, {status:201})
+        },
+      })
+      const worker = name => createAgentReplier({bs,stateFile:join(dir,name + '.json'),host:{
+        currentRuntime: () => ({chatTurn() {}}),
+        async call(endpoint, input) {
+          assert.equal(endpoint,'agents/groupTurn')
+          assert.equal(input.request_id,'ots:otj_claim:4')
+          turns.push(name)
+          return {text:'Answer once'}
+        },
+      }})
+      const winner = worker('winner')
+      const contender = worker('contender')
+      const first = winner.once()
+      await committed.promise
+      assert.deepEqual(await contender.once(),{replied:0,cursor:0})
+      assert.deepEqual(await first,{replied:1,cursor:0})
+      assert.deepEqual(turns,['winner'])
+      assert.equal(final.length,1)
+      const ownerReplays = claims.filter(payload => JSON.parse(payload).claim_id === claimed)
+      assert.equal(ownerReplays.length,2)
+      assert.equal(new Set(ownerReplays).size,1)
+      assert.equal(claims.length,3)
+      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7})
+    })
+  }
+})
+
+test('a managed reply retries transient delivery once with the same payload and no second model turn', async t => {
+  const job = {job_id:'otj_live',attempt:2,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_source',revision:3}}
+  const scenarios = [
+    {name:'connection drops after commit', outcomes:['lost','ok'], replied:1},
+    {name:'server recovers from 503', outcomes:[503,'ok'], replied:1},
+    {name:'repeated 503 runs out of retries', outcomes:[503,503], replied:0},
+    {name:'conflict is not retried', outcomes:[409], replied:0},
+  ]
+  for (const {name,outcomes,replied} of scenarios) {
+    await t.test(name, async () => {
+      const dir = fixture()
+      const deliveries = []
+      const actions = []
+      let message, turns = 0, writes = 0
+      const bs = createBotSocial({
+        server:SERVER, credentialsPath:join(dir,'bot','flybot-social.json'),
+        async fetch(url, options) {
+          const path = url.slice(SERVER.length)
+          if (path.startsWith('/v1/ot/agent-inbox?')) return Response.json({cursor:0,jobs:[job]})
+          if (path === '/v1/ot/agent-reply-jobs/otj_live') {
+            actions.push(JSON.parse(options.body))
+            return Response.json({ok:true})
+          }
+          assert.equal(path,'/v1/ot/conversations/otc_group/agent-messages')
+          const outcome = outcomes[deliveries.push(options.body) - 1]
+          if (typeof outcome === 'number') return Response.json({}, {status:outcome})
+          if (!message) {
+            message = {id:'otm_reply'}
+            writes++
+          }
+          if (outcome === 'lost') throw new TypeError('connection dropped')
+          return Response.json(message,{status:201})
+        },
+      })
+      const replier = createAgentReplier({bs,stateFile:join(dir,'inbox.json'),host:{
+        currentRuntime: () => ({chatTurn() {}}),
+        async call(endpoint) {
+          assert.equal(endpoint,'agents/groupTurn')
+          turns++
+          return {text:'Complete answer'}
+        },
+      }})
+      assert.deepEqual(await replier.once(),{replied,cursor:0})
+      assert.equal(turns,1)
+      assert.equal(writes,replied)
+      assert.equal(deliveries.length,outcomes.length)
+      assert.equal(new Set(deliveries).size,1)
+      const claim_id = actions[0].claim_id
+      assert.match(claim_id, CLAIM_ID)
+      assert.deepEqual(JSON.parse(deliveries[0]),{
+        agent_ref:'helper',body:'Complete answer',reply_to:'otm_source',mode:'mention',
+        client_key:'r:' + createHash('sha256').update(JSON.stringify(['otm_source','helper'])).digest('hex'),
+        job_id:'otj_live',attempt:2,claim_id,
+      })
+      assert.deepEqual(actions,[
+        {action:'start',attempt:2,claim_id,source_revision:3},
+        ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
+      ])
+    })
+  }
 })
 
 test('manual group reply uses the same managed send and progress reads follow the chosen workspace', async () => {
   const workspace = 'a'.repeat(32)
   const personal = 'b'.repeat(32)
   const wrong = 'c'.repeat(32)
+  const sharedProgress = {id:'otj_live',message_id:'otm_source',attempt:1,status:'running',text:''}
+  const accountProgress = {...sharedProgress,status:'queued'}
   const f = fake({
     'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
     [`GET /v1/ot/teams/by-workspace/${workspace}`]: () => ({id:'ott_group'}),
@@ -158,10 +289,8 @@ test('manual group reply uses the same managed send and progress reads follow th
       agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
     'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_source',body:input.body,
       reply_jobs:[{id:'otj_live',status:'queued',attempt:1}]}),
-    [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/reply-progress`]: () => ({items:[
-      {id:'otj_live',message_id:'otm_source',attempt:1,text:'Live reply'},
-    ]}),
-    'GET /v1/ot/conversations/otc_account/reply-progress': () => ({items:[]}),
+    [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/reply-progress`]: () => ({items:[sharedProgress]}),
+    'GET /v1/ot/conversations/otc_account/reply-progress': () => ({items:[accountProgress]}),
   })
   const dir = fixture()
   setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
@@ -181,9 +310,9 @@ test('manual group reply uses the same managed send and progress reads follow th
   assert.equal((await feature.v1({...payload,path:from(wrong)+'/agent-replies'})).status,404)
   assert.equal(f.calls.filter(call => call.method === 'POST').length,1)
   const shared = await feature.v1({method:'GET',path:from(workspace)+'/reply-progress'})
-  assert.equal(shared.body.items[0].text,'Live reply')
+  assert.deepEqual(shared,{status:200,body:{items:[sharedProgress]}})
   const account = await feature.v1({method:'GET',path:from(personal,'otc_account')+'/reply-progress'})
-  assert.deepEqual(account,{status:200,body:{items:[]}})
+  assert.deepEqual(account,{status:200,body:{items:[accountProgress]}})
   assert.equal(f.calls.at(-1).path,'/v1/ot/conversations/otc_account/reply-progress')
 })
 
@@ -316,4 +445,24 @@ test('attachment search uses the owner binding and existing chat download metada
   }
   assert.equal((await feature.v1({method:'GET',path:`${base(workspace)}/attachments?kind=photo&kind=file`})).status, 400)
   assert.equal(f.calls.length, 2)
+})
+
+test('group sender retry forwards the displayed attempt to Bot Social', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const upstream = '/v1/ot/conversations/otc_1/messages/otm_source/agent-retry'
+  const jobs = [{id:'otj_live',status:'queued',attempt:4}]
+  const f = fake({
+    'GET /v1/ot/me': () => ({owner_id:'owner-a'}),
+    [`GET /v1/ot/teams/by-workspace/${workspace}`]: () => ({id:'ott_group'}),
+    'GET /v1/ot/conversations/otc_1': () => ({kind:'group',team_id:'ott_group'}),
+    [`POST ${upstream}`]: () => ({reply_jobs:jobs}),
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir}).endpoints
+  const path = `/v1/workspaces/${workspace}/social/conversations/otc_1/messages/otm_source/agent-retry`
+  const body = {job_id:'otj_live',attempt:3}
+  const result = await feature.v1({method:'POST',path,body})
+  assert.deepEqual(result,{status:200,body:{reply_jobs:jobs}})
+  assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body})
 })

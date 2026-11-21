@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {mount} from '../openteamily/static/memory/app.mjs';
+import {memoryCitationFromSearch, mount} from '../openteamily/static/memory/app.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -690,6 +690,106 @@ function memoryPage(id, title) {
     created_by: 'alice', updated_by: 'alice', updated: 1763000000,
   };
 }
+
+const citedWorkspace = 'a'.repeat(32);
+const citedPage = 'b'.repeat(32);
+const originWorkspace = 'c'.repeat(32);
+const originAgent = 'd'.repeat(32);
+const originConversation = 'e'.repeat(32);
+const originMessage = 'f'.repeat(32);
+const citationFrom = [originWorkspace, originAgent, originConversation, originMessage].join('.');
+const citationQuery = `?workspace=${citedWorkspace}&page=${citedPage}&revision=1&from=${citationFrom}`;
+const citationReturn = `/chat#workspace=${originWorkspace}&agent=${originAgent}&conversation=${originConversation}&message=${originMessage}`;
+
+test('a citation builds only a typed private Chat return in the originating workspace', () => {
+  assert.equal(memoryCitationFromSearch(citationQuery).href, citationReturn);
+  assert.equal(memoryCitationFromSearch(citationQuery.replace('.' + originMessage, '')).href,
+    citationReturn.replace('&message=' + originMessage, ''));
+  for (const query of [
+    citationQuery + '&from=' + citationFrom, citationQuery.replace(citedWorkspace, 'invalid'),
+    citationQuery.replace(citationFrom, '//other.example'), citationQuery + '.extra',
+    citationQuery.replace('page=' + citedPage, 'page=candidates'),
+  ]) assert.equal(memoryCitationFromSearch(query), null);
+});
+
+function citationFixture({versionStatus = 200, pageStatus = 200} = {}) {
+  const {doc, el} = fakeMemoryDocument(memoryHtml);
+  const calls = [];
+  const path = `/v1/workspaces/${citedWorkspace}/memory/${citedPage}`;
+  const page = {...memoryPage(citedPage, '当前标题'), revision: 2};
+  const version = {title: '原始标题', revision: 1, body: '<img src=evil> 原始内容'};
+  const location = {pathname: '/memory', search: citationQuery};
+  doc.defaultView = {location, history: {replaceState(_state, _title, url) {location.search = new URL(url, 'https://fixture.invalid').search;}}};
+  doc.createTextNode = text => {
+    const node = new MemoryNode('#text');
+    node.textContent = text;
+    return node;
+  };
+  const fetcher = async (url, options = {}) => {
+    calls.push([options.method, url, options.body]);
+    if (url === '/v1/auth/session') return jsonResponse(200, {user: {id: originWorkspace, username: 'alice'}});
+    if (url === '/v1/settings') return jsonResponse(200, {settings: {values: {}}});
+    if (url.startsWith('/v1/workspaces') && !url.startsWith('/v1/workspaces/')) return jsonResponse(200, {items: [{id: citedWorkspace, name: '来源空间'}]});
+    if (url === path + '/versions/1') return jsonResponse(versionStatus, versionStatus === 200 ? {version, current: 2} : {});
+    if (url === path && options.method === 'POST') return jsonResponse(200, {page: {...page, revision: 3}});
+    if (url === path) return jsonResponse(pageStatus, pageStatus === 200 ? {page} : {});
+    if (url.endsWith('/graph')) return jsonResponse(200, {nodes: [], edges: [], topics: [], counts: {}});
+    return jsonResponse(200, {items: [], total: 0});
+  };
+  return {doc, el, calls, fetcher, location, path};
+}
+
+test('the cited revision is read-only and editing fetches the latest page while preserving the exact chat return', async () => {
+  const {doc, el, calls, fetcher, location, path} = citationFixture();
+  const previous = globalThis.document;
+  globalThis.document = doc;
+  try {
+    mount(doc, {fetcher});
+    for (let round = 0; round < 6; round += 1) await memoryTick();
+    assert.equal(el('memory-citation-preview').hidden, false);
+    assert.equal(el('editor-form').hidden, true);
+    assert.equal(el('memory-citation-title').textContent, '原始标题');
+    assert.equal(el('memory-citation-version').textContent, '引用版本 · 修订 1 · 当前修订 2');
+    assert.equal(el('memory-citation-body').textContent, '<img src=evil> 原始内容');
+    assert.equal(el('memory-citation-body').children[0].tagName, 'P');
+    assert.equal(el('memory-citation-return').href, citationReturn);
+    assert.equal(calls.some(([, url]) => url === path || url === path + '/versions'), false);
+
+    await el('memory-citation-edit').click();
+    assert.equal(el('memory-citation-preview').hidden, true);
+    assert.equal(el('editor-form').hidden, false);
+    assert.equal(el('editor-form').elements.title.value, '当前标题');
+    assert.equal(el('editor-form').elements.title.focused, true);
+    assert.equal(new URLSearchParams(location.search).has('revision'), false);
+    await el('editor-form').dispatch('submit');
+    const save = calls.find(([method, url]) => method === 'POST' && url === path);
+    assert.equal(JSON.parse(save[2]).revision, 2);
+    assert.equal(new URLSearchParams(location.search).get('from'), citationFrom);
+    assert.equal(el('memory-citation-return').href, citationReturn);
+    assert.match(el('memory-citation-status').textContent, /已保存为修订 3/);
+  } finally {
+    if (previous === undefined) delete globalThis.document; else globalThis.document = previous;
+  }
+});
+
+test('an unavailable cited version can lead to the current page, but a deleted page just preserves return', async () => {
+  for (const pageStatus of [200, 404]) {
+    const {doc, el, fetcher} = citationFixture({versionStatus: 404, pageStatus});
+    const previous = globalThis.document;
+    globalThis.document = doc;
+    try {
+      mount(doc, {fetcher});
+      for (let round = 0; round < 6; round += 1) await memoryTick();
+      assert.equal(el('memory-citation-return').href, citationReturn);
+      assert.equal(el('memory-citation-body').textContent, '');
+      assert.equal(el('editor-form').hidden, true);
+      assert.equal(el('memory-citation-edit').hidden, pageStatus === 404);
+      assert.match(el('memory-citation-status').textContent, pageStatus === 404 ? /已删除或无法访问/ : /引用版本已无法读取/);
+    } finally {
+      if (previous === undefined) delete globalThis.document; else globalThis.document = previous;
+    }
+  }
+});
 
 const exportBody = '---\ntitle: "项目简报"\nrevision: 1\n---\n\n正文';
 

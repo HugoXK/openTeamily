@@ -1,5 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
@@ -83,13 +84,16 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   const retry = room + "/messages/" + message.id + "/agent-retry";
   const answer = (job: any) => ({agent_ref: job.agent_ref, body: "Checked", reply_to: message.id,
     job_id: job.job_id, attempt: job.attempt});
-  const draftSnapshot = (attempt: number, text: string) => ({id: draft.job_id, message_id: message.id, attempt, text});
+  const draftSnapshot = (attempt: number, text: string, status = "running") =>
+    ({id: draft.job_id, message_id: message.id, attempt, status, text});
   const view = () => sender.ok("GET", listProgress);
 
   assert.equal((await sender.call("POST", change(draft), {action: "start", attempt: 1})).status, 404);
   assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 1, text: "Too early"})).status, 409);
   assert.equal((await fetch(S.base + listProgress)).status, 401);
+  assert.deepEqual((await view()).items.at(-1), draftSnapshot(1, "", "queued"));
   await owner.ok("POST", change(draft), {action: "start", attempt: 1});
+  assert.deepEqual((await view()).items.at(-1), draftSnapshot(1, ""));
   await owner.ok("POST", change(review), {action: "start", attempt: 1});
   assert.equal((await owner.call("POST", change(draft), {action: "start", attempt: 1})).status, 409);
   assert.deepEqual((await owner.ok("GET", later)).jobs, []);
@@ -100,7 +104,7 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   await owner.ok("POST", progress(draft), {attempt: 1, revision: 1, text: "Starting a draft"});
   await owner.ok("POST", progress(review), {attempt: 1, revision: 1, text: "Starting a review"});
   assert.deepEqual((await view()).items, [
-    {id: review.job_id, message_id: message.id, attempt: 1, text: "Starting a review"},
+    {id: review.job_id, message_id: message.id, attempt: 1, status: "running", text: "Starting a review"},
     draftSnapshot(1, "Starting a draft"),
   ]);
   assert.deepEqual(await sender.ok("GET", activity + "&since=" + before.version), {version: before.version});
@@ -120,7 +124,7 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   const retried = await sender.ok("POST", retry, {job_id: draft.job_id});
   assert.deepEqual(retried.reply_jobs.map((job: any) => job.status), ["queued", "replied"]);
   assert.deepEqual(retried.reply_jobs.map((job: any) => job.attempt), [2, 1]);
-  assert.deepEqual((await view()).items, [draftSnapshot(2, "")]);
+  assert.deepEqual((await view()).items, [draftSnapshot(2, "", "queued")]);
   assert.equal((await sender.call("POST", retry, {job_id: draft.job_id})).status, 409);
   const next = (await owner.ok("GET", later)).jobs;
   assert.deepEqual(next.map((job: any) => [job.job_id, job.attempt]), [[draft.job_id, 2]]);
@@ -135,6 +139,75 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   assert.deepEqual(history.map((row: any) => row.id), [message.id, posted.id, completed.id]);
   assert.deepEqual(history[0].reply_jobs.map((job: any) => job.status), ["replied", "replied"]);
   assert.deepEqual((await view()).items, []);
+});
+
+test("managed reply claims replay without renewing the lease and fence each attempt", async t => {
+  let now = Date.now();
+  const service = await startServer({...bulkAuth, now: () => now});
+  t.after(service.stop);
+  const [owner, sender] = await Promise.all([home(service.base, "claim-owner"), home(service.base, "claim-sender")]);
+  const contact = await owner.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
+  await sender.ok("POST", "/v1/ot/contacts/" + contact.id, {action: "accept"});
+  const root = "/v1/ot/conversations";
+  const group = await owner.ok("POST", root, {kind: "group", account_group: true,
+    title: "Managed claims", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+  const room = root + "/" + group.id;
+  await owner.ok("PUT", room + "/agents/helper", {name: "Helper", auto_reply: true});
+  const source = await sender.ok("POST", room + "/messages", {body: "@helper Can you check?"});
+  const id = source.reply_jobs[0].id;
+  const claim = randomUUID(), other = randomUUID();
+  const job = "/v1/ot/agent-reply-jobs/" + id;
+  const progress = job + "/progress";
+  const answer = room + "/agent-messages";
+  const retry = room + "/messages/" + source.id + "/agent-retry";
+  const start = {action: "start", attempt: 1, source_revision: source.revision, claim_id: claim};
+  const snapshot = {attempt: 1, revision: 1, text: "Working", claim_id: claim};
+  const final = {agent_ref: "helper", body: "Checked", reply_to: source.id};
+  const post = (path: string, payload: unknown) => owner.call("POST", path, payload);
+  const activity = root + "?scope=personal&view=activity";
+
+  assert.equal((await post(job, {...start, claim_id: "invalid"})).status, 400);
+  assert.equal((await sender.call("POST", job, start)).status, 404);
+  await owner.ok("POST", job, start);
+  assert.equal((await post(job, {...start, claim_id: other})).status, 409);
+  assert.equal((await post(job, {...start, claim_id: undefined})).status, 409);
+  assert.equal((await post(progress, {...snapshot, claim_id: other})).status, 409);
+  assert.equal((await post(progress, {...snapshot, claim_id: undefined})).status, 409);
+  assert.equal((await post(job, {action: "fail", attempt: 1, claim_id: other})).status, 409);
+  assert.equal((await post(job, {action: "fail", attempt: 1})).status, 409);
+  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: other})).status, 409);
+  assert.equal((await post(answer, {...final, job_id: id, attempt: 1})).status, 409);
+  assert.equal((await post(answer, final)).status, 409);
+  assert.equal((await post(answer, {...final, mode: "auto"})).status, 409);
+  await owner.ok("POST", progress, snapshot);
+  const before = await sender.ok("GET", activity);
+  now += 179_999;
+  assert.deepEqual(await owner.ok("POST", job, start), {ok: true});
+  assert.deepEqual(await sender.ok("GET", activity + "&since=" + before.version), {version: before.version});
+  assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items,
+    [{id, message_id: source.id, attempt: 1, status: "running", text: "Working"}]);
+  assert.equal((await post(progress, snapshot)).data.error.code, "reply_progress_stale");
+  now++;
+  assert.equal((await post(job, start)).status, 409);
+  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: claim})).status, 409);
+
+  assert.equal((await sender.call("POST", retry, {job_id: id, attempt: "1"})).status, 400);
+  await sender.ok("POST", retry, {job_id: id, attempt: 1});
+  await owner.ok("POST", job, {...start, attempt: 2, claim_id: other});
+  assert.equal((await post(progress, {...snapshot, attempt: 2})).status, 409);
+  await owner.ok("POST", job, {action: "fail", attempt: 2, claim_id: other});
+  assert.equal((await sender.call("POST", retry, {job_id: id, attempt: 1})).status, 409);
+  assert.deepEqual((await sender.ok("GET", room + "/messages")).messages[0].reply_jobs[0],
+    {id, agent_name: "Helper", attempt: 2, status: "failed", can_retry: true});
+  await sender.ok("POST", retry, {job_id: id, attempt: 2});
+  const next = randomUUID();
+  await owner.ok("POST", job, {...start, attempt: 3, claim_id: next});
+  const delivery = {...final, job_id: id, attempt: 3, claim_id: next};
+  const reply = await owner.ok("POST", answer, delivery);
+  assert.equal((await owner.ok("POST", answer, delivery)).id, reply.id);
+  assert.equal((await post(answer, {...delivery, claim_id: other})).status, 409);
+  assert.equal((await post(job, {...start, attempt: 3, claim_id: next})).status, 409);
+  assert.deepEqual((await sender.ok("GET", room + "/messages")).messages.map((row: any) => row.id), [source.id, reply.id]);
 });
 
 test("activity snapshots are scoped and skip message content until the client needs it", async () => {

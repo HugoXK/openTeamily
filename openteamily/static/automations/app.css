@@ -395,7 +395,14 @@ body.app-workspace #main-panel {
 }
 
 #manual-run-note { margin: 0 0 .75rem; }
+.manual-run-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; }
+#manual-run-status { margin: .25rem 0; scroll-margin-top: .75rem; }
 #manual-run-status:empty { display: none; }
+#manual-run-status:is([data-state="failed"], [data-state="timeout"], [data-state="uncertain"]) { color: var(--ot-danger); }
+#manual-run-status[data-state="running"] { color: var(--ot-accent-hover); }
+#manual-run-status[data-state="succeeded"] { color: var(--ot-success, #147044); }
+#view-watched-run, #run-history-retry { min-height: 2.75rem; }
+#run-history-error:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; }
 #automation-link-retry { margin: 0 1rem .75rem; min-height: 2.75rem; }
 
 #tick-automation,
@@ -722,6 +729,8 @@ body.app-workspace #main-panel {
 .run-toggle .status-pill[data-status="timeout"] {
   color: var(--ot-danger);
 }
+
+.run-toggle .status-pill[data-status="running"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
 
 @media (max-width: 480px) {
   body.app-workspace #main-panel {

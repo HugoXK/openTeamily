@@ -490,6 +490,18 @@ function teamsRoutes(host) {
             const personal = personalWorkspace(localBinding, env)
             const result = { items: personal ? [personal] : [], cursor: null }
             const include = q.get('include')
+            if (include === 'automations') {
+              Object.assign(result, platformViewer(call))
+              const workspaces = q.getAll('workspace')
+              const personalScope = !workspaces.length || (workspaces.length === 1 && workspaces[0] === personal?.id)
+              if (personal && personalScope && q.getAll('include').length === 1 && result.viewer_username) {
+                const list = await host.call('automations/list', {
+                  workspace_id: personal.id, category: 'mine', username: result.viewer_username,
+                }).catch(() => null)
+                if (Array.isArray(list?.items)) result.automations = {items: list.items}
+              }
+              return [200, result]
+            }
             if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username)) {
@@ -913,7 +925,8 @@ function messengerExtraRoutes(host, wakeReplies) {
         const [, workspace, conversation, message] = match
         const bs = client(host)
         await messengerScope(host, bs, workspace, conversation)
-        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry', {job_id: body?.job_id})
+        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry',
+          {job_id: body?.job_id, attempt: body?.attempt})
         wakeReplies()
         return [200, result]
       }),

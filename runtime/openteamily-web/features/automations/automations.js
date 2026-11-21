@@ -38,7 +38,6 @@ export function dsBotTurn(host) {
 }
 
 export const MAX_AUTOMATIONS = 100
-export const MAX_RUNS = 200
 export const TICK_MS = 15_000
 const SCOPES = new Set(['once', 'ongoing'])
 const REMINDER = 'reminder'
@@ -61,8 +60,10 @@ CREATE TABLE IF NOT EXISTS ot_automation_runs (
  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
  status TEXT NOT NULL CHECK(status IN ('queued','succeeded','failed','skipped')), error_code TEXT,
- dispatch TEXT NOT NULL, attempt_of TEXT, UNIQUE(automation_id, due_at));
-CREATE INDEX IF NOT EXISTS ot_automation_run_list ON ot_automation_runs(automation_id, id);
+ dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER, UNIQUE(automation_id, due_at));
+CREATE INDEX IF NOT EXISTS ot_automation_runs_recent ON ot_automation_runs(automation_id, started DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_runs_status_recent ON ot_automation_runs(status, automation_id, started DESC, id DESC);
+DROP INDEX IF EXISTS ot_automation_run_list;
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
  PRIMARY KEY(run_id, key_hash));
@@ -132,13 +133,15 @@ export function runView(row) {
   let dispatch = {}
   try { dispatch = JSON.parse(row.dispatch) || {} } catch { dispatch = {} }
   let status = row.status
-  if (row.error_code === 'cancelled') status = 'cancelled'
+  if (status === 'queued' && row.claimed_at != null) status = 'running'
+  else if (row.error_code === 'cancelled') status = 'cancelled'
   else if (row.error_code === 'timeout') status = 'timeout'
+  const trigger = row.attempt_of ? 'retry' : row.due_at < 0 ? 'manual' : 'scheduled'
+  const backend = row.error_code !== 'migrated' && dispatch.backend === 'ds-bot' ? 'ds-bot' : 'legacy'
   const out = {
     id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at < 0 ? row.started : row.due_at,
-    started: row.started, finished: row.finished, status, error_code: row.error_code,
-    ...(row.due_at < 0 ? { trigger: 'manual' } : {}),
-    dispatch: { backend: 'ds-bot', ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
+    started: row.started, finished: row.finished, status, error_code: row.error_code, trigger,
+    dispatch: { backend, ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
   return out
@@ -152,6 +155,19 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
+
+  // This feature is loaded once in the runtime that owns the volume. A previous
+  // process's claimed turn may have already made calls or changed state.
+  tx(db, () => {
+    if (!all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')) {
+      run('ALTER TABLE ot_automation_runs ADD COLUMN claimed_at INTEGER')
+      // Older pending rows combined queued and running; their delivery is uncertain.
+      run("UPDATE ot_automation_runs SET claimed_at=started WHERE status='queued'")
+    }
+    const dispatch = { backend: 'ds-bot', result: { error: '上次运行因 DS-Bot 重启而中断。请检查已有结果，再决定是否重试。' } }
+    run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?
+      WHERE status='queued' AND claimed_at IS NOT NULL`, clock(), JSON.stringify(dispatch))
+  })
 
   const workspaceOf = (payload) => {
     const id = payload?.workspace_id
@@ -173,18 +189,21 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   function finish(runId, status, error, patch) {
     const row = one('SELECT * FROM ot_automation_runs WHERE id=?', runId)
-    if (!row || row.status !== 'queued') return row // cancelled meanwhile: keep the cancel
+    if (!row || row.status !== 'queued' || row.claimed_at === null) return row
     let dispatch = {}
     try { dispatch = JSON.parse(row.dispatch) || {} } catch { dispatch = {} }
     Object.assign(dispatch, patch)
-    run('UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=? WHERE id=?', clock(), status, error, JSON.stringify(dispatch), runId)
+    run(`UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=?
+      WHERE id=? AND status='queued' AND claimed_at IS NOT NULL`, clock(), status, error, JSON.stringify(dispatch), runId)
     return one('SELECT * FROM ot_automation_runs WHERE id=?', runId)
   }
 
-  // Execute one queued run as a DS-Bot turn. Never throws.
+  // Claim before publishing a receipt; run the model outside the dispatch call.
   function execute(runId) {
     if (inflight.has(runId)) return inflight.get(runId)
-    const job = (async () => {
+    const claimed = run("UPDATE ot_automation_runs SET claimed_at=? WHERE id=? AND status='queued' AND claimed_at IS NULL", clock(), runId)
+    if (!claimed.changes) return
+    const job = Promise.resolve().then(async () => {
       const item = one('SELECT r.*, a.title, a.prompt FROM ot_automation_runs r JOIN ot_automations a ON a.id=r.automation_id WHERE r.id=?', runId)
       if (!item || item.status !== 'queued') return
       try {
@@ -209,18 +228,21 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         finish(runId, 'failed', code, { result: { error: message } })
         log(`openteamily-web: automation run ${runId} failed (${code})`)
       }
-    })().finally(() => inflight.delete(runId))
+    }).finally(() => inflight.delete(runId))
     inflight.set(runId, job)
     return job
   }
 
   function insertRun(row, due, attemptOf = null) {
-    const count = one('SELECT COUNT(*) AS n FROM ot_automation_runs WHERE automation_id=?', row.id).n
-    if (count >= MAX_RUNS) return null
     const id = newId()
-    run('INSERT INTO ot_automation_runs VALUES(?,?,?,?,?,?,?,?,?,?)', id, row.id, row.workspace_id, due, clock(), null, 'queued', null, JSON.stringify({ backend: 'ds-bot' }), attemptOf)
+    run(`INSERT INTO ot_automation_runs
+      (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`, id, row.id, row.workspace_id, due, clock(), null, 'queued', null, JSON.stringify({ backend: 'ds-bot' }), attemptOf)
     return id
   }
+
+  const hasActiveRun = (id) => Boolean(one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", id))
+  const nextAdHocSlot = (id) => (one('SELECT MIN(due_at) AS slot FROM ot_automation_runs WHERE automation_id=? AND due_at<0', id).slot ?? 0) - 1
 
   // Evaluate every enabled automation (optionally one workspace) and fire due slots.
   function tick(workspaceId = null) {
@@ -232,7 +254,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     for (const row of rows) {
       const due = dueAt(JSON.parse(row.schedule), now)
       if (due === null) continue
-      const id = tx(db, () => (one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due) ? null : insertRun(row, due)))
+      const id = tx(db, () => {
+        if (hasActiveRun(row.id) || one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due)) return null
+        return insertRun(row, due)
+      })
       if (!id) continue
       void execute(id)
       fired.push(runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)))
@@ -241,8 +266,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   function start() {
-    // Runs left queued by a previous process never got their DS-Bot turn: run them now.
-    for (const { id } of all("SELECT id FROM ot_automation_runs WHERE status='queued' ORDER BY id")) void execute(id)
+    if (timer) return
+    for (const { id } of all("SELECT id FROM ot_automation_runs WHERE status='queued' AND claimed_at IS NULL ORDER BY started,id")) void execute(id)
     try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
     timer = setInterval(() => {
       try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
@@ -388,15 +413,20 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const cursor = payload.cursor ?? ''
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
-    if (status && !['queued', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const after = cursor && loadRun(row, cursor)
+    if (status && !['queued', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
+    const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND id=?', row.id, cursor)
+    if (cursor && !after) refuse(404, 'not_found', 'Automation run not found')
     const params = [row.id]
     let filter = 'automation_id=?'
-    if (status) { filter += ' AND status=?'; params.push(status) }
+    if (status) {
+      filter += ' AND status=?'
+      params.push(status === 'running' ? 'queued' : status)
+      if (status === 'queued') filter += ' AND claimed_at IS NULL'
+      if (status === 'running') filter += ' AND claimed_at IS NOT NULL'
+    }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
-    const pending = Boolean(one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id))
-    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null, has_pending: pending }
+    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null, has_pending: hasActiveRun(row.id) }
   }
 
   async function saveRun(payload) {
@@ -420,25 +450,24 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       const prior = one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
         WHERE m.automation_id=? AND m.key_hash=?`, row.id, keyHash)
       if (prior) return { status: 200, run: runView(prior) }
-      if (one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id)) {
-        refuse(409, 'already_running', '这条自动化正在运行。')
-      }
+      if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       // Keep manual runs and scheduled slots distinct.
-      const slot = Math.min(0, one('SELECT MIN(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0) - 1
-      const id = insertRun(row, slot)
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      const id = insertRun(row, nextAdHocSlot(row.id))
       run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', row.id, keyHash, id)
-      return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)) }
+      return { status: 202, id }
     })
-    if (outcome.status === 202) void execute(outcome.run.id)
-    return outcome
+    if (outcome.run) return outcome
+    void execute(outcome.id)
+    return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)) }
   }
 
   function cancel(payload) {
     const row = load(workspaceOf(payload), payload.id)
     const item = loadRun(row, payload.run_id)
-    if (item.status !== 'queued') refuse(409, 'conflict', 'Automation run cannot be cancelled')
-    run('UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=? WHERE id=?', clock(), 'failed', 'cancelled', JSON.stringify({ backend: 'ds-bot', result: { cancelled: true } }), item.id)
+    const dispatch = JSON.stringify({ backend: 'ds-bot', result: { cancelled: true } })
+    const cancelled = run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='cancelled', dispatch=?
+      WHERE id=? AND status='queued' AND claimed_at IS NULL`, clock(), dispatch, item.id)
+    if (!cancelled.changes) refuse(409, 'conflict', '只有尚未启动的运行可以取消。')
     return { run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', item.id)) }
   }
 
@@ -455,10 +484,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         if (again) return { status: 200, run: runView(again) }
       }
       if (item.status !== 'failed') refuse(409, 'conflict', 'Only a failed run can be retried')
-      // A retry is its own slot: one second after the latest slot of this automation.
-      const latest = one('SELECT MAX(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0
-      const id = insertRun(row, Math.max(latest + 1, clock()), item.id)
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
+      const id = insertRun(row, nextAdHocSlot(row.id), item.id)
       run('INSERT INTO ot_automation_retries VALUES(?,?,?,?)', item.id, keyHash, id, clock())
       return { status: 201, id }
     })
@@ -488,7 +515,9 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
           JSON.stringify(validAgents(r.agents ?? []) ? (r.agents ?? []) : []), r.compiled ? 1 : 0, 'management')
         // The last legacy slot counts as already run, so a migrated schedule never fires twice.
         const due = dueAt(normalizeSchedule(r.schedule), clock())
-        if (due !== null) run('INSERT OR IGNORE INTO ot_automation_runs VALUES(?,?,?,?,?,?,?,?,?,?)', newId(), r.id, r.workspace_id, due, clock(), clock(), 'skipped', 'migrated', JSON.stringify({ backend: 'ds-bot' }), null)
+        if (due !== null) run(`INSERT OR IGNORE INTO ot_automation_runs
+          (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
+          VALUES(?,?,?,?,?,?,?,?,?,?)`, newId(), r.id, r.workspace_id, due, clock(), clock(), 'skipped', 'migrated', JSON.stringify({ backend: 'legacy' }), null)
         imported += 1
       }
     })

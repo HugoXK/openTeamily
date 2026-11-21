@@ -63,5 +63,13 @@ export function deliverBundle(vol, name, text) {
 }
 
 export const WS = 'a'.repeat(32)
+
+export async function bootMemory(vol = volume(), {personal = WS, teams = []} = {}) {
+  const bot = await boot(vol)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:personal})
+  bot.features.table['teams/activeWorkspaces'] = async () => teams.map(id => ({id}))
+  return bot
+}
+
 let counter = 0
 export const key = () => `test-key-${String(++counter).padStart(6, '0')}-${process.pid}`

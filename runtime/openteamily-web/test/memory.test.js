@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { bootMemory as boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/memory${rest}`
 
@@ -87,9 +87,9 @@ test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes 
 })
 
 test('memory/pages gives chat recall pages only from the selected workspace in this DS-Bot', async () => {
-  const bot = await boot()
-  await bot.call('memory', 'POST', base(), { title: '口味', body: '不吃辣。' }, key())
   const otherWorkspace = 'e'.repeat(32)
+  const bot = await boot(undefined, {teams:[otherWorkspace]})
+  await bot.call('memory', 'POST', base(), { title: '口味', body: '不吃辣。' }, key())
   await bot.call('memory', 'POST', base('', otherWorkspace), { title: '备忘', body: '只在另一工作区' }, key())
   const viaApi = await bot.endpoint('memory/pages', {workspace_id:WS})
   assert.equal(viaApi.ok, true)
@@ -104,11 +104,57 @@ test('memory/pages gives chat recall pages only from the selected workspace in t
   assert.deepEqual((await other.endpoint('memory/pages', {workspace_id:WS})).value, [], 'another DS-Bot has none of these pages')
 })
 
+test('memory citations read exact saved revisions with current workspace access', async () => {
+  const team = 'f'.repeat(32)
+  const teams = [team]
+  const bot = await boot(undefined, {teams})
+  const call = (...args) => bot.call('memory', ...args)
+  const local = (await call('POST', base(), {title:'发布笔记', body:'保留自己的发布记忆。'}, key())).body.page
+  const {page} = (await call('POST', base('', team), {title:'团队发布', body:'发布地点是北京。'}, key())).body
+  const path = base('/' + page.id, team)
+  const {action} = (await call('POST', base('/actions', team), {title:'核对发布准备', memory_page_id:page.id}, key())).body
+  const actionPath = base('/actions/' + action.id, team)
+  const edited = await call('POST', path, {revision:1, changes:{body:'发布地点改到上海。'}})
+  assert.equal(edited.status, 200)
+  assert.equal(edited.body.page.revision, 2)
+  const current = await bot.endpoint('memory/pages', {workspace_id:team})
+  assert.deepEqual(current.value.map(item => [item.id,item.revision,item.body]), [[page.id,2,'发布地点改到上海。']])
+  const historical = await call('GET', path + '/versions/1')
+  assert.equal(historical.body.current, 2)
+  assert.equal(historical.body.version.body, '发布地点是北京。')
+  assert.equal((await call('GET', path + '/versions/2')).body.version.body, '发布地点改到上海。')
+  assert.equal((await call('GET', path + '/versions/3')).status, 404)
+  assert.equal((await call('GET', base('/' + page.id) + '/versions/1')).status, 404)
+  assert.equal((await call('GET', actionPath)).body.action.id, action.id)
+  assert.equal((await bot.endpoint('memory/search', {q:'发布'})).value.items.length, 2)
+
+  teams.length = 0
+  for (const target of [base('',team), path, path + '/versions', path + '/versions/1', actionPath]) {
+    const result = await call('GET', target)
+    assert.equal(result.status, 404)
+    assert.equal(result.body.error.code, 'not_found')
+  }
+  assert.equal((await call('POST', path, {revision:2, changes:{body:'不应被保存。'}})).status, 404)
+  assert.equal((await call('POST', path + '/remove', {})).status, 404)
+  assert.equal((await bot.endpoint('memory/pages', {workspace_id:team})).ok, false)
+  assert.equal((await bot.endpoint('memory/personal', {workspace_id:team})).ok, false)
+  assert.deepEqual((await bot.endpoint('memory/search', {q:'发布'})).value.items.map(item => item.id), [local.id])
+
+  teams.push(team)
+  assert.equal((await call('GET', path)).body.page.body, '发布地点改到上海。')
+  assert.equal((await call('POST', path + '/remove', {})).status, 200)
+  assert.equal((await call('GET', path + '/versions/1')).status, 404)
+  bot.features.table['teams/activeWorkspaces'] = async () => { throw new Error('Bot Social disconnected') }
+  assert.equal((await call('GET', base('/' + local.id))).status, 200)
+  assert.equal((await call('GET', base('/profile'))).status, 200)
+  assert.deepEqual((await bot.endpoint('memory/search', {q:'发布'})).value.items.map(item => item.id), [local.id])
+})
+
 test('one test account\'s legacy memory (with history) imports into its DS-Bot only', async () => {
   const { bundles, expect } = legacyBundles(['memory'])
   const vol = volume()
   deliverBundle(vol, 'memory-1.bundle', bundles.memory)
-  const bot = await boot(vol)
+  const bot = await boot(vol, {personal:expect.workspace_id})
   assert.deepEqual((await bot.endpoint('memory/routes')).value.imported.map((item) => item.status), ['imported'])
   const wid = expect.workspace_id
   const page = await bot.call('memory', 'GET', base('/' + expect.memory.page_id, wid))

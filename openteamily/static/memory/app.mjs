@@ -312,6 +312,26 @@ export function memoryPageFromSearch(search) {
   return 'overview';
 }
 
+const MEMORY_ID = /^[0-9a-f]{32}$/;
+
+export function memoryCitationFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  const [from] = params.getAll('from');
+  const [chatWorkspace, agent, conversation, message, extra] = (from || '').split('.');
+  if (params.getAll('from').length !== 1 || extra !== undefined
+      || ![chatWorkspace, agent, conversation].every(id => MEMORY_ID.test(id || ''))
+      || (message !== undefined && !MEMORY_ID.test(message))) return null;
+  const workspace = params.get('workspace');
+  const page = params.get('page');
+  const action = params.get('action');
+  if (!MEMORY_ID.test(workspace || '') || params.getAll('workspace').length !== 1 || params.getAll('page').length !== 1) return null;
+  if (page === 'todos' ? !MEMORY_ID.test(action || '') || params.getAll('action').length !== 1
+    : (page !== 'profile' && !MEMORY_ID.test(page || '')) || params.has('action')) return null;
+  const target = new URLSearchParams({workspace: chatWorkspace, agent, conversation});
+  if (message) target.set('message', message);
+  return {from, workspace, page, action, message, href: '/chat#' + target};
+}
+
 export function queryForMemoryPage(view) {
   if (view === 'profile') return '?page=profile';
   if (view === 'candidates') return '?page=candidates';
@@ -369,7 +389,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionEditor = document.getElementById('action-editor-form');
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
+  const citationHeader = document.getElementById('memory-citation');
+  const citationReturn = document.getElementById('memory-citation-return');
+  const citationStatus = document.getElementById('memory-citation-status');
+  const citationPreview = document.getElementById('memory-citation-preview');
+  const citationTitle = document.getElementById('memory-citation-title');
+  const citationVersion = document.getElementById('memory-citation-version');
+  const citationBody = document.getElementById('memory-citation-body');
+  const citationEdit = document.getElementById('memory-citation-edit');
+  const citationRetry = document.getElementById('memory-citation-retry');
   let currentUser = null;
+  let activeCitation = null;
+  let citationRevision;
   let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
@@ -407,6 +438,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function setCitationStatus(message) {
+    if (citationStatus) citationStatus.textContent = message;
+  }
+
+  function hideCitationPreview() {
+    if (citationPreview) citationPreview.hidden = true;
+    citationRevision = undefined;
+  }
+
+  function setCitation(citation) {
+    if (activeCitation !== citation) hideCitationPreview();
+    activeCitation = citation;
+    if (citationHeader) citationHeader.hidden = !citation;
+    if (citationReturn) {
+      if (citation) {
+        citationReturn.href = citation.href;
+        citationReturn.textContent = citation.message ? '返回引用消息' : '返回原对话';
+      } else citationReturn.removeAttribute('href');
+    }
+    setCitationStatus('');
+  }
+
+  function citationFor(page, action = null) {
+    return activeCitation?.workspace === workspaceId() && activeCitation.page === page && activeCitation.action === action
+      ? activeCitation : null;
+  }
+
+  function syncCitationUrl(params, citation = activeCitation) {
+    if (citation) params.set('from', citation.from);
+    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params);
   }
 
   function randomKey() {
@@ -854,6 +917,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const view = document.defaultView;
     const params = new URLSearchParams(queryForMemoryPage(currentView));
     const id = workspaceId();
+    if (currentView === 'profile' && citationFor('profile')) {
+      syncCitationUrl(new URLSearchParams({workspace: id, page: 'profile'}));
+      return;
+    }
     if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
     const query = params.toString();
     view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
@@ -994,6 +1061,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    pageRequest += 1;
+    setCitation(currentView === 'profile' ? citationFor('profile') : null);
+    hideCitationPreview();
     closeProfilePreview();
     if (editor) editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
@@ -1341,6 +1411,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
       currentUser = null;
+      setCitation(null);
       cancelDirectorySearch();
       browseDirectory?.controller?.abort();
       browseDirectory = activeDirectory = null;
@@ -1370,6 +1441,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
     }).catch(() => {});
     const linked = new URLSearchParams(document.defaultView?.location?.search || '');
+    const citation = memoryCitationFromSearch(linked);
     const workspace = linked.get('workspace'), pageId = linked.get('page');
     const scopedLink = /^[0-9a-f]{32}$/.test(workspace || '');
     const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
@@ -1395,12 +1467,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     const openingPage = deepLink && !missingWorkspace;
     const openingAction = deepAction && !missingWorkspace;
-    const directory = loadWorkspace({syncView: !openingPage && !openingAction && !missingWorkspace});
+    const directory = loadWorkspace({syncView: !openingPage && !openingAction && !missingWorkspace && !citation});
+    setCitation(citation);
+    if (citation && !missingWorkspace && citation.page === 'profile') syncViewUrl();
     if (openingPage || openingAction) {
       await Promise.all([directory, openingAction ? openAction(actionId) : openPage(pageId,revision)]);
     } else {
       await directory;
-      if (missingWorkspace && seq === sessionRequest) show('error', '无法打开此工作区的记忆。');
+      if (missingWorkspace && seq === sessionRequest) {
+        if (citation && activeCitation === citation) setCitationStatus('此工作区的记忆已无法访问。');
+        else if (!citation) show('error', '无法打开此工作区的记忆。');
+      }
     }
   }
 
@@ -1734,6 +1811,64 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已分享到来源群。');
   });
 
+  function unavailableCitation(status, message) {
+    const unavailable = [403, 404, 410].includes(status);
+    setCitationStatus(unavailable ? message : '暂时无法读取引用的记忆。请重试。');
+    if (unavailable) citationBody?.replaceChildren();
+    if (unavailable && citationEdit) citationEdit.hidden = true;
+    if (citationRetry) citationRetry.hidden = unavailable;
+  }
+
+  async function openCitedRevision(citation, revision, isCurrent) {
+    showPageMode();
+    currentPage = currentAction = null;
+    editor.hidden = true;
+    if (actionEditor) actionEditor.hidden = true;
+    citationRevision = revision;
+    citationPreview.hidden = false;
+    citationTitle.textContent = '引用的记忆';
+    citationVersion.textContent = '引用版本 · 修订 ' + revision;
+    citationBody.replaceChildren();
+    citationEdit.hidden = citationRetry.hidden = true;
+    setCitationStatus('正在读取引用版本…');
+    const path = `/v1/workspaces/${citation.workspace}/memory/${citation.page}`;
+    const seen = await request('GET', path + '/versions/' + revision).catch(() => ({status: 0, body: {}}));
+    if (!isCurrent()) return;
+    let version = seen.status === 200 ? seen.body.version : null;
+    let latest = seen.body.current;
+    if (seen.status === 404) {
+      const current = await request('GET', path).catch(() => ({status: 0, body: {}}));
+      if (!isCurrent()) return;
+      if (current.status !== 200 || current.body.page?.id !== citation.page) {
+        unavailableCitation(current.status, '这条记忆已删除或无法访问。');
+        citationTitle.focus?.();
+        return;
+      }
+      latest = current.body.page.revision;
+      if (latest === revision) version = current.body.page;
+      else {
+        citationEdit.hidden = false;
+        setCitationStatus('引用版本已无法读取。可以编辑当前版本。');
+        citationTitle.focus?.();
+        return;
+      }
+    }
+    if (version?.revision !== revision || typeof version.body !== 'string' || typeof version.title !== 'string') {
+      unavailableCitation(seen.status, '这条记忆已删除或无法访问。');
+      citationTitle.focus?.();
+      return;
+    }
+    citationTitle.textContent = version.title;
+    if (Number.isSafeInteger(latest) && latest > revision) {
+      citationVersion.textContent += ' · 当前修订 ' + latest;
+    }
+    if (version.body.trim()) renderMarkdown(document, citationBody, version.body);
+    else citationBody.textContent = '（空白正文）';
+    citationEdit.hidden = false;
+    setCitationStatus('');
+    citationTitle.focus?.();
+  }
+
   async function openPage(pageId, revision) {
     if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
@@ -1743,14 +1878,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) return;
     const seq = workspaceRequest;
     const token = ++pageRequest;
-    const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`);
-    if (seq !== workspaceRequest || token !== pageRequest) return;
-    if (seen.status !== 200 || !seen.body.page) {
-      show('error', messageFor(seen.body.error, '无法打开记忆页。'));
+    const owner = currentUser;
+    const citation = citationFor(pageId);
+    if (activeCitation !== citation) setCitation(citation);
+    const isCurrent = () => seq === workspaceRequest && token === pageRequest && owner === currentUser;
+    if (citation && revision && citationPreview) return openCitedRevision(citation, revision, isCurrent);
+    const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`).catch(() => ({status: 0, body: {}}));
+    if (!isCurrent()) return;
+    if (seen.status !== 200 || seen.body.page?.id !== pageId) {
+      if (citation) unavailableCitation(seen.status, '这条记忆已删除或无法访问。');
+      else show('error', messageFor(seen.body.error, '无法打开记忆页。'));
       return;
     }
     const page = seen.body.page;
+    hideCitationPreview();
     showPage(page, revision);
+    if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
       const preview = historyPreviewToken;
       await openPageHistory();
@@ -1761,6 +1904,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function showPage(page, revision) {
     currentPage = page;
+    if (activeCitation && !citationFor(page.id)) setCitation(null);
+    hideCitationPreview();
     const source = document.getElementById('memory-page-chat-source');
     const href = sourceHref(workspaceId(), page.source);
     if (source) source.hidden = !href;
@@ -1797,8 +1942,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
     const params = new URLSearchParams({workspace:id, page:currentPage.id});
     if (revision) params.set('revision', String(revision));
-    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params.toString());
+    syncCitationUrl(params, citationFor(currentPage.id));
   }
+
+  citationEdit?.addEventListener('click', async () => {
+    const citation = activeCitation;
+    if (!citation || citationEdit.disabled) return;
+    citationEdit.disabled = true;
+    setCitationStatus('正在打开当前版本…');
+    try {
+      await openPage(citation.page);
+      if (activeCitation === citation && currentPage?.id === citation.page && !editor.hidden) {
+        editor.elements.title.focus?.();
+      }
+    } finally {
+      citationEdit.disabled = false;
+    }
+  });
+  citationRetry?.addEventListener('click', () => {
+    if (activeCitation) return openPage(activeCitation.page, citationRevision);
+  });
 
   function rememberPage(page, {created = false} = {}) {
     pageChoices = [page, ...pageChoices.filter(item => item.id !== page.id)]
@@ -1963,12 +2126,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
+    const hadCitation = Boolean(activeCitation);
+    const citation = citationFor('todos', actionId);
+    if (citation !== activeCitation) setCitation(citation);
+    hideCitationPreview();
     const seq = workspaceRequest;
     const token = ++pageRequest;
-    const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`);
+    const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`).catch(() => ({status: 0, body: {}}));
     if (seq !== workspaceRequest || token !== pageRequest) return;
     if (seen.status !== 200 || !seen.body.action) {
-      show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
+      if (citation) setCitationStatus([403, 404, 410].includes(seen.status)
+        ? '引用的行动已删除或无法访问。' : '暂时无法读取引用的行动，请刷新后重试。');
+      else show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
       return;
     }
     currentAction = seen.body.action;
@@ -1984,6 +2153,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillPageSelect(actionEditor.elements.memory_page_id, currentAction.memory_page_id || '');
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
+    if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
   }
 
   document.getElementById('login-form').addEventListener('submit', async (event) => {
@@ -2211,7 +2381,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const memoryWindow = document.defaultView;
   if (memoryWindow && memoryWindow.addEventListener) {
     memoryWindow.addEventListener('popstate', () => {
-      showView(memoryPageFromSearch(memoryWindow.location.search), {sync: false});
+      const search = memoryWindow.location.search;
+      const view = memoryPageFromSearch(search);
+      if (memoryCitationFromSearch(search)) {
+        currentView = view;
+        void loadSession();
+      } else showView(view, {sync: false});
     });
   }
   function setDirectoryFilter(filter) {
@@ -2364,6 +2539,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
     if (!historySelection) syncPageUrl();
+    if (citationFor(currentPage.id)) setCitationStatus('已保存为修订 ' + currentPage.revision + '。');
     rememberPage(currentPage);
     syncExportButton();
     if (editor.elements.topics.value === submittedTopics) editor.elements.topics.value = formatTopics(currentPage.topics);
@@ -2437,15 +2613,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function removePending(kind) {
     const pending = pendingDelete;
     if (!pending || pending.kind !== kind) return;
+    const owner = currentUser;
+    const citation = kind === 'page' ? citationFor(pending.id) : citationFor('todos', pending.id);
     closeDeleteConfirm({restoreFocus: false});
     const removed = await request('POST', deleteRemovePath(kind, pending.workspace, pending.id), {});
+    if (currentUser !== owner || workspaceId() !== pending.workspace) return;
     if (removed.status !== 200) {
       show('error', messageFor(removed.body.error,
         kind === 'page' ? '无法删除记忆页。' : '无法删除下一步行动。'));
       return;
     }
     show('ok', '已删除。');
-    await loadWorkspace();
+    const restoreCitation = citation && activeCitation === citation;
+    const directory = loadWorkspace({syncView: !restoreCitation});
+    if (restoreCitation) {
+      setCitation(citation);
+      setCitationStatus(kind === 'page' ? '这条记忆已删除。' : '引用的行动已删除。');
+    }
+    await directory;
   }
 
   document.getElementById('delete-page').addEventListener('click', () => {

@@ -892,10 +892,11 @@ test('group progress updates only the original job and attempt and clears stale 
   t.mock.timers.enable({apis: ['setTimeout']});
   const source = {id: 'source', user_id: alice, body: '请两位协助', created: 1, seq: 1, reply_jobs: [
     {id: 'job-a', attempt: 2, status: 'queued', agent_name: '助手一'},
-    {id: 'job-b', attempt: 1, status: 'running', agent_name: '助手二'},
+    {id: 'job-b', attempt: 1, status: 'queued', agent_name: '助手二'},
   ]};
   const flowing = [{id: 'job-a', message_id: 'source', attempt: 2, text: '原样显示 <em>片段</em>'},
-    {id: 'job-b', message_id: 'other-source', attempt: 1, text: '别的消息'}];
+    {id: 'job-b', message_id: 'other-source', attempt: 1, text: '别的消息'},
+    {id: 'job-b', message_id: 'source', attempt: 1, status: 'running', text: ''}];
   const batches = [...Array(18).fill(flowing),
     [{id: 'job-a', message_id: 'source', attempt: 1, text: '过期的尝试'},
       {id: 'job-b', message_id: 'source', attempt: 1, text: '另一个智能体的新进度'}],
@@ -928,6 +929,7 @@ test('group progress updates only the original job and attempt and clears stale 
     assert.equal(first.getAttribute('aria-live'), 'off');
     assert.equal(second.hidden, true);
     assert.equal(jobs[0].dataset.state, 'running');
+    assert.equal(jobs[1].dataset.state, 'running', 'a claimed job is running before text arrives');
     for (let index = 0; index < 17; index += 1) {
       t.mock.timers.tick(500);
       await settle();
@@ -953,6 +955,64 @@ test('group progress updates only the original job and attempt and clears stale 
     t.mock.timers.tick(2000); await settle();
     assert.equal(progressReads, 20);
     assert.equal(second.hidden, true);
+  } finally { restore(); }
+});
+
+test('a group reply already absent from the first progress poll refreshes its failed source and offers retry', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const job = {id: 'fast-job', attempt: 1, status: 'queued', agent_name: '核对助手'};
+  const source = {id: 'source', user_id: alice, body: '请协助核对', created: 1, seq: 1};
+  let historyReads = 0;
+  let progressReads = 0;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, _opts, conversation) => {
+    if (!path) {
+      historyReads += 1;
+      const state = progressReads ? {...job, status: 'failed', can_retry: true} : job;
+      return json(200, {conversation, items: [{...source, reply_jobs: [state]}]});
+    }
+    assert.equal(path, '/reply-progress');
+    progressReads += 1;
+    return json(200, {items: []});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const row = () => descendants(list.children[0]).find(node => node.className === 'group-reply-job');
+    assert.equal(row().dataset.state, 'queued');
+    t.mock.timers.tick(500); await settle();
+    t.mock.timers.tick(350); await settle();
+    assert.equal(historyReads, 2);
+    assert.equal(list.children[0].dataset.messageId, source.id);
+    assert.equal(row().dataset.state, 'failed');
+    assert.ok(row().children.some(node => node.getAttribute('aria-label') === '重试 核对助手'));
+    t.mock.timers.tick(9000); await settle();
+    assert.equal(progressReads, 1, 'no polling a terminal Job');
+  } finally { restore(); }
+});
+
+test('group retry submits the displayed attempt and refreshes an outdated failure', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const job = {id: 'retry-job', attempt: 1, status: 'failed', agent_name: '核对助手', can_retry: true};
+  const original = {id: 'source', user_id: alice, body: '请协助核对', created: 1, seq: 1};
+  const attempts = [];
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      const latest = attempts.length ? {...job, attempt: 2} : job;
+      return json(200, {conversation, items: [{...original, reply_jobs: [latest]}]});
+    }
+    assert.equal(path, '/messages/source/agent-retry');
+    attempts.push(JSON.parse(opts.body));
+    return json(409, {error: {code: 'reply_job_unavailable', message: '这次回复的状态已更新。'}});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const retry = descendants(list.children[0]).find(node => node.getAttribute('aria-label') === '重试 核对助手');
+    await fire(retry, 'click');
+    await settle();
+    assert.deepEqual(attempts, [{job_id: job.id, attempt: 1}]);
+    const row = descendants(list.children[0]).find(node => node.className === 'group-reply-job');
+    assert.equal(row.dataset.replyAttempt, '2');
   } finally { restore(); }
 });
 
@@ -1569,6 +1629,85 @@ test('social pinned state sorts before recency and unread filter uses server sta
   ], alice);
   assert.equal(rows[0].id, 'old');
   assert.equal(rows[1].unread_count, 1);
+});
+
+function pinConversationFixture() {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: base} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const calls = [];
+  const saved = Promise.withResolvers();
+  const fetcher = async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET', body: options.body});
+    if (path.endsWith('/conv-2/preferences')) return saved.promise;
+    const result = await base(path);
+    const body = await result.json();
+    if (body.conversation?.id === 'conv-2') body.conversation = {...body.conversation, kind: 'group', title: 'Project Room'};
+    if (path.endsWith('/social/conversations?limit=100')) {
+      body.items = body.items.map(item => item.id === 'conv-2' ? {...item, kind: 'group', title: 'Project Room'} : item);
+    }
+    return json(result.status, body);
+  };
+  const open = id => fire(el('conversation-list'), 'click', {
+    target: sessionRows(el).find(row => row.dataset.conversation === id),
+  });
+  return {doc, el, restore, calls, saved, fetcher, open};
+}
+
+test('conversation pin shares controls, reorders immediately, and never reopens an old chat after saving', async () => {
+  const {doc, el, restore, calls, saved, fetcher, open} = pinConversationFixture();
+  try {
+    await mount(doc, {fetcher});
+    await open('conv-2');
+    const before = calls.length;
+    const saving = fire(el('group-info-pin'), 'click');
+    await settle();
+    assert.equal(el('group-info-pin').getAttribute('aria-checked'), 'true');
+    assert.equal(el('pin-conversation').textContent, '取消置顶');
+    assert.equal(el('group-info-pin').disabled, true);
+    assert.equal(el('pin-conversation').disabled, true);
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-2');
+    await fire(el('pin-conversation'), 'click');
+    assert.deepEqual(calls.slice(before).map(call => [call.method, call.path.split('/').at(-1), JSON.parse(call.body)]),
+      [['POST', 'preferences', {pinned: true}]]);
+
+    await open('conv-1');
+    const afterNavigation = calls.length;
+    assert.equal(el('pin-conversation').disabled, false);
+    saved.resolve(json(200, {pinned: true}));
+    await saving;
+    assert.equal(calls.length, afterNavigation, 'saving only updates the already-loaded directory and controls');
+    assert.equal(sessionRows(el).find(row => row.getAttribute('aria-current') === 'true').dataset.conversation, 'conv-1');
+    assert.equal(el('pin-conversation').textContent, '置顶会话');
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-2');
+  } finally {
+    saved.resolve(json(503, {}));
+    restore();
+  }
+});
+
+test('a failed pin rolls back both surfaces and the sidebar without fetching the conversation again', async () => {
+  const {doc, el, restore, calls, saved, fetcher, open} = pinConversationFixture();
+  try {
+    await mount(doc, {fetcher});
+    await open('conv-2');
+    const before = calls.length;
+    const saving = fire(el('pin-conversation'), 'click');
+    await settle();
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-2');
+    assert.equal(el('group-info-pin').getAttribute('aria-checked'), 'true');
+    saved.resolve(json(503, {}));
+    await saving;
+    assert.equal(calls.length, before + 1);
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-1');
+    assert.equal(el('group-info-pin').getAttribute('aria-checked'), 'false');
+    assert.equal(el('pin-conversation').textContent, '置顶会话');
+    assert.equal(el('pin-conversation').disabled, false);
+    assert.match(el('status').textContent, /置顶未保存/);
+  } finally {
+    saved.resolve(json(503, {}));
+    restore();
+  }
 });
 
 test('session filter selects only real unread social rows', async () => {
@@ -2912,6 +3051,53 @@ function settledNativeSnapshot(fixture) {
   return {agent: fixture.agent, conversation: fixture.nativeThread, cursor: null, has_newer: false,
     items: fixture.nativeRows.map(row => ({...row, workspace_id: linkWork, agent_id: linkAgent, conversation_id: linkThread}))};
 }
+
+test('a saved pin survives a conversation directory read started before the save', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`);
+  const directory = Promise.withResolvers();
+  fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
+  fixture.routes.set(scope + linkSocialPath + '/preferences', () => json(200, {pinned: true}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    await fire(fixture.el('group-info-pin'), 'click');
+    assert.equal(fixture.el('group-info-pin').getAttribute('aria-checked'), 'true');
+    directory.resolve(json(200, {items: [{id: linkSocial, kind: 'group', title: 'Linked group', pinned: false, updated: 30}]}));
+    await settle();
+    const row = sessionRows(fixture.el).find(item => item.dataset.conversation === linkSocial);
+    assert.equal(row.children[1].children[0].textContent, '置顶 · Linked group');
+    assert.equal(fixture.el('group-info-pin').getAttribute('aria-checked'), 'true');
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 1);
+  } finally {
+    directory.resolve(json(503, {}));
+    fixture.restore();
+  }
+});
+
+test('private reply memory citations carry the exact invoking chat and message', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const refId = 'd'.repeat(32);
+  const source = {...fixture.nativeRows[1], memory_refs: [{id: refId, workspace_id: linkWork, title: 'Saved note', revision: 2}]};
+  fixture.routes.set(linkBase(linkWork) + linkNativeLatest, () =>
+    json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items: [source]}));
+  function linkWithText(node, text) {
+    if (node.tagName === 'A' && node.textContent === text) return node;
+    for (const child of node.children) {
+      const link = linkWithText(child, text);
+      if (link) return link;
+    }
+  }
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    const link = linkWithText(fixture.el('message-list'), 'Saved note');
+    assert.equal(link.href, '/memory?' + new URLSearchParams({
+      workspace: linkWork, page: refId, revision: '2',
+      from: [linkWork, linkAgent, linkThread, linkAgentLatest].join('.'),
+    }));
+  } finally {
+    fixture.restore();
+  }
+});
 
 test('desktop startup reads one bounded private candidate alongside Social, then opens and acknowledges only the winner', async () => {
   const scope = linkBase(linkWork);

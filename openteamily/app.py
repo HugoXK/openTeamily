@@ -43,7 +43,6 @@ class Config:
     max_workspaces: int = 10000
     max_members_per_workspace: int = 50
     max_invites_per_workspace: int = 20
-    max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
     max_versions_per_artifact: int = 100
@@ -58,7 +57,6 @@ class Config:
     max_social_conversations_per_workspace: int = 200
     max_social_messages_per_conversation: int = 500
     max_social_members_per_conversation: int = 50
-    max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
     auth_global_limit: int = 100

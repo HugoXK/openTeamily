@@ -96,6 +96,33 @@ const meetingKey = prefix => prefix + (globalThis.crypto?.randomUUID
   ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
 const meetingIdPattern = /^[a-f0-9]{32}$/;
 const unavailable = {status: 0, body: {}};
+const SAVE_TIMEOUT_MS = 12000;
+
+function ambiguousSave(status) {
+  return status === 0 || status === 408 || status >= 500;
+}
+
+function meetingMatchesChanges(meeting, changes) {
+  const normalizers = {
+    title: value => value.trim(),
+    attendees: value => value.map(name => name.trim()),
+    action_items: value => value.map(item => [item.text.trim(), (item.owner || '').trim(), Boolean(item.done)]),
+  };
+  return Object.entries(changes).every(([field, value]) => {
+    const saved = meeting[field];
+    if (saved === undefined) return false;
+    const normalize = normalizers[field];
+    return normalize ? JSON.stringify(normalize(saved)) === JSON.stringify(normalize(value)) : saved === value;
+  });
+}
+
+async function saveRequest(method, path, body, headers) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SAVE_TIMEOUT_MS);
+  try { return await request(method, path, body, headers, controller.signal); }
+  catch { return unavailable; }
+  finally { clearTimeout(timeout); }
+}
 
 export function mountMeetingShares(document, {request, context, historyWorkspace = () => '', key = () => meetingKey('meeting-share-')}) {
   const control = name => document.getElementById('meeting-share-' + name);
@@ -393,6 +420,7 @@ function mount() {
   const layout = document.getElementById('meeting-layout');
   const save = document.getElementById('save-meeting');
   const mobileSave = document.getElementById('save-meeting-mobile');
+  const saveStatus = document.getElementById('meeting-save-status');
   const remove = document.getElementById('remove-meeting');
   const deleteDialog = document.getElementById('meeting-delete-dialog');
   const filters = document.getElementById('meeting-list-filters');
@@ -430,7 +458,8 @@ function mount() {
   let actionFollowups = [];
   let artifactWrite = null;
   let writing = null;
-  let creation = null;
+  let saveRetry = null;
+  let saveConflict = false;
   let deleting = null;
   const attendeeInput = document.getElementById('meeting-attendees');
   const attendeeList = document.getElementById('attendee-matches');
@@ -454,6 +483,17 @@ function mount() {
     status.textContent = text;
   }
 
+  function showSave(kind, text) {
+    saveStatus.dataset.kind = kind;
+    saveStatus.textContent = text;
+  }
+
+  function resetSave() {
+    saveRetry = null;
+    saveConflict = false;
+    showSave('', '');
+  }
+
   function workspaceId() {
     return workspaceSelect.value;
   }
@@ -463,23 +503,29 @@ function mount() {
   }
 
   function scope() {
-    return {workspace: workspaceId(), selection};
+    return {workspace: workspaceId(), selection, viewer};
   }
 
   function active(target) {
-    return workspaceId() === target.workspace && selection === target.selection;
+    return workspaceId() === target.workspace && selection === target.selection && viewer === target.viewer;
   }
 
   function syncWriting() {
     const pending = writing && active(writing) ? writing : null;
-    save.disabled = Boolean(pending);
-    if (mobileSave) mobileSave.disabled = Boolean(pending);
-    remove.disabled = Boolean(pending);
-    const label = pending?.kind === 'save' ? '保存中…' : '保存';
+    const retry = saveRetry && active(saveRetry);
+    save.disabled = Boolean(pending || saveConflict);
+    save.formNoValidate = Boolean(retry);
+    if (mobileSave) {
+      mobileSave.disabled = save.disabled;
+      mobileSave.formNoValidate = Boolean(retry);
+    }
+    const blocked = Boolean(pending || retry || saveConflict);
+    remove.disabled = blocked;
+    const label = pending?.kind === 'save' ? '保存中…' : retry ? '确认并重试保存' : '保存';
     save.textContent = label;
     if (mobileSave) mobileSave.textContent = label;
-    for (const box of actionBoxes) box.disabled = Boolean(pending);
-    syncSavedActions(Boolean(pending));
+    for (const box of actionBoxes) box.disabled = blocked;
+    syncSavedActions(blocked);
   }
 
   function syncSavedActions(pending) {
@@ -746,23 +792,37 @@ function mount() {
   async function persistActionToggle(action, box) {
     const done = box.checked;
     if (writing && active(writing)) { box.checked = action.done; return; }
+    const previous = action.done;
     action.done = done;
-    if (!current?.id || action.savedIndex === undefined) {
+    const saved = current?.action_items?.[action.savedIndex];
+    if (!current?.id || !saved || (action.text || '').trim() !== saved.text || (action.owner || '').trim() !== (saved.owner || '')) {
       syncWriting();
       show('ok', '这条行动项的完成状态会在保存会议后生效。');
       return;
     }
+    const meeting = current;
     const target = {...scope(), kind: 'action'};
+    const path = `${base()}/${meeting.id}`;
+    const payload = actionToggleBody(meeting.action_items, action.savedIndex, done, meeting.revision);
     writing = target;
     syncWriting();
     show('loading', '正在保存行动项…');
-    const result = await request('POST', `${base()}/${current.id}`,
-      actionToggleBody(current.action_items, action.savedIndex, done, current.revision)).catch(() => unavailable);
+    let result = await saveRequest('POST', path, payload);
+    if (active(target) && (ambiguousSave(result.status) || result.status === 409)) {
+      show('loading', '正在确认行动项是否已保存…');
+      const checked = await saveRequest('GET', path);
+      const observed = checked.body.meeting;
+      const {title, started_at, attendees, summary, transcript} = meeting;
+      const expected = {title, started_at, attendees, summary, transcript, ...payload.changes};
+      if (checked.status === 200 && (!native || checked.body.viewer_username === viewer) &&
+          observed?.id === meeting.id && observed.workspace_id === target.workspace &&
+          observed.revision >= meeting.revision && meetingMatchesChanges(observed, expected)) result = checked;
+    }
     if (writing === target) writing = null;
     if (!active(target)) return;
-    if (result.status !== 200) {
-      box.checked = !done;
-      action.done = !done;
+    if (result.status !== 200 || result.body.meeting?.id !== meeting.id || result.body.meeting.workspace_id !== target.workspace) {
+      box.checked = previous;
+      action.done = previous;
       renderActions();
       show('error', result.status === 409 ? '会议已在别处更新，请重新打开后再勾选。'
         : messageFor(result.body.error, '无法保存这条行动项的完成状态。'));
@@ -841,9 +901,23 @@ function mount() {
     sharing.sync();
   }
 
+  function syncRecord() {
+    document.getElementById('remove-meeting').hidden = !current?.id;
+    const exportLink = document.getElementById('export-meeting');
+    if (exportLink) {
+      exportLink.hidden = !current?.id;
+      exportLink.href = current?.id ? `${base()}/${current.id}/export` : '#';
+    }
+    document.getElementById('meeting-meta').textContent = current?.id
+      ? '修订 ' + current.revision + ' · 创建者 ' + current.created_by : '新会议';
+    sharing.sync();
+    renderList();
+    rewriteLocation(current?.id ? {meeting: current.id} : {new: '1'});
+  }
+
   function fill(meeting) {
     selection += 1;
-    creation = null;
+    resetSave();
     syncLibraryLink();
     audio.reset();
     hideAttendees();
@@ -863,21 +937,12 @@ function mount() {
     clearDraft();
     actions = meeting ? (meeting.action_items || []).map((item, savedIndex) => ({...item, savedIndex})) : [];
     renderActions();
-    document.getElementById('remove-meeting').hidden = !meeting || !meeting.id;
-    const exportLink = document.getElementById('export-meeting');
-    if (exportLink) {
-      exportLink.hidden = !meeting || !meeting.id;
-      exportLink.href = meeting && meeting.id ? `${base()}/${meeting.id}/export` : '#';
-    }
-    document.getElementById('meeting-meta').textContent = meeting && meeting.id
-      ? '修订 ' + meeting.revision + ' · 创建者 ' + meeting.created_by : '新会议';
-    renderList();
-    rewriteLocation(meeting?.id ? {meeting: meeting.id} : {new: '1'});
+    syncRecord();
   }
 
   function openCatalogue({focus = false} = {}) {
     selection += 1;
-    creation = null;
+    resetSave();
     current = null;
     actions = [];
     actionFollowups = [];
@@ -951,7 +1016,11 @@ function mount() {
   }
 
   async function openMeeting(id, read) {
+    const pendingSave = writing?.kind === 'save' && active(writing) ? writing
+      : saveRetry && active(saveRetry) ? saveRetry : null;
+    const owner = viewer;
     const workspace = workspaceId(), pendingSelection = ++selection;
+    resetSave();
     audio.reset();
     clearDraft();
     if (!read) {
@@ -959,10 +1028,14 @@ function mount() {
       show('loading', '正在打开会议…');
     }
     const result = read || await request('GET', `${base()}/${id}`).catch(() => unavailable);
-    if (workspaceId() !== workspace || pendingSelection !== selection) return;
+    if (workspaceId() !== workspace || pendingSelection !== selection || viewer !== owner) return;
     form.inert = false;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         result.body.meeting?.id !== id || result.body.meeting.workspace_id !== workspace) {
+      if (pendingSave && !form.hidden) {
+        saveRetry = {...pendingSave, selection};
+        showSave('error', '上次保存结果还未确认。草稿已保留，请重试。');
+      }
       syncWriting();
       show('error', messageFor(result.body.error, '无法打开会议。'));
       return;
@@ -977,6 +1050,7 @@ function mount() {
 
   async function openSharedMeeting(id, read) {
     const workspace = workspaceId(), pendingSelection = ++selection;
+    resetSave();
     current = null;
     sharing.sync();
     audio.reset();
@@ -1020,6 +1094,8 @@ function mount() {
 
   async function load() {
     const seq = ++workspaceLoad;
+    selection += 1;
+    resetSave();
     resetList();
     renderList();
     const linked = new URLSearchParams((globalThis.location?.hash || '').slice(1));
@@ -1130,58 +1206,97 @@ function mount() {
     }
   }
 
+  const startedInput = document.getElementById('meeting-started-at');
+
+  function draftContents() {
+    return JSON.stringify([titleInput.value, startedInput.value, attendeeInput.value, summary.value, transcript.value,
+      actions.map(({text, owner, done}) => [text, owner, done])]);
+  }
+
+  function beginSave() {
+    const title = titleInput.value.trim();
+    const startedAt = Math.floor(new Date(startedInput.value).getTime() / 1000);
+    if (!title) { showSave('error', '请填写标题。'); return null; }
+    if (!Number.isFinite(startedAt)) { showSave('error', '请选择开始时间。'); return null; }
+    const submittedActions = actions.filter(action => (action.text || '').trim());
+    return {
+      ...scope(), kind: 'save', id: current?.id, revision: current?.revision, draft: draftContents(), submittedActions,
+      key: current?.id ? null : meetingKey('meeting-'),
+      changes: {
+        title, started_at: startedAt, attendees: parseAttendees(attendeeInput.value),
+        summary: summary.value, transcript: transcript.value,
+        action_items: submittedActions.map(({text, owner, done}) => ({text, owner, done})),
+      },
+    };
+  }
+
+  function savedMeeting(result, operation) {
+    const meeting = result.body.meeting;
+    return [200, 201].includes(result.status) && meetingIdPattern.test(meeting?.id || '') &&
+      meeting.workspace_id === operation.workspace && (!operation.id || meeting.id === operation.id) &&
+      Number.isSafeInteger(meeting.revision) && meeting.revision > 0 ? meeting : null;
+  }
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (form.hidden) return;
-    const title = document.getElementById('meeting-title').value.trim();
-    const started = document.getElementById('meeting-started-at').value;
-    const startedAt = Math.floor(new Date(started).getTime() / 1000);
-    if (!title) { show('error', '请填写标题。'); return; }
-    if (!Number.isFinite(startedAt)) { show('error', '请选择开始时间。'); return; }
-    const changes = {
-      title,
-      started_at: startedAt,
-      attendees: parseAttendees(document.getElementById('meeting-attendees').value),
-      summary: document.getElementById('meeting-summary').value,
-      transcript: document.getElementById('meeting-transcript').value,
-      action_items: actions.filter(action => (action.text || '').trim())
-        .map(({text, owner, done}) => ({text, owner, done})),
-    };
-    if (!workspaceId() || save.disabled) return;
-    const target = current, operation = {...scope(), kind: 'save'};
+    if (form.hidden || form.inert || !workspaceId() || save.disabled) return;
+    const retrying = saveRetry && active(saveRetry);
+    const operation = retrying ? saveRetry : beginSave();
+    if (!operation) return;
     writing = operation;
     syncWriting();
-    show('loading', '正在保存…');
-    let result;
-    try {
-      if (target?.id) {
-        result = await request('POST', `${base()}/${target.id}`, {revision: target.revision, changes});
-      } else {
-        const contents = JSON.stringify(changes);
-        if (creation?.contents !== contents) creation = {contents, key: meetingKey('meeting-')};
-        result = await request('POST', base(), changes, {'Idempotency-Key': creation.key});
+    showSave('loading', retrying ? '正在确认上次保存…' : '正在保存…');
+    const {id, revision, key, changes} = operation;
+    const path = id ? `${base()}/${id}` : base();
+    const result = await (id
+      ? saveRequest('POST', path, {revision, changes})
+      : saveRequest('POST', path, changes, {'Idempotency-Key': key}));
+    let meeting = savedMeeting(result, operation);
+    const readAfterConflict = Boolean(retrying && id && result.status === 409);
+    let uncertain = ambiguousSave(result.status) || ([200, 201].includes(result.status) && !meeting) || readAfterConflict;
+    let conflict = Boolean(id && result.status === 409 && result.body.error?.current);
+    if (active(operation) && id && uncertain) {
+      showSave('loading', '正在核对会议的最新版本…');
+      const read = await saveRequest('GET', path);
+      const latest = (!native || read.body.viewer_username === operation.viewer) && savedMeeting(read, operation);
+      if (latest) {
+        if (latest.revision >= revision && latest.revision <= revision + 1 && meetingMatchesChanges(latest, changes)) {
+          meeting = latest;
+        } else if (latest.revision > revision) {
+          conflict = true;
+          uncertain = false;
+        } else if (readAfterConflict) {
+          uncertain = false;
+        }
       }
-    } catch {
-      result = {status: 0, body: {}};
-    } finally {
-      if (writing === operation) writing = null;
     }
+    if (writing === operation) writing = null;
     if (!active(operation)) return;
+    saveRetry = !meeting && uncertain ? operation : null;
+    const newerDraft = operation.draft !== draftContents();
+    const revisedCreate = meeting && !id && meeting.revision > 1;
+    saveConflict = Boolean((!meeting && !uncertain && conflict) || (revisedCreate && newerDraft));
     syncWriting();
-    if (result.status === 409) {
-      show('error', '会议已在别处更新，或标题已被占用。');
+    if (!meeting) {
+      if (uncertain) showSave('error', '暂时无法确认保存结果。草稿已保留，请重试。');
+      else if (conflict) showSave('error', '会议已在别处更新。草稿已保留，请复制修改后重新打开会议。');
+      else if (result.status === 409) showSave('error', '同名会议已存在。请更换标题后保存。');
+      else showSave('error', messageFor(result.body.error, '保存失败。草稿已保留，请重试。'));
       return;
     }
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '保存失败。'));
-      return;
-    }
-    const meeting = result.body.meeting;
-    selection += 1;
     if (!native) meetings = [meeting, ...meetings.filter(item => item.id !== meeting.id)];
     else meetings = meetings.map(item => item.id === meeting.id ? meeting : item);
-    fill(meeting);
-    show('ok', '会议已保存。');
+    if (!newerDraft && layout?.dataset.view !== 'catalogue') fill(meeting);
+    else {
+      current = meeting;
+      clearArtifactResult();
+      for (const action of actions) delete action.savedIndex;
+      if (!revisedCreate) operation.submittedActions.forEach((action, index) => { action.savedIndex = index; });
+      syncWriting();
+      syncRecord();
+    }
+    if (saveConflict) showSave('error', '会议已创建，但随后在别处更新。草稿已保留，请复制修改后重新打开会议。');
+    else showSave('ok', newerDraft ? '上次提交已保存。还有未保存的修改。' : '会议已保存。');
     void loadList({keepEditor: true, preserve: true});
   });
 
