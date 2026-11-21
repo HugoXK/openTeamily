@@ -2189,3 +2189,64 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   font-size: .8125rem;
   color: var(--ot-muted);
 }
+
+.message-quote,
+.composer-reply {
+  min-width: 0;
+  padding: .35rem .55rem;
+  border: 0;
+  border-inline-start: 2px solid var(--ot-accent);
+  border-radius: .35rem;
+  background: var(--ot-surface);
+  color: var(--ot-muted);
+  text-align: start;
+  font-size: .8rem;
+}
+.message-quote {
+  display: grid;
+  gap: .125rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin: .25rem 0 .4rem;
+  overflow-wrap: anywhere;
+}
+#message-list li > button.message-quote {
+  height: auto;
+  min-height: 2rem;
+  border-inline-start: 2px solid var(--ot-accent);
+  border-radius: .35rem;
+  margin: .25rem 0 .4rem;
+  padding: .35rem .55rem;
+  background: var(--ot-surface);
+  cursor: pointer;
+  opacity: 1;
+}
+button.message-quote:hover { background: var(--ot-bg-accent); }
+.message-quote strong,
+.composer-reply-copy strong {
+  color: var(--ot-ink);
+  font-weight: 650;
+}
+.composer-reply {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  margin: .1rem .15rem .25rem;
+}
+.composer-reply[hidden] { display: none; }
+.composer-reply-copy { display: grid; gap: .15rem; min-width: 0; }
+.composer-reply-copy :is(strong,span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chat-reply-cancel {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--ot-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+#chat-reply-cancel:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }

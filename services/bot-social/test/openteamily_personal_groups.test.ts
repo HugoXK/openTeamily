@@ -183,3 +183,42 @@ test("deleting for one reader preserves the shared message, pins and reactions",
   assert.equal(shared.retracted, false);
   assert.deepEqual(shared.reactions,[{emoji:"👍",count:1,mine:false}]);
 });
+
+test("quoted messages keep a real link and respect each reader's access", async () => {
+  const [owner, peer] = await Promise.all([
+    home(S.base, "quote-owner"), home(S.base, "quote-peer"),
+  ]);
+  const contact = await owner.ok("POST", "/v1/ot/contacts", {handle:peer.handle});
+  await peer.ok("POST", "/v1/ot/contacts/" + contact.id, {action:"accept"});
+  const root = "/v1/ot/conversations";
+  const group = await owner.ok("POST", root, {kind:"group", account_group:true, title:"Linked replies", members:[peer.handle]});
+  const other = await owner.ok("POST", root, {kind:"group", account_group:true, title:"Different room", members:[peer.handle]});
+  const send = root + "/" + group.id + "/messages";
+  const original = await owner.ok("POST", send, {body:"Original  room\ntext"});
+  const reply = await peer.ok("POST", send, {body:"Actual answer", reply_to:original.id});
+  assert.equal(reply.body, "Actual answer");
+  assert.equal(reply.reply_to, original.id);
+  assert.deepEqual(reply.reply_preview, {message_id:original.id, available:true,
+    author:original.author.display_name, excerpt:"Original room text"});
+  const payload = {body:"Wrong room", reply_to:original.id};
+  const foreign = await peer.call("POST", root + "/" + other.id + "/messages", payload);
+  assert.equal(foreign.status,409);
+  await owner.ok("POST", "/v1/ot/messages/" + original.id + "/hide", {conversation_id:group.id});
+  const preview = async (actor: typeof owner) => (await actor.ok("GET", "/v1/ot/messages/" + reply.id)).reply_preview;
+  assert.deepEqual(await preview(owner), {message_id:original.id, available:false});
+  assert.equal((await preview(peer)).available,true);
+  const hidden = await owner.call("POST", send, payload);
+  assert.equal(hidden.status,409);
+
+  const revised = await owner.ok("POST", send, {body:"Before editing"});
+  const draft = await peer.ok("POST", send, {body:"Quoted document", reply_to:revised.id, direct:true,
+    attachment:{title:"reference.txt", mime:"text/plain", data:Buffer.from("Attachment contents").toString("base64")}});
+  assert.equal(draft.reply_preview.excerpt,"Before editing");
+  const target = "/v1/ot/messages/" + revised.id;
+  await owner.ok("PATCH", target, {body:"After editing"});
+  const submitted = "/v1/ot/messages/" + draft.id;
+  assert.equal((await peer.ok("GET", submitted)).reply_preview.excerpt, "After editing");
+  await owner.ok("DELETE", target);
+  assert.deepEqual((await peer.ok("GET", submitted)).reply_preview, {message_id:revised.id, available:false});
+  assert.equal((await peer.call("POST", send, {body:"Too late", reply_to:revised.id})).status,409);
+});

@@ -94,6 +94,7 @@ export function sendPrivateAttachmentMessage(view, path, message, files, headers
 
 function errorText(result) {
   const code = result.body?.error?.code;
+  if (code === 'reply_unavailable') return '原消息已不可回复，请取消引用后重新选择文件。';
   if (code === 'attachment_storage_full') return '附件存储空间已满。';
   if (code === 'attachment_type_blocked') return '文件格式不受支持，或内容与扩展名不符。';
   if (result.status === 413) return '文件太大，最大支持 8 MB。';
@@ -158,6 +159,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
       }
       const form = new view.FormData();
       form.append('file',job.file);
+      if (job.destination.reply) form.set('reply_to', job.destination.reply.message_id);
       const result = await uploadForm(view, job.destination.path, {
         Accept: 'application/json',
         'X-CSRF-Token': csrfToken(), 'Idempotency-Key': job.key,

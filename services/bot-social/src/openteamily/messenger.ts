@@ -205,18 +205,33 @@ function workspaceConversation(ot: OtContext, workspace: string, id: string, own
   return {conv, directPeer};
 }
 
+const VISIBLE_MESSAGE = "NOT EXISTS (SELECT 1 FROM ot_hidden_messages hidden WHERE hidden.message_id=m.id AND hidden.owner_id=?)";
+
+function replyOriginal(ot: OtContext, conversationId: string, messageId: string, viewer: string) {
+  return ot.get<{body: string; author_kind: string; author_id: string; agent_name: string | null}>(`
+    SELECT m.body,m.author_kind,m.author_id,m.agent_name FROM ot_messages m
+    WHERE m.id=? AND m.conversation_id=? AND m.retracted=0 AND ${VISIBLE_MESSAGE}`, messageId, conversationId, viewer);
+}
+
+function replyPreview(ot: OtContext, message: any, viewer: string) {
+  const original = replyOriginal(ot, message.conversation_id, message.reply_to, viewer);
+  if (!original) return {message_id: message.reply_to, available: false};
+  const author = original.author_kind === "agent" ? original.agent_name : ot.profileView(original.author_id).display_name;
+  return {message_id: message.reply_to, available: true, author: author || "成员",
+    excerpt: original.body.replace(/\s+/g, " ").trim().slice(0, 120)};
+}
+
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
+  ...(viewer && m.reply_to && !m.retracted ? {reply_preview: replyPreview(ot, m, viewer)} : {}),
   attachment: m.retracted ? undefined : attachmentView(ot, m.id),
   voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
-
-const VISIBLE_MESSAGE = "NOT EXISTS (SELECT 1 FROM ot_hidden_messages hidden WHERE hidden.message_id=m.id AND hidden.owner_id=?)";
 
 function requireVisibleMessage(ot: OtContext, id: string, owner: string) {
   assert(!ot.get("SELECT 1 FROM ot_hidden_messages WHERE owner_id=? AND message_id=?", owner, id),
@@ -698,6 +713,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(Number(b.voice !== undefined) + Number(b.attachment !== undefined) + Number(Boolean(sourceMessage)) <= 1,
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
+    const replyTo = optText(b.reply_to, "reply_to", {min: 1, max: 80}) ?? null;
     const msg = ot.tx(() => {
       const direct = b.direct === true;
       const workspace = !direct && (sourceConversation || b.attachment !== undefined)
@@ -732,10 +748,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         file = readAttachment(ot, sourceConversation, sourceMessage);
       }
       const bodyText = text(b.body || file?.title || (voice ? "语音消息" : b.body), "body", {min: 1, max: BODY_MAX, multiline: true});
-      if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
+      if (replyTo) assert(replyOriginal(ot, conv.id, replyTo, me.ownerId), 409, "reply_unavailable", "原消息已不可回复，请取消引用。");
       const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
       const mentions = parsed.mentions;
-      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
+      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
       if (file) saveAttachment(ot, m.id, me.ownerId, file);
       if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {

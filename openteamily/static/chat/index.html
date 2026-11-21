@@ -389,6 +389,13 @@
     <p id="public-chat-status" class="note" role="status" hidden></p>
     <form id="chat-form" method="post" action="/v1/workspaces">
       <div class="composer">
+        <div id="chat-reply-preview" class="composer-reply" hidden>
+          <div class="composer-reply-copy" aria-live="polite">
+            <strong id="chat-reply-author"></strong>
+            <span id="chat-reply-excerpt"></span>
+          </div>
+          <button type="button" id="chat-reply-cancel" aria-label="取消引用">×</button>
+        </div>
         <div class="composer-row">
           <details class="composer-plus">
             <summary title="添加" aria-label="添加">+</summary>

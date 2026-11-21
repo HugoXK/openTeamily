@@ -125,6 +125,7 @@ function messageItem(row, me, env, workspaceId) {
     retracted: !!row.retracted,
     ...(row.reactions?.length ? {reactions: row.reactions} : {}),
     ...(row.voice ? { voice: row.voice } : {}),
+    ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
       path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
@@ -194,6 +195,7 @@ function rethrow(error) {
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
     public_chat_closed: 'public_chat_closed',
+    reply_unavailable: 'reply_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
