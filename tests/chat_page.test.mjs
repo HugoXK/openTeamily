@@ -2820,6 +2820,8 @@ const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
 const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
 const linkPersonalStartup = linkPersonalDefault + '&workspace=';
+const linkPersonalEntry = linkPersonalStartup + linkWork + '&entry_agent=' + linkAgent;
+const linkPersonalThreadEntry = linkPersonalEntry + '&entry_conversation=' + linkThread + '&directory=0';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
 const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
 const linkNativeLatest = linkNativePath + '?limit=50';
@@ -2861,7 +2863,8 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
   const fetcher = async (path, options = {}) => {
     const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
-    const override = routes.get(path);
+    const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork : path;
+    const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
@@ -3073,7 +3076,8 @@ for (const target of ['linked', 'bare agent']) {
     try {
       const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
       await settle();
-      assert.ok(fixture.calls.some(call => call.path === linkPersonalStartup + linkWork && call.method === 'GET'));
+      const startupPath = target === 'linked' ? linkPersonalThreadEntry : linkPersonalEntry;
+      assert.ok(fixture.calls.some(call => call.path === startupPath && call.method === 'GET'));
       assert.equal(fixture.calls.some(call => call.path.startsWith(scope + '/')), false);
       assert.equal(fixture.el('workspace').value, '');
       auth.resolve(json(200, {user: {id: alice, username: 'alice'}}));
@@ -3101,6 +3105,57 @@ for (const target of ['linked', 'bare agent']) {
     }
   });
 }
+
+for (const explicit of [false, true]) {
+  test(`an owned ${explicit ? 'exact thread' : 'agent'} entry paints its transcript without another history read`, async () => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}${explicit ? '&conversation=' + linkThread : ''}`);
+    const auth = Promise.withResolvers();
+    const social = Promise.withResolvers();
+    const startupPath = explicit ? linkPersonalThreadEntry : linkPersonalEntry;
+    fixture.routes.set('/v1/auth/session', () => auth.promise);
+    fixture.routes.set(startupPath, async () => {
+      const base = await linkedChatSnapshot(fixture).json();
+      return json(200, {...base, ...(explicit && {chat: undefined}), entry: settledNativeSnapshot(fixture)});
+    });
+    fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.deepEqual(fixture.calls.map(call => call.path), ['/v1/auth/session', startupPath]);
+      assert.deepEqual(fixture.messages(), [], 'the snapshot waits for its matching authenticated owner');
+      auth.resolve(json(200, {user: {id: alice, username: 'alice'}}));
+      await settle();
+      assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+      assert.equal(fixture.calls.some(call => call.path.startsWith(scope + linkNativeLatest)), false);
+      assert.equal(fixture.calls.some(call => call.path === scope + linkNativeDirectory), explicit);
+      social.resolve(json(200, {items: []}));
+      await loading;
+    } finally {
+      auth.resolve(json(401, {}));
+      social.resolve(json(503, {}));
+      fixture.restore();
+    }
+  });
+}
+
+test('an inline transcript for a different thread falls back to the authorized single history read', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}`);
+  fixture.routes.set(linkPersonalEntry, async () => {
+    const base = await linkedChatSnapshot(fixture).json();
+    const entry = settledNativeSnapshot(fixture);
+    entry.conversation = {...entry.conversation, id: '9'.repeat(32)};
+    return json(200, {...base, entry});
+  });
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+  } finally {
+    fixture.restore();
+  }
+});
 
 test('a native startup snapshot from another owner cannot authorize a private conversation', async () => {
   const scope = linkBase(linkWork);

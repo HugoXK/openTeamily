@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT NOT NU
   revision INTEGER NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
   key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, imported_from TEXT,
   UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, name_hash));
+CREATE INDEX IF NOT EXISTS agents_workspace_order ON agents(workspace_id, id);
 CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS agent_conversations_by_agent ON agent_conversations(agent_id, updated DESC, id);
@@ -146,10 +147,14 @@ export function createAgents({ db, host }) {
     return {items, cursor: older.length > olderCount ? items[0].id : null, has_newer: newer.length > newerCount}
   }
 
-  async function privateProfile(agent) {
-    const binding = one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1')
-    if (binding?.agent_id !== agent.id || binding.workspace_id !== agent.workspace_id) return null
+  async function readPrivateProfile() {
     try { return (await host.call('personal/get', {})) || {recall:'off'} } catch { return {recall:'off'} }
+  }
+
+  async function privateProfile(agent) {
+    const binding = one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND workspace_id=? AND agent_id=?',
+      agent.workspace_id, agent.id)
+    return binding ? readPrivateProfile() : null
   }
 
   function observeAgent(row, bot, rosterAttached) {
@@ -162,23 +167,24 @@ export function createAgents({ db, host }) {
   }
 
   async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
-    const rows = all(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
+    const rows = db.prepare(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
       FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id
-      WHERE a.workspace_id=? AND a.id>? ORDER BY a.id`, workspaceId, cursor)
+      WHERE a.workspace_id=? AND a.id>? ORDER BY a.id`)
     // Native writes own reconciliation. Listing still works before the roster
     // attaches and can reflect live edits without queueing behind a model turn.
     const rt = host.currentRuntime?.()?.rt
     const rosterAttached = typeof rt?.botOf === 'function'
-    const unmapped = new Map()
-    if (rosterAttached && rows.some(row => !row.native_bot_id)) {
-      for (const bot of Object.values(rt.state?.bots ?? {})) {
-        const link = bot.openteamily
-        if (link?.workspace_id === workspaceId && !unmapped.has(link.agent_id)) unmapped.set(link.agent_id, bot)
-      }
-    }
+    let unmapped
     const page = []
-    for (const row of rows) {
-      const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped.get(row.id)
+    for (const row of rows.iterate(workspaceId, cursor)) {
+      if (rosterAttached && !row.native_bot_id && !unmapped) {
+        unmapped = new Map()
+        for (const bot of Object.values(rt.state?.bots ?? {})) {
+          const link = bot.openteamily
+          if (link?.workspace_id === workspaceId && !unmapped.has(link.agent_id)) unmapped.set(link.agent_id, bot)
+        }
+      }
+      const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped?.get(row.id)
       const observed = observeAgent(row, bot, rosterAttached)
       if (!includeArchived && observed.archived) continue
       page.push(observed)
@@ -187,17 +193,19 @@ export function createAgents({ db, host }) {
     const items = page.slice(0, limit).map(view)
     const binding = one('SELECT agent_id FROM native_personal_binding WHERE singleton=1 AND workspace_id=?', workspaceId)
     const personal = binding && items.find(agent => agent.id === binding.agent_id)
-    if (personal) {
-      const profile = await privateProfile(personal)
-      if (profile) personal.memory_recall_default = profile.recall !== 'off'
-    }
+    if (personal) personal.memory_recall_default = (await readPrivateProfile()).recall !== 'off'
     return {items, cursor: page.length > limit ? items.at(-1)?.id ?? null : null}
   }
 
-  function memoryMode(convo, profile) {
+  function savedMemoryMode(convo) {
     const setting = one('SELECT enabled,scope FROM agent_conversation_memory WHERE conversation_id=?', convo.id)
     if (setting) return setting.enabled ? setting.scope : 'off'
-    return profile?.recall === 'off' ? 'off' : 'workspace'
+  }
+
+  const defaultMemoryMode = profile => profile?.recall === 'off' ? 'off' : 'workspace'
+  const memoryMode = (convo, profile) => savedMemoryMode(convo) ?? defaultMemoryMode(profile)
+  async function conversationMemoryMode(convo, agent) {
+    return savedMemoryMode(convo) ?? defaultMemoryMode(await privateProfile(agent))
   }
 
   function memorySetting(mode) {
@@ -523,6 +531,22 @@ export function createAgents({ db, host }) {
         ORDER BY c.updated DESC, c.id LIMIT 200`)
       return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)) }
     },
+    async startupEntry(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      if (typeof p.agent_id !== 'string' || !ID.test(p.agent_id) ||
+          (p.conversation_id !== undefined && (typeof p.conversation_id !== 'string' || !ID.test(p.conversation_id)))) {
+        fail('invalid', 'Invalid startup conversation', 400)
+      }
+      const id = p.conversation_id ?? one(`SELECT c.id
+        FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
+        WHERE a.workspace_id=? AND c.agent_id=? ORDER BY c.updated DESC, c.id LIMIT 1`, workspaceId, p.agent_id)?.id
+      if (!id) return null
+      const result = await endpoints.v1({
+        method: 'GET', path: `/v1/workspaces/${workspaceId}/agents/${p.agent_id}/conversations/${id}?limit=50&snapshot=1`,
+      })
+      return result.status === 200 ? result.body : null
+    },
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
@@ -540,7 +564,7 @@ export function createAgents({ db, host }) {
       const row = conversation(agent, id)
       if (row.title !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
-      return { status: 201, conversation: { ...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent))) } }
+      return { status: 201, conversation: { ...row, ...mapping, ...memorySetting(await conversationMemoryMode(row, agent)) } }
     },
     async openConversation(p) {
       const agent = load(ws(p), p.id)
@@ -559,24 +583,29 @@ export function createAgents({ db, host }) {
       const key = `agent:${agent.id}:${row.id}`
       // A candidate can lose to a pinned or newer Social thread at startup.
       // Only the selected thread can materialize missing native state.
-      const mapped = snapshot ? native.mappedSession(agent, key) : await native.readSession(agent, key, row.title)
-      if (!mapped) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
+      let mapped = native.mappedSession(agent, key)
+      let current = agent
+      if (!mapped) {
+        if (snapshot) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
+        mapped = await native.session(agent, key, row.title)
+        // Native setup can reconcile the stored agent while binding the session.
+        current = load(agent.workspace_id, agent.id)
+      }
       const {native_name, ...mapping} = mapped
-      const current = load(agent.workspace_id, agent.id)
       const rt = host.currentRuntime?.()?.rt
       const observed = observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function')
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       return {
         agent: view(observed),
-        conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
+        conversation: {...row, ...mapping, ...memorySetting(await conversationMemoryMode(row, agent))},
         ...(history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
       }
     },
     async captureSource(p) {
       const agent = load(ws(p), p.agent_id)
       const convo = conversation(agent, p.conversation_id)
-      if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || memoryMode(convo,await privateProfile(agent)) === 'off'))) return null
+      if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || await conversationMemoryMode(convo, agent) === 'off'))) return null
       const row = one("SELECT text FROM agent_messages WHERE id=? AND conversation_id=? AND role='user' AND status IN ('sent','succeeded')",p.message_id,convo.id)
       return row ? {title:convo.title,text:row.text} : null
     },
@@ -837,6 +866,7 @@ export default async function agents(host) {
   timer.unref?.()
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.startupEntry = endpoints.startupEntry
   wrapped.groupTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.turn(payload, {onProgress:payload.onProgress})

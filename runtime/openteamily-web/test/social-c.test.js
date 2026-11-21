@@ -91,10 +91,18 @@ test('the Chat snapshot reads only the local owner’s workspace and directory',
     else process.env.OPENTEAMILY_OWNER_USER_ID = previousOwner
   })
   const directory = { items: [{id: agent}], conversations: [{id: 'd'.repeat(32), agent_id: agent}], cursor: null }
+  const entry = {agent: {id: agent, workspace_id: workspace},
+    conversation: {id: 'd'.repeat(32), agent_id: agent, workspace_id: workspace}, items: [], cursor: null, has_newer: false}
   const reads = []
+  const entries = []
   let available = true
+  let hasEntry = true
   const endpoint = teams({ call: async (endpoint, payload) => {
     if (endpoint === 'agents/personal-binding') return { workspace_id: workspace, agent_id: agent }
+    if (endpoint === 'agents/startupEntry') {
+      entries.push(payload)
+      return hasEntry ? entry : null
+    }
     assert.equal(endpoint, 'agents/v1')
     reads.push(payload)
     if (!available) throw new Error('unavailable')
@@ -111,6 +119,25 @@ test('the Chat snapshot reads only the local owner’s workspace and directory',
   assert.equal(other.body.personal_agent_id, agent)
   assert.equal(other.body.chat, undefined)
   assert.equal(reads.length, 1)
+  const hint = '&entry_agent=' + agent
+  const exact = hint + '&entry_conversation=' + entry.conversation.id + '&directory=0'
+  assert.deepEqual((await get('&workspace=' + workspace + exact)).body, {
+    items: result.body.items, cursor: null, personal_agent_id: agent, entry,
+  })
+  assert.deepEqual(entries, [{workspace_id: workspace, agent_id: agent, conversation_id: entry.conversation.id}])
+  assert.equal(reads.length, 1, 'an exact transcript does not need the directory')
+  assert.equal((await get('&workspace=' + 'e'.repeat(32) + exact)).body.entry, undefined)
+  assert.equal((await get(exact)).body.entry, undefined)
+  assert.equal((await get('&workspace=' + workspace + exact + hint)).body.entry, undefined)
+  assert.equal(entries.length, 1, 'unscoped and ambiguous hints cannot read a transcript')
+  hasEntry = false
+  assert.equal((await get('&workspace=' + workspace + exact)).body.chat, undefined)
+  const newAgent = await get('&workspace=' + workspace + hint + '&directory=0')
+  assert.equal(newAgent.body.entry, null)
+  assert.deepEqual(newAgent.body.chat, directory, 'an agent without a snapshot can still open an empty draft')
+  const bindingOnly = await get('&workspace=' + workspace + '&directory=0')
+  assert.equal(bindingOnly.body.personal_agent_id, agent)
+  assert.equal(bindingOnly.body.chat, undefined)
   available = false
   assert.equal((await get()).body.personal_agent_id, agent)
   assert.equal((await get()).body.chat, undefined)
@@ -118,6 +145,7 @@ test('the Chat snapshot reads only the local owner’s workspace and directory',
   delete process.env.OPENTEAMILY_OWNER_USER_ID
   assert.equal((await get()).body.personal_agent_id, undefined)
   assert.equal((await get()).body.chat, undefined)
+  assert.equal((await get('&workspace=' + workspace + exact)).body.entry, undefined)
   const request = {headers: new Headers({'x-ot-owner-username': 'personal-test'})}
   const fromGateway = await get('', {request})
   assert.equal(fromGateway.body.viewer_username, 'personal-test')

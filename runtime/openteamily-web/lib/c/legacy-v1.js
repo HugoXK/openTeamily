@@ -496,11 +496,25 @@ function teamsRoutes(host) {
                 if (include === 'chat') result.personal_agent_id = localBinding.agent_id
                 if (!q.has('workspace') || q.get('workspace') === personal.id) {
                   if (include === 'chat') {
-                    const directory = await host.call('agents/v1', {
-                      method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
-                    }).catch(() => null)
-                    if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
-                        Array.isArray(directory.body.conversations)) result.chat = directory.body
+                    const agent = q.get('entry_agent')
+                    const conversation = q.get('entry_conversation')
+                    const entryRequested = q.get('workspace') === personal.id && q.getAll('workspace').length === 1 && HEX.test(agent || '')
+                      && q.getAll('entry_agent').length === 1
+                      && (conversation === null || (HEX.test(conversation) && q.getAll('entry_conversation').length === 1))
+                    if (entryRequested) {
+                      result.entry = await host.call('agents/startupEntry', {
+                        workspace_id: personal.id, agent_id: agent, conversation_id: conversation ?? undefined,
+                      }).catch(() => null)
+                    }
+                    // Exact conversation links can verify the same local owner
+                    // binding before loading the directory independently.
+                    if (q.get('directory') !== '0' || (entryRequested && conversation === null && !result.entry)) {
+                      const directory = await host.call('agents/v1', {
+                        method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
+                      }).catch(() => null)
+                      if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
+                          Array.isArray(directory.body.conversations)) result.chat = directory.body
+                    }
                   } else {
                     const order = q.get('order') === 'recent' ? '?order=recent' : ''
                     const catalog = await host.call('artifacts/v1', {

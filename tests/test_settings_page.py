@@ -193,6 +193,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('javascript', asset['headers']['Content-Type'])
         self.assertGreater(len(asset['body']), 256 * 1024)
 
+    def test_chat_entry_can_load_from_the_platform_shell(self):
+        asset = self.raw.call('GET', '/chat/app.mjs')
+        self.assertEqual(asset['status'], 200)
+        self.assertIn('javascript', asset['headers']['Content-Type'])
+        self.assertIn(b'startChatReads', asset['body'])
+
     def test_platform_settings_api_stays_retired_without_disabling_login(self):
         self.assertEqual(self.client.call('GET', '/v1/settings')['status'], 410)
         update = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})

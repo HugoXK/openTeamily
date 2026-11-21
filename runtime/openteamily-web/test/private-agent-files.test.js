@@ -61,8 +61,10 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   t.after(() => db.close())
   const runtime = createRuntime()
   let allowRuntime = true
+  let profileReads = 0
   const {endpoints} = createAgents({db,host:{
     currentRuntime: () => runtime,
+    call: async () => { profileReads++; return {recall: 'all'} },
     runtime: async () => {
       assert.ok(allowRuntime, 'A snapshot must not start the native runtime')
       return runtime
@@ -72,6 +74,10 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   const newConversation = () => endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
   const {conversation: mapped} = await newConversation()
   const {conversation: unmapped} = await newConversation()
+  db.prepare('UPDATE agent_conversations SET updated=? WHERE id=?').run(10, unmapped.id)
+  db.prepare('UPDATE agent_conversations SET updated=? WHERE id=?').run(11, mapped.id)
+  db.prepare('INSERT INTO native_personal_binding VALUES(1,?,?)').run(workspace, agent.id)
+  db.prepare("INSERT INTO agent_conversation_memory VALUES(?,0,'workspace')").run(mapped.id)
   const insert = db.prepare("INSERT INTO agent_messages VALUES(?,?,'user',?,'succeeded',?,'{}')")
   for (let i = 0; i < 65; i++) insert.run(i.toString(16).padStart(32,'0'),mapped.id,`Message ${i}`,i)
   db.prepare('DELETE FROM native_agent_sessions WHERE conversation_key=?').run(`agent:${agent.id}:${unmapped.id}`)
@@ -89,6 +95,14 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   assert.equal(body.items.length,50)
   assert.equal(body.items[0].body,'Message 15')
   assert.equal(body.cursor,body.items[0].id)
+  assert.equal(body.conversation.memory_recall,false)
+  assert.equal(profileReads, 0, 'an explicit conversation preference does not read the personal profile')
+  const entry = {workspace_id:workspace, agent_id:agent.id, conversation_id:mapped.id}
+  await assert.rejects(endpoints.startupEntry(entry), {code: 'agents/not-found'})
+  assert.deepEqual(await endpoints.startupEntry(entry, {internal:true}), body)
+  assert.deepEqual(await endpoints.startupEntry({...entry, conversation_id:undefined}, {internal:true}), body)
+  assert.equal(await endpoints.startupEntry({...entry, workspace_id:'b'.repeat(32)}, {internal:true}), null)
+  assert.equal(await endpoints.startupEntry({...entry, conversation_id:unmapped.id}, {internal:true}), null)
   assert.equal((await request(path(unmapped.id),{},query)).status,409)
   assert.equal((await request(path(mapped.id).replace(workspace,'b'.repeat(32)),{},query)).status,404)
   assert.equal((await request(path('c'.repeat(32)),{},query)).status,404)
@@ -97,6 +111,7 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   }
   runtime.rt.botOf(body.agent.native_bot_id).hidden = true
   assert.equal((await request(path(mapped.id),{},query)).status,409)
+  assert.equal(await endpoints.startupEntry(entry, {internal:true}), null)
   runtime.rt.botOf(body.agent.native_bot_id).hidden = false
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,1)
 

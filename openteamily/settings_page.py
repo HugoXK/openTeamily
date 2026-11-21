@@ -165,7 +165,8 @@ class SettingsPage:
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
         engine = directory == 'shell' and name.startswith('model3d-engine-') and name.endswith('.mjs')
-        limit = 1024 * 1024 if engine else 256 * 1024
+        chat_entry = directory == 'chat' and name == 'app.mjs'
+        limit = 1024 * 1024 if engine or chat_entry else 256 * 1024
         folder = self.root / directory
         root_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:

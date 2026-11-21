@@ -116,6 +116,52 @@ test('authenticated package assets revalidate against their actual bytes; person
   assert.equal(page.headers.has('etag'), false)
 })
 
+test('Chat versions its static dependency graph, keeps HTML private, and never caches newer bytes under an old URL', async () => {
+  const {pages, data} = fixture()
+  const css = join(pages, 'shell', 'app.css')
+  writeFileSync(join(pages, 'chat', 'index.html'), `<html><head>
+    <link rel="stylesheet" href="/shell/app.css">
+    <script type="module" src="/chat/app.mjs"></script>
+  </head><body><a href="/chat">Chat</a></body></html>`)
+  writeFileSync(join(pages, 'chat', 'app.mjs'), "import '../shell/utility.mjs'")
+  const dependencyFile = join(pages, 'shell', 'utility.mjs')
+  writeFileSync(dependencyFile, 'export const item = 1')
+  const mountPages = () => {
+    const ctx = fakeCtx()
+    apply(ctx, {pagesDir: pages, dataDir: data})
+    return ctx.routes.get(PAGE_PATH)
+  }
+  const route = mountPages()
+  const doc = await get(route, '/chat')
+  assert.equal(doc.headers.get('cache-control'), 'no-store')
+  const html = await doc.text()
+  const entry = /src="(\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs)"/.exec(html)?.[1]
+  assert.ok(entry)
+  const base = entry.slice(0, -'/chat/app.mjs'.length)
+  assert.ok(html.includes(`href="${base}/shell/app.css"`))
+  assert.ok(html.includes('<a href="/chat">'))
+  const dep = base + '/shell/utility.mjs'
+  const versioned = await get(route, dep)
+  assert.equal(await versioned.text(), 'export const item = 1')
+  assert.match(versioned.headers.get('cache-control'), /^private, max-age=31536000, immutable$/)
+  assert.equal((await get(route, dep, {'If-None-Match': versioned.headers.get('etag')})).status, 304)
+  assert.equal((await get(route, base + '/shell/leak.txt')).status, 404)
+  assert.equal((await get(route, base + '/chat/index.html')).status, 404)
+
+  writeFileSync(css, 'body{margin:0}')
+  writeFileSync(dependencyFile, 'export const item = 2')
+  const after = mountPages()
+  const rewritten = await (await get(after, '/chat')).text()
+  const revisedEntry = /src="(\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs)"/.exec(rewritten)?.[1]
+  assert.ok(revisedEntry)
+  assert.notEqual(revisedEntry, entry)
+  const changed = await get(after, dep)
+  assert.equal(changed.status, 302)
+  assert.equal(changed.headers.get('cache-control'), 'no-store')
+  const current = await get(after, changed.headers.get('location'))
+  assert.equal(await current.text(), 'export const item = 2')
+})
+
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {
   const { pages, data } = fixture()
   const ctx = fakeCtx()
