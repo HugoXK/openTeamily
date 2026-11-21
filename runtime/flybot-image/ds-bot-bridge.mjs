@@ -26,11 +26,28 @@ import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
 
+export const MODEL_OVERRIDE = Symbol.for('openteamily.model-api.override')
+export function userModelOverride(scope = globalThis) {
+  const resolve = scope[MODEL_OVERRIDE]
+  if (typeof resolve !== 'function') return null
+  try { return resolve() || null } catch { return null }
+}
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
+function modelInput(modelApi) {
+  const model = String(modelApi?.model || '').toLowerCase()
+  const isDeepSeekFlash = model === 'deepseek-flash' || model === 'deepseek-v4-flash-vision-exp'
+    || /^deepseek-v4\.1-flash(?:-\d{4,8})?$/.test(model)
+  return isDeepSeekFlash ? ['text','image'] : ['text']
+}
+
+function providerModel(input) {
+  return {id:MODEL_ID,name:'OpenTeamily model',contextWindow:128000,maxTokens:8192,input}
+}
+
 export const TOOLS_CAPABILITY = 'ot-tools'
 export const DEFAULT_PORT = 18731
-const BODY_LIMIT = 4 * 1024 * 1024
+const BODY_LIMIT = 24 * 1024 * 1024
 const RESULT_TEXT_LIMIT = 12000
 const SKILL_FORMATS = ['openteamily.prompt-skill.v1', 'openteamily.prompt-skill.v2']
 
@@ -120,9 +137,10 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         if (req.headers.authorization !== 'Bearer ' + state.token) return sendJson(res, 401, { error: { message: 'unauthorized' } })
         const raw = await readBody(req)
-        const modelApi = state.active?.modelApi || state.startupModel()
+        const task = req.headers['x-openteamily-private-text'] === '1' ? null : state.active
+        const modelApi = task?.modelApi || state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
-        if (state.active) state.active.modelCalls += 1
+        if (task) task.modelCalls += 1
         state.modelCalls += 1
         try { await forward(modelApi, raw, res) } catch (error) {
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))
@@ -188,7 +206,7 @@ export async function handleMcp(state, message) {
 }
 
 // Wait for the DS-Bot turn that our requestId started; collect the Bot's text.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = []) {
   return new Promise((resolve, reject) => {
     let sessionId
     let settled = false
@@ -216,7 +234,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000) {
       }
     })
     off = typeof disposer === 'function' ? disposer : () => disposer?.dispose?.()
-    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }], requestId }))
+    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }, ...files], requestId }))
       .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
   })
 }
@@ -227,11 +245,14 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     active: null,
     tools: [],
     modelCalls: 0,
-    startupModel: () => { try { return loadModelApi(env) || null } catch { return null } },
+    // The account's own model settings (B4 @openteamily/web model-api feature,
+    // in-process, sealed at rest) win over the manager-mounted startup file.
+    startupModel: () => { try { return userModelOverride() || loadModelApi(env) || null } catch { return null } },
   }
   const listenPort = port ?? (Number(env.OPENTEAMILY_BRIDGE_PORT) || DEFAULT_PORT)
   const baseURL = `http://127.0.0.1:${listenPort}/v1`
   let ready = null
+  let hasImageInput
   let botId = null
   let skillNames = new Set()
   let toolsAttached = false
@@ -259,14 +280,25 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     renameSync(chatsPath + '.tmp', chatsPath)
   }
 
+  function effectiveInput() {
+    return modelInput(state.active?.modelApi || state.startupModel())
+  }
+
+  async function saveInput(input) {
+    await rt.saveProviderModels({provider:PROVIDER,models:[providerModel(input)]})
+    hasImageInput = input.includes('image')
+  }
+
   async function setup() {
+    const input = effectiveInput()
     try {
       await rt.addProvider({ provider: PROVIDER, custom: true, api: 'openai-completions', name: 'OpenTeamily', baseURL,
-        models: [{ id: MODEL_ID, name: 'OpenTeamily model', contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
-        key: state.token })
+        models:[providerModel(input)],key:state.token })
+      hasImageInput = input.includes('image')
     } catch (error) {
       if (!/already set up/.test(String(error?.message))) throw error
-      await rt.setProviderKey(PROVIDER, state.token)
+      await rt.setProviderKey(PROVIDER,state.token)
+      await saveInput(input)
     }
     await rt.bootstrap()
     botId = rt.state.mainBotIds.find(id => rt.botOf(id))
@@ -276,6 +308,12 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return botId
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
+
+  async function prepareModel() {
+    await ensureSetup()
+    const input = effectiveInput()
+    if (input.includes('image') !== hasImageInput) await saveInput(input)
+  }
 
   const attachedNow = () => new Set(rt.botOf(botId)?.capabilities ?? [])
   async function syncSkills(material) {
@@ -306,14 +344,24 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     }
   }
 
-  async function infer(origin, token, payload) {
+  // One DS-Bot turn at a time per runtime: management tasks and @openteamily/web
+  // plugin chat both switch the Main Bot's active part, so they share this lock.
+  let turnQueue = Promise.resolve()
+  function exclusive(fn) {
+    const run = turnQueue.then(() => fn())
+    turnQueue = run.catch(() => {})
+    return run
+  }
+  const infer = (origin, token, payload) => exclusive(() => inferUnlocked(origin, token, payload))
+
+  async function inferUnlocked(origin, token, payload) {
     const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, { skill_format: 'openteamily.prompt-skill.v2' })
     const active = { taskId: payload.id, modelApi: access.model_api, modelCalls: 0, toolCalls: 0, bridge: null, tools: [] }
     let stage = 'DS-Bot setup'
     // Active before setup: picking the Bot's model may release DS-Bot's greeting turn.
     state.active = active
     try {
-      await ensureSetup()
+      await prepareModel()
       await selectConversation(access.conversation_id || (rt.createSession ? 'task:' + payload.id : null))
       stage = 'skill verification/loading'
       const material = access.skills || []
@@ -388,7 +436,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return processed
   }
 
-  return { state, setup: ensureSetup, cycle, infer, syncSkills, syncTools, selectConversation, port: listenPort, baseURL, get botId() { return botId } }
+  return { state, setup: ensureSetup, prepareModel, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId } }
 }
 
 // Plugin entry: start the loopback server and the management task loop.

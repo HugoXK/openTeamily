@@ -5,9 +5,13 @@
 let attached = null
 const waiters = new Set()
 
+// value = { rt, ctx, ...services }. Services the runtime wrapper provides today:
+//   chatTurn(conversationKey, text, requestId) → { text, sessionId, turnId }  (one native DS-Bot turn)
+//   mainBot() → botId of the user's Main Bot (after provider/model setup)
+// Calling attachRuntime again (e.g. once services are ready) replaces the handle.
 export function attachRuntime(value) {
   if (!value || !value.rt || !value.ctx) throw new Error('openteamily-web: attachRuntime needs { rt, ctx }')
-  attached = Object.freeze({ rt: value.rt, ctx: value.ctx })
+  attached = Object.freeze({ ...value })
   for (const resolve of waiters) resolve(attached)
   waiters.clear()
   return attached

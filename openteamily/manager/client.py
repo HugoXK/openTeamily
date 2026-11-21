@@ -205,11 +205,33 @@ class ManagerClient:
             require(data['runtime_key'] is None, 'runtime_key_shape')
             return None
         doc = data['runtime_key']
-        require(isinstance(doc, dict) and set(doc) == {'origin', 'token', 'hostname'}, 'runtime_key_shape')
+        fields = {'origin', 'token', 'hostname'}
+        require(isinstance(doc, dict) and fields <= set(doc) <= fields | {'agent_bootstrap'}, 'runtime_key_shape')
+        if 'agent_bootstrap' in doc:
+            bootstrap = doc['agent_bootstrap']
+            require(isinstance(bootstrap, dict) and bootstrap.get('feature') == 'agents'
+                    and bootstrap.get('instance_id') == iid, 'runtime_key_shape')
         for key in ('origin', 'token', 'hostname'):
             require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
         return doc
 
+
+    def dsbot_upstream(self, iid, address, auth_cookie, process_ref):
+        """Report a running runtime's private address and DSH session cookie (never logged)."""
+        check_id(iid)
+        require(isinstance(process_ref, str) and HEX.fullmatch(process_ref), 'process_ref')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-upstream',
+                         {'address': address, 'auth_cookie': auth_cookie, 'process_ref': process_ref})
+        require(data.get('recorded') is True, 'response_shape')
+        return True
+
+    def dsbot_import(self, iid, seal_key_hex):
+        """Fetch this owner's sealed import bundles. seal_key_hex is 64 hex chars; never logged."""
+        check_id(iid)
+        require(isinstance(seal_key_hex, str) and re.fullmatch(r'[0-9a-f]{64}', seal_key_hex), 'seal_key')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-import', {'seal_key': seal_key_hex})
+        require(isinstance(data, dict) and data.get('owner_imported') is True, 'import_shape')
+        return data
 
     def recover(self, iid, revision, operation_id):
         check_id(iid)

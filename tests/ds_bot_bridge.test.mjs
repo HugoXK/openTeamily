@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import {
   createBridge, createBridgeServer, forwardModel, handleMcp, mcpTool, skillCapabilityName, MODEL_ID, TOOLS_CAPABILITY,
+  userModelOverride, MODEL_OVERRIDE,
 } from '../runtime/flybot-image/ds-bot-bridge.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
@@ -144,6 +145,27 @@ function fakeRuntime({ useModel = true } = {}) {
   return { rt, ctx, log, bind: state => { bridgeState = state } }
 }
 
+test('the DeepSeek Flash vision model updates a retained provider and follows account changes', async () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, fake.ctx, { port: 1 })
+  fake.bind(bridge.state)
+  let model = 'DeepSeek-V4.1-Flash-1017'
+  bridge.state.startupModel = () => ({model})
+  fake.rt.addProvider = async () => { throw new Error('openteamily is already set up') }
+  const updates = []
+  fake.rt.saveProviderModels = async ({provider,models}) => updates.push([provider,models[0].input])
+  await bridge.prepareModel()
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[['openteamily',['text','image']]])
+  model = 'another-text-only-model'
+  await bridge.prepareModel()
+  model = 'deepseek-flash'
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[
+    ['openteamily',['text','image']], ['openteamily',['text']], ['openteamily',['text','image']],
+  ])
+})
+
 function fakeManagement(task, access) {
   const calls = []
   const requester = async (origin, token, method, path, body) => {
@@ -244,4 +266,15 @@ test('separate conversations use separate native DS-Bot threads and reuse persis
     assert.equal(fake.rt.chatOf('bot1'), a)
     assert.equal(created, 2)
   } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('B4: the account model override from @openteamily/web wins, failures fall back to none', () => {
+  const scope = {}
+  assert.equal(userModelOverride(scope), null)
+  scope[MODEL_OVERRIDE] = () => ({ provider: 'openai', base_url: 'https://models.example/v1', model: 'm', api_key: 'k'.repeat(12), source: 'user' })
+  assert.equal(userModelOverride(scope).source, 'user')
+  scope[MODEL_OVERRIDE] = () => { throw new Error('sealed value is corrupt') }
+  assert.equal(userModelOverride(scope), null)
+  scope[MODEL_OVERRIDE] = () => null
+  assert.equal(userModelOverride(scope), null)
 })
