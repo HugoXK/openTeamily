@@ -187,3 +187,31 @@ test('the native inbox requests recent scoped notices and constructs safe meetin
   assert.equal((await endpoint({method:'GET',path:`/v1/workspaces/${'e'.repeat(32)}/notifications`})).status,404)
   assert.equal(f.calls.length,4)
 })
+
+test('Space work notices map account messages to the recipient workspace and scope their read updates', async t => {
+  const workspace = 'a'.repeat(32)
+  const conversation = 'otc_' + 'B'.repeat(26)
+  const message = 'otm_' + 'C'.repeat(26)
+  const notice = {id:'fixture-notice',seq:8,kind:'artifact.shared',created_at:9500,read:false,
+    data:{conversation_id:conversation,message_id:message,title:'排期表',actor_username:'Alice'}}
+  const f = fakeFetch((url, init) => init.method === 'GET' ? {unread:3,notifications:[
+    notice, {...notice,id:'malformed',data:{...notice.data,conversation_id:'../profile'}},
+  ]} : {unread:0})
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
+  t.after(() => setSharedBotSocial(undefined))
+  const endpoint = social({async call() { return {workspace_id:workspace} }}).endpoints.v1
+  const base = `/v1/workspaces/${workspace}/notifications`
+  const list = await endpoint({method:'GET',path:base+'?kind=work&limit=1'})
+  assert.deepEqual(list, {status:200,body:{limit:1,unread_count:3,items:[{
+    id:'fixture-notice',seq:8,kind:'artifact.shared',created:9,read:false,
+    conversation_id:conversation,message_id:message,workspace_id:workspace,title:'排期表',actor_username:'Alice',
+    path:`/chat#workspace=${workspace}&social=${conversation}&message=${message}`,
+  }]}})
+  assert.equal(f.calls[0].url,SERVER+'/v1/ot/notifications?limit=1&latest=1&personal=1&kind=work')
+  const read = await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'work'}})
+  assert.deepEqual(read,{status:200,body:{unread_count:0}})
+  assert.deepEqual(f.calls[1].body,{all:true,personal:true,kind:'work'})
+  assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
+  assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
+  assert.equal(f.calls.length,2)
+})

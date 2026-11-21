@@ -856,7 +856,18 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
-      if (file) saveAttachment(ot, m.id, me.ownerId, file);
+      if (file) {
+        saveAttachment(ot, m.id, me.ownerId, file);
+        if (file.resource && !sourceConversation) {
+          const recipients = ot.all<{owner_id: string}>(`SELECT recipient.owner_id FROM ot_conversation_members recipient
+            WHERE recipient.conversation_id=? AND recipient.owner_id<>? AND (? IS NULL OR EXISTS (
+              SELECT 1 FROM ot_team_members teammate WHERE teammate.team_id=?
+                AND teammate.owner_id=recipient.owner_id AND teammate.suspended=0))`, conv.id, me.ownerId, conv.team_id, conv.team_id);
+          const notice = {conversation_id: conv.id, message_id: m.id, title: file.resource.title,
+            actor_username: me.displayName, ...(conv.team_id ? {team_id: conv.team_id} : {})};
+          for (const recipient of recipients) ot.notify(recipient.owner_id, "artifact.shared", notice);
+        }
+      }
       if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {
         for (const agent of parsed.agents) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at)

@@ -1,16 +1,21 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
-// Authorized saved-result links select a real workspace and fetch the actual editor record.
+// A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
-  const params=new URLSearchParams(search||'');
-  if(!params.has('workspace')&&!params.has('artifact'))return null;
-  const workspace=params.get('workspace'),artifact=params.get('artifact');
-  if([...params.keys()].some(key=>!['workspace','artifact'].includes(key))||params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
-  return {workspace,artifact};
+  const params = new URLSearchParams(search || '');
+  if (!params.has('workspace') && !params.has('artifact')) return null;
+  const id = /^[0-9a-f]{32}$/;
+  const workspace = params.get('workspace');
+  const artifact = params.get('artifact');
+  if ([...params.keys()].some(key => !['workspace', 'artifact'].includes(key))
+    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
+    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))) return {invalid: true};
+  return artifact ? {workspace, artifact} : {workspace};
 }
 
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { mountSpreadsheet } from './spreadsheet.mjs';
+import { mountArtifactNotifications } from './notifications.mjs';
 import {
   artifactKindLabel as kindLabel, renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
@@ -435,12 +440,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders, signal) {
+  async function request(method, path, body, extraHeaders, signal, keepalive = false) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin', signal,
+      method, headers, credentials: 'same-origin', signal, keepalive,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -451,6 +456,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function workspaceId() {
     return workspaceSelect.value;
   }
+
+  const notifications = mountArtifactNotifications(document, {
+    request: (method, path, body, options = {}) =>
+      request(method, path, body, undefined, options.signal, options.keepalive),
+  });
 
   async function renderProviders() {
     const box = document.getElementById('oidc-providers');
@@ -2035,11 +2045,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceSelect.appendChild(option);
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    notifications.setWorkspace(workspaceId());
   }
 
   async function load() {
     const seq = ++workspaceLoad;
     activity.setScope('');
+    notifications.setWorkspace('');
     const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
@@ -2101,12 +2113,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     hideEditor();
     if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      notifications.setWorkspace('');
       meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
       renderCatalog();
       return;
     }
     if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      notifications.setWorkspace('');
       show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
       return;
     }
@@ -2116,10 +2130,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void loadList();
         return;
       }
-      const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
-      void loadList();
-      await opening;
-      return;
+      if (requested.artifact) {
+        const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
+        void loadList();
+        await opening;
+        return;
+      }
     }
     if (newKind) {
       const view = document.defaultView;
@@ -2154,6 +2170,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   workspaceSelect.addEventListener('change', () => {
     workspaceLoad += 1;
+    notifications.setWorkspace(workspaceId());
     hideEditor();
     show('', '');
     meetingLoadedFor = '';

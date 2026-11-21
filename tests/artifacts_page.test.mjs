@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref, messengerHref,
@@ -345,6 +346,110 @@ function fakeDocument() {
 function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
+
+const noticeWorkspace = 'a'.repeat(32);
+const noticeConversation = 'otc_' + 'B'.repeat(26);
+const noticeMessage = 'otm_' + 'C'.repeat(26);
+const sharedNotice = {
+  id: 'notice-one', kind: 'artifact.shared', title: '路线图', actor_username: 'Lin',
+  workspace_id: noticeWorkspace, conversation_id: noticeConversation, message_id: noticeMessage, read: false,
+};
+const publishedNotice = {id: 'notice-two', kind: 'discover.published', listing_kind: 'work', slug: 'design-brief', read: true};
+const noticeChat = '/chat#' + new URLSearchParams({workspace: noticeWorkspace, social: noticeConversation, message: noticeMessage});
+
+function notificationFixture(request) {
+  const {doc} = fakeDocument();
+  const element = id => doc.getElementById(id);
+  const dialog = element('artifact-notifications');
+  dialog.showModal = () => { dialog.open = true; element('artifact-notifications-close').focus(); };
+  dialog.close = () => { dialog.open = false; void dialog.dispatch('close'); };
+  const routes = [];
+  let scheduled = 0;
+  doc.defaultView = {
+    setTimeout: () => ++scheduled,
+    clearTimeout() {}, addEventListener() {},
+    location: {assign: target => routes.push(target)},
+  };
+  return {doc, element, dialog, routes, ...mountArtifactNotifications(doc, {request})};
+}
+
+test('Space notification links reject foreign paths and open verified work or chat deep links', () => {
+  assert.equal(artifactNoticeTarget(sharedNotice, noticeWorkspace), noticeChat);
+  assert.equal(artifactNoticeTarget({...sharedNotice, path: '//example.test'}, noticeWorkspace), null);
+  assert.equal(artifactNoticeTarget(sharedNotice, 'b'.repeat(32)), null);
+  assert.equal(artifactNoticeTarget(publishedNotice, noticeWorkspace), '/discover?work=design-brief');
+  assert.equal(artifactNoticeTarget({...publishedNotice, slug: '../account'}, noticeWorkspace), null);
+  assert.equal(artifactNoticeTarget({...publishedNotice, listing_kind: 'agent'}, noticeWorkspace), null);
+});
+
+test('Space bell fetches a scoped badge, retries loading, and marks only work notices read', async () => {
+  const calls = [];
+  let openReads = 0;
+  const scoped = '/v1/workspaces/' + noticeWorkspace + '/notifications';
+  const page = notificationFixture(async (method, url, body, options) => {
+    calls.push({method, url, body, options});
+    if (method === 'POST') return {status: 200, body: {unread_count: 0}};
+    if (url.endsWith('limit=1')) return {status: 200, body: {unread_count: 1}};
+    if (!openReads++) return {status: 503};
+    return {status: 200, body: {items: [sharedNotice, publishedNotice, {kind: 'messenger.mention'}], unread_count: 1}};
+  });
+  const bell = page.element('artifact-notify');
+  const badge = page.element('artifact-notify-count');
+  const retry = page.element('artifact-notifications-retry');
+  const list = page.element('artifact-notifications-list');
+  page.setWorkspace(noticeWorkspace);
+  await new Promise(setImmediate);
+  assert.deepEqual(calls.map(call => call.url), [scoped + '?kind=work&limit=1']);
+  assert.equal(badge.textContent, '1');
+  await bell.dispatch('click');
+  await new Promise(setImmediate);
+  assert.equal(retry.hidden, false);
+  await retry.dispatch('click');
+  await new Promise(setImmediate);
+  assert.equal(retry.hidden, true);
+  assert.deepEqual(list.children.map(row => row.children[0].href), [noticeChat, '/discover?work=design-brief']);
+  await page.element('artifact-notifications-read-all').dispatch('click');
+  await new Promise(setImmediate);
+  assert.deepEqual(calls.at(-1).body, {all: true, kind: 'work'});
+  assert.equal(calls.at(-1).url, scoped + '/read');
+  assert.equal(badge.hidden, true);
+  assert.equal(list.children[0].dataset.unread, 'false');
+  page.dialog.close();
+  assert.equal(page.doc.activeElement, bell);
+});
+
+test('Space ignores a delayed notice read after switching workspace and acknowledges unread links before opening', async () => {
+  const calls = [];
+  const slow = deferred();
+  const acknowledgment = deferred();
+  const laterWorkspace = 'b'.repeat(32);
+  const page = notificationFixture(async (method, url, body, options) => {
+    calls.push({method, url, body, options});
+    if (url.includes(noticeWorkspace)) return slow.promise;
+    if (method === 'POST') return acknowledgment.promise;
+    return {status: 200, body: {items: [{...publishedNotice, read: false}], unread_count: 1}};
+  });
+  page.setWorkspace(noticeWorkspace);
+  const old = calls[0];
+  page.setWorkspace(laterWorkspace);
+  slow.finish({status: 200, body: {items: [sharedNotice], unread_count: 40}});
+  await new Promise(setImmediate);
+  assert.equal(old.options.signal.aborted, true);
+  assert.equal(page.element('artifact-notify-count').textContent, '1');
+  await page.element('artifact-notify').dispatch('click');
+  await new Promise(setImmediate);
+  const link = page.element('artifact-notifications-list').children[0].children[0];
+  const opened = link.dispatch('click', {button: 0});
+  await link.dispatch('click', {button: 0});
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.deepEqual(page.routes, []);
+  assert.deepEqual(calls.at(-1).body, {notification_id: publishedNotice.id, kind: 'work'});
+  assert.equal(calls.at(-1).options.keepalive, true);
+  assert.ok(calls.at(-1).options.signal instanceof AbortSignal);
+  acknowledgment.finish({status: 200, body: {unread_count: 0}});
+  await opened;
+  assert.deepEqual(page.routes, ['/discover?work=design-brief']);
+});
 
 async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
                                   withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null,
@@ -1038,8 +1143,9 @@ test('saved result deep links require an exact authorized workspace and artifact
   const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
   const wid='a'.repeat(32),aid='b'.repeat(32);
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid),{workspace:wid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
-  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+  for(const query of ['?artifact='+aid,'?workspace='+wid+'&artifact=','?workspace='+wid+'&workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
 });
 
 const linkedWorkspace = 'a'.repeat(32);

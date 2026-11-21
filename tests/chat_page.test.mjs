@@ -1806,6 +1806,8 @@ test('notification badge and summary text', () => {
     '小林 分享了纪要「设计评审」');
   assert.equal(notificationSummary({kind: 'discover.published', listing_kind: 'agent', actor_username: '小林', title: '日程助手'}),
     '小林 发布了新智能体「日程助手」');
+  assert.equal(notificationSummary({kind: 'artifact.shared', actor_username: '小林', title: '排期表'}),
+    '小林 分享了作品「排期表」');
 });
 
 test('notification targets only resolve exact receipt scope and safe public listing slugs', () => {
@@ -1827,6 +1829,14 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationTarget({kind: 'follow_work', path: '/w/legacy-slug'}), '/w/legacy-slug');
   assert.equal(notificationTarget({kind: 'follow_work', path: 'https://outside.example/w/legacy-slug'}), null);
   assert.equal(notificationTarget({kind: 'automation_reminder', path: '/wrong'}), '/automations');
+  const conversation = 'otc_' + 'A'.repeat(26);
+  const message = 'otm_' + 'B'.repeat(26);
+  const work = {kind: 'artifact.shared', workspace_id: workspace, conversation_id: conversation, message_id: message};
+  const expected = `/chat#workspace=${workspace}&social=${conversation}&message=${message}`;
+  assert.equal(notificationTarget({...work, path: expected}, workspace), expected);
+  assert.equal(notificationTarget(work, other), null);
+  assert.equal(notificationTarget({...work, message_id: '../settings'}, workspace), null);
+  assert.equal(notificationTarget({...work, path: '//outside.example'}, workspace), null);
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {
