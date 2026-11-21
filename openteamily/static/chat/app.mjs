@@ -526,6 +526,15 @@ export function notificationSummary(item) {
     const author = item.actor_username || '你关注的作者';
     return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
   }
+  if (item.kind === 'discover.published') {
+    const author = item.actor_username || '你关注的作者';
+    const type = item.listing_kind === 'agent' ? '智能体' : '作品';
+    return `${author} 发布了新${type}` + (item.title ? `「${item.title}」` : '');
+  }
+  if (item.kind === 'meeting.shared') {
+    const organizer = item.organizer || '会议组织者';
+    return `${organizer} 分享了纪要` + (item.title ? `「${item.title}」` : '');
+  }
   if (item.kind === 'messenger.mention') {
     const author = item.by?.display_name || item.by?.handle || '成员';
     return `${author} 提及了你`;
@@ -695,8 +704,35 @@ export function reminderNotice(status, body = {}) {
   return '没能设成提醒，请稍后再试。';
 }
 
-export function notificationTarget(item) {
-  return item && item.kind === 'automation_reminder' ? '/automations' : null;
+const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
+const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'automation_reminder']);
+
+export function notificationTarget(item, workspace) {
+  if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === 'meeting.shared') {
+    const path = typeof item.path === 'string' ? MEETING_NOTIFICATION_PATH.exec(item.path) : null;
+    const share = item.share_id ?? path?.[2];
+    if (!NOTIFICATION_ID.test(workspace || '') || !NOTIFICATION_ID.test(share || '')
+      || (item.workspace_id != null && item.workspace_id !== workspace)) return null;
+    const target = '/meetings#' + new URLSearchParams({workspace, shared: share});
+    return item.path == null || item.path === target ? target : null;
+  }
+  const listing = item?.kind === 'follow_work' ? 'work' : item?.kind === 'discover.published' ? item.listing_kind : '';
+  const prefix = listing === 'work' ? '/w/' : listing === 'agent' ? '/a/' : '';
+  if (!prefix) return null;
+  const slug = item.slug ?? (typeof item.path === 'string' && item.path.startsWith(prefix) ? item.path.slice(prefix.length) : '');
+  if (typeof slug !== 'string' || !NOTIFICATION_SLUG.test(slug)) return null;
+  const target = prefix + slug;
+  return item.path == null || item.path === target ? target : null;
+}
+
+async function waitForLinkedNotificationRead(read) {
+  let timer;
+  const timeout = new Promise(resolve => { timer = globalThis.setTimeout(resolve, 500); });
+  try { return await Promise.race([read, timeout]); }
+  finally { globalThis.clearTimeout(timer); }
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
@@ -1046,11 +1082,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
   }
 
-  async function request(method, path, body, extra, signal) {
+  async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin', signal,
+      ...(keepalive ? {keepalive} : {}),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -2502,11 +2539,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let notificationSeq = 0;
+  let notificationEpoch = 0;
   let notificationSnapshot = null;
+  const notificationReads = new Set();
   const notificationKind = document.getElementById('notifications-kind');
   const notificationUnread = document.getElementById('notifications-unread');
+  const notificationNotice = document.getElementById('notifications-status');
+  const notificationScope = () => ({workspace: workspaceId(), owner: currentUser?.id, epoch: notificationEpoch});
+  const currentNotificationScope = scope =>
+    Boolean(scope?.owner && scope.owner === currentUser?.id && scope.workspace === workspaceId() && scope.epoch === notificationEpoch);
 
-  function renderNotifications(body) {
+  function setNotificationStatus(text = '') {
+    if (!notificationNotice) return;
+    notificationNotice.textContent = text;
+    notificationNotice.hidden = !text;
+    if (text) {
+      const empty = document.getElementById('notifications-empty');
+      if (empty) empty.hidden = true;
+    }
+  }
+
+  function resetNotifications() {
+    notificationEpoch += 1;
+    notificationSnapshot = null;
+    setNotificationsOpen(false);
+    renderNotifications({items: [], unread_count: 0}, notificationScope());
+  }
+
+  function applyNotificationRead(scope, result, id) {
+    if (!currentNotificationScope(scope) || !notificationSnapshot) return;
+    notificationSeq += 1;
+    const body = notificationSnapshot.body;
+    notificationSnapshot.body = {
+      ...body,
+      unread_count: result.body?.unread_count ?? body.unread_count,
+      items: (body.items || []).map(item => !id || item.id === id ? {...item, read: true} : item),
+    };
+    renderNotifications(notificationSnapshot.body, scope);
+  }
+
+  function renderNotifications(body, scope) {
     const badge = document.getElementById('notification-count');
     const toggle = document.getElementById('notifications-toggle');
     const text = notificationBadgeText(body.unread_count);
@@ -2519,27 +2591,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
-      const link = item.kind === 'follow_work' && item.path;
-      const button = document.createElement(link ? 'a' : 'button');
-      if (link) button.href = item.path;
-      else button.type = 'button';
+      const target = notificationTarget(item, scope.workspace);
+      const button = document.createElement(target ? 'a' : 'button');
+      const invalidLink = LINKED_NOTIFICATION_KINDS.has(item.kind) && !target;
+      if (target) button.href = target;
+      else {
+        button.type = 'button';
+        if (invalidLink) { button.disabled = true; button.title = '通知目标不可用'; }
+      }
       button.className = 'notification-item' + (item.read ? '' : ' is-unread');
       button.dataset.notification = item.id;
+      button.dataset.notificationKind = item.kind;
+      const readKey = `${scope.epoch}:${item.id}`;
+      if (notificationReads.has(readKey)) button.setAttribute('aria-busy', 'true');
       const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
       const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
       const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
       button.append(summary, excerpt, time);
-      button.addEventListener('click', async () => {
-        const wid = workspaceId();
-        if (link) {
-          if (!item.read) request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
-          setNotificationsOpen(false);
-          return;
+      button.addEventListener('click', async event => {
+        if (target) event.preventDefault();
+        if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
+        setNotificationStatus();
+        if (!item.read) {
+          notificationReads.add(readKey);
+          button.setAttribute('aria-busy', 'true');
+          const read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+            {notification_id: item.id}, undefined, AbortSignal.timeout(5000), {keepalive: Boolean(target)})
+            .catch(() => ({status: 0, body: {}}))
+            .then(result => {
+              notificationReads.delete(readKey);
+              button.removeAttribute('aria-busy');
+              if (result.status === 200) applyNotificationRead(scope, result, item.id);
+              return result;
+            });
+          const result = target ? await waitForLinkedNotificationRead(read) : await read;
+          if (!currentNotificationScope(scope)) return;
+          if (result && result.status !== 200
+            && ((result.status !== 0 && result.status < 500) || (!target && !item.conversation_id))) {
+            setNotificationStatus('无法标记这条通知为已读，请重新打开通知后重试。');
+            if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
+            return;
+          }
         }
-        if (!item.read) await request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
-        if (workspaceId() !== wid) return;
         setNotificationsOpen(false);
-        const target = notificationTarget(item);
         if (target) { globalThis.location.assign(target); return; }
         if (item.conversation_id) {
           const opened = await openSocialConversation(item.conversation_id, {acknowledge: !item.message_id});
@@ -2554,7 +2648,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
     const empty = document.getElementById('notifications-empty');
     if (empty) {
-      empty.hidden = items.length > 0;
+      empty.hidden = items.length > 0 || Boolean(notificationNotice && !notificationNotice.hidden);
       empty.textContent = mentionsOnly
         ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
         : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
@@ -2562,16 +2656,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
   }
 
-  async function loadNotifications() {
-    const wid = workspaceId();
-    if (!wid) return;
+  async function loadNotifications({interactive = false} = {}) {
+    const scope = notificationScope();
+    if (!scope.workspace || !scope.owner) return;
     const token = ++notificationSeq;
-    let result;
-    // Notifications are auxiliary: a failed fetch must never break the session list.
-    try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
-    if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
-    notificationSnapshot = result.body;
-    renderNotifications(notificationSnapshot);
+    const unreadOnly = Boolean(notificationUnread?.checked);
+    if (interactive) {
+      setNotificationStatus('正在加载通知…');
+      const old = notificationSnapshot;
+      const items = old && (!old.unreadOnly || unreadOnly) ? old.body.items : [];
+      renderNotifications({items, unread_count: old?.body.unread_count || 0}, scope);
+    }
+    const announce = interactive || notificationNotice?.textContent === '正在加载通知…';
+    const suffix = unreadOnly ? '?filter=unread' : '';
+    const result = await request('GET', `/v1/workspaces/${scope.workspace}/notifications${suffix}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (token !== notificationSeq || !currentNotificationScope(scope) || unreadOnly !== Boolean(notificationUnread?.checked)) return;
+    if (result.status !== 200) {
+      if (announce) setNotificationStatus('无法加载通知。关闭后可重新打开。');
+      return;
+    }
+    if (announce) setNotificationStatus();
+    notificationSnapshot = {body: result.body, scope, unreadOnly};
+    renderNotifications(result.body, scope);
   }
 
   // Live-ish delivery: poll the inbox while the tab is visible. No server push.
@@ -2634,6 +2741,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('notifications-toggle');
     if (panel) panel.hidden = !open;
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) setNotificationStatus();
   }
 
   const liveBanner = document.getElementById('conversation-live-update');
@@ -3749,6 +3857,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      resetNotifications();
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
@@ -3773,6 +3882,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      resetNotifications();
       attachmentSender?.reset();
       clearPendingSends();
       memoryDrafts.clear();
@@ -4089,24 +4199,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
-  for (const control of [notificationKind, notificationUnread]) {
-    control?.addEventListener('change', () => {
-      if (notificationSnapshot) renderNotifications(notificationSnapshot);
-    });
-  }
+  notificationKind?.addEventListener('change', () => {
+    if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);
+  });
+  notificationUnread?.addEventListener('change', () => loadNotifications({interactive: true}));
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
     const open = Boolean(panel && panel.hidden);
     setNotificationsOpen(open);
-    if (open) await loadNotifications();
+    if (open) await loadNotifications({interactive: true});
   });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !document.getElementById('notifications-panel')?.hidden) {
+      void loadNotifications();
+    }
+  });
+  globalThis.addEventListener('pageshow', event => { if (event.persisted) void loadNotifications(); });
   const readAll = document.getElementById('notifications-read-all');
   if (readAll) readAll.addEventListener('click', async () => {
-    const wid = workspaceId();
+    const scope = notificationScope();
+    if (!scope.owner || !scope.workspace || readAll.disabled) return;
     readAll.disabled = true;
-    const result = await request('POST', `/v1/workspaces/${wid}/notifications/read`, {all: true});
-    if (result.status !== 200) { show('error', '无法标记通知为已读。'); readAll.disabled = false; return; }
+    const result = await request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+      {all: true}, undefined, AbortSignal.timeout(5000)).catch(() => ({status: 0, body: {}}));
+    if (!currentNotificationScope(scope)) return;
+    if (result.status !== 200) {
+      setNotificationStatus('无法标记通知为已读。');
+      readAll.disabled = false;
+      return;
+    }
+    applyNotificationRead(scope, result);
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
@@ -4114,9 +4237,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     socialOpen += 1;
     setSocialHistory(null);
     if (liveBanner) liveBanner.hidden = true;
-    notificationSnapshot = null;
+    resetNotifications();
     agentMentions.clear();
-    renderNotifications({items: [], unread_count: 0});
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';

@@ -9,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { ApiError, assert } from "../errors.js";
 import { newId } from "../ids.js";
 import type { Platform } from "../platform.js";
+import { MEETING_RECIPIENT_FROM, MEETING_RECIPIENT_VISIBLE } from "./meeting-receipt-access.js";
 
 export const CORE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_profiles (
@@ -118,6 +119,25 @@ function ensureProfileColumns(ot: OtContext) {
   ot.run("CREATE UNIQUE INDEX IF NOT EXISTS ot_profiles_platform_user ON ot_profiles(platform_user_id) WHERE platform_user_id IS NOT NULL");
 }
 
+const ACTIVE_NOTIFICATION_LISTING = `FROM ot_listings listing
+  WHERE listing.id=json_extract(ot_notifications.data,'$.listing_id') AND listing.listed=1`;
+const NOTIFICATION_DATA = `CASE WHEN kind='discover.published' THEN (
+  SELECT json_set(ot_notifications.data,'$.slug',listing.slug,'$.kind',listing.kind,
+    '$.listing_kind',listing.kind,'$.title',listing.title) ${ACTIVE_NOTIFICATION_LISTING}
+) ELSE data END AS data`;
+
+function notificationVisibility(workspace: string | null | undefined, otherEvents = "1", args: string[] = []) {
+  return {
+    sql: ` AND CASE WHEN kind='meeting.shared' THEN EXISTS (SELECT 1 ${MEETING_RECIPIENT_FROM}
+      WHERE addressed.recipient_id=ot_notifications.owner_id AND s.id=json_extract(ot_notifications.data,'$.share_id')
+      AND s.workspace_id IS json_extract(ot_notifications.data,'$.workspace_id')
+      ${workspace === undefined ? "" : "AND s.workspace_id IS ?"} AND ${MEETING_RECIPIENT_VISIBLE})
+      ELSE (${otherEvents}) AND (kind<>'discover.published' OR EXISTS (
+        SELECT 1 ${ACTIVE_NOTIFICATION_LISTING})) END`,
+    args: workspace === undefined ? args : [workspace, ...args],
+  };
+}
+
 export function registerCore(app: FastifyInstance, ot: OtContext) {
   ensureProfileColumns(ot);
   app.get("/v1/ot/me", async (req) => {
@@ -146,36 +166,44 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
   });
   // Notifications are account-owned. A workspace view includes team-scoped and
   // account-wide events, never another team's private conversation events.
-  const notificationScope = (req: any, owner: string, source: any) => {
+  const notificationScope = (owner: string, source: Record<string, unknown>) => {
     const wid = source.workspace_id;
     if (source.personal === true || source.personal === "1") {
       assert(wid === undefined, 400, "invalid_request", "Choose one notification scope");
-      return {sql: ` AND (
+      return notificationVisibility(null, `
         json_extract(data,'$.conversation_id') IN (
           SELECT c.id FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
           WHERE m.owner_id=? AND c.team_id IS NULL)
         OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL
-          AND json_extract(data,'$.conversation_id') IS NULL))`, args:[owner]};
+          AND json_extract(data,'$.conversation_id') IS NULL)`, [owner]);
     }
-    if (wid === undefined) return { sql: "", args: [] as any[] };
+    if (wid === undefined) return notificationVisibility(undefined);
     assert(typeof wid === "string" && /^[0-9a-f]{32}$/.test(wid), 400, "invalid_request", "invalid workspace");
-    const team = ot.get<any>("SELECT t.id FROM ot_teams t JOIN ot_team_members m ON m.team_id=t.id WHERE t.workspace_id=? AND m.owner_id=? AND m.suspended=0", wid, owner);
+    const team = ot.get<{id: string}>("SELECT t.id FROM ot_teams t JOIN ot_team_members m ON m.team_id=t.id WHERE t.workspace_id=? AND m.owner_id=? AND m.suspended=0", wid, owner);
     assert(team, 404, "not_found", "workspace not found");
-    return { sql: ` AND (json_extract(data,'$.workspace_id') = ? OR json_extract(data,'$.team_id') = ?
+    return notificationVisibility(wid, `json_extract(data,'$.workspace_id') = ? OR json_extract(data,'$.team_id') = ?
       OR json_extract(data,'$.conversation_id') IN (SELECT id FROM ot_conversations WHERE team_id=?)
-      OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL AND json_extract(data,'$.conversation_id') IS NULL))`, args: [wid, team.id, team.id] };
+      OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL AND json_extract(data,'$.conversation_id') IS NULL)`,
+    [wid, team.id, team.id]);
   };
-  app.get("/v1/ot/notifications", async (req) => {
+  app.get("/v1/ot/notifications", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
     const me = ot.me(req), q = query(req);
     const after = intParam(q.after, "after", 0);
     const limit = intParam(q.limit, "limit", 50, 200);
-    const scope = notificationScope(req, me.ownerId, q);
-    const rows = ot.all<any>("SELECT * FROM ot_notifications WHERE owner_id = ? AND seq > ?" + scope.sql + (q.unread === "1" ? " AND read_at IS NULL" : "") + " ORDER BY seq LIMIT ?", me.ownerId, after, ...scope.args, limit);
+    const latest = one(q.latest, "latest");
+    assert(latest === undefined || latest === "1", 400, "invalid_request", "latest must be 1");
+    const order = latest ? "DESC" : "ASC";
+    const scope = notificationScope(me.ownerId, q);
+    const rows = ot.all<any>(`SELECT id,seq,kind,created_at,read_at,${NOTIFICATION_DATA}
+      FROM ot_notifications WHERE owner_id = ? AND seq > ?` + scope.sql
+      + (q.unread === "1" ? " AND read_at IS NULL" : "") + ` ORDER BY seq ${order} LIMIT ?`, me.ownerId, after, ...scope.args, limit);
     const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id = ? AND read_at IS NULL" + scope.sql, me.ownerId, ...scope.args).n;
     return { unread, notifications: rows.map((r) => ({ seq: r.seq, id: r.id, kind: r.kind, data: JSON.parse(r.data), created_at: r.created_at, read: r.read_at !== null })) };
   });
-  app.post("/v1/ot/notifications/read", async (req) => {
-    const me = ot.me(req), b = body(req), scope = notificationScope(req, me.ownerId, b);
+  app.post("/v1/ot/notifications/read", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req), b = body(req), scope = notificationScope(me.ownerId, b);
     let suffix = "", args: any[] = [];
     if (b.all === true && b.notification_id === undefined) { /* all visible */ }
     else if (typeof b.notification_id === "string" && b.all === undefined) {

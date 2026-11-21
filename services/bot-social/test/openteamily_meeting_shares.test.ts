@@ -6,6 +6,7 @@ import { home } from "./openteamily_helpers.js";
 type Home = Awaited<ReturnType<typeof home>>;
 const ROOT = "/v1/ot";
 const SOURCE = "a".repeat(32);
+const INBOX = ROOT + "/notifications";
 let server: Awaited<ReturnType<typeof startServer>>;
 before(async () => { server = await startServer(bulkAuth); });
 after(async () => { await server.stop(); });
@@ -42,6 +43,11 @@ async function team(owner: Home, key: string, ...members: Home[]) {
     await teammate.ok("POST", ROOT + "/invites/accept", { code });
   }
   return row;
+}
+
+type Notice = { id: string; seq: number; kind: string; data: Record<string, unknown>; read: boolean };
+function meetingNotices(page: { notifications: Notice[] }) {
+  return page.notifications.filter(row => row.kind === "meeting.shared");
 }
 
 test("personal receipts save distinct immutable versions, page privately and revoke by author", async () => {
@@ -200,4 +206,100 @@ test("ordinary direct shares require current reach and public agent threads cann
   const thread = await reader.ok("POST", ROOT + "/discover/" + slug + "/start");
   assert.equal((await reader.call("GET", recipients(ROOT, thread.conversation_id))).status, 404);
   assert.equal((await reader.call("POST", shares, sharing(thread.conversation_id, author.id))).status, 404);
+});
+
+test("meeting invitations notify chosen accounts once and inbox ordering preserves the legacy cursor", async () => {
+  const [author, reader, second, unselected] = await Promise.all([
+    member("inbox-note-author"), member("inbox-note-reader"), member("inbox-note-second"), member("inbox-note-unselected"),
+  ]);
+  for (const recipient of [reader, second, unselected]) await contacts(author, recipient);
+  const group = await author.ok("POST", ROOT + "/conversations", { kind: "group", account_group: true,
+    title: "Personal notes inbox", members: [reader.handle, second.handle, unselected.handle] });
+  const shares = ROOT + "/meeting-shares";
+  const workspace = await team(author, "note-inbox-other-workspace", reader);
+  const before = await reader.ok("POST", INBOX + "/read", { all: true, personal: true });
+  assert.equal(before.unread, 0);
+  const firstPayload = sharing(group.id, reader.id, second.id);
+  const first = (await author.ok("POST", shares, firstPayload)).meeting;
+  const replay = await author.call("POST", shares, { ...firstPayload, recipient_ids: [second.id, reader.id] });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.data.meeting.id, first.id);
+  const newer = (await author.ok("POST", shares, { ...sharing(group.id, reader.id), client_key: "notes-inbox-newer",
+    revision: 2, title: "Newer notes" })).meeting;
+
+  const legacy = await reader.ok("GET", INBOX + "?personal=1");
+  const [oldNotice, newNotice] = meetingNotices(legacy);
+  assert.equal(meetingNotices(legacy).length, 2);
+  assert.ok(oldNotice.seq < newNotice.seq);
+  assert.deepEqual(oldNotice.data, { share_id: first.id, title: first.title, organizer: first.organizer });
+  assert.deepEqual(newNotice.data, { share_id: newer.id, title: newer.title, organizer: newer.organizer });
+  assert.deepEqual(meetingNotices(await second.ok("GET", INBOX)).map(row => row.data.share_id), [first.id]);
+  assert.deepEqual(meetingNotices(await unselected.ok("GET", INBOX)), []);
+  assert.deepEqual(meetingNotices(await author.ok("GET", INBOX)), []);
+  const latest = await reader.ok("GET", INBOX + "?personal=1&latest=1&unread=1&limit=1");
+  assert.equal(latest.unread, 2);
+  assert.deepEqual(latest.notifications.map((row: Notice) => row.id), [newNotice.id]);
+  const paged = await reader.ok("GET", INBOX + "?personal=1&after=" + oldNotice.seq);
+  assert.deepEqual(paged.notifications.map((row: Notice) => row.id), [newNotice.id]);
+  assert.equal((await reader.call("GET", INBOX + "?latest=1&latest=1")).status, 400);
+  assert.equal((await reader.call("GET", INBOX + "?latest=only")).status, 400);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX + "?workspace_id=" + workspace.workspace_id)), []);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: oldNotice.id,
+    workspace_id: workspace.workspace_id })).status, 404);
+  assert.equal((await unselected.call("POST", INBOX + "/read", { notification_id: oldNotice.id })).status, 404);
+  assert.deepEqual(await reader.ok("POST", INBOX + "/read", { notification_id: oldNotice.id, personal: true }),
+    { unread: 1, marked: 1 });
+  assert.equal(meetingNotices(await reader.ok("GET", INBOX + "?personal=1&unread=1"))[0].id, newNotice.id);
+
+  await author.ok("POST", shares + "/" + newer.id + "/revoke", {});
+  assert.equal((await reader.ok("GET", INBOX + "?personal=1")).unread, 0);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: newNotice.id, personal: true })).status, 404);
+  await author.ok("DELETE", ROOT + "/conversations/" + group.id + "/members/" + reader.handle);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX)), []);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: oldNotice.id })).status, 404);
+  const hidden = server.platform.db.prepare<[string], { read_at: number | null }>(
+    "SELECT read_at FROM ot_notifications WHERE id=?").get(newNotice.id);
+  await reader.ok("POST", INBOX + "/read", { up_to: newNotice.seq });
+  assert.equal(hidden?.read_at, null);
+  assert.equal(server.platform.db.prepare<[string], { read_at: number | null }>(
+    "SELECT read_at FROM ot_notifications WHERE id=?").get(newNotice.id)?.read_at, null);
+});
+
+test("team receipts in an ordinary DM stay in the owning workspace and follow live access", async () => {
+  const [owner, author, reader] = await Promise.all([
+    member("team-notice-owner"), member("team-notice-author"), member("team-notice-reader"),
+  ]);
+  const anchor = await team(owner, "meeting-notice-team-one", author, reader);
+  const other = await team(owner, "meeting-notice-team-two", author, reader);
+  const dm = await author.ok("POST", ROOT + "/conversations", { kind: "dm", peer: reader.handle });
+  const scope = ROOT + "/workspaces/" + anchor.workspace_id;
+  const teamParams = "?workspace_id=" + anchor.workspace_id;
+  await reader.ok("POST", INBOX + "/read", { all: true, workspace_id: anchor.workspace_id });
+  const receipt = (await author.ok("POST", scope + "/meeting-shares", sharing(dm.id, reader.id))).meeting;
+  const personal = (await author.ok("POST", ROOT + "/meeting-shares", { ...sharing(dm.id, reader.id),
+    client_key: "team-notice-personal-version" })).meeting;
+  const teamPage = await reader.ok("GET", INBOX + teamParams);
+  assert.equal(teamPage.unread, 1);
+  const [notice] = meetingNotices(teamPage);
+  assert.deepEqual(meetingNotices(teamPage).map(row => row.data), [
+    { share_id: receipt.id, title: receipt.title, organizer: receipt.organizer, workspace_id: anchor.workspace_id },
+  ]);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX + "?personal=1")).map(row => row.data.share_id), [personal.id]);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX + "?workspace_id=" + other.workspace_id)), []);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: notice.id, personal: true })).status, 404);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: notice.id,
+    workspace_id: other.workspace_id })).status, 404);
+
+  const members = ROOT + "/teams/" + anchor.id + "/members/";
+  await owner.ok("PATCH", members + author.handle, { suspended: true });
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX)).map(row => row.data.share_id), [personal.id]);
+  assert.equal(meetingNotices(await reader.ok("GET", INBOX + teamParams + "&unread=1")).length, 0);
+  assert.equal((await reader.call("POST", INBOX + "/read", { notification_id: notice.id })).status, 404);
+  await owner.ok("PATCH", members + author.handle, { suspended: false });
+  assert.equal(meetingNotices(await reader.ok("GET", INBOX + teamParams))[0].id, notice.id);
+  await owner.ok("PATCH", members + reader.handle, { suspended: true });
+  assert.equal((await reader.call("GET", INBOX + teamParams)).status, 404);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX)).map(row => row.data.share_id), [personal.id]);
+  await owner.ok("DELETE", ROOT + "/teams/" + other.id + "/members/" + reader.handle);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX + "?personal=1")), []);
 });

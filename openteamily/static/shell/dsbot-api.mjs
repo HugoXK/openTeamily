@@ -162,10 +162,11 @@ export function install(win = globalThis.window) {
   if (!win || win.__openteamilyDsBotShim || !servedByDsBot(win.document)) return null;
   const origin = win.location.origin;
   const original = win.fetch.bind(win);
-  async function viaDsBot(target, method, headers, body, signal) {
+  async function viaDsBot(target, method, headers, body, signal, keepalive) {
     const encoded = await encodeBody(body);
     const response = await original(API_ROUTE, {
       method: 'POST', credentials: 'same-origin', signal,
+      ...(keepalive ? {keepalive} : {}),
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(envelope(target, method, headers, encoded)),
     });
@@ -181,7 +182,8 @@ export function install(win = globalThis.window) {
     const method = init.method || (isRequest ? input.method : 'GET');
     const headers = init.headers || (isRequest ? input.headers : undefined);
     const body = init.body !== undefined ? init.body : (isRequest && method !== 'GET' ? await input.clone().text() : undefined);
-    return viaDsBot(target, method, headers, body, init.signal ?? (isRequest ? input.signal : undefined));
+    return viaDsBot(target, method, headers, body, init.signal ?? (isRequest ? input.signal : undefined),
+      init.keepalive ?? (isRequest ? input.keepalive : undefined));
   };
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;

@@ -1503,7 +1503,7 @@ test('icon chat controls have accessible names and a direct file picker', () => 
   assert.match(html, /id="voice-preview" controls/);
 });
 
-import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
+import {notificationBadgeText, notificationSummary, notificationTarget} from '../openteamily/static/chat/app.mjs';
 
 test('notification badge and summary text', () => {
   assert.equal(notificationBadgeText(0), '');
@@ -1517,6 +1517,31 @@ test('notification badge and summary text', () => {
     '小林 将你加入「项目群」');
   assert.equal(notificationSummary({kind: 'messenger.call', by: {display_name: '小林'}, title: '项目群', call_kind: 'video'}),
     '小林 在「项目群」发起了视频通话');
+  assert.equal(notificationSummary({kind: 'meeting.shared', organizer: '小林', title: '设计评审'}),
+    '小林 分享了纪要「设计评审」');
+  assert.equal(notificationSummary({kind: 'discover.published', listing_kind: 'agent', actor_username: '小林', title: '日程助手'}),
+    '小林 发布了新智能体「日程助手」');
+});
+
+test('notification targets only resolve exact receipt scope and safe public listing slugs', () => {
+  const workspace = 'a'.repeat(32);
+  const other = 'b'.repeat(32);
+  const share = 'c'.repeat(32);
+  const path = `/meetings#workspace=${workspace}&shared=${share}`;
+  const meeting = {kind: 'meeting.shared', workspace_id: workspace, share_id: share};
+  assert.equal(notificationTarget(meeting, workspace), path);
+  assert.equal(notificationTarget({kind: 'meeting.shared', path}, workspace), path);
+  assert.equal(notificationTarget({...meeting, path}, other), null);
+  assert.equal(notificationTarget({...meeting, path: path + '&new=1'}, workspace), null);
+  assert.equal(notificationTarget({...meeting, path: path.replace(share, other)}, workspace), null);
+  assert.equal(notificationTarget({...meeting, path: '//outside.example'}, workspace), null);
+  assert.equal(notificationTarget({kind: 'discover.published', listing_kind: 'work', slug: 'published-work'}), '/w/published-work');
+  assert.equal(notificationTarget({kind: 'discover.published', listing_kind: 'agent', slug: 'assistant-app'}), '/a/assistant-app');
+  assert.equal(notificationTarget({kind: 'discover.published', listing_kind: 'agent', slug: 'assistant-app', path: '/w/assistant-app'}), null);
+  assert.equal(notificationTarget({kind: 'discover.published', listing_kind: 'work', slug: '../settings'}), null);
+  assert.equal(notificationTarget({kind: 'follow_work', path: '/w/legacy-slug'}), '/w/legacy-slug');
+  assert.equal(notificationTarget({kind: 'follow_work', path: 'https://outside.example/w/legacy-slug'}), null);
+  assert.equal(notificationTarget({kind: 'automation_reminder', path: '/wrong'}), '/automations');
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {
@@ -1533,7 +1558,7 @@ test('mention notifications show a badge, open the conversation and mark read', 
   }]});
   try {
     await mount(doc, {fetcher: async (path, init = {}) => {
-      if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
+      if (path === '/v1/workspaces/ws-1/notifications' || path === '/v1/workspaces/ws-1/notifications?filter=unread') return json(200, inbox());
       if (path === '/v1/workspaces/ws-1/notifications/read') {
         posts.push(JSON.parse(init.body)); unread = 0; return json(200, {unread_count: 0});
       }
@@ -1562,6 +1587,108 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.equal(el('notifications-panel').hidden, true);
     assert.equal(el('notification-count').hidden, true);
     assert.equal(el('notifications-empty').textContent, '暂无未读提及。');
+  } finally { restore(); }
+});
+
+test('native notification links bound the read wait, fetch newest unread, and ignore stale workspace actions', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const workspace = 'd'.repeat(32);
+  const other = 'e'.repeat(32);
+  const inboxPath = `/v1/workspaces/${workspace}/notifications`;
+  const receipt = {id: 'receipt', kind: 'meeting.shared', title: '版本复盘', organizer: '小方', created: 30,
+    workspace_id: workspace, share_id: 'f'.repeat(32)};
+  receipt.path = `/meetings#workspace=${workspace}&shared=${receipt.share_id}`;
+  const newest = {id: 'newest', kind: 'discover.published', listing_kind: 'agent', title: '计划助手',
+    actor_username: '小方', slug: 'schedule-assistant', path: '/a/schedule-assistant', created: 50};
+  const late = {...receipt, id: 'late', share_id: '1'.repeat(32)};
+  late.path = `/meetings#workspace=${workspace}&shared=${late.share_id}`;
+  const navigation = [];
+  const marks = [];
+  const filters = [];
+  let completeRead;
+  let receiptRead = false;
+  globalThis.location.assign = path => navigation.push(path);
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path === '/v1/workspaces?limit=100') return json(200, {items: [
+        {id: workspace, name: '本工作区'}, {id: other, name: '另一工作区'},
+      ]});
+      if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: workspace}}});
+      if (path === inboxPath || path === inboxPath + '?filter=unread') {
+        const filtered = path.includes('?');
+        filters.push(filtered);
+        return json(200, filtered ? {unread_count: 2, items: [newest, late]}
+          : {unread_count: receiptRead ? 0 : 1, items: [{...receipt, read: receiptRead}]});
+      }
+      if (path === inboxPath + '/read') {
+        const id = JSON.parse(options.body).notification_id;
+        marks.push({path, id, keepalive: options.keepalive});
+        if (id === newest.id) return json(503, {});
+        return new Promise(resolve => { completeRead = resolve; });
+      }
+      if (path.startsWith(`/v1/workspaces/${other}/notifications`)) return json(200, {unread_count: 0, items: []});
+      return original(path.replace(workspace, 'ws-1').replace(other, 'ws-1'));
+    }});
+    const rows = () => el('notification-list').children.map(row => row.children[0]);
+    await fire(el('notifications-toggle'), 'click');
+    const first = rows()[0];
+    assert.equal(first.tagName, 'A');
+    assert.equal(first.href, receipt.path);
+    assert.equal(first.children[0].textContent, '小方 分享了纪要「版本复盘」');
+    const clicked = () => ({preventDefault() {}});
+    const pending = fire(first, 'click', clicked());
+    assert.deepEqual(navigation, []);
+    assert.equal(first.getAttribute('aria-busy'), 'true');
+    receiptRead = true;
+    completeRead(json(200, {unread_count: 0}));
+    await pending;
+    assert.deepEqual(navigation, [receipt.path]);
+    assert.equal(el('notification-count').hidden, true);
+
+    await fire(el('notifications-toggle'), 'click');
+    el('notifications-unread').checked = true;
+    await fire(el('notifications-unread'), 'change');
+    assert.equal(filters.at(-1), true);
+    assert.deepEqual(rows().map(row => row.dataset.notification), [newest.id, late.id]);
+    assert.equal(el('notification-count').textContent, '2');
+    await fire(rows()[0], 'click', clicked());
+    assert.deepEqual(navigation, [receipt.path, newest.path]);
+    assert.equal(el('notification-count').textContent, '2', 'temporary read failure leaves the badge unread');
+
+    await fire(el('notifications-toggle'), 'click');
+    const denied = fire(rows()[1], 'click', clicked());
+    completeRead(json(404, {}));
+    await denied;
+    assert.deepEqual(navigation, [receipt.path, newest.path]);
+    assert.equal(el('notifications-panel').hidden, false);
+
+    const slow = fire(rows()[1], 'click', clicked());
+    t.mock.timers.tick(499);
+    await settle();
+    assert.deepEqual(navigation, [receipt.path, newest.path]);
+    t.mock.timers.tick(1);
+    await slow;
+    assert.deepEqual(navigation, [receipt.path, newest.path, late.path]);
+    assert.equal(el('notification-count').textContent, '2', 'opening at the deadline does not acknowledge the notification');
+    completeRead(json(200, {unread_count: 1}));
+    await settle();
+    assert.equal(el('notification-count').textContent, '1', 'a real late acknowledgement still updates the inbox');
+
+    await fire(el('notifications-toggle'), 'click');
+    const old = rows()[1];
+    const lost = fire(old, 'click', clicked());
+    el('workspace').value = other;
+    await fire(el('workspace'), 'change');
+    completeRead(json(200, {unread_count: 1}));
+    await lost;
+    await fire(old, 'click', clicked());
+    assert.deepEqual(navigation, [receipt.path, newest.path, late.path]);
+    assert.deepEqual(marks, [receipt.id, newest.id, late.id, late.id, late.id]
+      .map(id => ({path: inboxPath + '/read', id, keepalive: true})));
+    assert.equal(el('notification-count').hidden, true);
   } finally { restore(); }
 });
 

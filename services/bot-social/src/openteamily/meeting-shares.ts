@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { body, hashCode, one, params, query, text, type OtContext } from "./core.js";
+import { MEETING_RECIPIENT_FROM, MEETING_RECIPIENT_VISIBLE } from "./meeting-receipt-access.js";
 import { accountConversation, fixedPublicThread, requireDirectReach, workspaceConversation, workspaceTeam } from "./messenger.js";
 
 export const MEETING_SHARES_SCHEMA = `
@@ -111,31 +112,12 @@ function recipients(ot: OtContext, scope: Scope, conversationId: string): Recipi
     ORDER BY p.display_name COLLATE NOCASE,p.owner_id`, ...bindings);
 }
 
-// SQL applies the same account/team and live reach restrictions as the selector before pagination.
 function recipientAccess(ot: OtContext, { workspace, owner }: Scope) {
-  const team = workspace ? workspaceTeam(ot, workspace, owner) : null;
-  const scope = team
-    ? `(c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL))
-      AND EXISTS (SELECT 1 FROM ot_team_members teammate
-        WHERE teammate.team_id=? AND teammate.owner_id=s.sender_id AND teammate.suspended=0)`
-    : `c.team_id IS NULL AND (c.account_group=1 OR (c.kind='dm' AND (
-      EXISTS (SELECT 1 FROM ot_contacts contact
-        WHERE contact.owner_a=MIN(addressed.recipient_id,s.sender_id)
-        AND contact.owner_b=MAX(addressed.recipient_id,s.sender_id) AND contact.status='accepted')
-      OR EXISTS (SELECT 1 FROM ot_team_members viewer_team
-        JOIN ot_team_members sender_team ON sender_team.team_id=viewer_team.team_id
-        WHERE viewer_team.owner_id=addressed.recipient_id AND viewer_team.suspended=0
-        AND sender_team.owner_id=s.sender_id AND sender_team.suspended=0)
-    )))`;
+  if (workspace) workspaceTeam(ot, workspace, owner);
   return {
-    from: `FROM ot_meeting_share_recipients addressed
-      JOIN ot_meeting_shares s ON s.id=addressed.share_id
-      JOIN ot_conversations c ON c.id=s.conversation_id
-      JOIN ot_conversation_members viewer ON viewer.conversation_id=c.id AND viewer.owner_id=addressed.recipient_id
-      JOIN ot_conversation_members author ON author.conversation_id=c.id AND author.owner_id=s.sender_id
-      WHERE addressed.recipient_id=? AND s.workspace_id IS ? AND s.revoked_at IS NULL
-      AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%' AND ${scope}`,
-    bindings: [owner, workspace, ...(team ? [team.id, team.id] : [])],
+    from: `${MEETING_RECIPIENT_FROM}
+      WHERE addressed.recipient_id=? AND s.workspace_id IS ? AND ${MEETING_RECIPIENT_VISIBLE}`,
+    bindings: [owner, workspace],
   };
 }
 
@@ -205,6 +187,8 @@ function create(ot: OtContext, req: FastifyRequest, scope: Scope, organizer: str
     for (const recipient of data.recipientIds) {
       ot.run("INSERT INTO ot_meeting_share_recipients(share_id,recipient_id,display_name) VALUES (?,?,?)",
         id, recipient, selectable.get(recipient));
+      ot.notify(recipient, "meeting.shared", { share_id: id, title: data.title, organizer,
+        ...(workspace ? { workspace_id: workspace } : {}) });
     }
     return { meeting: detail(ot.get<Share>("SELECT * FROM ot_meeting_shares WHERE id=?", id)!) };
   });
