@@ -5,7 +5,7 @@
 // memory/personal gives the owner's preferences and profile for DS-Bot turns.
 import { defineFeature } from '../../featurekit/feature.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
-import { allPages, routes as pageRoutes, search } from './pages.js'
+import { allPages, recallAcrossWorkspaces, routes as pageRoutes, search } from './pages.js'
 import { personal, routes as extraRoutes } from './extras.js'
 import { actor } from './common.js'
 import { captureRoutes, captureWorker } from './capture.js'
@@ -20,6 +20,10 @@ export default defineFeature({
   endpoints: ({ store, owner, host }) => ({
     ...captureWorker({store,host}),
     async pages(payload) { return allPages(store, payload) },
+    async recallAcrossWorkspaces(payload,call) {
+      if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'memory/not-found'})
+      return recallAcrossWorkspaces(store,host,payload)
+    },
     async personal(payload) { return personal(store, actor({ store, owner }), payload) },
   }),
 })

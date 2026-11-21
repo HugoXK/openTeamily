@@ -57,6 +57,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     },
   }
   const db = new DatabaseSync(':memory:')
+  db.exec('CREATE TABLE agent_conversation_memory (conversation_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL)')
   try {
     let profile = {name:'Ada',instructions:'Answer briefly.',recall:'all'}
     let selectedHistory
@@ -67,6 +68,10 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
         if (endpoint === 'memory/pages') {
           recallRequests.push(payload)
           return [page,foreignPage]
+        }
+        if (endpoint === 'memory/recallAcrossWorkspaces') {
+          assert.equal(payload.workspace_id,wid)
+          return [{page:foreignPage}]
         }
         if (endpoint === 'memory/personal') {
           personalRequests.push(payload)
@@ -143,6 +148,16 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.doesNotMatch(prompts[3],/Friday in Hangzhou|Answer briefly|Private workspace personalization/)
     assert.deepEqual(recallRequests,[scope,scope])
     assert.deepEqual(personalRequests,[scope,scope])
+
+    assert.equal((await endpoints.v1({method:'POST',path,body:{memory_scope:'everything'}})).status,400)
+    assert.deepEqual((await endpoints.v1({method:'POST',path,body:{memory_scope:'workspaces'}})).body,
+      {memory_recall:true,memory_scope:'workspaces'})
+    assert.equal((await endpoints.v1({method:'GET',path})).body.conversation.memory_scope,'workspaces')
+    const shared = (await send('cross-workspaces-fixture')).body.reply
+    assert.deepEqual(shared.memory_refs,[{workspace_id:foreignPage.workspace_id,id:foreignPage.id,revision:2,title:foreignPage.title}])
+    assert.match(prompts.at(-1),/Reference notes from accessible workspaces/)
+    assert.match(prompts.at(-1),/other-workspace launch note/)
+    assert.deepEqual(recallRequests,[scope,scope])
   } finally { db.close() }
 })
 

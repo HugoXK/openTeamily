@@ -1025,6 +1025,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const workspace = linked.get('workspace'), pageId = linked.get('page');
     const scopedLink = /^[0-9a-f]{32}$/.test(workspace || '');
     const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
+    const actionId = linked.get('action');
+    const deepAction = scopedLink && pageId === 'todos' && /^[0-9a-f]{32}$/.test(actionId || '');
     const linkedRevision = linked.get('revision');
     const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
@@ -1044,9 +1046,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (seq === sessionRequest && result.status === 200) fillWorkspaces(result.body.items);
     });
     const openingPage = deepLink && !missingWorkspace;
-    const directory = loadWorkspace({syncView: !openingPage && !missingWorkspace});
-    if (openingPage) {
-      await Promise.all([directory, openPage(pageId, revision)]);
+    const openingAction = deepAction && !missingWorkspace;
+    const directory = loadWorkspace({syncView: !openingPage && !openingAction && !missingWorkspace});
+    if (openingPage || openingAction) {
+      await Promise.all([directory, openingAction ? openAction(actionId) : openPage(pageId,revision)]);
     } else {
       await directory;
       if (missingWorkspace && seq === sessionRequest) show('error', '无法打开此工作区的记忆。');
@@ -1597,7 +1600,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
+    const seq = workspaceRequest;
+    const token = ++pageRequest;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`);
+    if (seq !== workspaceRequest || token !== pageRequest) return;
     if (seen.status !== 200 || !seen.body.action) {
       show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
       return;

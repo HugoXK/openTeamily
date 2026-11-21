@@ -111,8 +111,8 @@ export function nativeGroupClient(host, raw) {
     return api
   }
   void install().catch(error => host.log?.('Native shared-group hooks unavailable: ' + String(error.code || 'error')))
-  const request = async (method, path, body) => {
-    const result = await raw.request(method, path, body)
+  const request = async (method, path, body, options) => {
+    const result = await raw.request(method, path, body, options)
     if (!path.startsWith('/v1/ot/conversations')) return result
     const api = await install()
     if (!api) return result
@@ -120,5 +120,5 @@ export function nativeGroupClient(host, raw) {
     if (result?.kind === 'group' && result.id) return api.sync(result)
     return result
   }
-  return { ...raw, request, get: path => request('GET',path), post: (path,b={}) => request('POST',path,b), put: (path,b={}) => request('PUT',path,b), patch: (path,b={}) => request('PATCH',path,b), del: path => request('DELETE',path) }
+  return { ...raw, request, get: (path,options) => request('GET',path,undefined,options), post: (path,b={}) => request('POST',path,b), put: (path,b={}) => request('PUT',path,b), patch: (path,b={}) => request('PATCH',path,b), del: path => request('DELETE',path) }
 }

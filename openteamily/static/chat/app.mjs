@@ -835,42 +835,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const memoryRecall = document.getElementById('agent-memory-recall');
   const memoryDrafts = new Map();
-  const memoryWrites = new Set();
-  const recallEnabled = scope => currentConversation?.memory_recall ?? memoryDrafts.get(scope)
-    ?? currentAgent?.memory_recall_default ?? true;
+  const memoryWrites = new Map();
+  const recallMode = scope => currentConversation?.memory_scope ?? memoryDrafts.get(scope)
+    ?? ((currentConversation?.memory_recall ?? currentAgent?.memory_recall_default ?? true) ? 'workspace' : 'off');
 
   function syncMemoryRecall(scope = sendScope()) {
     if (!memoryRecall) return;
     const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
     memoryRecall.hidden = !visible;
     if (!visible) return;
-    const enabled = recallEnabled(scope);
-    memoryRecall.setAttribute('aria-pressed', String(enabled));
-    const label = enabled ? '记忆已开启' : '记忆已关闭';
-    if (memoryRecall.textContent !== label) memoryRecall.textContent = label;
+    memoryRecall.value = memoryWrites.get(scope) ?? recallMode(scope);
     memoryRecall.disabled = memoryWrites.has(scope) || Boolean(pendingSends.get(scope)?.jobs.some(job => !job.failed));
   }
 
-  memoryRecall?.addEventListener('click', async () => {
+  memoryRecall?.addEventListener('change', async () => {
     if (memoryRecall.hidden || memoryRecall.disabled) return;
     const scope = sendScope();
-    const enabled = !recallEnabled(scope);
+    const mode = memoryRecall.value;
     if (!currentConversation) {
-      memoryDrafts.set(scope, enabled);
+      memoryDrafts.set(scope,mode);
       syncMemoryRecall(scope);
       return;
     }
     const path = `${agentBase()}/conversations/${currentConversation.id}`;
-    memoryWrites.add(scope);
+    memoryWrites.set(scope,mode);
     renderPendingSend();
     try {
-      const result = await request('POST', path, {memory_recall:enabled});
+      const result = await request('POST',path,{memory_scope:mode});
       if (sendScope() !== scope) return;
-      if (result.status !== 200 || result.body.memory_recall !== enabled) throw new Error();
-      currentConversation.memory_recall = enabled;
-      show('ok', enabled ? '已开启后续消息的记忆检索。' : '已关闭后续消息的记忆检索。', {announceOnly: true});
+      if (result.status !== 200 || result.body.memory_scope !== mode) throw new Error();
+      currentConversation.memory_scope = mode;
+      currentConversation.memory_recall = result.body.memory_recall;
+      show('ok', mode === 'off' ? '已关闭后续消息的记忆检索。' : mode === 'workspace'
+        ? '后续消息将参考本工作区的记忆。' : '后续消息将参考可访问工作区里的记忆和行动项。', {announceOnly:true});
     } catch {
-      if (sendScope() === scope) show('error', '记忆开关未保存，请重试。');
+      if (sendScope() === scope) show('error','记忆范围未保存，请重试。');
     } finally {
       memoryWrites.delete(scope);
       if (sendScope() === scope) renderPendingSend();
@@ -1250,13 +1249,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function memorySources(item) {
     if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
     const wid = workspaceId();
-    const refs = Array.isArray(item.memory_refs)
-      ? item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id)) : [];
-    const links = refs.map(ref => {
-      const params = new URLSearchParams({workspace:wid, page:ref.id});
-      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
-      return [params, ref.title || '记忆页'];
-    });
+    const refs = Array.isArray(item.memory_refs) ? item.memory_refs : [];
+    const links = [];
+    for (const ref of refs) {
+      if (!/^[0-9a-f]{32}$/.test(ref?.id || '') || !/^[0-9a-f]{32}$/.test(ref.workspace_id || '')) continue;
+      const workspace = workspaces.find(entry => entry.id === ref.workspace_id);
+      if (ref.workspace_id !== wid && !workspace) continue;
+      const params = new URLSearchParams({workspace:ref.workspace_id,page:ref.id});
+      let title = ref.title || '记忆页';
+      if (ref.kind === 'action') {
+        params.set('page','todos');
+        params.set('action',ref.id);
+        title = '行动 · ' + title;
+      } else if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision',String(ref.revision));
+      if (ref.workspace_id !== wid && workspace?.name) title += ' · ' + workspace.name;
+      links.push([params,title]);
+    }
     if (item.memory_profile_workspace === wid) {
       links.push([new URLSearchParams({workspace:wid, page:'profile'}), '我的资料与偏好']);
     }
@@ -4462,7 +4470,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         base: social ? socialBase() : `${agentBase()}/conversations`,
         conversationId: currentConversation?.id, jobs: [], active: false,
         createKey: currentConversation ? null : idempotencyKey('chat-'),
-        memoryRecall: memoryDrafts.get(scope),
+        memoryScope: memoryDrafts.get(scope),
       };
       pendingSends.set(scope, queue);
     }
@@ -4495,7 +4503,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           if (!queue.conversationId) {
             feedback('正在创建对话…');
             const body = {title: '新对话'};
-            if (queue.memoryRecall !== undefined) body.memory_recall = queue.memoryRecall;
+            if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
             const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
             const conversation = created.body.conversation;
             if (![200, 201].includes(created.status) || !conversation?.id) {

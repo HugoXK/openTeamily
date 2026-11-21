@@ -334,3 +334,41 @@ test('automatic group capture has its own cursor and can be paused during extrac
     assert.deepEqual(paused.items,[])
   } finally { finish(); memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
+
+test('cross-workspace recall searches approved pages and actions using live membership', async () => {
+  const {default: memoryFeature} = await import('../features/memory/index.js')
+  const {mkdtempSync, rmSync} = await import('node:fs')
+  const {tmpdir} = await import('node:os')
+  const {join} = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(),'memory-authorized-recall-'))
+  const team = 'b'.repeat(32), revoked = 'f'.repeat(32)
+  let memberships = [{id:team,name:'Project team'}]
+  const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,async call(endpoint) {
+    if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
+    assert.equal(endpoint,'teams/activeWorkspaces')
+    if (!memberships) throw new Error('Membership service unavailable')
+    return memberships
+  }})
+  const create = (workspaceId, path, body, key) => memory.endpoints.v1({
+    method:'POST',path:`/v1/workspaces/${workspaceId}/memory${path}`,body,idempotency_key:key,
+  })
+  const params = {workspace_id:WS,query:'Launch action item'}
+  try {
+    const personal = await create(WS,'',{title:'Launch overview',body:'Personal notes'},'cross-recall-personal')
+    const accessible = await create(team,'/actions',{title:'Launch handoff',notes:'Confirm the scope.',due_at:1803945600},'cross-recall-action')
+    await create(revoked,'',{title:'Launch action item',body:'Unshared memo'},'cross-recall-revoked')
+    assert.equal(personal.status,201)
+    assert.equal(accessible.status,201)
+    await assert.rejects(memory.endpoints.recallAcrossWorkspaces(params))
+    const recall = () => memory.endpoints.recallAcrossWorkspaces(params,{internal:true})
+    const matched = (await recall()).map(({page})=>page)
+    assert.deepEqual(new Set(matched.map(page=>page.workspace_id)),new Set([WS,team]))
+    const action = matched.find(page=>page.kind==='action')
+    assert.equal(action.id,accessible.body.action.id)
+    assert.match(action.facts,/open.*2027-03-02/)
+    memberships = []
+    assert.deepEqual((await recall()).map(({page})=>page.id),[personal.body.page.id])
+    memberships = null
+    assert.deepEqual((await recall()).map(({page})=>page.id),[personal.body.page.id])
+  } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
+})
