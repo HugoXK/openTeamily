@@ -4,12 +4,13 @@ from dataclasses import replace
 import io
 import json
 import unittest
+from unittest.mock import patch
 
 import test_compose_manager as base
 from openteamily import model_api
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.dsbot_gateway import ensure_schema, owner_runtime_readiness, record_upstream
-from openteamily.manager.__main__ import main
+from openteamily.manager.__main__ import main, dsbot_route
 from openteamily.manager.engine import ComposeEngine, Registry, Runner
 from openteamily.manager.safety import ManagerError, write_new
 from openteamily.manager.worker import ManagerWorker
@@ -46,7 +47,10 @@ class AutoProvisionPollTests(unittest.TestCase):
             ).fetchall()
         self.assertEqual(len(first), 1)
         self.assertEqual(tuple(first[0])[1:], ('running', 'start', 1))
-        state = user.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
+        agent = user.call('POST', '/v1/personal-agent')['body']['personal_agent']
+        self.assertEqual(registration['body']['personal_chat'],
+                         {'workspace_id': agent['workspace']['id'], 'agent_id': agent['agent']['id']})
+        state = agent['runtime_provisioning']
         self.assertEqual((state['state'], state['instance_id']), ('existing', first[0]['instance_id']))
         return user, state['instance_id']
 
@@ -157,6 +161,35 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(code, 0, result)
         by_id = {r['instance_id']: r for r in result['results']}
         self.assertEqual(by_id[auto]['status'], 'skipped')
+
+    def test_cold_signup_starts_ahead_of_restart_and_busy_inventory(self):
+        client = self.start_http()
+        _, cold = self.auto_instance(static=True)
+        _, stopped = self.auto_instance('dana', peer='127.0.0.10', static=True)
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['dsbot_gateway'] = {'web_container': 'fixture-web'}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        pending_restart = {**client.snapshot(self.iid), 'desired': 'running', 'observed': 'running',
+                           'converged': False, 'revision': 4, 'observed_revision': 3}
+        stopped_instance = {**client.snapshot(stopped), 'desired': 'stopped', 'observed': 'stopped', 'converged': True}
+        inventory = [pending_restart, stopped_instance, client.snapshot(cold)]
+        events = []
+
+        def work(_worker, iid):
+            events.append(('claim', iid))
+            return ({'status': 'observed', 'observed': 'running', 'instance_id': iid} if iid == cold
+                    else {'status': 'no_claim', 'instance_id': iid})
+
+        def publish(_engine, _client, iid):
+            events.append(('route', iid))
+            return {'status': 'published', 'instance_id': iid}
+
+        with (patch.object(base.ManagerClient, 'assigned', return_value=inventory),
+              patch.object(ManagerWorker, 'run_once', autospec=True, side_effect=work),
+              patch.object(dsbot_route, 'publish', side_effect=publish)):
+            code, result = self.poll()
+        self.assertEqual(code, 0, result)
+        self.assertEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid), ('claim', stopped)])
 
     def test_adopt_requires_matching_auto_snapshot(self):
         self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}

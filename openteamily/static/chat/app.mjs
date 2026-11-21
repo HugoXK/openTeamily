@@ -9,6 +9,7 @@ import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { startChatReads, takeChatReads } from './startup.mjs';
+import { confirmSignupSession, signupSessionError } from '../home/runtime-readiness.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -4379,7 +4380,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || startChatReads(read, start.workspace, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
-    if (session.status !== 200 || !session.body?.user?.id) {
+    const unconfirmedSignup = !confirmSignupSession(document.defaultView ?? globalThis, session);
+    if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
       chatSettings = null;
@@ -4408,7 +4410,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('session-pane').hidden = true;
       document.body.classList.remove('chat-open');
       setSessionsOpen(false);
-      show('', '');
+      show(unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {

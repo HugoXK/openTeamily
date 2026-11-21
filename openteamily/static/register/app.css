@@ -12,6 +12,7 @@ button { margin-top: 16px; border: 0; background: #2c573c; color: white; cursor:
 button:disabled { opacity: .6; cursor: wait; }
 .hint { margin-top: 6px; font-size: 13px; color: #5f665e; }
 a { color: #2c573c; }
+.runtime-starting progress { width: 100%; height: .375rem; accent-color: #649b79; }
 :focus-visible { outline: 3px solid #649b79; outline-offset: 3px; }
 @media (prefers-color-scheme: dark) {
   :root { background: #181e1a; color: #e5e9df; }

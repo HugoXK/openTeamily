@@ -332,6 +332,30 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.report('1' * 32, good, 'x' * 43)[0], 401)
         self.assertEqual(self.report('1' * 32, dict(good, extra=1), token)[0], 400)
 
+    def test_restart_cannot_reactivate_an_old_gateway_route(self):
+        iid, owner, other = '1' * 32, 'a' * 32, 'b' * 32
+        token = secrets.token_urlsafe(32)
+        manager = ManagerIdentity('manager-a', digest(token), frozenset({iid}), 'compose')
+        self.app.manager_auth = ManagerAuth([manager])
+        runtime = lifecycle.Lifecycle(self.store, lifecycle.RuntimePolicy(backend_mode='compose', image_ref='example/runtime@sha256:' + 'a' * 64))
+        previous = {'address': '172.30.0.21:8080', 'auth_cookie': 'dsh-auth-172.30.0.21:8080=' + 'Z' * 30, 'process_ref': 'f' * 32}
+        with self.store.transaction() as db:
+            db.execute('UPDATE instances SET process_ref=? WHERE id=?', (previous['process_ref'], iid))
+        self.assertEqual(self.report(iid, previous, token)[0], 200)
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Upstream'], previous['address'])
+
+        self.assertTrue(runtime.restart(owner, iid, operation_id='restart-race-fixture-0001')[0])
+        claim = runtime.claim(manager, iid)
+        self.assertEqual(self.report(iid, previous, token)[0], 409, 'old process may not refresh during restart')
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+        runtime.observe(manager, iid, claim['job']['id'], claim['job']['revision'], claim['lease'], 'running', 'd' * 32)
+        self.assertEqual(self.call(self.tokens[owner])[0], 503, 'old cookie does not reactivate after a new process is healthy')
+        self.assertEqual(self.report(iid, previous, token)[0], 409, 'old process may not report after replacement')
+        self.assertEqual(self.call(self.tokens[other])[1]['X-OT-Upstream'], '172.30.0.12:8080')
+        current = {'address': '172.30.0.31:8080', 'auth_cookie': 'dsh-auth-172.30.0.31:8080=' + 'R' * 30, 'process_ref': 'd' * 32}
+        self.assertEqual(self.report(iid, current, token)[0], 200)
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Upstream'], current['address'])
+
     def test_retired_instance_cannot_route_or_receive_manager_reports(self):
         owner, canonical, retired = 'a' * 32, '1' * 32, '3' * 32
         token = secrets.token_urlsafe(32)

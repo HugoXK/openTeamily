@@ -494,16 +494,20 @@ class App:
             if path.endswith('register'):
                 if not self.config.allow_registration:
                     refuse(403, 'registration_closed', 'Public registration is disabled')
+                hashed_password = password_hash(password)
                 with self.store.transaction() as db:
                     if db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone():
                         refuse(409, 'conflict', 'Registration is unavailable for this username')
                     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] >= self.config.max_users:
                         refuse(429, 'quota', 'Account capacity reached')
                     user_id = uuid4().hex
-                    db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, password_hash(password), now))
-                    self.queue_new_account_runtime(db, user_id, username, now)
+                    db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, hashed_password, now))
+                    personal_chat = self.queue_new_account_runtime(db, user_id, username, now)
                     headers = self.new_session(db, user_id, now)
-                return 201, {'user': {'id': user_id, 'username': username}}, headers
+                signup = {'user': {'id': user_id, 'username': username}}
+                if personal_chat is not None:
+                    signup['personal_chat'] = personal_chat
+                return 201, signup, headers
             with self.store.connect() as db:
                 user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
             if user is None:
@@ -575,14 +579,16 @@ class App:
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
                 state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
-            return 200, {'state': state}, []
+            return 200, {'state': state, 'user_id': session['user_id']}, []
+        if path == '/v1/auth/session' and method == 'GET' and not query:
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+            return 200, {'user': {'id': session['user_id'], 'username': session['username']},
+                         'expires_at': session['expires']}, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
                 self.csrf_check(env, session)
-            if path == '/v1/auth/session' and method == 'GET' and not query:
-                return 200, {'user': {'id': session['user_id'], 'username': session['username']},
-                             'expires_at': session['expires']}, []
             if path == '/v1/auth/logout' and method == 'POST':
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
@@ -843,7 +849,9 @@ class App:
         except personal.WorkspaceCapacity:
             # Signup can succeed even if the personal workspace must be retried.
             return
-        self.ensure_personal_runtime(db, user_id, row, now)
+        provision = self.ensure_personal_runtime(db, user_id, row, now)
+        if provision['instance_id']:
+            return {'workspace_id': row['workspace_id'], 'agent_id': row['agent_id']}
 
     def ensure_personal_runtime(self, db, user_id, row, now):
         """Server-derived: the caller's own personal workspace and agent only."""

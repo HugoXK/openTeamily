@@ -4,7 +4,7 @@ import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
-import { csrfCookie, signupSessionError, takeSignupSession, waitForRuntime } from './runtime-readiness.mjs';
+import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -333,8 +333,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     loading = true;
     try {
       const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
-      const expectedSignup = [200, 401].includes(session.status) ? takeSignupSession(view) : null;
-      const unconfirmedSignup = expectedSignup && session.body.user?.id !== expectedSignup;
+      const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
         loginPanel.hidden = false;

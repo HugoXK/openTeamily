@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
-import { rememberSignupSession, takeSignupSession, waitForRuntime } from '../openteamily/static/home/runtime-readiness.mjs';
+import { confirmSignupSession, pendingSignupSession, rememberSignupSession, takeSignupSession, waitForRuntime } from '../openteamily/static/home/runtime-readiness.mjs';
+import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
 
 const alice = 'a'.repeat(32);
@@ -16,7 +17,7 @@ test('runtime readiness retries temporary failures and stops at confirmed states
     return reply;
   }, {delay: async ms => waits.push(ms)});
   assert.equal(state, 'ready');
-  assert.deepEqual(waits, [1000, 1000]);
+  assert.deepEqual(waits, [300, 300]);
   assert.equal(await waitForRuntime(async () => ({status: 401})), 'signed-out');
   assert.equal(await waitForRuntime(async () => ({status: 200, body: {state: 'starting'}}), {attempts: 1}), 'timeout');
 });
@@ -27,9 +28,27 @@ test('runtime polling stays responsive during cold starts and keeps its original
     delay: async ms => waits.push(ms),
   });
   assert.equal(result, 'timeout');
-  assert.deepEqual(waits.slice(0, 30), new Array(30).fill(1000));
-  assert.equal(waits.slice(30).every(ms => ms === 3000), true);
+  assert.deepEqual(waits.slice(0, 10), new Array(10).fill(300));
+  assert.deepEqual(waits.slice(10, 37), new Array(27).fill(1000));
+  assert.deepEqual(waits.slice(37), new Array(35).fill(3000));
   assert.equal(waits.reduce((sum, ms) => sum + ms, 0), 135_000);
+});
+
+test('an expected signup needs a valid account ID before a ready state can be trusted', async () => {
+  let calls = 0;
+  const state = await waitForRuntime(async () => {
+    calls += 1;
+    return {status: 200, body: {state: 'ready', user_id: calls === 1 ? null : alice}};
+  }, {expectedUser: alice, delay: async () => {}});
+  assert.equal(calls, 2);
+  assert.equal(state, 'ready');
+  const {view} = homeFixture();
+  rememberSignupSession(view, alice);
+  assert.equal(confirmSignupSession(view, {status: 503, body: {}}), false);
+  assert.equal(confirmSignupSession(view, {status: 200, body: {user: {id: 'bad-data'}}}), false);
+  assert.equal(pendingSignupSession(view), alice);
+  assert.equal(confirmSignupSession(view, {status: 200, body: {user: {id: alice}}}), true);
+  assert.equal(pendingSignupSession(view), null);
 });
 
 function homeFixture(pathname = '/', hash = '') {
@@ -52,6 +71,44 @@ function homeFixture(pathname = '/', hash = '') {
   };
   return {document, view, read, register};
 }
+
+test('a cold route sends an unexpected signup session to manual login without starting the wrong runtime', async () => {
+  const hash = '#team-invite=validSyntheticInvite';
+  const {document, view} = homeFixture('/chat', hash);
+  const paths = [];
+  view.location.replace = target => paths.push(target);
+  rememberSignupSession(view, alice);
+  await mountRuntimeStarting(document, {fetcher: async path => {
+    assert.equal(path, '/v1/auth/runtime-readiness');
+    return {status: 200, json: async () => ({state: 'setup', user_id: bob})};
+  }});
+  assert.deepEqual(paths, ['/login' + hash]);
+  assert.equal(takeSignupSession(view), alice, 'login still sees the expected account and can prevent the wrong session from proceeding');
+});
+
+test('runtime startup uses the ready result of setup without polling again and resumes the original chat link', async () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {document, view} = homeFixture('/chat', hash);
+  document.cookie = 'ot_dev_csrf=expected-csrf';
+  const requests = [];
+  let restored = '';
+  view.location.reload = () => { restored = view.location.pathname + view.location.hash; };
+  rememberSignupSession(view, alice);
+  await mountRuntimeStarting(document, {fetcher: async (path, options) => {
+    requests.push(path);
+    if (path === '/v1/auth/runtime-readiness') {
+      return {status: 200, json: async () => ({state: 'setup', user_id: alice})};
+    }
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers['X-CSRF-Token'], 'expected-csrf');
+    return {status: 201, json: async () => ({personal_agent: {runtime_provisioning: {readiness: 'ready'}}})};
+  }});
+  assert.deepEqual(requests, ['/v1/auth/runtime-readiness', '/v1/personal-agent']);
+  assert.equal(restored, '/chat' + hash);
+  assert.equal(pendingSignupSession(view), alice);
+  assert.equal(takeSignupSession(view), alice);
+  assert.equal(pendingSignupSession(view), null);
+});
 
 test('a ready personal chat becomes clickable while the workspace list and onboarding are still pending', async () => {
   const {document, read, view} = homeFixture();

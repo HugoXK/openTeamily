@@ -43,7 +43,16 @@ def poll_once(args):
     cfg = registry.config
     client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
     results = []
-    for item in client.assigned():
+    def priority(item):
+        if item['converged'] or item['blocked']:
+            return 3
+        if item['desired'] == 'running':
+            return 0 if item.get('provisioning') == 'auto' and item['revision'] == 1 else 1
+        return 2
+
+    # A signup start must not wait behind every already-routed account. The
+    # returned order is a hint only; each job still takes a fenced claim.
+    for item in sorted(client.assigned(), key=priority):
         iid = item['id']
         try:
             if iid not in cfg['instances']:
@@ -58,6 +67,10 @@ def poll_once(args):
             if registry.config.get('dsbot_gateway') is not None and result.get('status') in ('observed', 'no_claim'):
                 # Route the owner's browser to this DS-Bot (platform gateway). A refusal
                 # here never changes the job receipt above.
+                if (result.get('observed', item['observed']) != 'running'
+                        or (result['status'] == 'no_claim' and not item['converged'])):
+                    results.append({'status': 'not_running', 'instance_id': iid})
+                    continue
                 try:
                     results.append(dsbot_route.publish(engine, client, iid))
                 except ManagerError as error:

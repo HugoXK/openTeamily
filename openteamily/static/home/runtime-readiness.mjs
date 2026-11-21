@@ -7,9 +7,10 @@ const signupSessionKey = 'ot-expected-signup-session';
 const signupLifetimeMs = 5 * 60 * 1000;
 const platformUserId = /^[0-9a-f]{32}$/;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
+const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
 export function rememberSignupSession(view, id, now = Date.now()) {
-  if (typeof id !== 'string' || !platformUserId.test(id)) return false;
+  if (!validSignupUser(id)) return false;
   try {
     if (!view?.sessionStorage) return false;
     view.sessionStorage.setItem(signupSessionKey, JSON.stringify({id, expires: now + signupLifetimeMs}));
@@ -19,26 +20,46 @@ export function rememberSignupSession(view, id, now = Date.now()) {
   }
 }
 
-export function takeSignupSession(view, now = Date.now()) {
+export function pendingSignupSession(view, now = Date.now(), {consume = false} = {}) {
   try {
-    const stored = view.sessionStorage.getItem(signupSessionKey);
+    const stored = view?.sessionStorage?.getItem(signupSessionKey);
     if (!stored) return null;
-    view.sessionStorage.removeItem(signupSessionKey);
+    if (consume) view.sessionStorage.removeItem(signupSessionKey);
     const {id, expires} = JSON.parse(stored);
-    return typeof id === 'string' && platformUserId.test(id)
+    return validSignupUser(id)
       && Number.isFinite(expires) && expires > now && expires <= now + signupLifetimeMs ? id : null;
   } catch {
     return null;
   }
 }
 
-export async function waitForRuntime(read, {delay = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 66} = {}) {
+export function takeSignupSession(view, now = Date.now()) {
+  return pendingSignupSession(view, now, {consume: true});
+}
+
+export function confirmSignupSession(view, response) {
+  const expected = pendingSignupSession(view);
+  if (!expected) return true;
+  const actual = response.body?.user?.id;
+  const definitive = response.status === 200 && validSignupUser(actual);
+  if (definitive || response.status === 401) takeSignupSession(view);
+  return definitive && actual === expected;
+}
+
+export async function waitForRuntime(read, {
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 73, expectedUser,
+} = {}) {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt) await delay(attempt <= 30 ? 1000 : 3000);
+    if (attempt) await delay(attempt <= 10 ? 300 : attempt <= 37 ? 1000 : 3000);
     const reply = await read().catch(() => null);
     if (reply?.status === 401) return 'signed-out';
-    const state = reply?.body?.state;
-    if (reply?.status === 200 && ['ready', 'unmanaged', 'unavailable', 'setup'].includes(state)) return state;
+    if (reply?.status !== 200) continue;
+    const {state, user_id: user} = reply.body || {};
+    if (expectedUser) {
+      if (!validSignupUser(user)) continue;
+      if (user !== expectedUser) return 'signup-mismatch';
+    }
+    if (['ready', 'unmanaged', 'unavailable', 'setup'].includes(state)) return state;
   }
   return 'timeout';
 }

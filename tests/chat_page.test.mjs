@@ -7,6 +7,7 @@ import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, c
 import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening, stagePublicAgentOpening} from '../openteamily/static/shell/public-agent-link.mjs';
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
+import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -3120,6 +3121,32 @@ test('a native startup snapshot from another owner cannot authorize a private co
     assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
   } finally {
     workspaces.resolve(json(503, {}));
+    fixture.restore();
+  }
+});
+
+test('direct signup to Chat will not open a different account even when that account has a ready runtime', async () => {
+  const fixture = linkedChatFixture('');
+  const values = new Map();
+  const view = {sessionStorage: {
+    setItem: (key, value) => values.set(key, value),
+    getItem: key => values.get(key),
+    removeItem: key => values.delete(key),
+  }};
+  fixture.doc.defaultView = view;
+  rememberSignupSession(view, bob);
+  fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture, alice));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    assert.deepEqual(fixture.calls.map(call => call.path), ['/v1/auth/session', linkPersonalDefault]);
+    assert.equal(fixture.el('login-panel').hidden, false);
+    assert.equal(fixture.el('main-panel').hidden, true);
+    assert.match(fixture.el('status').textContent, /账户已创建.*登录会话尚未确认/);
+    assert.equal(pendingSignupSession(view), null);
+    fixture.el('chat-body').value = 'Wrong account must never send this';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(fixture.calls.some(call => call.method === 'POST'), false);
+  } finally {
     fixture.restore();
   }
 });
