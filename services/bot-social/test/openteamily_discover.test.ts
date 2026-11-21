@@ -113,6 +113,58 @@ test("public listing pages need no token and hide unlisted works", async () => {
   assert.equal((await fetch(`${S.base}/v1/ot/public/listings/essay-${tag}`)).status, 404);
 });
 
+test("the public work preview is bounded, listed-only, and independent of the viewer", async () => {
+  const publisher = await home(S.base, "preview-publisher");
+  const reader = await home(S.base, "preview-reader");
+  const {owner_id, display_name, handle} = await publisher.ok("GET", "/v1/ot/me");
+  const platformId = "a2".repeat(16);
+  S.platform.db.prepare("UPDATE ot_profiles SET platform_user_id=? WHERE owner_id=?").run(platformId, owner_id);
+
+  const slug = "public-preview-essay";
+  const path = `/w/${slug}`;
+  const snapshot = "Published excerpt <script>\n" + "x".repeat(198_000) + " full snapshot tail";
+  const work = await publisher.ok("PUT", "/v1/ot/listings", {
+    kind: "work", ref: "owner-local-artifact", slug, title: "Public preview", work_kind: "document", snapshot,
+  });
+  await publisher.ok("PUT", "/v1/ot/listings", {
+    kind: "agent", ref: "owner-local-agent", slug: "work-preview-agent", title: "An agent",
+  });
+  await reader.ok("POST", "/v1/ot/listings/" + work.id + "/like", {});
+  await reader.ok("POST", "/v1/ot/listings/" + work.id + "/collect", {});
+  await reader.ok("POST", "/v1/ot/follows", {handle});
+
+  const headers = {accept: "application/json"};
+  const response = await fetch(S.base + path + "?view=preview", {headers});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("vary"), "Accept");
+  const payload = await response.text();
+  assert.ok(payload.length < 2_500, "the public response omits the rest of the snapshot");
+  const preview = JSON.parse(payload);
+  assert.deepEqual(preview, {
+    slug, title: "Public preview", kind: "document", author: handle.replace(/^@/, "").replace(/\.home$/, ""),
+    updated: Math.floor(work.updated_at / 1000),
+    path, likes: 1, collections: 1, comment_count: 0, site_available: false,
+    preview: snapshot.slice(0, 2000),
+  });
+  assert.deepEqual(await (await fetch(S.base + path + "/preview")).json(), {preview: preview.preview});
+  assert.equal((await fetch(S.base + path + "?view=preview")).headers.get("content-type")?.startsWith("text/html"), true);
+  assert.equal((await fetch(S.base + "/w/work-preview-agent?view=preview", {headers})).status, 404);
+  assert.equal((await fetch(S.base + "/w/unknown-preview?view=preview", {headers})).status, 404);
+
+  for (const rawPath of [path, `/v1/ot/public/listings/${slug}`, "/a/work-preview-agent"]) {
+    const raw = await (await fetch(S.base + rawPath, {headers})).json() as any;
+    assert.deepEqual(raw.creator, {handle, display_name, bio: ""});
+    assert.ok(!JSON.stringify(raw).includes(platformId));
+    assert.ok(!JSON.stringify(raw).includes(owner_id));
+    assert.equal(raw.liked, false);
+    assert.equal(raw.own, false);
+    if (raw.kind === "work") assert.equal(raw.snapshot, snapshot, "legacy public JSON keeps the published snapshot");
+  }
+  await publisher.ok("DELETE", "/v1/ot/listings/" + work.id);
+  assert.equal((await fetch(S.base + path + "?view=preview", {headers})).status, 404);
+});
+
 test("publication notifications resolve the current listing by ID and disappear when it is unlisted", async () => {
   const [publisher, follower, other] = await Promise.all([
     home(S.base, "renamed-publisher"), home(S.base, "renamed-follower"), home(S.base, "reused-address"),
@@ -582,6 +634,11 @@ test("public website HTML lives only in an isolated frame and is deleted on revo
     assert.equal(JSON.stringify(projection).includes("site-counter-data"), false);
     assert.equal("site_html" in projection, false);
   }
+  const preview = await (await fetch(page + "?view=preview", {headers: {accept: "application/json"}})).json() as any;
+  assert.equal(preview.kind, "website");
+  assert.equal(preview.site_available, true);
+  assert.equal(preview.preview, summary);
+  assert.doesNotMatch(JSON.stringify(preview), /site-counter-data|site_html|snapshot/);
   const feed = await reader.ok("GET", "/v1/ot/discover?kind=work&work_kind=website&q=计数器");
   assert.equal(feed.items[0].site_available, true);
   assert.equal(JSON.stringify(feed).includes("site-counter-data"), false);
