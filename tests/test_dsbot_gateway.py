@@ -79,6 +79,23 @@ class GatewayTest(unittest.TestCase):
         gw.mount(lambda e, s: s('200 OK', []) or [b'app'], self.app)(env, start)
         return seen['status'], seen['headers']
 
+    def test_provisioned_instance_is_not_replaced_by_a_healthy_legacy_instance(self):
+        owner, canonical, legacy = 'a' * 32, '1' * 32, '3' * 32
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       (legacy, '0' * 32, owner))
+            gw.record_upstream(db, legacy, '172.30.0.13:8080', 'dsh-auth-legacy=' + 'S' * 20, 1)
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       (owner, '0' * 32, 'a' * 32, canonical, 'manager', 1))
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Instance'], canonical)
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET health='unknown' WHERE id=?", (canonical,))
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+
     def test_each_user_reaches_only_their_own_dsbot(self):
         a, b = self.tokens['a' * 32], self.tokens['b' * 32]
         status, headers = self.call(a)
@@ -86,9 +103,11 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertEqual(headers['X-OT-Upstream-Path'], '/')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user0')
         status, headers = self.call(b, uri='/b/api/bot?x=1')
         self.assertEqual((status, headers['X-OT-Upstream']), (204, '172.30.0.12:8080'))
         self.assertEqual(headers['X-OT-Upstream-Path'], '/api/bot?x=1')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user1')
 
     def test_request_fields_cannot_select_another_instance(self):
         a = self.tokens['a' * 32]
@@ -133,6 +152,8 @@ class GatewayTest(unittest.TestCase):
     def test_moved_pages_map_to_plugin_route(self):
         routes = dict(gw.load_routes(), moved_pages=frozenset({'chat', 'home'}))
         self.assertEqual(gw.target_for('/chat/', routes), '/api/openteamily/page?path=%2Fchat%2F')
+        self.assertEqual(gw.target_for('/chat?start=0', routes), '/api/openteamily/page?path=%2Fchat')
+        self.assertEqual(gw.target_for('/chat/app.mjs?v=1', routes), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/', routes), '/api/openteamily/page?path=%2F')
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
@@ -160,6 +181,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
         self.assertEqual(gw.target_for('/artifacts/', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2F')
+        self.assertEqual(gw.target_for('/space?view=meetings', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts')
+        self.assertIsNone(gw.target_for('/space/app.mjs', gw.load_routes()))
         self.assertEqual(gw.target_for('/artifacts/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2Fapp.mjs')
         self.assertIsNone(gw.target_for('/share/' + 'A' * 43, gw.load_routes()))
         self.assertEqual(gw.target_for('/members/', gw.load_routes()), '/api/openteamily/page?path=%2Fmembers%2F')
@@ -170,6 +193,16 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/profile/dream'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/{aid}/share-group'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/candidates/{aid}'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/memory/capture'), 'messenger')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/memory/capture'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/draft'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/speech'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/draft'))
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -182,6 +215,8 @@ class GatewayTest(unittest.TestCase):
             ('/v1/team-directory', 'teams'),
             (f'/v1/workspaces/{ws}/directory', 'teams'),
             (f'/v1/workspaces/{ws}/social/conversations/{ident}/agent-replies', 'messenger'),
+            ('/v1/meeting-calls/create', 'messenger'),
+            ('/v1/meeting-calls/join', 'messenger'),
             ('/v1/discover/works', 'discover'),
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
@@ -229,7 +264,8 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)
-        self.assertIn('location @ot_login { return 302 /register/; }', conf)
+        self.assertIn('location @ot_login { return 302 /login; }', conf)
+        self.assertNotIn('location = /login { return 418; }', conf)
         self.assertIn('location ~ ^/v1/discover/(?:agents|works|me/works)$ { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
@@ -293,6 +329,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertTrue(headers['X-OT-Upstream-Path'].startswith('/api/openteamily/gateway?path='))
         self.assertEqual(headers['X-OT-Upstream-Token'], token)
+        self.assertNotIn('X-OT-Owner-Username', headers)
         # A key for B must never reach A.
         other = 'ota_' + '2' * 32 + '_' + 'K' * 43
         status, headers = self.call(
@@ -318,6 +355,27 @@ class GatewayTest(unittest.TestCase):
         # The caller's Authorization still never reaches a runtime.
         self.assertIn('proxy_set_header Authorization "";', conf)
 
+    def test_nginx_sets_runtime_owner_from_the_authorization_response(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        browser, external = conf.split('location @ot_dsbot {', 1)[1].split('location ^~ /v1/gateway/ {', 1)
+        self.assertIn('auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username $ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username "";', external)
+
+    def test_bot_social_socket_routes_only_shared_runtime_api(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social='bot-social:8787',
+                               bot_social_socket=True)
+        public, private = conf.split('listen unix:' + gw.SOCIAL_SOCKET_PATH + ';')
+        self.assertIn('location ^~ /social/', public)
+        self.assertIn('location ^~ /v1/ot/ops/ { return 404; }', private)
+        self.assertIn('location ^~ /v1/ot/', private)
+        self.assertIn('proxy_pass http://bot-social:8787;', private)
+        self.assertIn('location / { return 404; }', private)
+        self.assertNotIn('auth_request', private)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social_socket=True)
+
 
 
     def test_moved_v1_apis_go_to_the_owners_dsbot(self):
@@ -331,8 +389,10 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('feature=settings', headers['X-OT-Upstream-Path'])
         status, headers = self.call(a, uri='/v1/model-api')
         self.assertIn('feature=model-api', headers['X-OT-Upstream-Path'])
-        # Still on the platform: automations onboarding, composio callback, auth.
-        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+        status, headers = self.call(a, uri='/v1/onboarding/automations', method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        # The Composio callback and authentication still reach the platform.
         self.assertEqual(self.call(a, uri='/v1/composio/callback')[0], 404)
         self.assertEqual(self.call(a, uri='/v1/auth/session')[0], 404)
         # User B cannot be steered onto A's settings by a forged instance id.
@@ -342,8 +402,11 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
         status, headers = self.call(a, uri='/v1/automation-templates')
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
-        # onboarding automations still stay on the platform (B2 page is /automations/, not this path)
-        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+        automation = f"/v1/workspaces/{'3' * 32}/automations/{'4' * 32}"
+        status, headers = self.call(a, uri=automation, method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
     def test_nginx_locations_are_derived_from_moved_apis(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
@@ -381,10 +444,13 @@ class GatewayTest(unittest.TestCase):
         patterns = forwarding_patterns(conf)
         # Upstream platform exceptions stay in front of the generated fences.
         self.assertIn('location = /v1/agent-homepages/start { return 410; }', conf)
-        self.assertIn('location = /v1/onboarding/automations { proxy_pass', conf)
         self.assertIn('location = /v1/composio/callback { proxy_pass', conf)
+        # onboarding/automations moved to the DS-Bot automations feature upstream,
+        # so it is fenced by the generated table instead of proxied to the platform.
+        self.assertNotIn('location = /v1/onboarding/automations { proxy_pass', conf)
+        self.assertIn('location ~ ^/v1/(?:automation-templates|onboarding/automations)$ { return 418; }', conf)
+        self.assertEqual(conf.count('onboarding/automations'), 1)
         for path in (
-            '/v1/onboarding/automations',
             '/v1/composio/callback',
             f'/v1/workspaces/{ws}/agents/{ident}/runtime',
             f'/v1/workspaces/{ws}/agents/{ident}/runtime/unbind',
@@ -405,7 +471,7 @@ class GatewayTest(unittest.TestCase):
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
         import io
         token = secrets.token_urlsafe(32)
-        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32}), 'compose')])
+        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32, '3' * 32}), 'compose')])
         seal = 'ab' * 32
         raw = json.dumps({'seal_key': seal}).encode()
 
@@ -428,6 +494,16 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(post('2' * 32)[0], 403)
         self.assertEqual(post('1' * 32, tok='x' * 43)[0], 401)
         self.assertEqual(post('1' * 32, body=json.dumps({'seal_key': '00'}).encode())[0], 400)
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       ('3' * 32, '0' * 32, 'a' * 32))
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       ('a' * 32, '0' * 32, 'a' * 32, '1' * 32, 'manager-a', 1))
+        status, rejected = post('3' * 32)
+        self.assertEqual((status, rejected['error']['code']), (409, 'import_destination'))
+        self.assertEqual(post('1' * 32)[0], 200)
 
 if __name__ == '__main__':
     unittest.main()

@@ -75,7 +75,7 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
   if (!list || !input) return null;
   if (dsbotServed(document)) {
     // Served by the user's own DS-Bot: every successful install/binding change is
-    // materialized there right away (the chat page also syncs on load).
+    // materialized there right away.
     const base = fetcher;
     const sync = () => syncSkillsToDsBot(base, {'X-CSRF-Token': csrfCookie(document.cookie)}).catch(() => null);
     fetcher = async (path, init = {}) => {
