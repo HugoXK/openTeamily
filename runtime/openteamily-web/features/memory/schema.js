@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS memory_preferences (
  position INTEGER NOT NULL, created INTEGER NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
  UNIQUE(workspace_id, user_id, text_hash), UNIQUE(workspace_id, user_id, key_hash));
 CREATE INDEX IF NOT EXISTS memory_preference_owner ON memory_preferences(workspace_id, user_id, position, id);
+`, `
+CREATE TABLE memory_capture_settings (workspace_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
+CREATE TABLE memory_capture_items (
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, agent_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+  created INTEGER NOT NULL, available INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','ready','saved')),
+  title TEXT, body TEXT, source_title TEXT, excerpt TEXT,
+  page_id TEXT REFERENCES memory_pages(id) ON DELETE CASCADE);
+CREATE INDEX memory_capture_pending ON memory_capture_items(state,available,id);
+CREATE INDEX memory_capture_workspace ON memory_capture_items(workspace_id,state,created);
+CREATE INDEX memory_capture_page ON memory_capture_items(workspace_id,page_id);
 `]
 
 export const IMPORT_TABLES = {

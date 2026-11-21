@@ -119,3 +119,57 @@ test('profile organization uses only this workspace and stays a draft during a c
     assert.equal((await call('GET', base('/profile'))).body.profile.professional,'保留用户更新。')
   } finally { detachRuntime() }
 })
+
+test('workspace capture waits for opt-in, proposes asynchronously and saves one traceable page', async () => {
+  const {default: memoryFeature} = await import('../features/memory/index.js')
+  const {mkdtempSync, rmSync} = await import('node:fs')
+  const {tmpdir} = await import('node:os')
+  const {join} = await import('node:path')
+  const {setTimeout: delay} = await import('node:timers/promises')
+  const dir = mkdtempSync(join(tmpdir(),'memory-capture-'))
+  const source = {workspace_id:WS,agent_id:'b'.repeat(32),conversation_id:'c'.repeat(32),message_id:'d'.repeat(32)}
+  let calls = 0
+  const memory = memoryFeature({
+    dataDir:dir, featureDir:()=>dir,
+    async call(endpoint,payload) {
+      assert.equal(endpoint,'agents/captureSource')
+      assert.deepEqual(payload,source)
+      return {title:'日常偏好',text:'以后给我的周报用三条要点。'}
+    },
+    currentRuntime:()=>({async backgroundTextOnly(prompt) {
+      calls++
+      assert.match(prompt,/周报用三条要点/)
+      return JSON.stringify({title:'周报格式',body:'周报用三条要点。'})
+    }}),
+  })
+  const route = (method,path,body) => memory.endpoints.v1({method,path,body})
+  const path = base('/candidates')
+  try {
+    assert.equal((await route('GET',path)).body.enabled,false)
+    assert.deepEqual(await memory.endpoints.enqueueCapture(source),{queued:false})
+    assert.equal((await route('POST',path,{enabled:true})).body.enabled,true)
+    assert.deepEqual(await memory.endpoints.enqueueCapture(source),{queued:true})
+    assert.deepEqual(await memory.endpoints.enqueueCapture(source),{queued:false})
+    assert.equal(calls,0)
+    let list
+    for (let i = 0; i < 100; i++) {
+      list = (await route('GET',path)).body
+      if (list.items.length) break
+      await delay(50)
+    }
+    assert.equal(list.items.length,1)
+    assert.equal(calls,1)
+    assert.equal(list.items[0].source.message_id,source.message_id)
+    assert.equal((await route('GET',`/v1/workspaces/${'e'.repeat(32)}/memory/candidates`)).body.items.length,0)
+    const decision = {action:'save',title:'我的周报格式',body:'每份周报包含三条要点。'}
+    const saved = await route('POST',path+'/'+source.message_id,decision)
+    assert.equal(saved.status,201)
+    assert.equal((await route('POST',path+'/'+source.message_id,decision)).body.page.id,saved.body.page.id)
+    const page = (await route('GET',base('/'+saved.body.page.id))).body.page
+    assert.equal(page.source.message_id,source.message_id)
+    assert.equal(page.body,decision.body)
+    assert.equal((await route('GET',path)).body.items.length,0)
+    assert.equal((await route('POST',path,{enabled:false})).body.enabled,false)
+    assert.deepEqual(await memory.endpoints.enqueueCapture({...source,message_id:'f'.repeat(32)}),{queued:false})
+  } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
+})

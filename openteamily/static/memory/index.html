@@ -98,6 +98,7 @@
         </div>
         <nav class="memory-views" aria-label="记忆视图">
           <a href="/memory" data-view="overview" aria-current="page"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg></span>总览</a>
+          <a href="/memory?page=candidates" data-view="candidates">记忆建议</a>
           <a href="/memory?page=profile" data-view="profile"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 10c4.4 0 8 2.1 8 4.7V21H4v-2.3C4 16.1 7.6 14 12 14z"/></svg></span>我的资料</a>
           <a href="/memory?page=todos" data-view="actions"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 5h14v2H5V5zm0 4h14v2H5V9zm0 4h9v2H5v-2zm0 4h9v2H5v-2zm11.2-3.2 1.4-1.4 2.1 2.1 3.5-3.5 1.4 1.4-4.9 4.9-3.5-3.5z"/></svg></span>下一步行动</a>
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
@@ -167,6 +168,30 @@
           <button type="submit" id="new-action">新建行动</button>
         </form>
       </section>
+      <section id="memory-candidates" hidden>
+        <header class="memory-page-head">
+          <h2>记忆建议</h2>
+          <button type="button" id="memory-capture-toggle" aria-label="自动提炼记忆" aria-pressed="false" disabled>开启自动提炼</button>
+        </header>
+        <p class="note">从当前工作区开启记忆的智能体私聊中提炼要点，保存后供其他会话检索。</p>
+        <p id="memory-candidates-status" role="status"></p>
+        <ul id="memory-candidates-list"></ul>
+        <dialog id="memory-candidate-review" class="profile-dream-dialog" aria-labelledby="memory-review-title">
+          <form id="memory-candidate-form">
+            <h2 id="memory-review-title">核对记忆建议</h2>
+            <p><a id="memory-review-source">查看原消息</a></p>
+            <blockquote id="memory-review-excerpt"></blockquote>
+            <label>标题<input id="memory-review-name" maxlength="80" required></label>
+            <label>正文<textarea id="memory-review-body" maxlength="8000" rows="6" required></textarea></label>
+            <p id="memory-review-error" role="status"></p>
+            <footer class="profile-dream-actions">
+              <button type="button" id="memory-review-close">取消</button>
+              <button type="button" id="memory-review-ignore">忽略</button>
+              <button type="submit" id="memory-review-save" class="primary">保存到记忆</button>
+            </footer>
+          </form>
+        </dialog>
+      </section>
       <section id="profile-panel" hidden>
         <header class="memory-page-head">
           <h2>我的资料</h2>
@@ -216,6 +241,7 @@
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
         <header class="page-history-head">
           <h2 id="page-history-title">历史</h2>

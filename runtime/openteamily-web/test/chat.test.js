@@ -34,6 +34,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
   const foreignPage = {...page, workspace_id:'b'.repeat(32), id:'f'.repeat(32), body:'Private other-workspace launch note.'}
   const recallRequests = []
   const personalRequests = []
+  const candidateQueue = []
   const prompts = []
   const events = new Map()
   const bots = {main:{id:'main',name:'Main',capabilities:[]}}
@@ -71,6 +72,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
           return personalization
         }
         if (endpoint === 'personal/get') return profile
+        if (endpoint === 'memory/enqueueCapture') { candidateQueue.push(payload); return }
         assert.equal(endpoint,'skills/materialForScope')
       },
     }})
@@ -91,6 +93,11 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.equal(first.body.reply.memory_profile_workspace,wid)
     assert.deepEqual(personalRequests,[scope])
     assert.doesNotMatch(prompts[0],/other-workspace/)
+    const source = candidateQueue[0]
+    assert.equal(source.message_id,first.body.message.id)
+    assert.deepEqual(await endpoints.captureSource(source),{title:'Plans',text:'When is the launch?'})
+    assert.equal(await endpoints.captureSource({...source,message_id:first.body.reply.id}),null)
+    await assert.rejects(endpoints.captureSource({...source,workspace_id:foreignPage.workspace_id}),{status:404})
     assert.deepEqual(recallRequests,[scope])
     const reopened = (await endpoints.v1({method:'GET',path})).body.items[1]
     assert.deepEqual(reopened.memory_refs,first.body.reply.memory_refs)
@@ -105,6 +112,8 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.equal(disabled.memory_profile_workspace,undefined)
     assert.doesNotMatch(prompts[1],/Reference notes|concise bullets|metric units/)
     assert.equal(recallRequests.length,1)
+    assert.equal(await endpoints.captureSource(source),null)
+    assert.equal(candidateQueue.length,1)
     assert.equal(personalRequests.length,1)
 
     await endpoints['adopt-personal-chat']({...scope,id:agent.id,conversations:[]},false)

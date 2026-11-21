@@ -388,6 +388,7 @@ function hashParams() {
     workspace: params.get('workspace') || '',
     agent: params.get('agent') || '',
     conversation: params.get('conversation') || '',
+    message: params.get('message') || '',
     social: params.get('social') || '',
     publicAgent: params.get('public-agent') || '',
   };
@@ -399,6 +400,7 @@ function writeHash(values) {
   if (values.agent) params.set('agent', values.agent);
   if (values.social) params.set('social', values.social);
   if (values.conversation) params.set('conversation', values.conversation);
+  if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
   if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
@@ -3272,7 +3274,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (start.social) {
       await openSocialConversation(start.social);
     } else if (start.agent && start.conversation) {
-      await openAgentConversation(start.agent, start.conversation);
+      if (await openAgentConversation(start.agent, start.conversation) && /^[0-9a-f]{32}$/.test(start.message)) {
+        if (await jumpToMessage(start.message, null) === false) {
+          show('error', '找不到这条来源消息。');
+          return;
+        }
+        writeHash({workspace:workspaceId(), agent:start.agent, conversation:start.conversation, message:start.message});
+      }
     } else if (start.agent) {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) await openAgentConversation(start.agent, first.id);

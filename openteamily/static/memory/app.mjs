@@ -1,3 +1,4 @@
+import {mountCandidates, sourceHref} from './candidates.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
@@ -318,12 +319,14 @@ export function matchingMemoryPages(items, needle) {
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
+  if (value === 'candidates') return 'candidates';
   if (value === 'todos') return 'actions';
   return 'overview';
 }
 
 export function queryForMemoryPage(view) {
   if (view === 'profile') return '?page=profile';
+  if (view === 'candidates') return '?page=candidates';
   if (view === 'actions') return '?page=todos';
   return '';
 }
@@ -691,6 +694,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const [field, input] of Object.entries(profileInputs)) if (input) input.value = profile[field];
     if (status) status.textContent = '';
   }
+  const candidates = mountCandidates(document, {request, workspaceId});
+
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
     closeProfilePreview();
@@ -699,7 +704,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
-    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动'};
+    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动', candidates:'记忆建议'};
     if (title) title.textContent = labels[currentView] || '总览';
     const overview = document.getElementById('overview-panel');
     const side = document.getElementById('memory-side');
@@ -709,6 +714,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
+    candidates.show(currentView === 'candidates');
     if (currentView === 'profile') loadMemoryProfile();
     if (currentView === 'profile') loadPreferences();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
@@ -998,6 +1004,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
       currentUser = null;
+      candidates.show(false);
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       editor.hidden = true;
@@ -1116,6 +1123,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // the recorded editor); only the overview/side/actions/profile panels hide.
   function showPageMode() {
     closeProfilePreview();
+    candidates.show(false);
     listPanel.hidden = false;
     listPanel.dataset.view = 'page';
     for (const id of ['overview-panel', 'memory-side', 'actions-panel', 'profile-panel']) {
@@ -1368,6 +1376,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function showPage(page, revision) {
     currentPage = page;
+    const source = document.getElementById('memory-page-chat-source');
+    const href = sourceHref(workspaceId(), page.source);
+    if (source) source.hidden = !href;
+    if (href) document.getElementById('memory-page-chat-link').href = href;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
@@ -1584,6 +1596,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentUser = null;
+    candidates.show(false);
     currentPage = null;
     currentAction = null;
     closeProfilePreview();

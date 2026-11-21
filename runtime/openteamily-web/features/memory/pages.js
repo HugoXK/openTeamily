@@ -26,32 +26,35 @@ async function list(req, workspaceId) {
   return { body: { items: pagesView(req.store, rows.slice(0, limit)), cursor: rows.length > limit ? rows[limit - 1].id : null } }
 }
 
-async function create(req, workspaceId) {
-  const body = requireBodyKeys(await req.json(), ['title', 'body', 'topics'])
+export function insertPage(req, workspaceId, body, key) {
   const title = body.title
   const content = body.body ?? ''
   const topics = normalizeTopics('topics' in body ? body.topics : [])
   if (!validTitle(title) || !validBody(content) || topics === null) refuse(400, 'invalid', 'Provide a memory page title and body')
   const clean = title.trim()
-  const key = idempotencyKey(req.headers)
   const keyHash = digest('memory:' + key)
   const requestHash = digest(stableJson({ title: clean, body: content, topics }))
   const user = actor(req)
-  return req.store.transaction((store) => {
-    const prior = store.get('SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-    if (prior) {
-      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, body: { page: pageView(store, prior) } }
-    }
-    const hash = titleHash(clean)
-    if (store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A memory page with this title already exists')
-    if (store.get('SELECT COUNT(*) AS n FROM memory_pages WHERE workspace_id=?', workspaceId).n >= MAX_PAGES) refuse(429, 'quota', 'Memory page capacity reached')
-    const id = newId()
-    store.run('INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)', id, workspaceId, clean, hash, content, req.now, req.now, user, user, keyHash, requestHash)
-    replaceTopics(store, workspaceId, id, topics)
-    recordVersion(store, workspaceId, id, 1, clean, content, req.now, user)
-    return { status: 201, body: { page: pageView(store, loadPage(store, workspaceId, id)) } }
-  })
+  const store = req.store
+  const prior = store.get('SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+  if (prior) {
+    if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+    return { status: 200, body: { page: pageView(store, prior) } }
+  }
+  const hash = titleHash(clean)
+  if (store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A memory page with this title already exists')
+  if (store.get('SELECT COUNT(*) AS n FROM memory_pages WHERE workspace_id=?', workspaceId).n >= MAX_PAGES) refuse(429, 'quota', 'Memory page capacity reached')
+  const id = newId()
+  store.run('INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)', id, workspaceId, clean, hash, content, req.now, req.now, user, user, keyHash, requestHash)
+  replaceTopics(store, workspaceId, id, topics)
+  recordVersion(store, workspaceId, id, 1, clean, content, req.now, user)
+  return { status: 201, body: { page: pageView(store, loadPage(store, workspaceId, id)) } }
+}
+
+async function create(req, workspaceId) {
+  const body = requireBodyKeys(await req.json(), ['title', 'body', 'topics'])
+  const key = idempotencyKey(req.headers)
+  return req.store.transaction(() => insertPage(req, workspaceId, body, key))
 }
 
 async function update(req, workspaceId, row) {
