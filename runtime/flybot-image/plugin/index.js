@@ -35,11 +35,11 @@ export function apply(ctx, config = {}) {
     } : {}),
   })
   registerFlybotRoute(ctx, attached.flybot)
-  // OpenTeamily chat tasks run as DS-Bot turns on this runtime (see ds-bot-bridge.mjs).
+  // OpenTeamily features send native turns to this user's DS-Bot.
   if (config.openteamilyBridge !== false && process.env.OPENTEAMILY_DS_BOT_BRIDGE !== '0') {
     const { bridge } = startBridge(rt, ctx)
     // Services for @openteamily/web features (chat, skills): native DS-Bot turns in
-    // this user's own runtime, serialized with management tasks by bridge.exclusive.
+    // this user's own runtime, serialized by bridge.exclusive.
     const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
       await bridge.prepareModel()
       await bridge.selectConversation(key)
@@ -81,11 +81,10 @@ export function apply(ctx, config = {}) {
       if (bytes !== file.bytes) throw new Error('Native attachment size mismatch')
       return Buffer.concat(chunks)
     }
-    const privateText = async (prompt, background = false) => {
+    const privateText = async prompt => {
       await bridge.setup()
       const response = await fetch(bridge.baseURL + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token,
-          ...(background ? {'X-OpenTeamily-Private-Text':'1'} : {}) },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
         body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
         signal: AbortSignal.timeout(170000), redirect: 'error',
       })
@@ -95,8 +94,7 @@ export function apply(ctx, config = {}) {
       return text.slice(0, 20000)
     }
     const textOnly = prompt => bridge.exclusive(() => privateText(prompt))
-    const backgroundTextOnly = prompt => privateText(prompt,true)
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, backgroundTextOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached
 }

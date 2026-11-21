@@ -718,8 +718,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/conversations/:id/messages", async (req) => {
     const me = ot.me(req);
-    const conv = memberOf(ot, params(req).id, me.ownerId);
     const q = query(req);
+    const id = params(req).id;
+    const conv = q.workspace_id === undefined
+      ? memberOf(ot, id, me.ownerId)
+      : workspaceConversation(ot, text(q.workspace_id, "workspace_id", {min: 32, max: 32}), id, me.ownerId).conv;
     const limit = Math.max(1, intParam(q.limit, "limit", 50, 200));
     const before = intParam(q.before, "before", 0);
     const after = intParam(q.after, "after", 0);

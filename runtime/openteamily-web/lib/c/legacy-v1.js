@@ -666,10 +666,11 @@ function messengerRoutes(host, wakeReplies) {
       async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
-          await messengerScope(host, bs, match[1], match[2])
+          const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const q = parseQuery(query)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            workspace_id: !scope.personal && q.get('scope') === 'workspace' ? match[1] : undefined,
             limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
           }))
           return [200, {

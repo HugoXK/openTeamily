@@ -1550,7 +1550,9 @@ test('composer + attach shortcuts narrow the file picker without widening it', (
 
 test('composer + creation grid deep-links real editors and labels the rest 未接通', () => {
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
-  for (const kind of ['website', 'document', 'slides', 'spreadsheet']) assert.ok(html.includes(`/space?new=${kind}`), kind);
+  for (const kind of ['website', 'document', 'slides', 'spreadsheet']) {
+    assert.ok(html.includes(`href="/space?new=${kind}" data-create-artifact="${kind}"`),kind);
+  }
   for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
   assert.ok((html.match(/未接通/g) || []).length >= 5);
 });

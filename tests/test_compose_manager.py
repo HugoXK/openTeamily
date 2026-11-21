@@ -17,7 +17,9 @@ from unittest.mock import patch
 from wsgiref.simple_server import make_server
 
 import test_runtime as fixtures
-from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
+from openteamily.app import App, Config
+from openteamily.lifecycle import Lifecycle, RuntimeFault, RuntimePolicy, ManagerIdentity
+from openteamily.store import Store
 from openteamily.manager.client import ManagerClient
 from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, compatible_manifest_upgrade, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SOCIAL_SOCKET_BIND, SOCIAL_SOCKET_SOURCE, SOCIAL_SOCKET_TARGET, compose_bytes
 from openteamily.manager.safety import ManagerError, write_new, replace_private, instance_lock, redact
@@ -25,7 +27,7 @@ from openteamily.manager.worker import ManagerWorker
 from openteamily.manager.__main__ import main
 from openteamily.server import QuietHandler
 from openteamily.operator_config import load_manager_auth
-from openteamily.security import digest
+from openteamily.security import digest, opaque
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
 
@@ -77,8 +79,22 @@ class ComposeManagerTests(unittest.TestCase):
     manager_call = fixtures.RuntimeTests.manager_call
 
     def setUp(self):
-        fixtures.RuntimeTests.setUp(self)
-        self.runtime.policy = RuntimePolicy(image_ref=IMAGE, profile='local-compose', backend_mode='compose')
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.now = 1800000000
+        self.store = Store(Path(self.temp.name) / 'state')
+        self.runtime = Lifecycle(self.store, RuntimePolicy(image_ref=IMAGE, profile='local-compose', backend_mode='compose'),
+                                 clock=lambda: self.now)
+        self.app = App(self.store, Config(fixtures.ORIGIN, allow_registration=True),
+                       clock=lambda: self.now, lifecycle=self.runtime)
+        self.client = fixtures.Client(self.app)
+        self.assertEqual(self.client.register()['status'], 201)
+        self.owner = self.client.call('GET', '/v1/auth/session')['body']['user']['id']
+        personal = self.client.call('POST', '/v1/personal-agent')
+        self.assertEqual(personal['status'], 201)
+        self.wid = personal['body']['personal_agent']['workspace']['id']
+        self.agent_id = personal['body']['personal_agent']['agent']['id']
+        self.token = opaque()
         self.iid = self.create()['instance']['id']
         self.identity = self.manager(self.iid, mode='compose')
         self.root = Path(self.temp.name) / 'operator'
@@ -636,55 +652,80 @@ class ComposeManagerTests(unittest.TestCase):
 
 
 
-    def test_worker_writes_instance_runtime_key_and_redacts_the_token(self):
+    def test_worker_installs_bootstrap_without_credentials_on_create_start_and_restart(self):
+        # The separate auto-provision API suite and real Compose fixture cover
+        # enrollment. Mark this fixture's existing instance to exercise delivery.
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       (self.owner, self.wid, self.agent_id, self.iid, 'manager-a', self.now))
         client = self.start_http()
         worker = ManagerWorker(client, self.registry, self.engine)
-        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
-        path = self.engine.runtime_key_path(self.iid)
-        assert_container_readable_secret(self, path)
-        document = json.loads(path.read_text())
-        self.assertEqual(set(document), {'origin', 'token', 'hostname'})
-        self.assertEqual(document['origin'], 'https://management.test')
-        self.assertTrue(document['token'])
-        self.assertEqual(document['hostname'], 'flybot-' + self.iid[:12])
-        token = document['token']
-        dumped = (self.root / ('compose-' + self.iid + '.json')).read_text()
-        self.assertIn('openteamily-runtime-key.json', dumped)
-        self.assertNotIn(token, dumped)
-        listed = self.client.call('GET', '/v1/runtime-keys')
-        self.assertNotIn(token, json.dumps(listed))
-        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
-        started = worker.run_once(self.iid)
-        self.assertEqual(started['observed'], 'running')
-        rotated = json.loads(path.read_text())
-        self.assertNotEqual(rotated['token'], token)
-        self.assertNotIn(token, json.dumps(started))
-        self.assertNotIn(rotated['token'], json.dumps(started))
-        instance = self.client.call('GET', f'/v1/instances/{self.iid}')
-        self.assertNotIn(token, json.dumps(instance))
-        self.assertNotIn(rotated['token'], json.dumps(instance))
 
-    def test_runtime_agent_key_requires_a_lease_and_rejects_stop_jobs(self):
+        def assert_bootstrap_file():
+            path = self.engine.agent_bootstrap_path(self.iid)
+            assert_container_readable_secret(self, path)
+            document = json.loads(path.read_text())
+            self.assertEqual(set(document), {'agent_bootstrap'})
+            bundle = document['agent_bootstrap']
+            self.assertEqual(bundle['instance_id'], self.iid)
+            personal = json.loads(bundle['tables']['personal_agents'])
+            self.assertEqual(len(personal), 1)
+            self.assertEqual((personal[0]['workspace_id'], personal[0]['agent_id']), (self.wid, self.agent_id))
+            self.assertNotIn('origin', bundle)
+            self.assertNotIn('token', bundle)
+            self.assertNotIn('hostname', bundle)
+
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        assert_bootstrap_file()
+        # Simulate a left-over credential file that would still be on a stopped host.
+        self.engine.agent_bootstrap_path(self.iid).write_text('{"token":"obsolete-fixture-token"}')
+        # The create observation queued the automatic start for this instance.
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+        assert_bootstrap_file()
+        restarted = self.action(self.iid, 'restart', {'operation_id': 'bootstrap-test-restart-0001'})
+        self.assertEqual(restarted['status'], 202, restarted)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+        assert_bootstrap_file()
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM instance_runtime_keys').fetchone()[0], 0)
+
+    def test_manual_instance_has_empty_bootstrap_file_and_endpoint_rejects_stop_jobs(self):
         client = self.start_http()
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
-        self.action(self.iid, 'start')
-        started = worker.run_once(self.iid)
-        self.assertEqual(started['observed'], 'running')
-        bad = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-agent-key', {
-            'job_id': 'a' * 32, 'observed_revision': 1, 'lease': 'A' * 43,
-        })
+        path = self.engine.agent_bootstrap_path(self.iid)
+        assert_container_readable_secret(self, path)
+        self.assertEqual(path.read_bytes(), b'')
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+        self.assertEqual(path.read_bytes(), b'')
+        invalid_lease = {'job_id': 'a' * 32, 'observed_revision': 1, 'lease': 'A' * 43}
+        bad = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-agent-bootstrap', invalid_lease)
         self.assertIn(bad['status'], (400, 401, 403, 409))
-        self.assertNotIn('token', json.dumps(bad.get('body') if isinstance(bad.get('body'), dict) else bad))
-        # The error payload must not include a runtime token even if the word appears in docs.
-        self.assertNotIn('"token":', json.dumps(bad))
-        self.action(self.iid, 'stop')
+        retired = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-agent-key', invalid_lease)
+        self.assertEqual(retired['status'], 404)
+        self.assertEqual(self.action(self.iid, 'stop')['status'], 202)
         stop = client.claim(self.iid)
         with self.assertRaises(ManagerError) as error:
-            client.runtime_agent_key(self.iid, stop)
-        self.assertEqual(error.exception.code, 'runtime_key_not_applicable')
+            client.runtime_agent_bootstrap(self.iid, stop)
+        self.assertEqual(error.exception.code, 'agent_bootstrap_not_applicable')
         observed = client.leased_call(self.iid, stop, 'observe', observed='stopped')
         self.assertEqual(observed['job']['status'], 'succeeded')
+
+    def test_manager_rejects_unexpected_bootstrap_payload_and_wrong_instance(self):
+        client = ManagerClient(self.cfg['base_url'], 'manager-a', self.token, enabled=True)
+        claim = {'job': {'id': 'a' * 32, 'revision': 1}, 'lease': 'A' * 43}
+        bundle = {
+            'format': 'openteamily-dsbot-import', 'version': 1, 'feature': 'agents',
+            'instance_id': 'b' * 32, 'created': self.now, 'tables': {}, 'manifest': {},
+        }
+        for response in ({'agent_bootstrap': None, 'token': 'obsolete-token'}, {'agent_bootstrap': bundle}):
+            with self.subTest(response=response), patch.object(client, 'call', return_value=response):
+                with self.assertRaisesRegex(ManagerError, 'agent_bootstrap_shape'):
+                    client.runtime_agent_bootstrap(self.iid, claim)
+        with self.assertRaisesRegex(ManagerError, 'agent_bootstrap_shape'):
+            self.engine.install_agent_bootstrap(self.iid, bundle)
+        self.assertFalse(self.engine.agent_bootstrap_path(self.iid).exists())
 
     def old_compose_document(self):
         document = manifest(self.iid, self.cfg['instances'][self.iid])
@@ -744,8 +785,8 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertFalse(done['volume_deleted'])
         self.assertTrue(self.engine.bot_social_path(self.iid).exists())
         self.assertEqual(json.loads(self.engine.bot_social_path(self.iid).read_text()), {})
-        self.assertTrue(self.engine.runtime_key_path(self.iid).exists())
-        self.assertEqual(self.engine.runtime_key_path(self.iid).read_text(), '')
+        self.assertTrue(self.engine.agent_bootstrap_path(self.iid).exists())
+        self.assertEqual(self.engine.agent_bootstrap_path(self.iid).read_text(), '')
 
     def test_start_after_bind_upgrade_recreates_container_without_deleting_volume_data(self):
         client = self.start_http()

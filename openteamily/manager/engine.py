@@ -13,7 +13,7 @@ import stat
 import subprocess
 import time
 
-from .client import check_id
+from .client import check_agent_bootstrap, check_id
 from .safety import LIMIT, ManagerError, require, trusted_path, read_private, write_new, replace_private, json_loads
 
 IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]{0,118}@sha256:[0-9a-f]{64}')
@@ -21,6 +21,7 @@ SECRET_TARGET = '/run/secrets/openteamily-model-api.json'
 SECRET_BIND_SUFFIX = ':' + SECRET_TARGET + ':ro'
 BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
 BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
+# Keep the existing bind path so deployed Compose manifests keep their mount identity.
 RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
 RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
 SEAL_KEY_TARGET = '/run/secrets/openteamily-seal.key'
@@ -351,7 +352,7 @@ class ComposeEngine:
     def bot_social_path(self, iid):
         return self.registry.root / bot_social_relpath(iid)
 
-    def runtime_key_path(self, iid):
+    def agent_bootstrap_path(self, iid):
         return self.registry.root / runtime_key_relpath(iid)
 
     def seal_key_path(self, iid):
@@ -400,25 +401,15 @@ class ComposeEngine:
         publish_container_secret(path)
         return path
 
-    def install_runtime_key(self, iid, payload):
-        """Write the instance runtime key file (or empty). Never logs the token."""
+    def install_agent_bootstrap(self, iid, bundle):
+        """Write the personal-agent bundle, or an empty mounted file."""
         self.registry.entry(iid)
-        path = self.runtime_key_path(iid)
-        if payload is None:
-            raw = b''
-        else:
-            require(isinstance(payload, dict) and payload.get('token') and payload.get('origin') and payload.get('hostname'), 'runtime_key_payload')
-            allowed = {key: payload[key] for key in ('origin', 'token', 'hostname')}
-            if 'agent_bootstrap' in payload:
-                bootstrap = payload['agent_bootstrap']
-                require(isinstance(bootstrap, dict) and bootstrap.get('feature') == 'agents'
-                        and bootstrap.get('instance_id') == iid, 'runtime_key_payload')
-                allowed['agent_bootstrap'] = bootstrap
-            raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
+        path = self.agent_bootstrap_path(iid)
+        check_agent_bootstrap(iid, bundle)
+        raw = b'' if bundle is None else (json.dumps({'agent_bootstrap': bundle}, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
         publish_container_secret(path)
         return path
-
 
     def install_seal_key(self, iid):
         """Create or reuse this instance's 32-byte seal key. Never rotated automatically."""
@@ -440,8 +431,8 @@ class ComposeEngine:
                 self.install_secret(iid, None)
             if not self.bot_social_path(iid).exists():
                 self.install_bot_social(iid, None)
-            if not self.runtime_key_path(iid).exists():
-                self.install_runtime_key(iid, None)
+            if not self.agent_bootstrap_path(iid).exists():
+                self.install_agent_bootstrap(iid, None)
             if not self.seal_key_path(iid).exists():
                 self.install_seal_key(iid)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.

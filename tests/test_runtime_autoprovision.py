@@ -55,19 +55,17 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertIn(result['status'], (200, 201), result)
         return result['body']['personal_agent']
 
-    def run_job(self, iid, observed, process_ref=None, issue=False):
+    def run_job(self, iid, observed, process_ref=None):
         claim = self.manager('POST', '/v1/internal/jobs/claim', {'instance_id': iid})
         self.assertEqual(claim['status'], 200, claim)
         body = claim['body']['claim']
         self.assertIsNotNone(body)
-        key = None
-        if issue:
-            key = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', {
-                'job_id': body['job']['id'], 'observed_revision': body['job']['revision'], 'lease': body['lease']})
-            self.assertEqual(key['status'], 200, key)
-            key = key['body']['runtime_key']
-        payload = {'job_id': body['job']['id'], 'observed_revision': body['job']['revision'],
-                   'lease': body['lease'], 'observed': observed}
+        lease = {'job_id': body['job']['id'], 'observed_revision': body['job']['revision'], 'lease': body['lease']}
+        bootstrap = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', lease)
+        self.assertEqual(bootstrap['status'], 200, bootstrap)
+        self.assertEqual(set(bootstrap['body']), {'agent_bootstrap'})
+        self.assertEqual(self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', lease)['status'], 404)
+        payload = {**lease, 'observed': observed}
         if process_ref:
             payload['process_ref'] = process_ref
         result = self.manager('POST', f'/v1/internal/instances/{iid}/observe', payload)
@@ -75,7 +73,7 @@ class AutoProvisionTests(unittest.TestCase):
         # Receipt is for the claimed job even when the server queues a follow-up start.
         self.assertEqual(result['body']['job']['id'], body['job']['id'])
         self.assertEqual(result['body']['job']['status'], 'succeeded')
-        return body, key
+        return bootstrap['body']['agent_bootstrap']
 
     def count(self, sql, *args):
         with self.store.connect() as db:
@@ -123,6 +121,25 @@ class AutoProvisionTests(unittest.TestCase):
         ids = {item['id'] for item in self.listed()}
         self.assertEqual(ids, {iid, bob_state['instance_id']})
         self.assertTrue(all(item['provisioning'] == 'auto' for item in self.listed()))
+
+    def test_auto_provision_returns_personal_bootstrap_without_minting_key(self):
+        self.make_app()
+        alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
+        personal = self.ensure(alice)
+        other = self.ensure(bob)
+        iid = personal['runtime_provisioning']['instance_id']
+        created = self.run_job(iid, 'stopped')
+        started = self.run_job(iid, 'running', process_ref='a' * 32)
+        for bundle in (created, started):
+            self.assertEqual((bundle['instance_id'], bundle['feature']), (iid, 'agents'))
+            bindings = json.loads(bundle['tables']['personal_agents'])
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(bindings[0]['workspace_id'], personal['workspace']['id'])
+            self.assertEqual(bindings[0]['agent_id'], personal['agent']['id'])
+            self.assertNotIn(other['agent']['id'], bundle['tables']['workspace_agents'])
+        self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_keys'), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instance_runtime_keys'), 0)
+        self.assertFalse((self.store.path.parent / 'instance-runtime.wrap').exists())
 
     def test_concurrent_ensure_creates_one_instance(self):
         self.make_app()
