@@ -474,8 +474,9 @@ function teamsRoutes(host) {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username) &&
                   (!q.has('workspace') || q.get('workspace') === personal.id)) {
+                const order = q.get('order') === 'recent' ? '?order=recent' : ''
                 const catalog = await host.call('artifacts/v1', {
-                  method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts`,
+                  method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts${order}`,
                 }).catch(() => null)
                 if (catalog?.status === 200 && Array.isArray(catalog.body?.items)) result.catalog = catalog.body
               }

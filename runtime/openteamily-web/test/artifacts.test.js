@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 
@@ -149,6 +150,77 @@ test('Space catalog paginates through Unicode title matches and keeps scoped pre
   }
   assert.equal(first.activity_version, allFirst.activity_version)
   assert.equal(last.activity_version, allFirst.activity_version)
+})
+
+test('Space recent pages, scopes and facets include matches beyond the first page', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  async function create(title, fields = {}, workspace = WS) {
+    const result = await call('POST', base('', workspace), {
+      title, body: '测试', kind: 'document', ...fields,
+    }, key())
+    assert.equal(result.status, 201, JSON.stringify(result.body))
+    return result.body.artifact.id
+  }
+  const old = await create('旧站点', { kind: 'website' })
+  const message = await create('对话摘录', { source: {
+    kind: 'agent_message', id: 'b'.repeat(32), conversation_id: 'c'.repeat(32), conversation_title: '产品周会',
+  } })
+  const memory = await create('记忆产出', { source: {kind: 'agent_task', id: 'd'.repeat(32), task_kind: 'memory'} })
+  const newer = await Promise.all(Array.from({length: 20}, (_, i) => create('新作品 ' + i)))
+  const otherSpace = 'f'.repeat(32)
+  const other = await create('另一个工作区', { source: {
+    kind: 'agent_message', id: 'd'.repeat(32), conversation_id: 'e'.repeat(32), conversation_title: '内部讨论',
+  } }, otherSpace)
+  const db = new DatabaseSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3'))
+  try {
+    db.prepare('UPDATE artifacts SET updated=3 WHERE workspace_id=?').run(WS)
+    db.prepare('UPDATE artifacts SET updated=1 WHERE id=?').run(old)
+    db.prepare('UPDATE artifacts SET updated=2 WHERE id IN (?,?)').run(message, memory)
+    const nativeCreator = db.prepare('SELECT created_by FROM artifacts WHERE id=?').get(newer[0]).created_by
+    db.prepare('INSERT INTO ot_users VALUES (?,?,0)').run(nativeCreator, 'qa-owner')
+    db.prepare("INSERT INTO ot_users VALUES ('legacy-owner','qa-owner',1), ('legacy-friend','qa-friend',0), ('other-author','qa-other',0)").run()
+    db.prepare("UPDATE artifacts SET created_by='legacy-owner' WHERE id=?").run(message)
+    db.prepare("UPDATE artifacts SET created_by='legacy-friend' WHERE id=?").run(old)
+    db.prepare("UPDATE artifacts SET created_by='other-author' WHERE id=?").run(other)
+  } finally {
+    db.close()
+  }
+  await call('POST', base('/' + old + '/favorite'), {enabled: true})
+  await call('POST', base('/' + message + '/favorite'), {enabled: true})
+  await call('POST', base('/' + other + '/favorite', otherSpace), {enabled: true})
+  const list = (query, workspace) => call('GET', base('?' + query, workspace))
+  const ids = result => result.body.items.map(row => row.id)
+  const first = await list('order=recent')
+  assert.deepEqual(ids(first), newer.toSorted())
+  assert.equal(first.body.cursor, ids(first).at(-1))
+  const rest = await list('order=recent&cursor=' + first.body.cursor)
+  assert.deepEqual(ids(rest), [...[message, memory].sort(), old])
+  assert.equal(rest.body.cursor, null)
+  assert.equal(rest.body.activity_version, first.body.activity_version)
+  const starred = await list('order=recent&scope=favorites&limit=1')
+  assert.deepEqual(ids(starred), [message])
+  assert.deepEqual(ids(await list('order=recent&scope=favorites&cursor=' + starred.body.cursor)), [old])
+  assert.deepEqual(ids(await list('order=recent&kind=messages&scope=favorites&q=对话')), [message])
+  assert.deepEqual(ids(await list('order=recent&kind=website&scope=favorites')), [old])
+  assert.deepEqual(ids(await list('scope=memory')), [memory])
+  assert.deepEqual(ids(await list('scope=mine&kind=messages')), [message])
+  assert.deepEqual(ids(await list('scope=mine&kind=website')), [])
+  assert.deepEqual(ids(await list('order=recent&cursor=' + other)), [])
+  assert.deepEqual((await list('facets=1')).body, {
+    creators: ['qa-friend','qa-owner'], sessions: [{id: 'c'.repeat(32), label: '产品周会'}],
+  })
+  assert.deepEqual((await list('facets=1', otherSpace)).body, {
+    creators: ['qa-other'], sessions: [{id: 'e'.repeat(32), label: '内部讨论'}],
+  })
+  for (const bad of ['facets=1&q=x', 'facets=1&facets=1', 'kind=wrong', 'scope=foreign', 'order=title']) {
+    assert.equal((await list(bad)).status, 400)
+  }
+  const edited = await call('POST', base('/' + old), {revision: 1, changes: {title: '更新后的站点'}})
+  assert.equal(edited.status, 200)
+  const latest = await list('order=recent&limit=1')
+  assert.deepEqual(ids(latest), [old])
+  assert.notEqual(latest.body.activity_version, first.body.activity_version)
 })
 
 test('Space activity tracks saved revisions and favorites only in this owner and workspace', async () => {

@@ -66,6 +66,8 @@ test('personal workspace can include its native catalog and never reads a linked
     assert.deepEqual(result.body, { ...normal.body, catalog })
   }
   assert.deepEqual(reads, Array(2).fill({ method: 'GET', path: '/v1/workspaces/' + workspace + '/artifacts' }))
+  assert.deepEqual((await get('&include=artifacts&order=recent')).body.catalog, catalog)
+  assert.equal(reads.at(-1).path, '/v1/workspaces/' + workspace + '/artifacts?order=recent')
   available = false
   assert.deepEqual((await get('&include=artifacts')).body, normal.body)
   available = true

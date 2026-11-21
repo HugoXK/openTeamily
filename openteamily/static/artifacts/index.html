@@ -7,6 +7,9 @@
   <title>作品库 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/artifacts/app.css">
+  <link rel="modulepreload" href="/artifacts/notifications.mjs">
+  <link rel="modulepreload" href="/shell/thumb.mjs">
+  <link rel="modulepreload" href="/shell/work-notification.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/artifacts/app.mjs"></script>
@@ -219,8 +222,13 @@
           <button type="button" id="retry-artifact-list" hidden>重试</button>
         </div>
         <ul id="artifact-list"></ul>
+        <div id="artifact-pagination" hidden>
+          <p id="artifact-pagination-note" class="note" role="status" hidden></p>
+          <button type="button" id="more-artifacts" class="secondary" aria-controls="artifact-list">加载更多作品</button>
+        </div>
         <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
         <div id="list-empty" hidden>
+          <p id="empty-no-match" class="note" hidden>没有找到符合条件的作品。</p>
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
             <h2>你的资料空间从这里开始</h2>

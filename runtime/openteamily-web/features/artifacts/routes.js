@@ -3,7 +3,7 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
-  canEdit, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
+  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
   unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
@@ -48,12 +48,23 @@ function activity(req, workspaceId) {
 export async function dispatch(req, workspaceId, artifactId, action) {
   const context = ctx(req)
   if (!artifactId && req.method === 'GET') {
-    const { limit, cursor, args } = pagination(req.query, ['q'])
+    if (req.query.has('facets')) {
+      if (req.query.size !== 1 || req.query.get('facets') !== '1') refuse(400, 'invalid', 'Invalid artifact request')
+      return { body: catalogFacets(req.store, workspaceId) }
+    }
+    const { limit, cursor, args } = pagination(req.query, ['q', 'scope', 'kind', 'order'])
     const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
-    if (needle.length > 80) refuse(400, 'invalid', 'Invalid artifact request')
+    const scope = args.get('scope') ?? 'all'
+    const kind = args.get('kind') ?? 'all'
+    const order = args.get('order') ?? 'id'
+    if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
+        !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
+        !['id', 'recent'].includes(order)) refuse(400, 'invalid', 'Invalid artifact request')
     const { rows: activityRows, version } = workspaceActivity(req, workspaceId)
-    const rows = listing(req.store, workspaceId, cursor, limit + 1, needle)
     const favorites = new Set(activityRows.filter((row) => row.favorited).map((row) => row.id))
+    const rows = listing(req.store, workspaceId, cursor, limit + 1, {
+      needle, scope, kind, favorites, recent: order === 'recent', owner: req.owner, ownerUsername: req.ownerUsername,
+    })
     const items = rows.slice(0, limit).map((row) => view(row, false, { favorited: favorites.has(row.id) }))
     return { body: { items, cursor: rows.length > limit ? rows[limit - 1].id : null, activity_version: version } }
   }

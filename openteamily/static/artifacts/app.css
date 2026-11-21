@@ -436,6 +436,7 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 .filter-accordion {
   width: 100%;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   text-align: left;
   background: transparent;
@@ -444,12 +445,17 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 
 .filter-accordion::after {
-  content: "›";
-  color: var(--ot-muted);
+  content: "";
+  width: .4rem;
+  height: .4rem;
+  margin-inline-end: .25rem;
+  border-right: 1.5px solid var(--ot-muted);
+  border-bottom: 1.5px solid var(--ot-muted);
+  transform: rotate(-45deg);
 }
 
 .filter-accordion[aria-expanded="true"]::after {
-  content: "⌄";
+  transform: rotate(45deg);
 }
 
 .filter-body {
@@ -1598,6 +1604,18 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
   gap: .5rem;
   padding: .5rem 0;
 }
+
+#artifact-pagination:not([hidden]) {
+  display: grid;
+  justify-items: center;
+  gap: .5rem;
+  padding: .75rem 0 .5rem;
+}
+
+#artifact-pagination-note { margin: 0; text-align: center; }
+#more-artifacts { min-height: 2.75rem; padding-inline: 1rem; }
+#more-artifacts[aria-disabled="true"] { cursor: progress; }
+#empty-no-match { padding: 1.25rem .5rem; text-align: center; }
 
 .artifact-editor-panel {
   border-top: 1px solid var(--ot-line);

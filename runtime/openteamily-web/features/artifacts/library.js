@@ -4,7 +4,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_SELECT, SHARE_CSP, sourceView,
+  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
@@ -38,26 +38,63 @@ export function load(store, workspaceId, id) {
   return row && named(row, usernames(store))
 }
 
-function searchPage(store, workspaceId, cursor, limit, needle) {
+function filteredPage(store, boundary, bindings, order, limit, { needle, scope, kind, owner, ownerUsername, favorites }) {
+  const hasFilters = scope !== 'all' || kind !== 'all'
+  const columns = hasFilters
+    ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime,
+       b.board <> '' AS board_json, sl.deck <> '' AS slides_json, d.dashboard <> '' AS dashboard_json,
+       x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id
+       ${ROW_JOINS} LEFT JOIN ot_users u ON u.id=a.created_by `
+    : 'SELECT a.id, a.title FROM artifacts a '
+  const candidates = store.all(columns + boundary + order, ...bindings)
   const ids = []
-  const candidates = store.all('SELECT id, title FROM artifacts WHERE workspace_id=? AND id>? ORDER BY id', workspaceId, cursor)
-  for (const { id, title } of candidates) {
-    if (!title.toLocaleLowerCase('en-US').includes(needle)) continue
-    ids.push(id)
+  for (const row of candidates) {
+    if (needle && !row.title.toLocaleLowerCase('en-US').includes(needle)) continue
+    if (scope === 'favorites' && !favorites.has(row.id)) continue
+    if (scope === 'mine' && row.created_by !== owner && !row.is_owner &&
+        (!ownerUsername || row.username !== ownerUsername)) continue
+    if (scope === 'memory' && (row.chat_message_id || row.source_kind !== 'agent_task')) continue
+    if (kind === 'messages' ? !row.chat_message_id : kind !== 'all' && publicKind(row) !== kind) continue
+    ids.push(row.id)
     if (ids.length >= limit) break
   }
   if (!ids.length) return []
   const placeholders = ids.map(() => '?').join(',')
-  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders}) ORDER BY a.id`, workspaceId, ...ids)
+  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders})` + order, bindings[0], ...ids)
 }
 
-export function listing(store, workspaceId, cursor, limit, needle = '') {
-  const rows = needle
-    ? searchPage(store, workspaceId, cursor || '', limit, needle)
-    : store.all(ROW_SELECT + 'WHERE a.workspace_id=? AND a.id>? ORDER BY a.id LIMIT ?', workspaceId, cursor || '', limit)
+export function listing(store, workspaceId, cursor, limit, filters) {
+  let boundary = 'WHERE a.workspace_id=?'
+  const bindings = [workspaceId]
+  const order = filters.recent ? ' ORDER BY a.updated DESC, a.id' : ' ORDER BY a.id'
+  if (cursor && filters.recent) {
+    const anchor = store.get('SELECT updated FROM artifacts WHERE workspace_id=? AND id=?', workspaceId, cursor)
+    if (!anchor) return []
+    boundary += ' AND (a.updated<? OR (a.updated=? AND a.id>?))'
+    bindings.push(anchor.updated, anchor.updated, cursor)
+  } else if (cursor) {
+    boundary += ' AND a.id>?'
+    bindings.push(cursor)
+  }
+  const rows = filters.needle || filters.scope !== 'all' || filters.kind !== 'all'
+    ? filteredPage(store, boundary, bindings, order, limit, filters)
+    : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
   if (!rows.length) return rows
   const user = usernames(store)
   return rows.map((row) => named(row, user))
+}
+
+export function catalogFacets(store, workspaceId) {
+  const user = usernames(store)
+  const authors = store.all('SELECT DISTINCT created_by FROM artifacts WHERE workspace_id=?', workspaceId)
+  const creators = [...new Set(authors.map(row => user(row.created_by)))].sort()
+  const sources = store.all(`SELECT cs.conversation_id, cs.conversation_title FROM artifact_chat_sources cs
+    JOIN artifacts a ON a.id=cs.artifact_id WHERE a.workspace_id=? ORDER BY a.updated DESC, a.id`, workspaceId)
+  const sessions = new Map()
+  for (const { conversation_id: id, conversation_title: title } of sources) {
+    if (id && !sessions.has(id)) sessions.set(id, {id, label: title?.trim() || '对话'})
+  }
+  return { creators, sessions: [...sessions.values()] }
 }
 
 export function view(row, includeBody = true, { favorited } = {}) {

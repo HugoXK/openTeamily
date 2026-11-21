@@ -24,6 +24,7 @@ test('csrfCookie reads host-bound and development cookie names only', () => {
 test('listQuery encodes search and omits empty q', () => {
   assert.equal(listQuery(''), '');
   assert.equal(listQuery('  brief '), '?q=brief');
+  assert.equal(listQuery('  plan & brief ', {kind: 'document', scope: 'favorites'}), '?q=plan%20%26%20brief&kind=document&scope=favorites');
 });
 
 function activityFixture(options = {}) {
@@ -325,6 +326,7 @@ function fakeDocument() {
     },
     querySelectorAll(selector) {
       if (doc.kindButtons && String(selector).includes('data-kind')) return doc.kindButtons;
+      if (doc.scopeButtons && String(selector).includes('[data-scope]')) return doc.scopeButtons;
       return [];
     },
     querySelector() { return null; },
@@ -453,13 +455,21 @@ test('Space ignores a delayed notice read after switching workspace and acknowle
 
 async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
                                   withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null,
-                                  native = false, extraRequest} = {}) {
+                                  withScopes = false, native = false, extraRequest} = {}) {
   const {doc, elements, created, form} = fakeDocument();
   if (native) doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
   if (withKinds) {
     doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
       const node = new FakeNode('button');
       node.setAttribute('data-kind', kind);
+      node.ownerDocument = doc;
+      return node;
+    });
+  }
+  if (withScopes) {
+    doc.scopeButtons = ['all', 'mine', 'favorites', 'memory'].map(scope => {
+      const node = new FakeNode('button');
+      node.setAttribute('data-scope', scope);
       node.ownerDocument = doc;
       return node;
     });
@@ -476,8 +486,9 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
-    if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
-    if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
+    const order = native ? '?order=recent' : '';
+    if (path === '/v1/workspaces/w2/artifacts' + order) return reply({body: {items: []}});
+    if (path === '/v1/workspaces/w1/artifacts' + order) return reply({body: {items: listed}});
     if (path === '/v1/workspaces/w1/meetings?limit=100') {
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
@@ -523,6 +534,11 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     async openKind(kind) {
       const button = (doc.kindButtons || []).find((node) => node.getAttribute('data-kind') === kind);
       assert.ok(button, `kind button ${kind} must exist`);
+      await button.dispatch('click');
+    },
+    async openScope(scope) {
+      const button = (doc.scopeButtons || []).find(node => node.getAttribute('data-scope') === scope);
+      assert.ok(button, `scope button ${scope} must exist`);
       await button.dispatch('click');
     },
     meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=100'); },
@@ -1108,6 +1124,66 @@ test('an unauthorised save asks the user to sign in instead of failing silently'
 test('favorites scope uses the persisted flag instead of inventing an empty collection', () => {
   const items = [{id:'a', kind:'document', favorited:true}, {id:'b', kind:'document', favorited:false}];
   assert.deepEqual(visibleArtifacts(items, {scope:'favorites'}).map(item=>item.id), ['a']);
+});
+
+test('loading more is single-flight and never inserts results into a newly selected catalog scope', async () => {
+  const first = {id: 'a'.repeat(32), kind: 'document', title: '最近作品'};
+  const older = {id: 'b'.repeat(32), kind: 'document', title: '下一页作品'};
+  const saved = {id: 'c'.repeat(32), kind: 'document', title: '较早的收藏', favorited: true};
+  const held = deferred();
+  const base = '/v1/workspaces/w1/artifacts';
+  const olderPath = base + '?order=recent&cursor=' + first.id;
+  const page = await openArtifactsPage({native: true, withScopes: true, extraRequest(path) {
+    if (path === base + '?order=recent') return reply({body: {items: [first], cursor: first.id}});
+    if (path === olderPath) return held.promise;
+    if (path === base + '?scope=favorites&order=recent') return reply({body: {items: [saved], cursor: null}});
+  }});
+  const list = page.elements.get('artifact-list');
+  const footer = page.elements.get('artifact-pagination');
+  const more = page.elements.get('more-artifacts');
+  try {
+    assert.equal(footer.hidden, false);
+    const loadingMore = more.dispatch('click');
+    assert.equal(more.getAttribute('aria-disabled'), 'true');
+    await more.dispatch('click');
+    assert.equal(page.calls.filter(call => call.path === olderPath).length, 1);
+    await page.openScope('favorites');
+    assert.equal(footer.hidden, true);
+    held.finish(reply({body: {items: [older], cursor: null}}));
+    await loadingMore;
+    assert.deepEqual(artifactRows(list).map(row => row.dataset.artifactId), [saved.id]);
+  } finally { page.close(); }
+});
+
+test('pagination retry keeps current rows and rebuilds the expanded range if its activity version moved', async () => {
+  const first = {id: 'a'.repeat(32), kind: 'document', title: '先加载的作品'};
+  const older = {id: 'b'.repeat(32), kind: 'document', title: '追加的作品'};
+  const inserted = {id: 'c'.repeat(32), kind: 'document', title: '后来更新的作品'};
+  const base = '/v1/workspaces/w1/artifacts?order=recent';
+  const olderPath = base + '&cursor=' + first.id;
+  const expanded = base + '&limit=40';
+  const before = 'a'.repeat(64);
+  const after = 'b'.repeat(64);
+  let attempts = 0;
+  const page = await openArtifactsPage({native: true, extraRequest(path) {
+    if (path === base) return reply({body: {items: [first], cursor: first.id, activity_version: before}});
+    if (path === olderPath) {
+      if (++attempts === 1) return reply({status: 503});
+      return reply({body: {items: [older], cursor: null, activity_version: after}});
+    }
+    if (path === expanded) return reply({body: {items: [inserted, first, older], cursor: null, activity_version: after}});
+  }});
+  try {
+    const ids = () => artifactRows(page.elements.get('artifact-list')).map(row => row.dataset.artifactId);
+    const more = page.elements.get('more-artifacts');
+    await more.dispatch('click');
+    assert.deepEqual(ids(), [first.id]);
+    assert.equal(more.textContent, '重试加载更多');
+    await more.dispatch('click');
+    assert.deepEqual(ids(), [inserted.id, first.id, older.id]);
+    assert.equal(page.calls.filter(call => call.path === expanded).length, 1);
+    assert.equal(page.elements.get('artifact-pagination').hidden, true);
+  } finally { page.close(); }
 });
 
 test('an older workspace list cannot overwrite the current selected workspace', async () => {
