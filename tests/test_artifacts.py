@@ -126,36 +126,6 @@ class ArtifactTests(unittest.TestCase):
         missing = self.alice.call('GET', f'/v1/workspaces/{self.wid}/artifacts?q=missing-term')
         self.assertEqual(missing['body']['items'], [])
 
-    def test_search_matches_document_body_but_not_nontext_payloads(self):
-        self.assertEqual(
-            self.create(title='Weekly plan', body='The budget needs approval', key='artifact-search-body-01')['status'],
-            201,
-        )
-        self.assertEqual(
-            self.create(
-                title='Board deck', kind='slides', key='artifact-search-slides-01',
-                slides={'schema': 'openteamily.slides.v1', 'slides': [
-                    {'title': 'Secret', 'bullets': ['alpha-slide-token']}]},
-            )['status'],
-            201,
-        )
-        found = self.alice.call('GET', f'/v1/workspaces/{self.wid}/artifacts?q=budget')
-        self.assertEqual(found['status'], 200)
-        self.assertEqual([item['title'] for item in found['body']['items']], ['Weekly plan'])
-        item = found['body']['items'][0]
-        self.assertIn('budget', item['search_preview'].lower())
-        self.assertNotIn('body', item)
-        self.assertEqual(self.alice.call(
-            'GET', f'/v1/workspaces/{self.wid}/artifacts?q=alpha-slide-token')['body']['items'], [])
-        title_hit = self.alice.call('GET', f'/v1/workspaces/{self.wid}/artifacts?q=Board deck')
-        self.assertEqual([item['title'] for item in title_hit['body']['items']], ['Board deck'])
-        self.assertNotIn('search_preview', title_hit['body']['items'][0])
-        website = self.create(title='Landing', body='website hidden-token', kind='website', key='artifact-search-web-01')
-        self.assertEqual(website['status'], 201, website)
-        web_hit = self.alice.call('GET', f'/v1/workspaces/{self.wid}/artifacts?q=hidden-token')
-        self.assertEqual([item['title'] for item in web_hit['body']['items']], ['Landing'])
-        self.assertIn('hidden-token', web_hit['body']['items'][0]['search_preview'])
-
     def test_search_paginates_matching_titles(self):
         # Default list pages are 20. If q were applied after an unfiltered
         # id page, a later match such as "Pad 24" could be skipped.

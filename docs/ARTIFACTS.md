@@ -66,18 +66,3 @@ No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily co
 ### Version-pinned work sharing into chat
 
 All saved work kinds (document, website, whiteboard, slides, dashboard, media) can be sent to an authorized workspace social conversation. An optional `artifact_revision` must match the saved current revision for a new send. Metadata and export link are pinned in `social_artifact_versions`; forwarding copies this metadata, and later work edits do not silently change the sent version. Replaying the same idempotency key returns the original message even after a later edit. Sending does not publish a public share. Source deletion can make the reference unavailable; it does not erase the historical chat text. Exports keep their existing supported formats, not native Office/PDF promises.
-
-## Works-library text search
-
-`GET /v1/workspaces/{id}/artifacts?q=<needle>` searches the loaded workspace
-library by title, and for `document` / `website` artifacts also by saved body
-text. Matching is a bounded, case-insensitive substring scan, not a full-text
-index, ranking model, semantic search or cross-workspace search. Media,
-whiteboards, slides and dashboards are excluded from body matching so their
-JSON payloads and binary bytes are never treated as prose.
-
-A body-only hit returns the normal list record plus `search_preview`, a
-whitespace-collapsed snippet capped at 160 characters. The full document body is
-still omitted from the list response. The `/space` search box labels this as
-`搜索标题或正文`; opening a result still uses the existing editor and
-authorization checks. Screenshot: `docs/screenshots/space-content-search/` (synthetic).

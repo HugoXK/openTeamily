@@ -66,7 +66,6 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertIn('没有匹配的会话', html)
         self.assertIn('未实现', html)
         self.assertIn('id="new-menu"', html)
-        self.assertIn('placeholder="搜索标题或正文"', html)
         self.assertIn('id="new-slides"', html)
         self.assertIn('id="slides-editor"', html)
         self.assertIn('id="slide-list"', html)

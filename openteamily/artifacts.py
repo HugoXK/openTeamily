@@ -418,21 +418,13 @@ def load(db, workspace_id, artifact_id):
     ).fetchone()
 
 
-def _matches_search(row, needle):
-    if needle in row['title'].casefold():
-        return True
-    if public_kind(row) not in ('document', 'website'):
-        return False
-    return needle in (row['body'] or '').casefold()
-
-
 def listing(db, workspace_id, cursor, limit, needle=''):
     rows = db.execute(
         ROW_SELECT + 'WHERE a.workspace_id=? ORDER BY a.id',
         (workspace_id,),
     ).fetchall()
     if needle:
-        rows = [row for row in rows if _matches_search(row, needle)]
+        rows = [row for row in rows if needle in row['title'].casefold()]
     if cursor:
         rows = [row for row in rows if row['id'] > cursor]
     return rows[:limit]
