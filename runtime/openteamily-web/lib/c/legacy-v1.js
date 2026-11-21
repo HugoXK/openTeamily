@@ -442,7 +442,11 @@ function invitesRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const data = await bs.get('/v1/ot/join-requests/mine')
-          return [200, { items: (data.requests || []).map((row) => requestItem(row)) }]
+          return [200, { items: (data.requests || []).map(row => ({
+            ...requestItem(row),
+            workspace_id: HEX.test(row.workspace_id || '') ? row.workspace_id : null,
+            team_name: typeof row.team_name === 'string' ? row.team_name : '',
+          })) }]
         })
       },
     },
@@ -549,7 +553,11 @@ function teamsRoutes(host) {
             .filter((t) => HEX.test(String(t.workspace_id || '')))
             .map((t) => workspaceItem(t, me, env))
           const personal = personalWorkspace(localBinding, env)
-          if (personal && !rows.some(row => row.id === personal.id)) rows.unshift(personal)
+          if (personal) {
+            const previous = rows.findIndex(row => row.id === personal.id)
+            if (previous < 0) rows.unshift(personal)
+            else rows[previous] = { ...rows[previous], kind: 'personal' }
+          }
           if (cursor) {
             const at = rows.findIndex((row) => row.id === cursor)
             rows = at >= 0 ? rows.slice(at + 1) : []
@@ -580,6 +588,13 @@ function teamsRoutes(host) {
           const slug = body?.slug
           if (!name || !['new', 'convert'].includes(body?.mode)) throw new Fault(400, 'invalid', 'Provide a team name, a valid Team ID, and new or convert')
           if (!IDEM.test(String(key || ''))) throw new Fault(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+          if (body.mode === 'convert') {
+            const binding = await host.call('agents/personal-binding', {})
+            const personal = personalWorkspace(binding, env)
+            if (personal && personal.id === body.workspace_id) {
+              throw new Fault(409, 'conflict', 'The personal workspace cannot be converted into a team')
+            }
+          }
           const bs = client(host)
           const me = await meOf(bs, env)
           const team = body.mode === 'new'

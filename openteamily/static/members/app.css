@@ -69,6 +69,7 @@ body.app-workspace #main-panel {
 #members-panel h2,
 #invites-panel h2,
 #join-requests-panel h2,
+#my-join-requests h2,
 #team-directory-panel h2 {
   margin: 0 0 0.5rem;
   font-size: 0.75rem;
@@ -80,6 +81,7 @@ body.app-workspace #main-panel {
 #member-list,
 #invite-list,
 #join-request-list,
+#my-join-request-list,
 #directory-results {
   list-style: none;
   padding: 0;
@@ -93,6 +95,7 @@ body.app-workspace #main-panel {
 #member-list li,
 #invite-list li,
 #join-request-list li,
+#my-join-request-list li,
 #directory-results li {
   display: flex;
   flex-wrap: wrap;
@@ -106,9 +109,19 @@ body.app-workspace #main-panel {
 #member-list li:last-child,
 #invite-list li:last-child,
 #join-request-list li:last-child,
+#my-join-request-list li:last-child,
 #directory-results li:last-child {
   border-bottom: 0;
 }
+
+.requests-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-block-end: .4rem; }
+#my-join-requests .requests-heading h2, #join-requests-panel .requests-heading h2 { margin: 0; }
+.requests-heading button, #my-join-request-list button, #join-request-list button { min-height: 2.75rem; }
+#my-join-request-list:empty, #join-request-list:empty, :is(#my-join-requests-status, #join-requests-status):empty { display: none; }
+#my-join-request-list .role-pill[data-state="approved"] { color: var(--ot-success, #147044); }
+#my-join-request-list .role-pill[data-state="rejected"] { color: var(--ot-danger); }
+#my-join-request-list .member-name { overflow-wrap: anywhere; }
+#my-join-requests-status, #join-requests-status { margin: .25rem 0 .5rem; }
 
 .member-id {
   display: flex;

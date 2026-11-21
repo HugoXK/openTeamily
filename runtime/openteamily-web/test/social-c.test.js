@@ -295,6 +295,57 @@ test('teams, members, invites and social features map to the shared routes', asy
   assert.ok(f.calls.every((c) => c.auth === `Bearer ${TOKEN}`))
 })
 
+test('applicant join requests expose team names and only canonical workspace IDs', async () => {
+  const workspace = 'a'.repeat(32)
+  const common = {role:'member',member:{owner_id:'applicant',handle:'ann.home'},created_at:1795212000000}
+  const f = fakeFetch(() => ({requests:[
+    {...common,id:'otjr_valid',team_id:'ott_a',workspace_id:workspace,team_name:'Studio',status:'approved',decided_at:1795212001000},
+    {...common,id:'otjr_unbound',team_id:'ott_b',workspace_id:null,team_name:'Old studio',status:'pending'},
+  ]}))
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: creds(), fetch: f.fetch}))
+  const endpoint = invites({dataDir:'/nonexistent'}).endpoints.v1
+  const result = await endpoint({method:'GET',path:'/v1/join-requests'})
+  assert.equal(result.status,200)
+  const [approved, pending] = result.body.items
+  assert.deepEqual({id:approved.id,workspace_id:approved.workspace_id,team_name:approved.team_name,role:approved.role,
+    status:approved.status,created:approved.created,decided:approved.decided},
+  {id:'otjr_valid',workspace_id:workspace,team_name:'Studio',role:'member',status:'approved',created:1795212000,decided:1795212001})
+  assert.equal(pending.workspace_id,null)
+  assert.equal(pending.team_name,'Old studio')
+  assert.deepEqual(f.calls.map(call => call.url), [SERVER + '/v1/ot/join-requests/mine'])
+})
+
+test('a legacy shared projection cannot make the bound personal workspace convertible', async () => {
+  const personal = 'a'.repeat(32)
+  const shared = 'b'.repeat(32)
+  const row = (workspace_id, name) => ({workspace_id, name, role: 'owner'})
+  const f = fakeFetch((url, init) => {
+    const pathname = new URL(url).pathname
+    if (pathname === '/v1/ot/me') return {handle: 'ann.home', owner_id: 'ann'}
+    if (pathname === '/v1/ot/workspaces') return {workspaces: [row(personal, 'Existing personal name'), row(shared, 'Studio')]}
+    assert.equal(pathname, '/v1/ot/workspaces/' + shared + '/convert')
+    assert.equal(init.method, 'POST')
+    return {...row(shared, 'Studio'), slug: 'studio-team'}
+  })
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: creds(), fetch: f.fetch}))
+  const endpoint = teams({call: async () => ({workspace_id: personal, agent_id: 'c'.repeat(32)})}).endpoints.v1
+  const listed = await endpoint({method: 'GET', path: '/v1/workspaces'})
+  assert.deepEqual(listed.body.items.map(item => [item.id, item.kind, item.name]), [
+    [personal, 'personal', 'Existing personal name'], [shared, 'workspace', 'Studio'],
+  ])
+  const convert = workspace_id => endpoint({
+    method: 'POST', path: '/v1/teams', idempotency_key: 'native-convert-team',
+    body: {mode: 'convert', name: 'Studio', slug: 'studio-team', workspace_id},
+  })
+  const before = f.calls.length
+  const blocked = await convert(personal)
+  assert.equal(blocked.status, 409)
+  assert.equal(f.calls.length, before)
+  const converted = await convert(shared)
+  assert.equal(converted.status, 200)
+  assert.equal(converted.body.workspace.id, shared)
+})
+
 test('the native inbox requests recent scoped notices and constructs safe meeting and Discover links', async t => {
   const personal = 'a'.repeat(32)
   const team = 'b'.repeat(32)
