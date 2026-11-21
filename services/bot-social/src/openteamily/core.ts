@@ -148,6 +148,15 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
   // account-wide events, never another team's private conversation events.
   const notificationScope = (req: any, owner: string, source: any) => {
     const wid = source.workspace_id;
+    if (source.personal === true || source.personal === "1") {
+      assert(wid === undefined, 400, "invalid_request", "Choose one notification scope");
+      return {sql: ` AND (
+        json_extract(data,'$.conversation_id') IN (
+          SELECT c.id FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
+          WHERE m.owner_id=? AND c.team_id IS NULL)
+        OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL
+          AND json_extract(data,'$.conversation_id') IS NULL))`, args:[owner]};
+    }
     if (wid === undefined) return { sql: "", args: [] as any[] };
     assert(typeof wid === "string" && /^[0-9a-f]{32}$/.test(wid), 400, "invalid_request", "invalid workspace");
     const team = ot.get<any>("SELECT t.id FROM ot_teams t JOIN ot_team_members m ON m.team_id=t.id WHERE t.workspace_id=? AND m.owner_id=? AND m.suspended=0", wid, owner);

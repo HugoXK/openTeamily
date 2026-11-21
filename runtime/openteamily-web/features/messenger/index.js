@@ -3,7 +3,7 @@
 // DS-Bot (lib/c/agent-replies.js); nothing is executed by the platform or by another user's DS-Bot.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
 import { createAgentReplier, defaultStateFile } from '../../lib/c/agent-replies.js'
-import { messengerV1 } from '../../lib/c/legacy-v1.js'
+import { groupMemorySources, messengerV1, shareGroupMemory } from '../../lib/c/legacy-v1.js'
 
 export default function messenger(host) {
   const bs = () => sharedBotSocial(host)
@@ -11,11 +11,23 @@ export default function messenger(host) {
   const msg = (p) => `/v1/ot/messages/${seg(p?.message_id, 'message_id')}`
   let replier
   const agentReplier = () => (replier ??= createAgentReplier({ bs: bs(), host, stateFile: defaultStateFile(host), log: host.log ?? (() => {}) }))
-  if (typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0') agentReplier().start()
+  const automaticReplies = typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0'
+  if (automaticReplies) agentReplier().start()
+  const wakeReplies = () => {
+    if (automaticReplies) void agentReplier().once().catch(error => host.log?.(`agent inbox: ${error?.code ?? 'error'}`))
+  }
   return {
     pages: ['messenger'],
     endpoints: {
-      v1: messengerV1(host),
+      v1: messengerV1(host, wakeReplies),
+      shareGroupMemory: async (payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'messenger/not-found'})
+        return shareGroupMemory(host,payload)
+      },
+      captureSources: async (payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'messenger/not-found'})
+        return groupMemorySources(host,payload)
+      },
       list: async () => {
         const data = await bs().get('/v1/ot/conversations')
         return { ...data, conversations: (data.conversations ?? []).map((c) => ({ ...c, first_unread_seq: c.unread > 0 ? c.read_seq + 1 : null })) }
@@ -31,7 +43,7 @@ export default function messenger(host) {
         // #358: the first message after the viewer's read cursor is the "new messages" divider.
         return { ...page, first_unread_seq: page.read_seq < page.last_seq ? page.read_seq + 1 : null }
       },
-      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, mentions: p?.mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
+      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, voice: p?.voice, attachment: p?.attachment, workspace: p?.workspace_id, mentions: p?.mentions, agent_mentions: p?.agent_mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
       read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
       edit: async (p) => bs().patch(msg(p), { body: p?.body }),
       retract: async (p) => bs().del(msg(p)),

@@ -19,6 +19,7 @@ function fixture(turn, at = 1_800_000_000) {
   const clock = { now: at }
   const calls = []
   const feature = createAutomations({
+    personalBinding: async () => ({workspace_id: W}),
     db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
@@ -70,6 +71,40 @@ test('create is idempotent, titles are unique, updates check revision', async ()
   assert.equal(e['automations/list']({ workspace_id: 'b'.repeat(32) }).items.length, 0)
 })
 
+test('the mine tab lists saved automations for the signed-in runtime owner', async () => {
+  const { e } = fixture()
+  const draft = { workspace_id: W, template_id: 'custom', prompt: 'Respond once',
+    schedule: { kind: 'now', time_zone: 'UTC' } }
+  const { automation } = e['automations/create']({
+    ...draft, title: '我的任务', participants: ['alice'], idempotency_key: 'a'.repeat(16),
+  })
+  e['automations/create']({
+    ...draft, title: '其他人的任务', participants: ['bobby'], idempotency_key: 'b'.repeat(16),
+  })
+  const path = `/v1/workspaces/${W}/automations?category=mine`
+  const request = new Request('https://example.test', { headers: { 'x-ot-owner-username': 'Alice' } })
+  const result = await e['automations/v1']({ path }, { request })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body.items.map(item => item.id), [automation.id])
+})
+
+test('creating a scheduled automation can save it enabled in the same request', async () => {
+  const { e } = fixture()
+  const request = {
+    method: 'POST', path: `/v1/workspaces/${W}/automations`, idempotency_key: 'e'.repeat(16),
+    body: { title: '每周检查', template_id: 'custom', prompt: 'Check the report', participants: ['alice'],
+      schedule: { kind: 'weekly', weekday: 1, time: '09:00', time_zone: 'UTC' }, enabled: true },
+  }
+  const created = await e['automations/v1'](request)
+  assert.equal(created.status, 201)
+  assert.equal(created.body.automation.enabled, true)
+  assert.equal(created.body.automation.revision, 1)
+  const retried = await e['automations/v1'](request)
+  assert.equal(retried.status, 200)
+  assert.equal(retried.body.automation.id, created.body.automation.id)
+  assert.equal((await e['automations/v1']({...request, body: {...request.body, enabled: false}})).status, 409)
+})
+
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {
   const at = zonedEpoch('UTC', 2027, 1, 4, 9, 1)
   const { e, calls, feature, clock } = fixture(null, at)
@@ -89,6 +124,34 @@ test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot re
   assert.equal(items[0].dispatch.ds_bot.session_id, 's1')
   clock.now += 86400
   assert.equal(feature.tick().length, 1, 'next day fires again')
+})
+
+test('manual execution queues only the named automation and leaves its scheduled slot free', async () => {
+  let finishTurn
+  const calls = []
+  const { e, feature } = fixture(args => new Promise(resolve => { calls.push(args); finishTurn = resolve }))
+  const draft = {workspace_id: W, template_id: 'custom', prompt: 'Respond once', participants: ['alice'],
+    schedule: {kind: 'now', time_zone: 'UTC'}}
+  const {automation: target} = e['automations/create']({...draft, title: '手动', idempotency_key: 'm'.repeat(16)})
+  const {automation: other} = e['automations/create']({...draft, title: '其他', idempotency_key: 'o'.repeat(16)})
+  const req = {method: 'POST', path: `/v1/workspaces/${W}/automations/${target.id}/run`,
+    body: {}, idempotency_key: 'q'.repeat(16)}
+  const accepted = await e['automations/v1'](req)
+  assert.equal(accepted.status, 202)
+  assert.equal(accepted.body.run.trigger, 'manual')
+  assert.equal((await e['automations/v1'](req)).body.run.id, accepted.body.run.id)
+  assert.equal((await e['automations/v1']({...req, idempotency_key: 'x'.repeat(16)})).status, 409)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].conversation, `automation:${target.id}`)
+  finishTurn({text: '完成'})
+  await Promise.all(feature.inflight.values())
+  assert.equal(e['automations/runs']({workspace_id: W, id: other.id}).items.length, 0)
+  assert.equal(e['automations/get']({workspace_id: W, id: target.id}).automation.enabled, false)
+  e['automations/update']({workspace_id: W, id: target.id, revision: 1, changes: {enabled: true}})
+  assert.equal(feature.tick().length, 1)
+  finishTurn({text: '定时完成'})
+  await Promise.all(feature.inflight.values())
+  assert.equal(e['automations/runs']({workspace_id: W, id: target.id}).items.length, 2)
 })
 
 test('failed runs are recorded; retry is idempotent; queued runs can be cancelled', async () => {
@@ -193,4 +256,20 @@ test('official import bundle marks the current slot skipped and does not re-impo
   assert.ok(runs.items.some((row) => row.status === 'skipped' && row.error_code === 'migrated'))
   assert.equal(feature.tick().length, 0)
   assert.equal((await feature.migrate(bundle)).imported, 0)
+})
+
+test('onboarding creates a paused automation in DS-Bot and skips retries', async () => {
+  const { e } = fixture()
+  const request = {method: 'POST', path: '/v1/onboarding/automations',
+    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'alice'}}
+  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}})
+  assert.equal(denied.status, 403)
+  const result = await e['automations/v1'](request)
+  assert.equal(result.status, 201)
+  const id = result.body.created[0].id
+  assert.equal(e['automations/get']({workspace_id: W, id}).automation.enabled, false)
+  const retry = await e['automations/v1'](request)
+  assert.equal(retry.status, 200)
+  assert.deepEqual(retry.body.created, [])
+  assert.equal(retry.body.skipped[0].template_id, 'daily_brief')
 })
