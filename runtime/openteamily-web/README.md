@@ -20,3 +20,18 @@ per-volume id in `/data/openteamily/instance.json`. It is not a credential.
 
 Tests: `npm test` (no install). The two-runtime isolation proof is
 `runtime/flybot-image/test/container-gateway-isolation.py`.
+
+## B3 feature kit
+
+`featurekit/` is shared code for the B3 features (meetings, memory, artifacts,
+search) built on the stable extension point (`features/<name>/index.js`).
+`defineFeature(spec)` opens the feature's own SQLite file under
+`host.featureDir()`, applies its migrations, imports pending legacy bundles
+(`/data/openteamily/import/*.bundle`, built per user and per feature by
+`openteamily/dsbot_bundle.py`), and registers `<name>/v1` (the feature's legacy
+`/v1` routes, executed here), `<name>/routes` and `<name>/search`.
+Pages served by the DS-Bot load `openteamily/static/shell/dsbot-api.mjs`, which
+turns a moved feature's legacy `/v1` calls and download links into
+`POST /b/api/openteamily {endpoint: '<name>/v1'}`; on legacy pages it does nothing.
+
+Moved so far: meetings; memory (pages, revisions/restore, export, 做梦, actions, links, graph, profile, preferences; `memory/pages` for chat recall, `memory/personal`); search (messages, resources, search/all); artifacts (studio CRUD, media, boards, slides, dashboards, versions, original and office (docx, xlsx, pdf, pptx) export, authenticated shares, `artifacts/create`, `artifacts/files`, `artifacts/search`; per-user bundle import including media objects).

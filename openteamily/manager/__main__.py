@@ -10,6 +10,7 @@ from .client import ManagerClient, check_id
 from .engine import Registry, Runner, ComposeEngine, manifest
 from .safety import ManagerError, require, trusted_path, write_new, instance_lock, redact
 from .worker import ManagerWorker
+from . import dsbot_import, dsbot_route
 
 
 def initialize(args):
@@ -52,7 +53,21 @@ def poll_once(args):
                 registry.adopt(iid, item)
             registry.entry(iid, item)
             engine = ComposeEngine(registry, Runner(registry, enabled=True))
-            results.append(ManagerWorker(client, registry, engine).run_once(iid))
+            result = ManagerWorker(client, registry, engine).run_once(iid)
+            results.append(result)
+            if registry.config.get('dsbot_gateway') is not None and result.get('status') in ('observed', 'no_claim'):
+                # Route the owner's browser to this DS-Bot (platform gateway). A refusal
+                # here never changes the job receipt above.
+                try:
+                    results.append(dsbot_route.publish(engine, client, iid))
+                except ManagerError as error:
+                    results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
+                if args.import_legacy:
+                    try:
+                        with instance_lock(registry.root, iid):
+                            results.append(dsbot_import.deliver(engine, client, iid))
+                    except ManagerError as error:
+                        results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
         except ManagerError as error:
             results.append({'status': 'refused', 'instance_id': iid, 'reason': error.code})
     uncertain = any(r.get('status') == 'uncertain' for r in results)
@@ -87,7 +102,8 @@ def main(argv=None):
             cmd.add_argument('--operation-id', help='Fresh 16..64 character operator key; reuse this key on uncertain HTTP retry')
         if name == 'migrate-manifest':
             cmd.add_argument('--apply', action='store_true', help='Rewrite a compatible frozen compose file; never deletes the named volume or secret files')
-    sub.add_parser('poll-once', help='Discover every instance the server assigns to this manager (explicit grants and server auto-provisioned) and run one fenced job each')
+    poll = sub.add_parser('poll-once', help='Discover every instance the server assigns to this manager and run one fenced job each')
+    poll.add_argument('--import-legacy', action='store_true', help='Deliver a retained platform bundle when explicitly migrating accounts')
     args = parser.parse_args(argv)
     try:
         if args.command == 'init':
@@ -106,8 +122,8 @@ def main(argv=None):
                         engine.install_secret(iid, None)
                     if not engine.bot_social_path(iid).exists():
                         engine.install_bot_social(iid, None)
-                    if not engine.runtime_key_path(iid).exists():
-                        engine.install_runtime_key(iid, None)
+                    if not engine.agent_bootstrap_path(iid).exists():
+                        engine.install_agent_bootstrap(iid, None)
                     preview['secret_files'] = 'created_if_missing'
                 preview['executed'] = False
                 preview['volume_deleted'] = False

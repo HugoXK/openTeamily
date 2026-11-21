@@ -59,13 +59,24 @@ All of these already exist in the pinned tree and are used by today's runtime im
   user's volume, e.g. for a `node:sqlite` file), `runtime()` → `Promise<{ rt, ctx }>` of the user's
   DS-Bot (the upstream `createRuntime` result and the DSH context with `sessions`, `llm`, `tools`,
   `schedule`, `skills`, …), `currentRuntime()`, `log()`.
+* Additive (B1): `runtime()` also carries runtime services from the image wrapper —
+  `chatTurn(conversationKey, text, requestId) → {text, sessionId, turnId}` (one native DS-Bot turn on a
+  per-conversation native session, serialized) and `mainBot() → botId`. Absent services mean the feature
+  must fail closed (e.g. `chat/runtime-unavailable`).
+* Additive (B1): `host.call(endpoint, payload)` calls another feature in-process; rejects with
+  `openteamily/not-found` if that feature is missing. Contracts used today: chat reads
+  `memory/pages → [{id, revision, title, body}]` (B3 owns it) and `personal/get`.
 * Features are discovered at start; a feature that throws while loading is skipped and logged, never
   breaking the core or other features. Core files (`index.js`, `src/*`) are owned by the skeleton stream;
   interface changes are noted here.
 * Each feature ships its own tests in `runtime/openteamily-web/test/<name>*.test.js` (run by
   `npm test` in the image recipe job) and, where it needs a running DS-Bot, a container check.
 * The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
-  (`moved_pages`); a moved page calls `/b/api/openteamily` instead.
+  (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
+  calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
+  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`, `automations`, `agents`, `artifacts`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations`, workspace lists, runtime keys and public `/share/<token>` pages stay on the platform. `/members/`, `/team/`, `/messenger/` and `/discover/` wait for a dedicated (not old FlyBot) Bot Social URL. Office format exports of works still follow.
+  platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
+  `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
 
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's
@@ -90,7 +101,7 @@ Social (cross-user). "Batch" is the implementation PR that moves it (see §6).
 | `/artifacts/` (studio, slides, boards, dashboards, versions) | D (+S for shares) | B3 | Exports via ds-bot office (#379 keeps `office_exports.py` only until B3). |
 | `/memory/` | D (+S for share links #299) | B3 | ds-bot memory scopes + plugin tables. |
 | `/meetings/` | D | B3 | |
-| `/settings/` (preferences, model API, skill secrets, Composio, custom MCP, notifications) | D (P keeps account security: password, linked identities, delete account #362) | B4 | Secrets move into DS-Bot `secrets.js` encrypted store. |
+| `/settings/` (preferences, model API, skill secrets, Composio, custom MCP, notifications) | D (P keeps account security: password, linked identities, delete account #362) | B4 | Secrets are sealed by the plugin on the user's volume (AES-256-GCM, purpose-bound, `lib/b4/seal.js`), not `secrets.js` (which exposes values to bot shells as `$DSH_SECRET_*`); see §8a. |
 | `/profile/`, `/look/` | P for public handle/avatar; D for private look/preferences | B4 | Public handle is cross-user → published to Bot Social. |
 | `/onboarding/` | D (first-run inside DS-Bot); P only for the post-register redirect | B4 | |
 | `/runtimes/` | P | A | Becomes "your DS-Bot" status/start/stop page; own-machine FlyBot (`runtime_keys`, `runtime_connect`) stays P during transition, retired in D. |
@@ -180,6 +191,28 @@ the request authority). The browser never sees a DSH token or cookie:
 * because the cookie is signed by that runtime's own secret and bound to its own authority, it is useless
   against any other runtime even if leaked.
 
+### 4.3.1 Deployment wiring (phase A2)
+* **Platform (wsgi.py):** `application = dsbot_gateway.wrap(app, store, config, '/data/operator/dsbot-gateway.json', manager_auth)`.
+  The key file is operator-owned (`{"version":1,"key":"<32–128 url-safe chars>"}`, 0600). Without it the
+  gateway stays off.
+* **Edge (nginx):** `python -m openteamily.dsbot_gateway render --platform 127.0.0.1:8080 --listen <edge
+  listen> --key-include /etc/nginx/ot-gateway-key.conf > default.conf`; the include holds
+  `set $ot_gateway_key "<same key>";` (operator-owned, not in the rendered file).
+* **Manager:** add `"dsbot_gateway": {"web_container": "<exact web container name>"}` to `manager.json`.
+  Every `poll-once` pass then, per granted running healthy instance: connects the web container (whose
+  netns the edge and manager share) to that runtime's own `ot-<id>_default` network, reads the runtime's
+  address there, takes the DSH launch URL from the process's start logs (cached 0600 under `secrets/`,
+  keyed by process identity), exchanges it for the DSH cookie and reports
+  `POST /v1/internal/instances/<id>/dsbot-upstream {address, auth_cookie, process_ref}`. The platform
+  accepts it only from a loopback manager bearer that is granted the instance, and only for the
+  instance's current running `process_ref`. Re-reporting every pass keeps the cookie fresh.
+* The web/edge listeners must stay bound to loopback/the edge port; a runtime attached to the web
+  container's network can reach those addresses, and `/v1/internal/*` and `/v1/platform/route` already
+  refuse non-loopback or keyless callers.
+* `OPENTEAMILY_INSTANCE_ID` is not injected into existing compose files (that would change frozen
+  manifests); the plugin's per-volume id is the marker and the gateway routes by the platform's
+  instance id.
+
 ### 4.4 Network
 Runtimes keep no published ports by default. The edge reaches runtimes on a deployment-scoped internal
 Docker network per runtime (created and labelled by the manager, the edge container attached, no egress
@@ -237,6 +270,29 @@ and a container test proving the capability executes inside the user's DS-Bot.
   legacy feature module.
 * High-overlap areas to sequence: chat (#346, #352, #358, #368, #271), settings (#284, #384, #197),
   automations (#310), memory (#299, #378), discover (#313, #335), team/members (#281), profile (#362).
+
+## 8a. B4 status (settings, model API, connectors)
+
+* Features: `features/settings` (#410), `features/model-api` (#416), `features/connectors` (#426),
+  import (#431). Each exposes `<feature>/v1` taking `{method, path, query, body}` and returning the exact
+  legacy Flask `{status, body}`, so the gateway can forward moved `/v1` routes unchanged:
+  settings → `/v1/settings`, `/v1/notification-prefs`, `/v1/onboarding{,/recommendations,/picks,/look}`;
+  model-api → `/v1/model-api`; connectors → `/v1/composio/*`, `/v1/connected-tools*`, `/v1/custom-mcp*`.
+  `/v1/onboarding/automations` stays with B2.
+* Model key reaches only the in-process loopback proxy (`ds-bot-bridge.mjs` `userModelOverride`);
+  DS-Bot keeps its placeholder token. Public HTTP bases only via the read-only #375 policy file.
+* Composio is per-user only (no admin fallback); tools reach DS-Bot through the loopback `ot-apps` MCP
+  capability with in-plugin approvals (300 s TTL, never retried).
+* Runtime requirements (deploy, not done by B4): `OPENTEAMILY_PUBLIC_ORIGIN` (Composio callback),
+  read-only `/run/secrets/openteamily-model-http.json` (#375), and a manager-provided
+  `/run/secrets/openteamily-seal.key`; the platform passes the same key to
+  `dsbot_bundle.build_with_secrets` so imported secrets can be re-sealed. Without it, bundles carrying
+  secrets are rejected and kept for retry. The manager job `dsbot_import.deliver` (hooked from
+  `poll_once`) creates that key, requests the sealed bundles over loopback, and copies them into
+  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Phase D: the server scheduler skips a workspace once `/automations/` is in `moved_pages` and that owner has a healthy published DS-Bot, so both clocks cannot fire. Flask also stops queueing `runtime_connect` infer tasks for agent/chat conversations, the leftover External Agent API handler, and automation retries once those pages have moved and the owner has a live DS-Bot; group replies stay on the platform path until C pages move. Workspaces whose owner has no runtime keep the server clock until one is published. Automations, agents and artifacts are included in the import job (per-feature delivery markers). Moved `/v1` routes listed in this
+  section (except `/v1/onboarding/automations`) are forwarded by the platform gateway to
+  `/api/openteamily/legacy` on the owner's DS-Bot.
+* Stays platform: account security, runtime keys UI (#282), delete account (#362), public profile.
 
 ## 8. Rollback
 

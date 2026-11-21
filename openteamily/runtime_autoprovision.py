@@ -1,9 +1,9 @@
-"""Operator opt-in: one isolated runtime instance per user's personal workspace.
+"""Operator opt-in: one isolated runtime instance per user.
 
 Self-written for OpenTeamily. Default OFF. When enabled, ensuring a user's
 personal agent creates exactly one runtime instance in that user's own personal
 workspace (owner = that user, the trusted RuntimePolicy image/profile/backend,
-its own ``ot-<id>`` volume and, at start, its own instance runtime key) and
+its own ``ot-<id>`` volume and, at start, its personal agent bootstrap) and
 binds the personal agent to it. The binding and the manager assignment are
 derived server-side only; no request field can name an instance or a manager.
 
@@ -67,6 +67,22 @@ def load(db, user_id):
     return db.execute('SELECT * FROM runtime_auto_provisions WHERE user_id=?', (user_id,)).fetchone()
 
 
+def owned_instance(db, user_id):
+    """Prefer the provisioned instance. Legacy duplicates need operator reconciliation."""
+    from .lifecycle import fail
+    provision = load(db, user_id)
+    if provision is not None:
+        row = db.execute('SELECT id FROM instances WHERE id=? AND owner_id=?',
+                         (provision['instance_id'], user_id)).fetchone()
+        if row is None:
+            fail(409, 'conflict', 'The provisioned runtime is unavailable')
+        return row['id']
+    rows = db.execute('SELECT id FROM instances WHERE owner_id=? LIMIT 2', (user_id,)).fetchall()
+    if len(rows) > 1:
+        fail(409, 'conflict', 'Multiple runtimes are registered for this account')
+    return rows[0]['id'] if rows else None
+
+
 def assigned(db, manager_id, instance_id):
     return db.execute('SELECT instance_id FROM runtime_auto_provisions WHERE manager_id=? AND instance_id=?',
                       (manager_id, instance_id)).fetchone() is not None
@@ -101,12 +117,18 @@ def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
     row = load(db, user_id)
     if row is not None:
         return {'state': 'existing', 'instance_id': row['instance_id']}
-    binding = agent_runtime.load_binding(db, workspace_id, agent_id)
-    if binding is not None:
-        return {'state': 'bound', 'instance_id': binding['instance_id']}
     owner = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
     if owner is None or owner['owner_id'] != user_id:
         return {'state': 'failed', 'instance_id': None, 'error_code': 'not_personal_workspace'}
+    try:
+        existing = owned_instance(db, user_id)
+    except RuntimeFault as error:
+        return {'state': 'failed', 'instance_id': None, 'error_code': error.code}
+    if existing is not None:
+        # Existing operator-enrolled instances retain their current manager grants.
+        return {'state': 'bound', 'instance_id': existing}
+    if agent_runtime.load_binding(db, workspace_id, agent_id) is not None:
+        return {'state': 'failed', 'instance_id': None, 'error_code': 'invalid_runtime_binding'}
     if db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0] >= policy.max_instances:
         return {'state': 'capacity', 'instance_id': None}
     try:
