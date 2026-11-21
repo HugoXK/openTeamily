@@ -30,6 +30,7 @@ const publicMessage = (row, workspaceId, agentId) => {
   }))
   return {
     ...(attachments.length ? {attachments} : {}),
+    ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,
@@ -76,7 +77,8 @@ export function agentsV1({ endpoints, log, personalSend }) {
       }
       if (req.method === 'POST') {
         const body = await req.json()
-        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title })
+        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title,
+          idempotency_key: req.headers.get('idempotency-key') })
         return { status: result.status ?? 201, body: { conversation: publicConversation(result.conversation, workspaceId, id) } }
       }
       throw new FeatureError(400, 'invalid', 'Invalid conversation request')

@@ -115,6 +115,7 @@ function messageItem(row, me, env, workspaceId) {
   return {
     id: row.id,
     seq: row.seq,
+    ...(row.mine && row.client_key ? {client_key: row.client_key} : {}),
     conversation_id: row.conversation_id,
     workspace_id: workspaceId,
     user_id: agent ? null : userIdOf(author, me, env),

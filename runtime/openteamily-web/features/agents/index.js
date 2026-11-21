@@ -65,10 +65,10 @@ export function createAgents({ db, host }) {
   db.exec(SCHEMA)
   db.exec(`UPDATE agent_messages SET status='failed',
     meta=json_remove(json_set(meta,'$.error','agents/interrupted'),'$.nativePending')
-    WHERE role='assistant' AND status='running' AND json_extract(meta,'$.attachmentTurn')=1;
+    WHERE role='assistant' AND status='running' AND json_extract(meta,'$.nativePending')=1;
     UPDATE agent_messages SET meta=json_remove(meta,'$.nativePending')
     WHERE role='user' AND json_extract(meta,'$.requestHash') IS NOT NULL;`)
-  const attachmentTurns = new Map()
+  const activeTurns = new Map()
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
@@ -129,14 +129,14 @@ export function createAgents({ db, host }) {
     const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
     if (prior) {
       if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
-      return attachmentTurns.get(userId) || result()
+      return activeTurns.get(userId) || result()
     }
-    const userMeta = {requestHash:hash,nativePending:true}
+    const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
     try {
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify(userMeta))
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(),
-        JSON.stringify({attachmentTurn:true,nativePending:true}))
+        JSON.stringify({clientKey:key,nativePending:true}))
       run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
@@ -163,7 +163,7 @@ export function createAgents({ db, host }) {
           },
         })
         run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
-          JSON.stringify({engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id}), replyId)
+          JSON.stringify({clientKey:key,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id}), replyId)
       } catch (error) {
         const code = typeof error?.code === 'string' ? error.code : 'agents/failed'
         if (!staged.length) {
@@ -173,16 +173,16 @@ export function createAgents({ db, host }) {
           }
           fail('attachment-unavailable', 'Could not prepare the file in this DS-Bot', 502)
         }
-        run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed', JSON.stringify({error:code}), replyId)
+        run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed', JSON.stringify({clientKey:key,error:code}), replyId)
       } finally {
-        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({requestHash:hash, files:staged}), userId)
+        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({requestHash:hash,clientKey:key,files:staged}), userId)
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       }
       return result()
     }
     const promise = perform()
-    attachmentTurns.set(userId,promise)
-    try { return await promise } finally { attachmentTurns.delete(userId) }
+    activeTurns.set(userId,promise)
+    try { return await promise } finally { activeTurns.delete(userId) }
   }
 
   const endpoints = {
@@ -319,8 +319,13 @@ export function createAgents({ db, host }) {
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
-      const row = { id: newId(), agent_id: agent.id, title, created: now(), updated: now() }
-      run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, row.title, row.created, row.updated)
+      const key = p.idempotency_key
+      if (key != null && (typeof key !== 'string' || !IDEM.test(key))) fail('invalid', 'Invalid conversation create key', 400)
+      const id = key ? sha(`conversation:${agent.id}:${key}`).slice(0,32) : newId()
+      const stamp = now()
+      run('INSERT OR IGNORE INTO agent_conversations VALUES(?,?,?,?,?)', id, agent.id, title, stamp, stamp)
+      const row = conversation(agent, id)
+      if (row.title !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
       return { status: 201, conversation: { ...row, ...mapping } }
     },
@@ -392,23 +397,46 @@ export function createAgents({ db, host }) {
         return sendWithAttachments(p, agent, convo, text)
       }
       if (!text || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
-      const userId = newId()
-      run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({ nativePending:true }))
-      const replyId = newId()
-      try {
-        const reply = await turn({ agent_id: agent.id, key: convo.id, text, request_id: `ot-agent:${userId}`, reply_language: p.reply_language, context: p.context })
-        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({session_id:reply.session_id}), userId)
-        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', reply.text, 'succeeded', now(),
-          JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id, turn_id: reply.turn_id }))
-      } catch (error) {
-        run('UPDATE agent_messages SET meta=? WHERE id=?', '{}', userId)
-        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'failed', now(), JSON.stringify({ error: String(error?.code ?? 'agents/failed') }))
-        run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
-        if (p.return_failed !== true) throw error
+      const key = p.idempotency_key
+      if (key != null && (typeof key !== 'string' || !IDEM.test(key))) fail('invalid', 'Invalid message send key', 400)
+      const hash = key && sha(JSON.stringify([text, p.reply_language || '']))
+      const userId = key ? sha(`text-user:${convo.id}:${key}`).slice(0,32) : newId()
+      const replyId = key ? sha(`text-reply:${convo.id}:${key}`).slice(0,32) : newId()
+      const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
+      const prior = key && one('SELECT meta FROM agent_messages WHERE id=?', userId)
+      if (prior) {
+        if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Send key was used for a different message', 409)
+        return activeTurns.get(userId) || result()
       }
-      run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
-      const rows = all('SELECT * FROM agent_messages WHERE id IN (?,?) ORDER BY created, id', userId, replyId)
-      return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
+      const keyed = key ? {clientKey:key} : {}
+      const userMeta = key ? {...keyed,requestHash:hash} : {}
+      db.exec('BEGIN')
+      try {
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({...userMeta,nativePending:true}))
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(), JSON.stringify({...keyed,nativePending:true}))
+        run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
+        db.exec('COMMIT')
+      } catch (error) { db.exec('ROLLBACK'); throw error }
+
+      const perform = async () => {
+        try {
+          const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:`ot-agent:${userId}`,reply_language:p.reply_language,context:p.context})
+          run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
+          run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
+            JSON.stringify({...keyed,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id}), replyId)
+        } catch (error) {
+          run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify(userMeta), userId)
+          run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed',
+            JSON.stringify({...keyed,error:String(error?.code ?? 'agents/failed')}), replyId)
+          if (p.return_failed !== true) throw error
+        } finally {
+          run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
+        }
+        return result()
+      }
+      const promise = perform()
+      activeTurns.set(userId,promise)
+      try { return await promise } finally { activeTurns.delete(userId) }
     },
     turn,
     async publicReply(p) {

@@ -38,12 +38,13 @@ test('plugin responses are shaped like the legacy API', async () => {
   assert.equal(open.body.items[1].status, 'failed');
   assert.deepEqual(calls, [[PLUGIN_API, {endpoint: 'chat/open',
     payload: {conversation_id: 'c1', agent_id: agent, workspace_id: 'w'.repeat(32)}}]]);
-  const sent = await dsbotRequest(fetcher, dsbotRoute('POST', `${base}/conversations/c1/messages`, {body: 'x'}, agent), agent, {});
+  const sent = await dsbotRequest(fetcher, dsbotRoute('POST', `${base}/conversations/c1/messages`, {body: 'x'}, agent), agent, {'Idempotency-Key':'retry-one-message'});
   assert.equal(sent.status, 201);
   assert.equal(sent.body.message.body, 'x');
   assert.equal(sent.body.reply.body, 'Reply');
   assert.equal(calls.length, 2);
   assert.equal(calls[1][1].endpoint, 'chat/send');
+  assert.equal(calls[1][1].payload.idempotency_key, 'retry-one-message');
   const failing = async () => ({status: 200, json: async () => ({ok: false, error: {code: 'chat/runtime-unavailable', message: 'no'}})});
   const failed = await dsbotRequest(failing, dsbotRoute('GET', `${base}/conversations`, undefined, agent), agent, {});
   assert.equal(failed.status, 502);

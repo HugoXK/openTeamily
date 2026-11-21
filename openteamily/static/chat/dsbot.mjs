@@ -37,13 +37,14 @@ function message(row, base, cid) {
   const attachments = (row.meta?.files || []).map(({title,mime,bytes},index) => ({
     title,mime,bytes,path:`${base}/conversations/${id}/messages/${row.id}/files/${index}`,
   }));
-  return {id: row.id, ...(attachments.length ? {attachments} : {}), role: row.role, body: row.text,
+  return {id: row.id, ...(attachments.length ? {attachments} : {}),
+    ...(row.meta?.clientKey ? {client_key: row.meta.clientKey} : {}), role: row.role, body: row.text,
     status: !row.status || row.status === 'sent' ? 'succeeded' : row.status, created: row.created,
     error_code: row.meta?.error?.replace(/^agents\//, '') || null,
     memory_refs: (row.meta && row.meta.memory_refs) || [], engine: 'ds-bot'};
 }
 
-const STATUS = {'chat/not-found': 404, 'chat/invalid': 400, 'agents/not-found': 404,
+const STATUS = {'agents/conflict': 409, 'agents/invalid': 400, 'chat/not-found': 404, 'chat/invalid': 400, 'agents/not-found': 404,
   'openteamily/invalid': 400, 'openteamily/not-found': 404};
 
 export async function dsbotRequest(fetcher, route, agentId, headers) {
@@ -60,7 +61,9 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
     return {value: parsed.value};
   };
   const scope = /\/workspaces\/([^/]+)\/agents\//.exec(route.base || '');
-  const out = await call(route.endpoint, {...route.payload, agent_id:agentId, ...(scope ? {workspace_id:scope[1]} : {})});
+  const key = headers['Idempotency-Key'];
+  const out = await call(route.endpoint, {...route.payload, agent_id:agentId,
+    ...(scope ? {workspace_id:scope[1]} : {}), ...(key ? {idempotency_key:key} : {})});
   if (out.error) return out.error;
   const value = out.value;
   if (route.shape === 'list') return {status: 200, body: {items: (value.items || []).map(row => conversation(row, agentId))}};

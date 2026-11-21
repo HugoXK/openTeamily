@@ -828,8 +828,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
   let attachmentSender;
   const pendingSends = new Map();
-  const privateAttempts = new Map();
-  let pendingBubble = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
 
@@ -901,28 +899,84 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
+  function sendClosed() {
+    return currentSource === 'social'
+      && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false);
+  }
+
   function renderPendingSend() {
-    pendingBubble?.remove();
-    pendingBubble = null;
-    const pending = pendingSends.get(sendScope());
-    const button = document.getElementById('chat-send');
-    if (button) button.disabled = Boolean(pending) || (currentSource === 'social' && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false));
-    if (!pending) return;
+    const list = document.getElementById('message-list');
+    const queue = pendingSends.get(sendScope());
+    document.getElementById('chat-send').disabled = sendClosed();
+    const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
+    for (const child of Array.from(list.children)) {
+      if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
+      bubbles.delete(child);
+    }
+    for (const job of queue?.jobs || []) {
+      paintSendJob(job);
+      if (bubbles.has(job.bubble)) list.append(job.bubble);
+    }
+    document.getElementById('chat-empty').hidden = list.children.length > 0;
+  }
+
+  function paintSendJob(job) {
+    if (job.status.textContent !== job.state) job.status.textContent = job.state;
+    job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
+    job.actions.hidden = !job.failed;
+    job.retry.disabled = sendClosed();
+  }
+
+  function makeSendJob(queue, message, files, reply) {
+    const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
     const bubble = document.createElement('li');
-    bubble.className = currentSource === 'social' ? 'mine' : 'user';
-    bubble.dataset.sendPending = '1';
+    bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
     body.className = 'body';
-    renderMessageBody(document, body, pending.text || (pending.files || []).map(file => file.name).join(' · '), chatPreferences);
-    const state = document.createElement('p');
-    state.className = 'reply-state';
-    state.setAttribute('role', 'status');
-    state.textContent = pending.state;
-    if (pending.reply) bubble.append(quoteBlock(pending.reply));
-    bubble.append(body, state);
-    document.getElementById('message-list').append(bubble);
-    document.getElementById('chat-empty').hidden = true;
-    pendingBubble = bubble;
+    renderMessageBody(document, body, message.body || '', chatPreferences);
+    body.hidden = !message.body;
+    const status = document.createElement('p');
+    status.className = 'send-feedback';
+    status.setAttribute('role', 'status');
+    const actions = document.createElement('div');
+    actions.className = 'send-actions';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试';
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.textContent = '移除';
+    actions.append(retry, discard);
+    if (reply) bubble.append(quoteBlock(reply));
+    bubble.append(body);
+    for (const file of files) {
+      bubble.append(renderChatFile(document, {title: file.name, mime: file.type, bytes: file.size}, {pending: true}));
+    }
+    bubble.append(status, actions);
+    const job = {key, message, files, bubble, status, actions, retry, failed: false,
+      state: queue.active ? '等待发送…' : '正在发送…'};
+    retry.addEventListener('click', () => {
+      if (!job.failed || sendClosed()) return;
+      job.failed = false;
+      job.state = '等待发送…';
+      paintSendJob(job);
+      void drainSends(queue);
+    });
+    discard.addEventListener('click', () => {
+      removeSendJob(queue, job);
+      renderPendingSend();
+    });
+    return job;
+  }
+
+  function removeSendJob(queue, job) {
+    queue.jobs = queue.jobs.filter(item => item !== job);
+    job.bubble.remove();
+    if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+  }
+
+  function pendingMessageKeys() {
+    return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
   }
 
   async function request(method, path, body, extra) {
@@ -1154,7 +1208,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     lastAgentItems = items || [];
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     let pending = false;
+    const pendingKeys = pendingMessageKeys();
     for (const item of items || []) {
+      if (pendingKeys.has(item.client_key)) continue;
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
       li.className = item.role === 'user' ? 'user' : 'assistant';
@@ -1663,7 +1719,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
+    const pendingKeys = pendingMessageKeys();
     for (const item of items || []) {
+      if (pendingKeys.has(item.client_key)) continue;
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
       const mine = item.user_id === (currentUser && currentUser.id);
@@ -1994,7 +2052,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const cid = currentSource === 'social' && currentConversation?.id;
     const next = items.find(row => row.id === cid);
     if (next && viewingSocialMessages() && socialHistory?.cid === cid
-      && next.activity_version !== currentConversation.activity_version && !pendingSends.has(sendScope())) {
+      && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
       if (readingSocialContext()) {
         if (liveBanner) liveBanner.hidden = false;
       } else {
@@ -2338,6 +2396,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       notice.hidden = !notice.textContent;
     }
     document.getElementById('chat-body').disabled = state?.open === false || directClosed;
+    document.getElementById('chat-send').disabled = state?.open === false || directClosed;
   }
 
   function setSocialHeaderTools(social) {
@@ -2437,7 +2496,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const updated = result.body.conversation;
-    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.has(sendScope()))) {
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
       if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
       scheduleSocialPoll(currentConversation);
       return false;
@@ -2924,6 +2983,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
             document.getElementById('message-list').replaceChildren();
+            renderPendingSend();
+            syncPlusState();
+            attachmentSender?.render();
             writeHash({workspace: workspaceId(), agent: item.id});
           }
         } else if (item.type === 'social' || item.kind === 'social') {
@@ -2998,7 +3060,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
-      privateAttempts.clear();
+      pendingSends.clear();
       replyDrafts.clear();
       renderReplyDraft();
       currentConversation = null;
@@ -3017,7 +3079,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
-      privateAttempts.clear();
+      pendingSends.clear();
       replyDrafts.clear();
       renderReplyDraft();
     }
@@ -3129,7 +3191,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           applyChatIdentity(document, currentAgent.name, null, currentAgent.id === personalAgentId ? personalLook : null);
           setSessionsOpen(false);
         }
-        document.getElementById('chat-empty').hidden = false;
+        renderPendingSend();
+        syncPlusState();
+        attachmentSender?.render();
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
     } else if (sessions.length && !narrowScreen()) {
@@ -3974,143 +4038,136 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
 
-  async function sendCurrentMessage() {
+  function sendCurrentMessage() {
     const field = document.getElementById('chat-body');
-    const text = field.value;
     const social = currentSource === 'social';
-    let draftScope = sendScope();
-    const files = social ? [] : attachmentSender?.draftFiles?.(draftScope) || [];
-    if (!text.trim() && !files.length) {
-      show('error', '请填写消息。');
+    const scope = sendScope();
+    const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
+    if (!field.value.trim() && !files.length) return;
+    if (sendClosed()) return;
+    if (social ? !currentConversation : !currentAgent) {
+      show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
     }
-    const message = social ? agentMentions.message(text) : messagePayload(text, chatLanguage);
-    const reply = social ? replyDrafts.get(draftScope) : undefined;
+    const message = social ? agentMentions.message(field.value) : messagePayload(field.value, chatLanguage);
+    const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
     if (social && !validMessage(message.body)) {
       show('error', '请输入 1–4000 字符的消息。');
       return;
     }
-    if (social ? !currentConversation : !currentAgent) {
-      show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
-      return;
+    let queue = pendingSends.get(scope);
+    if (!queue) {
+      queue = {
+        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
+        base: social ? socialBase() : `${agentBase()}/conversations`,
+        conversationId: currentConversation?.id, jobs: [], active: false,
+        createKey: currentConversation ? null : idempotencyKey('chat-'),
+      };
+      pendingSends.set(scope, queue);
     }
-    let key = sendScope();
-    if (pendingSends.has(key)) return;
-    const base = social ? socialBase() : `${agentBase()}/conversations`;
-    const agentId = currentAgent?.id;
-    const owner = currentUser?.id;
-    let conversationId = currentConversation?.id;
-    const pending = {text:message.body, files, reply, state:conversationId ? '正在发送…' : '正在创建对话…'};
-    pendingSends.set(key, pending);
+    queue.jobs.push(makeSendJob(queue, message, files, reply));
+    field.value = '';
+    field.focus({preventScroll: true});
+    if (social) agentMentions.clear();
+    consumeReplyDraft(scope, reply);
+    if (files.length) attachmentSender.clearDraft(scope, files);
     show('', '');
     renderPendingSend();
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
-    const isCurrent = () => sendScope() === key;
+    void drainSends(queue);
+  }
+
+  async function drainSends(queue) {
+    if (queue.active || pendingSends.get(queue.scope) !== queue) return;
+    queue.active = true;
+    const isCurrent = () => sendScope() === queue.scope;
     try {
-      if (!conversationId) {
-        const created = await request('POST', base, {title: '新对话'}, {'Idempotency-Key': idempotencyKey('chat-')});
-        if (![200, 201].includes(created.status) || !created.body.conversation?.id) {
-          if (isCurrent()) show('error', messageFor(created.body.error, '无法创建对话。'));
-          return;
-        }
-        conversationId = created.body.conversation.id;
-        if (isCurrent()) {
-          currentConversation = created.body.conversation;
-          lastAgentItems = [];
-          writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
-          pendingSends.delete(key);
-          key = sendScope();
-          pendingSends.set(key, pending);
-          if (files.length) {
-            attachmentSender.moveDraft(draftScope,key);
-            draftScope = key;
-          }
-        }
-      }
-      pending.state = social ? '正在发送…' : '正在发送，等待智能体回复…';
-      if (isCurrent()) renderPendingSend();
-      const path = `${base}/${conversationId}/messages`;
-      let result;
-      if (files.length) {
-        if (owner !== currentUser?.id) return;
-        const existing = privateAttempts.get(draftScope);
-        const same = existing?.text === message.body && existing.language === message.reply_language
-          && existing.files.length === files.length && existing.files.every((file,index) => file === files[index]);
-        const attempt = same ? existing : {
-          key:idempotencyKey('agent-files-'), files, text:message.body, language:message.reply_language,
+      for (const job of queue.jobs.slice()) {
+        if (job.failed || !queue.jobs.includes(job)) continue;
+        if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
+        const feedback = state => {
+          job.state = state;
+          if (isCurrent()) paintSendJob(job);
         };
-        privateAttempts.set(draftScope,attempt);
-        pending.state = '正在上传附件…';
-        if (isCurrent()) renderPendingSend();
-        result = await sendPrivateAttachmentMessage(document.defaultView,path,message,files,
-          {'Idempotency-Key':attempt.key,'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-            pending.state = percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…';
-            const progress = isCurrent() && pendingBubble?.querySelector('.reply-state');
-            if (progress) progress.textContent = pending.state;
-          });
-        if (result.status === 201 && result.body.message?.attachments?.length) {
-          privateAttempts.delete(draftScope);
-          attachmentSender.clearDraft(draftScope,files);
+        try {
+          if (!queue.conversationId) {
+            feedback('正在创建对话…');
+            const created = await request('POST', queue.base, {title: '新对话'}, {'Idempotency-Key': queue.createKey});
+            const conversation = created.body.conversation;
+            if (![200, 201].includes(created.status) || !conversation?.id) {
+              throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
+            }
+            if (pendingSends.get(queue.scope) !== queue) return;
+            const previous = queue.scope;
+            const visible = isCurrent();
+            queue.conversationId = conversation.id;
+            queue.scope = JSON.stringify([queue.owner, queue.wid, 'agent', queue.agentId, conversation.id]);
+            pendingSends.delete(previous);
+            pendingSends.set(queue.scope, queue);
+            if (visible) {
+              currentConversation = conversation;
+              lastAgentItems = [];
+              writeHash({workspace: queue.wid, agent: queue.agentId, conversation: conversation.id});
+              attachmentSender?.moveDraft(previous, queue.scope);
+              renderPendingSend();
+            }
+            void loadSessions();
+          }
+          const path = `${queue.base}/${queue.conversationId}/messages`;
+          const headers = {'Idempotency-Key':job.key};
+          feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
+          const result = job.files.length
+            ? await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+              {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
+              })
+            : await request('POST', path, job.message, headers);
+          if (![200, 201].includes(result.status) || !result.body.message?.id) {
+            const code = result.body.error?.code;
+            if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
+              currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};
+              showPublicChatState(currentConversation.public_agent);
+            }
+            if (isCurrent() && result.status === 403 && currentConversation?.direct) {
+              void openSocialConversation(queue.conversationId, {refresh:true});
+            }
+            throw new Error(result.status === 413 ? '附件合计不能超过 8 MB。'
+              : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
+                : messageFor(result.body.error, '未能确认发送结果，请重试。'));
+          }
+          removeSendJob(queue, job);
+          if (isCurrent()) {
+            const append = (items, ...added) => [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
+            if (queue.social) {
+              if (socialHistory?.readingHistory) void openSocialConversation(queue.conversationId);
+              else renderSocialMessages(append(lastSocialItems, result.body.message).sort((a,b) => a.seq - b.seq), {refresh:true});
+              if (currentConversation.public_agent?.open) {
+                showPublicChatState({open: true, pending: true});
+                schedulePoll(servedByDsbot ? 8000 : 2000);
+              } else scheduleSocialPoll(currentConversation);
+              show('ok', '已发送。', {announceOnly: true});
+            } else {
+              const reply = result.body.reply;
+              if (reply?.id) {
+                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply))) schedulePoll();
+              } else void openAgentConversation(queue.agentId, queue.conversationId);
+              const notice = sendNotice(reply);
+              show(notice.kind, notice.text, notice);
+            }
+          }
+          if (queue.owner === currentUser?.id) void loadSessions();
+        } catch (error) {
+          job.failed = true;
+          feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);
         }
-      } else {
-        result = await request('POST', path, message, {'Idempotency-Key':idempotencyKey(social ? 'socialmsg-' : 'msg-')});
       }
-      if ([200, 201].includes(result.status)) consumeReplyDraft(draftScope, reply);
-      if (!isCurrent()) return;
-      if (![200, 201].includes(result.status)) {
-        const code = result.body?.error?.code;
-        const attachmentError = result.status === 413 ? '附件合计不能超过 8 MB。'
-          : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。' : '';
-        if (code === 'public_chat_closed' && currentConversation?.public_agent) {
-          currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};
-          showPublicChatState(currentConversation.public_agent);
-        }
-        if (result.status === 403 && currentConversation?.direct) void openSocialConversation(conversationId, {refresh:true});
-        show('error', attachmentError || messageFor(result.body.error, '发送失败，已保留草稿。'));
-        return;
-      }
-      pendingSends.delete(key);
-      if (field.value === text) {
-        field.value = '';
-        if (social) agentMentions.clear();
-      }
-      const update = (items, ...added) =>
-        [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
-      if (social) {
-        if (result.body.message?.id && !socialHistory?.readingHistory) {
-          renderSocialMessages(update(lastSocialItems, result.body.message));
-        } else {
-          void openSocialConversation(conversationId);
-        }
-        if (currentConversation.public_agent?.open) {
-          showPublicChatState({open: true, pending: true});
-          schedulePoll(servedByDsbot ? 8000 : 2000);
-        } else {
-          scheduleSocialPoll(currentConversation);
-        }
-        show('ok', '已发送。', {announceOnly: true});
-      } else {
-        const reply = result.body.reply;
-        if (result.body.message?.id && reply?.id) {
-          if (renderAgentMessages(update(lastAgentItems, result.body.message, reply))) schedulePoll();
-        } else {
-          void openAgentConversation(agentId, conversationId);
-        }
-        const notice = sendNotice(reply);
-        show(notice.kind, notice.text, notice);
-      }
-      void loadSessions();
-    } catch {
-      if (isCurrent()) show('error', '未能确认发送结果，已保留草稿。');
     } finally {
-      pendingSends.delete(key);
-      if (isCurrent()) {
-        renderPendingSend();
-        const list = document.getElementById('message-list');
-        document.getElementById('chat-empty').hidden = list.children.length > 0;
-      }
+      queue.active = false;
+      if (!queue.jobs.length && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+      if (isCurrent()) renderPendingSend();
+      if (queue.jobs.some(job => !job.failed)) void drainSends(queue);
     }
   }
 
