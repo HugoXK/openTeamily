@@ -91,17 +91,22 @@ async function actions(req, ws, targetId, removing) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((k) => !['title', 'notes', 'status', 'due_at', 'memory_page_id'].includes(k))) refuse(400, 'invalid', 'Unknown memory action field')
-  if (revision !== row.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, row))
-  let { title, notes, status, due_at: due, memory_page_id: pageId } = row
-  if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory action title'); title = changes.title.trim() }
-  if ('notes' in changes) { if (!validNotes(changes.notes)) refuse(400, 'invalid', 'Provide valid memory action notes'); notes = changes.notes }
-  if ('status' in changes) { if (!validStatus(changes.status)) refuse(400, 'invalid', 'Status must be open or done'); status = changes.status }
-  if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
-  if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
-  if (title === row.title && notes === row.notes && status === row.status && due === row.due_at && pageId === row.memory_page_id) return { body: { action: actionView(store, row) } }
-  store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
-    title, notes, status, due, pageId, row.revision + 1, req.now, actor(req), row.id)
-  return { body: { action: actionView(store, loadAction(store, ws, row.id)) } }
+  return store.transaction(() => {
+    const current = loadAction(store, ws, targetId)
+    if (!current) refuse(404, 'not_found', 'Memory action not found')
+    if (revision !== current.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, current))
+    let { title, notes, status, due_at: due, memory_page_id: pageId } = current
+    if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory action title'); title = changes.title.trim() }
+    if ('notes' in changes) { if (!validNotes(changes.notes)) refuse(400, 'invalid', 'Provide valid memory action notes'); notes = changes.notes }
+    if ('status' in changes) { if (!validStatus(changes.status)) refuse(400, 'invalid', 'Status must be open or done'); status = changes.status }
+    if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
+    if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
+    if (title === current.title && notes === current.notes && status === current.status && due === current.due_at &&
+        pageId === current.memory_page_id) return { body: { action: actionView(store, current) } }
+    store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
+      title, notes, status, due, pageId, current.revision + 1, req.now, actor(req), current.id)
+    return { body: { action: actionView(store, loadAction(store, ws, current.id)) } }
+  })
 }
 
 // ---- links and graph ----

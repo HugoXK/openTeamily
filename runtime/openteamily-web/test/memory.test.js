@@ -39,6 +39,27 @@ test('memory pages run inside this DS-Bot: create, list, edit, conflict, version
   assert.equal((await call('GET', base('/' + page.id))).status, 404)
 })
 
+test('simultaneous edits and restores cannot replace a page from the same revision', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('memory', ...args)
+  const original = (await call('POST', base(), {title:'并行修订',body:'起始正文'},key())).body.page
+  const path = base('/' + original.id)
+  const edit = (revision, body) => call('POST', path, {revision, changes:{body}})
+  async function checkRace(writes, expectedRevision) {
+    const results = await Promise.all(writes)
+    assert.deepEqual(results.map(result => result.status).sort(),[200,409])
+    const saved = results.find(result => result.status === 200).body.page
+    const conflict = results.find(result => result.status === 409).body.error
+    assert.equal(saved.revision, expectedRevision)
+    assert.equal(conflict.current.revision, expectedRevision)
+    assert.equal(conflict.current.body,saved.body)
+    assert.deepEqual((await call('GET',path)).body.page,saved)
+    assert.equal((await call('GET',path+'/versions/'+expectedRevision)).body.version.body,saved.body)
+  }
+  await checkRace([edit(1,'正文版本一'),edit(1,'正文版本二')],2)
+  await checkRace([edit(2,'并行保留的内容'),call('POST',path+'/versions/1/restore',{revision:2})],3)
+})
+
 test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes the page', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('memory', ...args)

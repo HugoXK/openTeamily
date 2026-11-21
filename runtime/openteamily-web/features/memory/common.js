@@ -53,10 +53,14 @@ export function normalizeTopics(value) {
   return names
 }
 
-export function topicsFor(store, ids) {
+export function topicsFor(store, ids, workspaceId) {
   const grouped = Object.fromEntries(ids.map((id) => [id, []]))
   if (!ids.length) return grouped
-  const rows = store.all(`SELECT page_id, name FROM memory_page_topics WHERE page_id IN (${ids.map(() => '?').join(',')}) ORDER BY name COLLATE NOCASE, name`, ...ids)
+  const placeholders = ids.map(() => '?').join(',')
+  const scope = workspaceId ? ' AND workspace_id=?' : ''
+  const args = workspaceId ? [...ids, workspaceId] : ids
+  const rows = store.all(`SELECT page_id, name FROM memory_page_topics
+    WHERE page_id IN (${placeholders})${scope} ORDER BY name COLLATE NOCASE, name`, ...args)
   for (const row of rows) (grouped[row.page_id] ??= []).push(row.name)
   return grouped
 }

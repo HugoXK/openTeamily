@@ -2,9 +2,9 @@ import { rank } from '../chat/recall.js'
 // Memory pages (legacy app.py memory_* + memory.py): page CRUD, bounded
 // revision history with restore, Markdown export and the "做梦" duplicate-
 // paragraph consolidation, all executed inside the user's DS-Bot.
-import { digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson } from '../../featurekit/http.js'
+import { CONTROL, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson } from '../../featurekit/http.js'
 import {
-  MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, recallWorkspace, replaceTopics, snippet,
+  MAX_PAGES, SNIPPET_MAX, TITLE_MAX, TOPIC_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, recallWorkspace, replaceTopics, snippet,
   titleHash, topicsFor, usernames, validBody, validTitle,
 } from './common.js'
 
@@ -16,7 +16,132 @@ function recordVersion(store, workspaceId, pageId, revision, title, body, now, u
   store.run('DELETE FROM memory_page_versions WHERE page_id=? AND revision<=?', pageId, revision - VERSION_KEEP)
 }
 
+const directoryText = text => String(text ?? '').trim().replace(/\s+/gu, ' ')
+const directoryCursor = /^(-?\d{1,16})\.([0-9a-f]{32})\.([0-9a-f]{24})$/
+
+function unfoldedRange(text, from, to) {
+  let offset = 0
+  let foldedOffset = 0
+  let start = 0
+  for (const char of text) {
+    const next = foldedOffset + casefold(char).length
+    if (foldedOffset <= from && from < next) start = offset
+    offset += char.length
+    if (to <= next) return [start, offset]
+    foldedOffset = next
+  }
+  return [start, text.length]
+}
+
+function directoryMatch(kind, source, needle) {
+  const text = directoryText(source)
+  const folded = casefold(text)
+  const from = folded.indexOf(needle)
+  if (from < 0) return null
+  const to = from + needle.length
+  // A lowercase match can expand a character such as İ. Map the match back
+  // onto the original UTF-16 offsets when the text length changed.
+  const [start, end] = folded.length === text.length ? [from, to] : unfoldedRange(text, from, to)
+  if (text.length <= SNIPPET_MAX) return { kind, text, start, end }
+
+  const span = SNIPPET_MAX - 2
+  let left = Math.max(0, Math.min(start - 48, text.length - span))
+  let right = Math.min(left + span, text.length)
+  if (/[\uDC00-\uDFFF]/u.test(text[left])) left += 1
+  if (/[\uDC00-\uDFFF]/u.test(text[right])) right -= 1
+  const prefix = left ? '…' : ''
+  const suffix = right < text.length ? '…' : ''
+  return {
+    kind, text: prefix + text.slice(left, right) + suffix,
+    start: start - left + prefix.length, end: end - left + prefix.length,
+  }
+}
+
+function searchMatch(row, topics, needle) {
+  const title = directoryMatch('title', row.title, needle)
+  if (title) return title
+  for (const name of topics) {
+    const topic = directoryMatch('topic', name, needle)
+    if (topic) return topic
+  }
+  return directoryMatch('body', row.body, needle)
+}
+
+function listRecent(req, workspaceId) {
+  const args = new URLSearchParams(req.query)
+  const cursor = args.get('cursor')
+  if (args.getAll('cursor').length > 1) refuse(400, 'invalid', 'Invalid memory cursor')
+  args.delete('cursor')
+  const { limit } = pagination(args, ['order', 'q', 'topic', 'updated_after'])
+  const needle = casefold(directoryText(args.get('q')))
+  const topic = (args.get('topic') ?? '').trim()
+  const after = args.get('updated_after')
+  const updatedAfter = after === null ? null : Number(after)
+  if (needle.length > 80 || CONTROL.test(needle) || topic.length > TOPIC_MAX || CONTROL.test(topic) ||
+      (after !== null && (!/^\d{1,16}$/.test(after) || !Number.isSafeInteger(updatedAfter)))) {
+    refuse(400, 'invalid', 'Invalid memory request')
+  }
+
+  const topicHash = topic ? digest(casefold(topic)) : null
+  const scope = digest(stableJson([workspaceId, needle, topicHash, updatedAfter])).slice(0, 24)
+  const parsed = cursor ? directoryCursor.exec(cursor) : null
+  const anchor = parsed ? { updated: Number(parsed[1]), id: parsed[2] } : null
+  if (cursor && (!anchor || !Number.isSafeInteger(anchor.updated) || parsed[3] !== scope)) {
+    refuse(400, 'invalid', 'Invalid memory cursor')
+  }
+
+  const store = req.store
+  let where = 'WHERE workspace_id=?'
+  const values = [workspaceId]
+  if (topicHash) {
+    where += ' AND EXISTS (SELECT 1 FROM memory_page_topics t WHERE t.page_id=memory_pages.id AND t.workspace_id=memory_pages.workspace_id AND t.name_hash=?)'
+    values.push(topicHash)
+  }
+  if (updatedAfter !== null) {
+    where += ' AND updated>=?'
+    values.push(updatedAfter)
+  }
+  const recent = ' ORDER BY updated DESC,id'
+  const select = 'SELECT * FROM memory_pages ' + where
+  let total, rows, topics
+  const matches = new Map()
+  if (needle) {
+    const candidates = store.all(select + recent, ...values)
+    topics = topicsFor(store, candidates.map(row => row.id), workspaceId)
+    rows = []
+    total = 0
+    for (const row of candidates) {
+      const match = searchMatch(row, topics[row.id], needle)
+      if (!match) continue
+      total += 1
+      if (rows.length > limit || (anchor && (row.updated > anchor.updated ||
+          (row.updated === anchor.updated && row.id <= anchor.id)))) continue
+      rows.push(row)
+      matches.set(row.id, match)
+    }
+  } else {
+    total = store.get('SELECT COUNT(*) AS count FROM memory_pages ' + where, ...values).count
+    if (anchor) {
+      where += ' AND (updated<? OR (updated=? AND id>?))'
+      values.push(anchor.updated, anchor.updated, anchor.id)
+    }
+    rows = store.all('SELECT * FROM memory_pages ' + where + recent + ' LIMIT ?', ...values, limit + 1)
+  }
+
+  const page = rows.slice(0, limit)
+  topics ??= topicsFor(store, page.map(row => row.id), workspaceId)
+  const user = usernames(store)
+  const items = page.map(row => {
+    const item = pageView(store, row, { includeBody: false, topics: topics[row.id], user })
+    if (needle) item.match = matches.get(row.id)
+    return item
+  })
+  const tail = page.at(-1)
+  return { body: { items, cursor: rows.length > limit ? `${tail.updated}.${tail.id}.${scope}` : null, total } }
+}
+
 async function list(req, workspaceId) {
+  if (req.query.get('order') === 'recent') return listRecent(req, workspaceId)
   const { limit, cursor } = pagination(req.query, ['q'])
   const needle = casefold((req.query.get('q') ?? '').trim())
   if (needle.length > 80) refuse(400, 'invalid', 'Invalid memory request')
@@ -58,25 +183,33 @@ async function create(req, workspaceId) {
   return req.store.transaction(() => insertPage(req, workspaceId, body, key))
 }
 
-async function update(req, workspaceId, row) {
+function pageAtRevision(store, workspaceId, pageId, revision) {
+  const latest = loadPage(store, workspaceId, pageId)
+  if (!latest) refuse(404, 'not_found', 'Memory page not found')
+  if (revision !== latest.revision) refuse(409, 'conflict', 'Memory page changed elsewhere; reload and retry', pageView(store, latest))
+  return latest
+}
+
+async function update(req, workspaceId, pageId) {
   const body = requireBodyKeys(await req.json(), ['revision', 'changes'])
   const { revision, changes } = body
   if (!Number.isInteger(revision) || revision < 0 || revision > 2 ** 31 || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((key) => !['title', 'body', 'topics'].includes(key))) refuse(400, 'invalid', 'Unknown memory field')
-  if (revision !== row.revision) refuse(409, 'conflict', 'Memory page changed elsewhere; reload and retry', pageView(req.store, row))
-  let title = row.title
-  let content = row.body
-  const current = topicsFor(req.store, [row.id])[row.id] ?? []
-  let topics = current
-  if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory page title and body'); title = changes.title.trim() }
-  if ('body' in changes) { if (!validBody(changes.body)) refuse(400, 'invalid', 'Provide a memory page title and body'); content = changes.body }
-  if ('topics' in changes) { topics = normalizeTopics(changes.topics); if (topics === null) refuse(400, 'invalid', 'Provide valid memory topics') }
-  if (title === row.title && content === row.body && stableJson(topics) === stableJson(current)) return { body: { page: pageView(req.store, row) } }
-  const hash = titleHash(title)
   const user = actor(req)
   return req.store.transaction((store) => {
+    // Compare inside the write transaction, after the request body has arrived.
+    const row = pageAtRevision(store, workspaceId, pageId, revision)
+    let title = row.title
+    let content = row.body
+    const current = topicsFor(store, [row.id])[row.id] ?? []
+    let topics = current
+    if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory page title and body'); title = changes.title.trim() }
+    if ('body' in changes) { if (!validBody(changes.body)) refuse(400, 'invalid', 'Provide a memory page title and body'); content = changes.body }
+    if ('topics' in changes) { topics = normalizeTopics(changes.topics); if (topics === null) refuse(400, 'invalid', 'Provide valid memory topics') }
+    if (title === row.title && content === row.body && stableJson(topics) === stableJson(current)) return { body: { page: pageView(store, row) } }
+    const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?', workspaceId, hash, row.id)) {
       refuse(409, 'conflict', 'A memory page with this title already exists')
     }
@@ -105,7 +238,7 @@ async function dispatch(req, workspaceId, targetId, removing) {
   }
   if (req.method === 'GET' && !req.queryString) return { body: { page: pageView(req.store, row) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
-  return update(req, workspaceId, row)
+  return update(req, workspaceId, row.id)
 }
 
 const versionView = (row, user) => ({ revision: row.revision, title: row.title, summary: row.body.trim() ? snippet(row.body) : '（空白正文）', created: row.created, created_by: user(row.created_by) })
@@ -128,12 +261,12 @@ async function versions(req, workspaceId, pageId, revision, restoring) {
   }
   if (req.queryString || req.method !== 'POST' || number === null || restoring !== 'restore') refuse(400, 'invalid', 'Invalid version request')
   const body = requireBodyKeys(await req.json(), ['revision'])
-  if (!Number.isInteger(body.revision) || body.revision !== row.revision) refuse(409, 'conflict', 'Memory page changed elsewhere; reload and retry', pageView(req.store, row))
-  const seen = loadVersion(number)
-  if (!seen) refuse(404, 'not_found', 'Version not found')
-  const hash = titleHash(seen.title)
   const by = actor(req)
   return req.store.transaction((store) => {
+    const row = pageAtRevision(store, workspaceId, pageId, body.revision)
+    const seen = loadVersion(number)
+    if (!seen) refuse(404, 'not_found', 'Version not found')
+    const hash = titleHash(seen.title)
     if (seen.title !== row.title && store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?', workspaceId, hash, row.id)) {
       refuse(409, 'conflict', 'A memory page with this title already exists')
     }

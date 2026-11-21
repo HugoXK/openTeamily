@@ -22,6 +22,12 @@ test('memory actions run in DS-Bot: create linked to a page, filter, update, con
   assert.equal(done.body.action.status, 'done')
   assert.equal((await call('POST', base(`/actions/${action.id}`), { revision: 1, changes: { status: 'open' } })).status, 409)
   assert.equal((await call('GET', base('/actions?status=open'))).body.items.length, 0)
+  const edits = await Promise.all(['下周一复查','下周五复查'].map(notes =>
+    call('POST',base(`/actions/${action.id}`),{revision:2,changes:{notes}})))
+  assert.deepEqual(edits.map(result => result.status).sort(),[200,409])
+  const winner = edits.find(result => result.status === 200).body.action
+  assert.deepEqual(edits.find(result => result.status === 409).body.error.current,winner)
+  assert.deepEqual((await call('GET',base(`/actions/${action.id}`))).body.action,winner)
   assert.equal((await call('POST', base(`/actions/${action.id}/remove`), {})).status, 200)
 })
 
