@@ -97,7 +97,7 @@ test("public listing pages need no token and hide unlisted works", async () => {
   assert.match(page, /Public essay/);
   assert.equal(page.includes("<script>"), false, "snapshot is escaped");
   assert.match(page, /hello &lt;script&gt; world/);
-  assert.doesNotMatch(page, /public-agent-composer|script-src 'self'/);
+  assert.doesNotMatch(page, /public-agent-(composer|share)|script-src 'self'/);
 
   const preview = await fetch(`${S.base}/w/essay-${tag}/preview`);
   assert.equal((await preview.json() as any).preview, "hello <script> world");
@@ -276,7 +276,7 @@ test("the public composer is gated by chat availability and a drafted start is b
     assert.equal(response.headers.get("cache-control"), "no-store");
     return response.text();
   };
-  assert.doesNotMatch(await page(), /<form id="public-agent-composer"|src="\/shell\/public-agent-composer|script-src 'self'/);
+  assert.doesNotMatch(await page(), /<form id="public-agent-composer"|src="\/shell\/public-agent-composer/);
   assert.equal((await visitor.call("POST", start, { listing_id: original.id })).data.error.code, "public_chat_closed");
 
   await publisher.ok("PUT", "/v1/ot/listings", { ...listing, chat_enabled: true });
@@ -323,6 +323,39 @@ test("the public composer is gated by chat availability and a drafted start is b
   assert.ok((await publisher.ok("GET", "/v1/ot/agent-inbox")).items.some((item: { message: { id: string } }) =>
     item.message.id === sent.id));
   assert.deepEqual((await replacement.ok("GET", "/v1/ot/agent-inbox")).items, []);
+});
+
+test("listed agent profiles expose a canonical share path even when visitor chat is disabled", async () => {
+  const publisher = await home(S.base, "profile-share-publisher");
+  await publisher.ok("PUT", "/v1/ot/profile", { display_name: 'Name <img src=x onerror="alert(1)">' });
+  const slug = "profile-share-agent";
+  const malicious = '<script src="https://fixture.invalid/injected.js"></script>';
+  const listing = { kind: "agent", ref: "shareable_agent", slug, title: malicious, summary: malicious,
+    snapshot: JSON.stringify({ quick_starts: ["Open this example"] }) };
+  const path = "/a/" + slug;
+  for (const chat_enabled of [false, true]) {
+    await publisher.ok("PUT", "/v1/ot/listings", { ...listing, chat_enabled });
+    const response = await fetch(S.base + path);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const html = await response.text();
+    assert.match(html, /form-action 'none';[^"]*script-src 'self';/);
+    assert.equal(html.includes(malicious), false);
+    assert.match(html, /Name &lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+    assert.match(html, /&lt;script src=&quot;https:\/\/fixture\.invalid\/injected\.js&quot;&gt;/);
+    assert.match(html, /<script type="module" src="\/shell\/public-agent-share\.mjs"><\/script>/);
+    assert.ok(html.includes(`id="public-agent-share" class="profile-share" data-profile-path="${path}"`));
+    assert.ok(html.includes(`value="${path}" data-copy-profile-url readonly`));
+    assert.ok(html.includes(`href="${path}">打开公开主页`));
+    assert.match(html, /<button type="button" data-copy-profile disabled hidden>/);
+    assert.match(html, /<details data-copy-profile-fallback>\s*<summary>主页链接<\/summary>/);
+    assert.match(html, /data-copy-profile-status role="status" aria-live="polite"/);
+    assert.equal(html.includes('<form id="public-agent-composer"'), chat_enabled);
+    assert.doesNotMatch(html, /(?:data-profile-path|href)="\/social\/a\//);
+  }
+  const publicData = await (await fetch(S.base + path, { headers: { accept: "application/json" } })).json() as Record<string, unknown>;
+  assert.equal(publicData.kind, "agent");
+  assert.equal(Object.hasOwn(publicData, "profile_share_token"), false);
 });
 
 test("popular works use recent public engagement, with stable account-scoped cursors", async (t) => {
@@ -559,7 +592,7 @@ test("public website HTML lives only in an isolated frame and is deleted on revo
   assert.match(host, /title="计数器 &lt;demo&gt; 的互动预览"/);
   assert.match(host, /frame-src 'self'/);
   assert.match(host, /评论/);
-  assert.doesNotMatch(host, /site-counter-data/);
+  assert.doesNotMatch(host, /site-counter-data|public-agent-share|script-src 'self'/);
   assert.deepEqual(await (await fetch(page + "/preview")).json(), {preview: summary});
 
   const frame = await fetch(page + "/site");

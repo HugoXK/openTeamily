@@ -118,9 +118,10 @@ function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
   const title = String(view.title || view.slug);
   const site = l.kind === "work" && view.site_available === true;
-  const canChat = l.kind === "agent" && Boolean(l.chat_enabled);
+  const agent = l.kind === "agent";
+  const canChat = agent && Boolean(l.chat_enabled);
   const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
-    + (site ? " frame-src 'self';" : "") + (canChat ? " script-src 'self';" : "");
+    + (site ? " frame-src 'self';" : "") + (agent ? " script-src 'self';" : "");
   if (l.kind === "work") {
     const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
     const comments = workCommentsPage(ot, l, null, {limit: "4"});
@@ -180,6 +181,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
 
   const {starts, version} = publishedQuickStarts(l);
   const chatHref = `/login#public-agent=${encodeURIComponent(l.slug)}`;
+  const profilePath = escapeHtml(`/a/${encodeURIComponent(l.slug)}`);
   const composer = canChat ? `
 <form id="public-agent-composer" method="post" data-slug="${escapeHtml(l.slug)}" data-listing-id="${escapeHtml(l.id)}">
   <label for="public-agent-message">消息</label>
@@ -205,6 +207,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="${policy}">
 <title>${escapeHtml(title)} · OpenTeamily</title>
+<script type="module" src="/shell/public-agent-share.mjs"></script>
 ${canChat ? '<script type="module" src="/shell/public-agent-composer.mjs"></script>' : ""}
 <style>
 :root{color-scheme:light;--ink:#192b28;--muted:#475b57;--surface:#fff;--line:#d7e1dd;--green:#24594b}
@@ -224,6 +227,19 @@ h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;let
 h2,h3,p{margin:0}
 .creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
 .description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.profile-share{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.35rem .75rem;margin-top:.85rem}
+.profile-share [hidden]{display:none}
+.profile-share button,.profile-share summary{min-height:2.75rem;padding:.55rem .7rem;border-radius:.55rem;font:inherit;font-size:.9rem;cursor:pointer}
+.profile-share button{border:1px solid var(--line);background:var(--surface);color:var(--green);font-weight:650}
+.profile-share button:hover{background:#edf6ed}
+.profile-share summary{color:var(--green)}
+.profile-share button:focus-visible,.profile-share summary:focus-visible,.profile-share input:focus-visible{outline:2px solid #176750;outline-offset:3px}
+.profile-share details[open]{flex:1 0 100%;max-width:100%;padding:0 .7rem .65rem;border:1px solid var(--line);border-radius:.55rem;background:var(--surface)}
+.profile-share details[open] summary{padding-inline:0}
+.profile-share label{display:block;color:var(--muted);font-size:.85rem}
+.profile-share input{display:block;width:100%;margin:.25rem 0 .55rem;padding:.45rem .55rem;border:1px solid #98bead;border-radius:.4rem;color:var(--ink);font:inherit}
+.profile-share details a,[data-copy-profile-status]{font-size:.85rem}
+[data-copy-profile-status]{flex-basis:100%;color:var(--muted)}
 .conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
@@ -256,6 +272,15 @@ h2,h3,p{margin:0}
 <div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
 <h1 id="profile-title">${escapeHtml(title)}</h1>
 ${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+<div id="public-agent-share" class="profile-share" data-profile-path="${profilePath}">
+  <button type="button" data-copy-profile disabled hidden>复制主页链接</button>
+  <details data-copy-profile-fallback>
+    <summary>主页链接</summary>
+    <label>主页地址 <input type="text" value="${profilePath}" data-copy-profile-url readonly></label>
+    <a href="${profilePath}">打开公开主页</a>
+  </details>
+  <p data-copy-profile-status role="status" aria-live="polite" hidden></p>
+</div>
 ${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">

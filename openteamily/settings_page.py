@@ -68,6 +68,7 @@ class SettingsPage:
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-share.mjs': ('shell', 'public-agent-share.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
