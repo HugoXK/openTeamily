@@ -564,8 +564,9 @@ async function mountSettingsPage({secrets, prefs, prefsFail} = {}) {
   }
   return {
     doc, calls, items, prefs: storedPrefs,
-    notify: ['mentions', 'artifacts'].map(key => [key, doc.getElementById(
-      'notify-' + key.replace('_', '-'))]),
+    notify: ['mentions', 'task_completion', 'artifacts'].map(key => [key, doc.getElementById(
+      'notify-' + key.replace(/_/g, '-'))]),
+    notifyLabel: key => doc.getElementById('notify-label-' + key.replace(/_/g, '-')),
     notifyState: doc.getElementById('notification-prefs-state'),
     list: doc.getElementById('skill-secret-list'),
     secretForm: doc.getElementById('skill-secrets-form'),
@@ -778,10 +779,12 @@ test('connected-tool approvals do not imply a connected account before key setup
 });
 
 test('the notification switches load the server preference and save one change', async () => {
-  const {doc, calls, prefs, notify, notifyState} =
+  const {doc, calls, prefs, notify, notifyLabel, notifyState} =
     await mountSettingsPage({prefs: {mentions: true, task_completion: false, artifacts: true}});
   assert.deepEqual(notify.map(([key, input]) => [key, input.checked]),
-                   [['mentions', true], ['artifacts', true]]);
+                   [['mentions', true], ['task_completion', false], ['artifacts', true]],
+                   'every category the server offers has a switch showing the stored value');
+  assert.equal(notifyLabel('mentions').textContent, '@提及', 'the label comes from the server categories');
   const mentions = notify[0][1];
   mentions.checked = false;
   doc.fire('change', {target: mentions});
@@ -796,7 +799,7 @@ test('the notification switches load the server preference and save one change',
 test('a failed notification save puts the switch back and shows the server reason', async () => {
   const {doc, prefs, notify, notifyState} =
     await mountSettingsPage({prefs: {mentions: true, task_completion: true, artifacts: true}, prefsFail: true});
-  const artifacts = notify[1][1];
+  const artifacts = notify[2][1];
   assert.equal(artifacts.checked, true);
   artifacts.checked = false;
   doc.fire('change', {target: artifacts});

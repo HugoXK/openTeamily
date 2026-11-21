@@ -597,29 +597,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await syncComposio();
   }
 
-  // One switch per notification category the page exposes. The inbox read path
-  // honours the stored choice: a failed save puts the switch back and shows the
-  // reason the server returned, and a category that is off produces no row on
-  // the next read. 任务完成提醒 stays on the general settings document above.
-  const NOTIFY_PREFS = [
-    ['mentions', 'notify-mentions'],
-    ['artifacts', 'notify-artifacts'],
-  ];
+  // One switch per notification category the server offers: the response carries
+  // `categories` (key, label, about) so the wording comes from the same place the
+  // stored preference does, and a build that drops a category hides its row
+  // instead of leaving a switch that saves nothing. 任务完成提醒 above stays on the
+  // general settings document; these three are the notification prefs the inbox
+  // read path honours.
+  const NOTIFY_CATEGORIES = ['mentions', 'task_completion', 'artifacts'];
+  const notifyId = (prefix, category) => prefix + category.replace(/_/g, '-');
 
   async function renderNotificationPrefs() {
     const state = document.getElementById('notification-prefs-state');
-    const inputs = NOTIFY_PREFS
-      .map(([category, id]) => [category, document.getElementById(id)])
-      .filter(([, input]) => input);
-    if (!inputs.length) return;
+    const rows = NOTIFY_CATEGORIES.map((category) => ({
+      category,
+      row: document.getElementById(notifyId('row-notify-', category)),
+      input: document.getElementById(notifyId('notify-', category)),
+      label: document.getElementById(notifyId('notify-label-', category)),
+      about: document.getElementById(notifyId('notify-about-', category)),
+    })).filter((entry) => entry.input);
+    if (!rows.length) return;
     const listed = await request('GET', '/v1/notification-prefs');
     if (listed.status !== 200) {
-      for (const [, input] of inputs) input.disabled = true;
-      if (state) state.textContent = '通知偏好读取失败，请稍后重试。';
+      for (const { input } of rows) input.disabled = true;
+      if (state) state.textContent = '通知偏好读取失败，稍后重试。';
       return;
     }
     const prefs = listed.body.prefs || {};
-    for (const [category, input] of inputs) {
+    const offered = new Map((listed.body.categories || []).map((item) => [item.key, item]));
+    for (const { category, row, input, label, about } of rows) {
+      const described = offered.get(category);
+      if (offered.size && !described) {
+        if (row) row.hidden = true;
+        continue;
+      }
+      if (row) row.hidden = false;
+      if (label && described?.label) label.textContent = described.label;
+      if (about && described?.about) about.textContent = described.about;
       input.disabled = false;
       input.checked = prefs[category] !== false;
       input.onchange = async () => {
