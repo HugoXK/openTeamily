@@ -322,7 +322,11 @@ test('a legacy shared projection cannot make the bound personal workspace conver
   const f = fakeFetch((url, init) => {
     const pathname = new URL(url).pathname
     if (pathname === '/v1/ot/me') return {handle: 'ann.home', owner_id: 'ann'}
-    if (pathname === '/v1/ot/workspaces') return {workspaces: [row(personal, 'Existing personal name'), row(shared, 'Studio')]}
+    if (pathname === '/v1/ot/workspaces') return {workspaces: [
+      row(personal, 'Existing personal name'), row(shared, 'Studio'),
+      {...row('d'.repeat(32), 'Other workspace'), role: 'admin'},
+      {...row('e'.repeat(32), 'Already a team'), slug: 'existing-team'},
+    ]}
     assert.equal(pathname, '/v1/ot/workspaces/' + shared + '/convert')
     assert.equal(init.method, 'POST')
     return {...row(shared, 'Studio'), slug: 'studio-team'}
@@ -330,9 +334,11 @@ test('a legacy shared projection cannot make the bound personal workspace conver
   setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: creds(), fetch: f.fetch}))
   const endpoint = teams({call: async () => ({workspace_id: personal, agent_id: 'c'.repeat(32)})}).endpoints.v1
   const listed = await endpoint({method: 'GET', path: '/v1/workspaces'})
-  assert.deepEqual(listed.body.items.map(item => [item.id, item.kind, item.name]), [
-    [personal, 'personal', 'Existing personal name'], [shared, 'workspace', 'Studio'],
+  assert.deepEqual(listed.body.items.slice(0, 2).map(item => [item.id, item.kind, item.name]), [
+    [personal, 'workspace', 'Existing personal name'], [shared, 'workspace', 'Studio'],
   ])
+  const convertible = await endpoint({method: 'GET', path: '/v1/workspaces?scope=convertible'})
+  assert.deepEqual(convertible.body.items.map(item => item.id), [shared])
   const convert = workspace_id => endpoint({
     method: 'POST', path: '/v1/teams', idempotency_key: 'native-convert-team',
     body: {mode: 'convert', name: 'Studio', slug: 'studio-team', workspace_id},

@@ -183,7 +183,7 @@ function teamFetcher({inviteStatus = 201, create} = {}) {
     requests.push({method, path, body: options.body ? JSON.parse(options.body) : undefined, headers: options.headers});
     if (path === '/v1/auth/session') return jsonResponse(200, {user: {id: 'u1', username: 'alice'}});
     if (path === '/v1/auth/providers') return jsonResponse(200, {items: []});
-    if (path === '/v1/workspaces?limit=100') {
+    if (path === '/v1/workspaces?scope=convertible&limit=100') {
       return jsonResponse(200, {items: [{id: 'ws1', name: 'Desk', owner_id: 'u1', kind: 'personal'}]});
     }
     if (path === '/v1/teams' && method === 'POST') {
@@ -432,7 +432,7 @@ async function openTeamPage({workspaces, session = ALICE, login, teams} = {}) {
     calls.push({method, path, headers: options.headers || {}, body: options.body});
     if (path === '/v1/auth/session') return reply(session);
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
-    if (path === '/v1/workspaces?limit=100') return reply({body: {items}});
+    if (path === '/v1/workspaces?scope=convertible&limit=100') return reply({body: {items}});
     if (path === '/v1/auth/login') return reply(login || {status: 200});
     if (path === '/v1/auth/logout') return reply({status: 200});
     if (path === '/v1/teams') return reply(teams || {status: 201});

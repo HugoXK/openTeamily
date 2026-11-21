@@ -217,7 +217,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     owned = [];
     renderStep();
     mainPanel.hidden = false;
-    const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => null);
+    const listed = await request('GET', '/v1/workspaces?scope=convertible&limit=100').catch(() => null);
     choicesLoading = false;
     choicesFailed = listed?.status !== 200;
     const items = Array.isArray(listed?.body?.items) ? listed.body.items : [];

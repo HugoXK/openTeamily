@@ -553,10 +553,10 @@ function teamsRoutes(host) {
             .filter((t) => HEX.test(String(t.workspace_id || '')))
             .map((t) => workspaceItem(t, me, env))
           const personal = personalWorkspace(localBinding, env)
-          if (personal) {
-            const previous = rows.findIndex(row => row.id === personal.id)
-            if (previous < 0) rows.unshift(personal)
-            else rows[previous] = { ...rows[previous], kind: 'personal' }
+          if (q.get('scope') === 'convertible') {
+            rows = rows.filter(row => row.id !== personal?.id && row.kind === 'workspace' && row.role === 'owner')
+          } else if (personal && !rows.some(row => row.id === personal.id)) {
+            rows.unshift(personal)
           }
           if (cursor) {
             const at = rows.findIndex((row) => row.id === cursor)
