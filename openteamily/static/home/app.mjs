@@ -1,4 +1,5 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
+import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
@@ -258,6 +259,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     }
   }
 
+  async function continuePublicAgent(intent) {
+    const continuation = publicAgentContinuation(intent);
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    show(document, 'loading', '正在打开公开智能体…');
+    try {
+      const [, initial] = await Promise.all([
+        request('POST', '/v1/personal-agent').catch(() => ({status: 0})),
+        request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0})),
+      ]);
+      let ready = initial;
+      for (let attempt = 0; attempt < 23 && !ready.body?.items?.length; attempt++) {
+        if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+        await new Promise(resolve => globalThis.setTimeout(resolve, 1000));
+        ready = await request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0}));
+      }
+      if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+      if (ready.status === 200 && ready.body?.items?.length) {
+        view.location.replace('/chat' + continuation);
+        return;
+      }
+    } catch {}
+    show(document, 'error', '聊天尚未准备好。');
+    const status = document.getElementById('status');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.id = 'public-agent-login-retry';
+    retry.className = 'public-agent-action';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => void load());
+    const back = document.createElement('a');
+    back.href = '/a/' + intent.slug;
+    back.className = 'public-agent-action';
+    back.textContent = '返回公开主页';
+    status.append(retry, back);
+  }
+
   async function load() {
     if (loading) return;
     loading = true;
@@ -267,6 +305,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         currentUser = null;
         loginPanel.hidden = false;
         mainPanel.hidden = true;
+        const intent = view.location?.pathname === '/login' && publicAgentIntentFromHash(view.location.hash);
+        const register = loginPanel.querySelector?.('.login-register-button');
+        if (register && intent) register.href = '/register' + publicAgentContinuation(intent);
         show(document, '', '');
         return;
       }
@@ -284,11 +325,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         view.location.replace(target);
         return;
       }
-      if (globalThis.location?.pathname === '/login') {
-        const params = new URLSearchParams((globalThis.location.hash || '').slice(1));
-        const slug = params.get('public-agent') || params.get('start');
-        globalThis.location.replace(slug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug)
-          ? '/chat#public-agent=' + slug : '/');
+      if (view.location?.pathname === '/login') {
+        const intent = publicAgentIntentFromHash(view.location.hash);
+        if (intent) await continuePublicAgent(intent);
+        else view.location.replace('/');
         return;
       }
       currentUser = session.body.user;

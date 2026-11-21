@@ -128,6 +128,12 @@ test('agentDiscoverPairs aligns statuses by index and defaults to unlisted', () 
   assert.deepEqual(pairs[1].discover, {listed: false});
 });
 
+test('publish management keeps archived listings available for withdrawal', () => {
+  const agents = [{id:'active'}, {id:'archived-public', archived:1}, {id:'archived-private', archived:1}];
+  const statuses = [{listed:false}, {listed:true}, {listed:false}];
+  assert.deepEqual(agentDiscoverPairs(agents,statuses).map(({agent}) => agent.id), ['active','archived-public']);
+});
+
 
 test('catalogQuery encodes search and cursor on the existing public allowlist', async () => {
   const {catalogQuery} = await import('../openteamily/static/discover/app.mjs');

@@ -7,6 +7,8 @@ import { mountImageCreator } from './image-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
+import { mountPublicDraft } from './public-draft.mjs';
+import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -96,27 +98,6 @@ export function messageSearchQuery(query, conversationId = '', cursor = '') {
   if (conversationId) params.set('conversation_id', conversationId);
   if (cursor) params.set('cursor', cursor);
   return params.toString();
-}
-
-export function homepageStartIndex(search) {
-  const source = search === undefined
-    ? ((typeof location !== 'undefined' && location.search) || '')
-    : search;
-  const params = new URLSearchParams(String(source).startsWith('?') ? String(source).slice(1) : source);
-  const raw = params.get('start');
-  if (!/^(0|[1-4])$/.test(raw || '')) return null;
-  return Number(raw);
-}
-
-export function stripHomepageStartQuery(pathname, search, hash) {
-  const params = new URLSearchParams(String(search || '').replace(/^\?/, ''));
-  if (!params.has('start')) {
-    return {changed: false, href: (pathname || '') + (search || '') + (hash || '')};
-  }
-  params.delete('start');
-  const next = params.toString();
-  const href = (pathname || '') + (next ? '?' + next : '') + (hash || '');
-  return {changed: true, href};
 }
 
 function searchHitKey(hit) {
@@ -391,7 +372,6 @@ function hashParams() {
     conversation: params.get('conversation') || '',
     message: params.get('message') || '',
     social: params.get('social') || '',
-    publicAgent: params.get('public-agent') || '',
   };
 }
 
@@ -833,6 +813,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const pendingSends = new Map();
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const publicDraft = mountPublicDraft(document);
 
   const memoryRecall = document.getElementById('agent-memory-recall');
   const memoryDrafts = new Map();
@@ -2772,6 +2753,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = null;
     currentAgent = agent;
     currentSource = 'agent';
+    publicDraft.enter(sendScope());
     stopPolling();
     setSocialHistory(null);
     autoTranslation.open(null);
@@ -2831,6 +2813,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
+    publicDraft.enter(sendScope());
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
     const pending = renderAgentMessages(result.body.items);
@@ -2887,6 +2870,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = updated;
+    publicDraft.enter(sendScope(), Boolean(updated.public_agent));
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
     setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
@@ -3386,30 +3370,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     );
   }
 
-  async function startHomepageConversation(index) {
-    const result = await request('POST', '/v1/agent-homepages/start', {quick_start: index}, {
-      'Idempotency-Key': idempotencyKey('home-start-'),
-    });
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(
-        result.body && result.body.error,
-        result.status === 401
-          ? '请先登录，再从公开主页发起对话。'
-          : '无法从公开主页发起对话。只有工作区成员可以，且需要先打开该公开主页。',
-      ));
-      return false;
+  let launchAttempt = null;
+
+  function publicStartError(intent, message, retry) {
+    show('error', message);
+    if (retry) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = 'public-agent-retry';
+      button.className = 'public-agent-action';
+      button.textContent = '重试';
+      button.addEventListener('click', retry);
+      status.append(button);
     }
-    const conversation = result.body && result.body.conversation;
-    if (!conversation || !conversation.id || !conversation.agent_id || !conversation.workspace_id) {
-      show('error', '无法从公开主页发起对话。');
-      return false;
+    const link = document.createElement('a');
+    link.href = '/a/' + intent.slug;
+    link.className = 'public-agent-action';
+    link.textContent = '返回公开主页';
+    status.append(link);
+  }
+
+  async function startPublicConversation(intent) {
+    const continuation = publicAgentContinuation(intent);
+    const owner = currentUser?.id;
+    if (!owner || !continuation || publicAgentContinuation(publicAgentIntentFromHash(location.hash)) !== continuation) return;
+    const scope = owner + continuation;
+    if (launchAttempt?.scope === scope && launchAttempt.busy) return;
+    const quick = intent.quickStart !== undefined;
+    const attempt = {scope, busy: true};
+    launchAttempt = attempt;
+    let completed = false;
+    const retry = () => startPublicConversation(intent);
+    const active = () => launchAttempt === attempt && currentUser?.id === owner
+      && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === continuation;
+    show('loading', quick ? '正在准备快捷开场…' : '正在打开公开智能体…');
+    try {
+      const payload = quick ? {quick_start: intent.quickStart, quick_start_version: intent.version} : {};
+      const result = await request('POST', '/v1/discover/agents/' + intent.slug + '/start', payload);
+      if (!active()) return;
+      const {workspace_id, conversation_id, draft_text} = result.body || {};
+      if (![200, 201].includes(result.status) || !/^[A-Za-z0-9._-]{1,80}$/.test(conversation_id || '')
+          || !workspaces.some(space => space.id === workspace_id) || (quick && (typeof draft_text !== 'string' || !draft_text.trim() || draft_text.length > 80))) {
+        const canRetry = result.status === 429 || result.status >= 500 || result.status === 0;
+        publicStartError(intent, messageFor(result.body?.error, '无法打开公开智能体。'), canRetry ? retry : null);
+        return;
+      }
+      workspaceSelect.value = workspace_id;
+      if (await openSocialConversation(conversation_id, {acknowledge: false})) {
+        completed = true;
+        if (quick && launchAttempt === attempt && currentUser?.id === owner
+            && currentSource === 'social' && currentConversation?.id === conversation_id && workspaceId() === workspace_id
+            && publicDraft.fill(draft_text)) {
+          show('ok', '开场已填入输入框，可编辑后发送。', {announceOnly: true});
+        } else {
+          show('', '');
+        }
+        void loadSessions();
+      } else if (active()) {
+        publicStartError(intent, '暂时无法加载对话。', retry);
+      }
+    } catch {
+      if (active()) publicStartError(intent, '连接中断，请重试。', retry);
+    } finally {
+      attempt.busy = false;
+      if (completed && launchAttempt === attempt) launchAttempt = null;
     }
-    if ([...workspaceSelect.options].some(option => option.value === conversation.workspace_id)) {
-      workspaceSelect.value = conversation.workspace_id;
-    }
-    await loadSessions();
-    await openAgentConversation(conversation.agent_id, conversation.id);
-    return true;
   }
 
   async function load() {
@@ -3423,6 +3448,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      publicDraft.clear();
       renderReplyDraft();
       currentConversation = null;
       chatCalls.sync();
@@ -3444,9 +3470,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      publicDraft.clear();
       renderReplyDraft();
     }
     currentUser = session.body.user;
+    const publicIntent = publicAgentIntentFromHash(location.hash);
+    if (publicIntent) show('loading', publicIntent.quickStart === undefined ? '正在打开公开智能体…' : '正在准备快捷开场…');
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     if (servedByDsbot) chatCalls.resumeMeeting();
@@ -3470,9 +3499,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
     }
 
-    const personalWorkspace = personal.status === 200 && personal.body.personal_agent
-      ? personal.body.personal_agent.workspace.id : '';
-    const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+    const personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
+    const personalWorkspace = personalEntity?.workspace?.id || '';
     personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
     personalLook = personalEntity ? personalEntity.look || null : null;
     if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
@@ -3483,8 +3511,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && settings.body.settings.values && settings.body.settings.values.chat_language;
     chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
-    if (listed.status !== 200) {
+    if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
       setSessionsStatus('无法加载工作区，请重试。');
+      if (publicIntent && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === publicAgentContinuation(publicIntent)) {
+        publicStartError(publicIntent, '暂时无法加载工作区。', () => void load());
+      }
       return;
     }
     workspaces = listed.body.items || [];
@@ -3506,38 +3537,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('', '');
       return;
     }
-    await loadSessions();
-    const homepageStart = homepageStartIndex();
-    if (homepageStart !== null) {
-      const started = await startHomepageConversation(homepageStart);
-      const stripped = stripHomepageStartQuery(location.pathname, location.search, location.hash);
-      if (stripped.changed) history.replaceState(null, '', stripped.href);
-      if (started) {
-        show('', '');
-        return;
-      }
-    }
-    const start = hashParams();
-    if (start.publicAgent && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(start.publicAgent)) {
-      show('ok', '正在打开公开智能体…');
-      try {
-        const result = await request('POST', `/v1/discover/agents/${start.publicAgent}/start`, {});
-        const {workspace_id, conversation_id} = result.body;
-        if (result.status !== 200 || !conversation_id || !workspaces.some(space => space.id === workspace_id)) {
-          show('error', messageFor(result.body.error, '无法打开公开智能体。'));
-          return;
-        }
-        if (workspaceSelect.value !== workspace_id) {
-          workspaceSelect.value = workspace_id;
-          await loadSessions();
-        }
-        if (await openSocialConversation(conversation_id)) {
-          show('', '');
-          void loadSessions();
-        }
-      } catch { show('error', '无法打开公开智能体，请重试。'); }
+    if (publicIntent) {
+      await startPublicConversation(publicIntent);
       return;
     }
+    await loadSessions();
+    const start = hashParams();
     if (start.social) {
       if (await openSocialConversation(start.social, {acknowledge:!start.message}) && /^[A-Za-z0-9._-]{1,80}$/.test(start.message)) {
         if (await jumpToMessage(start.message,null) === false) {
@@ -3806,6 +3811,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    publicDraft.enter(sendScope());
     syncCaptureButton();
     chatCalls.sync();
     voiceRecorder.refresh();
@@ -4489,6 +4495,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     queue.jobs.push(makeSendJob(queue, message, files, reply));
     field.value = '';
+    publicDraft.persist();
     field.focus({preventScroll: true});
     if (social) agentMentions.clear();
     consumeReplyDraft(scope, reply);

@@ -5,7 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { body, handleKey, intParam, one, OtContext, optText, params, query, text } from "./core.js";
+import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -66,36 +66,117 @@ function escapeHtml(value: string) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
+function publishedQuickStarts(listing: {id: string; kind: string; snapshot: string | null}) {
+  let starts: string[] = [];
+  if (listing.kind === "agent" && listing.snapshot) {
+    try {
+      const choices = JSON.parse(listing.snapshot)?.quick_starts;
+      if (Array.isArray(choices)) starts = choices.slice(0, 5).flatMap((item) => {
+        if (typeof item !== "string" || !item.trim()) return [];
+        try { return [text(item.trim(), "quick_start", {min: 1, max: 80})]; } catch { return []; }
+      });
+    } catch { /* An older listing may have no valid snapshot. */ }
+  }
+  return {starts, version: hashCode(JSON.stringify([listing.id, starts]))};
+}
+
 function publicPage(l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
-  const starts = (() => {
-    if (l.kind !== "agent" || !l.snapshot) return [];
-    try {
-      const parsed = JSON.parse(l.snapshot);
-      return Array.isArray(parsed?.quick_starts) ? parsed.quick_starts.map((t: unknown) => String(t).slice(0, 80)) : [];
-    } catch { return []; }
-  })();
-  const body = l.kind === "work" && l.snapshot && !String(l.snapshot).startsWith("{")
-    ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
-    : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
-  const startList = starts.length ? `<ul>${starts.map((s: string) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>` : "";
-  return `<!DOCTYPE html>
+  const title = String(view.title || view.slug);
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
+  if (l.kind === "work") {
+    const content = l.snapshot && !String(l.snapshot).startsWith("{")
+      ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
+      : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
+    return `<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
-<title>${escapeHtml(view.title || view.slug)} · OpenTeamily</title>
+<meta http-equiv="Content-Security-Policy" content="${policy}">
+<title>${escapeHtml(title)} · OpenTeamily</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}
 .meta{color:#555;font-size:.9rem}
 pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
 </style>
 </head><body>
-<p class="meta">${l.kind === "agent" ? "代理人" : "作品"}${creator ? " · " + escapeHtml(creator) : ""}</p>
-<h1>${escapeHtml(view.title || view.slug)}</h1>
-${body}
+<p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
+<h1>${escapeHtml(title)}</h1>
+${content}
+</body></html>
+`;
+  }
+
+  const {starts, version} = publishedQuickStarts(l);
+  const chatHref = `/login#public-agent=${encodeURIComponent(l.slug)}`;
+  const canChat = Boolean(l.chat_enabled);
+  const choiceItems = starts.map((choice, index) => {
+    const content = escapeHtml(choice);
+    if (!canChat) return `<li class="starter-preview">${content}</li>`;
+    const href = escapeHtml(`${chatHref}&quick-start=${index}&quick-start-version=${version}`);
+    return `<li><a class="starter" href="${href}"><span>${content}</span><span aria-hidden="true">↗</span></a></li>`;
+  }).join("");
+  const startList = choiceItems ? `
+<section class="starters" aria-labelledby="quick-starts">
+<h3 id="quick-starts">快捷开场</h3>
+<ul>${choiceItems}</ul>
+</section>` : "";
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="${policy}">
+<title>${escapeHtml(title)} · OpenTeamily</title>
+<style>
+:root{color-scheme:light;--ink:#192b28;--muted:#475b57;--surface:#fff;--line:#d7e1dd;--green:#24594b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--ink);background:#f3f7f3;font:1rem/1.6 system-ui,sans-serif}
+a{color:var(--green)}
+a:focus-visible{outline:2px solid #176750;outline-offset:4px}
+.site-header{background:var(--surface);border-bottom:1px solid var(--line)}
+.topbar{max-width:68rem;margin:auto;padding:.85rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+.brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);font-weight:750;text-decoration:none}
+.brand-mark{display:grid;place-items:center;width:1.85rem;height:1.85rem;border-radius:.55rem;background:var(--green);color:#fff;font-weight:800}
+.discover{font-size:.9rem;text-underline-offset:3px}
+.agent-home{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
+.profile{min-width:0}
+.avatar{display:grid;place-items:center;width:4rem;height:4rem;border:1px solid #bacfc3;border-radius:1.15rem;background:#e0eee3;color:#1b503f;font-weight:760;font-size:1.7rem}
+h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;letter-spacing:-.035em;overflow-wrap:anywhere}
+h2,h3,p{margin:0}
+.creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
+.description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
+.conversation h2{font-size:1.25rem;line-height:1.25}
+.help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
+.chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
+.chat-action:hover{background:#19483c}
+.starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
+.starters h3{margin-bottom:.7rem;font-size:.97rem}
+.starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
+.starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
+.starter{text-decoration:none}
+.starter:hover{border-color:#98bead;background:#edf6ed}
+@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}.chat-action{width:100%}}
+</style>
+</head><body>
+<header class="site-header"><div class="topbar">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">O</span>OpenTeamily</a>
+<a class="discover" href="/discover?tab=agents">发现智能体</a>
+</div></header>
+<main class="agent-home">
+<section class="profile" aria-labelledby="profile-title">
+<div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
+<h1 id="profile-title">${escapeHtml(title)}</h1>
+${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
+</section>
+<section class="conversation" aria-labelledby="conversation-title">
+<h2 id="conversation-title">网页对话</h2>
+<p class="help">${canChat ? "登录后可以聊天，发布者可以查看对话。快捷开场会填入输入框。" : "该智能体暂未开放访客聊天。"}</p>
+${canChat ? `<a class="chat-action" href="${escapeHtml(chatHref)}">开始对话</a>` : ""}
 ${startList}
-${l.kind === "agent" && l.chat_enabled ? `<p><a href="/chat#public-agent=${encodeURIComponent(l.slug)}">开始对话</a></p>` : ""}
+</section>
+</main>
 </body></html>
 `;
 }
@@ -227,18 +308,20 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
 
   // Public catalog pages: no connector token. The isolated site exposes them at
   // https://<origin>/social/a/<slug> and /social/w/<slug> through the existing edge prefix.
-  app.get("/v1/ot/public/listings/:slug", async (req) => {
+  app.get("/v1/ot/public/listings/:slug", async (req, reply) => {
     const l = listedBySlug(ot, params(req).slug);
+    if (l.kind === "agent") reply.header("Cache-Control", "no-store");
     return listingView(ot, l, null, true);
   });
   const sendPublic = async (req: any, reply: any, kind: "agent" | "work") => {
+    if (kind === "agent") reply.header("Cache-Control", "no-store");
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === kind, 404, "listing_not_found", "no such listing");
     const view = listingView(ot, l, null, true);
     const accept = String(req.headers.accept || "");
     if (accept.includes("application/json") && !accept.includes("text/html")) return view;
     reply.header("Content-Type", "text/html; charset=utf-8");
-    reply.header("Cache-Control", "public, max-age=60");
+    if (kind === "work") reply.header("Cache-Control", "public, max-age=60");
     return reply.send(publicPage(l, view));
   };
   app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
@@ -255,24 +338,49 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   // attached; the creator's own DS-Bot answers through its agent inbox.
   app.post("/v1/ot/discover/:slug/start", async (req, reply) => {
     const me = ot.me(req);
-    const l = listedBySlug(ot, params(req).slug);
-    assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
-    assert(l.chat_enabled, 409, "public_chat_closed", "该智能体未开放访客聊天。");
-    assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
-    const key = `agent:${l.id}:${me.ownerId}`;
-    let conv = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
-    const now = ot.now();
-    if (!conv) {
-      const id = newId("otc");
-      ot.tx(() => {
-        ot.run("INSERT INTO ot_conversations(id, kind, title, dm_key, created_by, created_at, updated_at) VALUES (?, 'group', ?, ?, ?, ?, ?)", id, String(l.title).slice(0, 80), key, me.ownerId, now, now);
-        for (const o of [me.ownerId, l.owner_id]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
-        ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)", id, l.ref, l.owner_id, String(l.title).slice(0, 80), now);
-      });
-      conv = ot.get<any>("SELECT * FROM ot_conversations WHERE id = ?", id);
-      ot.notify(l.owner_id, "discover.conversation_started", { listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId) });
-      return reply.status(201).send({ conversation_id: conv.id, agent_ref: l.ref, created: true });
+    const input = body(req);
+    assert(input && typeof input === "object" && !Array.isArray(input), 400, "invalid_request", "Invalid public chat request");
+    const quick = Object.keys(input).length !== 0;
+    if (quick) {
+      assert(Object.keys(input).length === 2 && Number.isInteger(input.quick_start)
+        && input.quick_start >= 0 && input.quick_start <= 4
+        && typeof input.quick_start_version === "string" && /^[a-f0-9]{64}$/.test(input.quick_start_version),
+      400, "invalid_request", "请选择有效的快捷开场。");
     }
-    return { conversation_id: conv.id, agent_ref: l.ref, created: false };
+    const result = ot.tx(() => {
+      const l = listedBySlug(ot, params(req).slug);
+      assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
+      assert(l.chat_enabled, 409, "public_chat_closed", "该智能体未开放访客聊天。");
+      assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
+      let draftText: string | undefined;
+      if (quick) {
+        const {starts, version} = publishedQuickStarts(l);
+        draftText = starts[input.quick_start];
+        assert(draftText && input.quick_start_version === version, 409, "quick_start_changed", "快捷开场已更新，请返回公开主页重新选择。");
+      }
+      const key = `agent:${l.id}:${me.ownerId}`;
+      const existing = ot.get<{id: string; created_by: string}>("SELECT id, created_by FROM ot_conversations WHERE dm_key = ?", key);
+      const id = existing?.id ?? newId("otc");
+      if (!existing) {
+        const now = ot.now();
+        const title = String(l.title).slice(0, 80);
+        ot.run("INSERT INTO ot_conversations(id, kind, title, dm_key, created_by, created_at, updated_at) VALUES (?, 'group', ?, ?, ?, ?, ?)",
+          id, title, key, me.ownerId, now, now);
+        for (const owner of [me.ownerId, l.owner_id]) {
+          ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, owner, now);
+        }
+        ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)",
+          id, l.ref, l.owner_id, title, now);
+        if (!quick) ot.notify(l.owner_id, "discover.conversation_started", {
+          listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId),
+        });
+      } else {
+        assert(existing.created_by === me.ownerId && ot.get(
+          "SELECT 1 FROM ot_conversation_members WHERE conversation_id=? AND owner_id=?", id, me.ownerId,
+        ), 404, "conversation_not_found", "no such conversation");
+      }
+      return {conversation_id: id, agent_ref: l.ref, created: !existing, ...(draftText ? {draft_text: draftText} : {})};
+    });
+    return reply.status(result.created ? 201 : 200).send(result);
   });
 }
