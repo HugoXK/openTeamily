@@ -115,6 +115,7 @@ function messageItem(row, me, env, workspaceId) {
   return {
     id: row.id,
     seq: row.seq,
+    ...(row.mine && row.client_key ? {client_key: row.client_key} : {}),
     conversation_id: row.conversation_id,
     workspace_id: workspaceId,
     user_id: agent ? null : userIdOf(author, me, env),
@@ -125,6 +126,8 @@ function messageItem(row, me, env, workspaceId) {
     retracted: !!row.retracted,
     ...(row.reactions?.length ? {reactions: row.reactions} : {}),
     ...(row.voice ? { voice: row.voice } : {}),
+    ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
+    ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
       path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
@@ -194,6 +197,7 @@ function rethrow(error) {
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
     public_chat_closed: 'public_chat_closed',
+    reply_unavailable: 'reply_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
@@ -662,8 +666,17 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
+          let message = body
+          if (body?.artifact_id !== undefined) {
+            if (body.voice || body.attachment || scope.conversation?.public_agent) {
+              throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
+            }
+            const snapshot = await host.call('artifacts/chatAttachment', {workspace_id: match[1],
+              artifact_id: body.artifact_id, revision: body.artifact_revision})
+            message = {...body, body: snapshot.body, attachment: snapshot.attachment}
+          }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: message?.body, voice: message?.voice, attachment: message?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: message?.mentions, agent_mentions: message?.agent_mentions, reply_to: message?.reply_to })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
@@ -855,27 +868,11 @@ function messengerExtraRoutes(host, wakeReplies) {
       async handle({ match, body, idempotency_key: key }) {
         return wrap(async () => {
           const bs = client(host)
-          const source = await messengerScope(host, bs, match[1], match[2])
-          const ids = Array.isArray(body?.message_ids) ? body.message_ids.slice(0, 20) : []
-          const target = body?.target_conversation_id
-          if (!ids.length || typeof target !== 'string') throw new Fault(400, 'invalid', 'Provide message_ids and target_conversation_id')
-          if (source.personal) {
-            const destination = await messengerScope(host, bs, match[1], target)
-            if (!accountConversation(source.conversation) || !accountConversation(destination.conversation)) throw new Fault(400, 'invalid', '请选择个人工作区的私聊或群聊。')
-          }
-          const rows = await page(bs, match[2])
-          const tag = String(key || Date.now()).slice(0, 40)
-          let forwarded = 0
-          for (const id of ids) {
-            const row = rows.find((m) => m.id === id)
-            if (!row || row.retracted || !row.body) continue
-            const voice = row.voice ? await bs.get(`${conv(match[2])}/messages/${seg(id, 'message_id')}/voice`) : undefined
-            const attachment_from = row.attachment ? {conversation_id: match[2], message_id: id} : undefined
-            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice,
-              workspace: match[1], direct: source.personal, attachment_from, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
-            forwarded++
-          }
-          return [201, { forwarded, target_conversation_id: target }]
+          const {personal} = await messengerScope(host, bs, match[1])
+          return [201, await bs.post(conv(match[2]) + '/forward', {
+            message_ids: body?.message_ids, target_conversation_id: body?.target_conversation_id,
+            workspace: personal ? undefined : match[1], request_key: key,
+          })]
         })
       },
     },

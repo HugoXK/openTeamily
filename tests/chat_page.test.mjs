@@ -586,7 +586,7 @@ function sessionRows(el) {
   return el('conversation-list').children.map((li) => li.children[0]);
 }
 
-test('a slow send immediately shows the draft and submits only once', async () => {
+test('a slow send moves the draft into the conversation and submits only once', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher, requests} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
@@ -606,9 +606,11 @@ test('a slow send immediately shows the draft and submits only once', async () =
     body.value = '发出这条消息';
     await fire(el('chat-form'), 'submit', {preventDefault() {}});
     const pending = el('message-list').children.at(-1);
-    assert.equal(pending.dataset.sendPending, '1');
+    assert.equal(pending.dataset.sendPending, 'pending');
     assert.ok(descendants(pending).some(node => node.textContent === '正在发送…'));
-    assert.equal(el('chat-send').disabled, true);
+    assert.equal(body.value, '');
+    assert.equal(body.focused, true);
+    assert.equal(el('chat-send').disabled, false);
     await fire(el('chat-form'), 'submit', {preventDefault() {}});
     assert.equal(sends, 1);
     body.value = '下一条草稿';

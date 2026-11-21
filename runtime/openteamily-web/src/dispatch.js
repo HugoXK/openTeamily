@@ -109,7 +109,7 @@ async function composeAttachments(request, agent) {
   for (const file of files) {
     attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
   }
-  return agent ? {body:form.get('body'), reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0]}
+  return agent ? {body:form.get('body'), reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {
@@ -188,7 +188,7 @@ export function createLegacyDispatch({ endpoints }) {
       const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
       if (result?.download && status === 200) return fileResponse(request, result.download)
-      return new Response(JSON.stringify(result?.body ?? {}), {
+      return new Response(status === 204 ? null : JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })
     } catch (error) {

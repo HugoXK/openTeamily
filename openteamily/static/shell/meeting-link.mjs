@@ -17,3 +17,24 @@ export function parseMeetingCode(value, origin) {
     return url.origin === origin && /^\/chat\/?$/.test(url.pathname) ? meetingCodeFromHash(url.hash) : '';
   } catch { return ''; }
 }
+
+const CHAT_DRAFT = 'openteamily.meeting-draft-from-chat';
+
+export function stageMeetingFromChat(storage, draft) {
+  storage.setItem(CHAT_DRAFT, JSON.stringify(draft));
+  return '/meetings#' + new URLSearchParams({workspace: draft.workspace, new: '1', from: 'chat'});
+}
+
+export function takeMeetingFromChat(storage, owner, workspace) {
+  try {
+    const raw = storage.getItem(CHAT_DRAFT);
+    storage.removeItem(CHAT_DRAFT);
+    const draft = JSON.parse(raw);
+    if (draft?.owner === owner && draft.workspace === workspace
+      && typeof draft.title === 'string' && draft.title.length <= 120
+      && typeof draft.transcript === 'string' && draft.transcript.trim() && draft.transcript.length <= 40000) {
+      return draft;
+    }
+  } catch {}
+  return null;
+}

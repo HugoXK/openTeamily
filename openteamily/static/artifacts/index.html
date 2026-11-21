@@ -360,8 +360,11 @@
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
       <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
-      <p id="send-to-chat-error" class="note" hidden></p>
-      <button type="button" id="send-to-chat-cancel">取消</button>
+      <p id="send-to-chat-error" class="note" role="status" hidden></p>
+      <div class="send-dialog-actions">
+        <button type="button" id="send-to-chat-cancel">取消</button>
+        <button type="button" class="primary" id="send-to-chat-confirm" disabled>确认发送</button>
+      </div>
     </div>
   </div>
   </main>
