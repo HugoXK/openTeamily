@@ -50,12 +50,15 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/model-api/image', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/video', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/music', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget('/v1/model-api/model3d', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images`, ORIGIN).feature, 'images');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/videos`, ORIGIN).feature, 'videos');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/music`, ORIGIN).feature, 'music');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/models-3d`, ORIGIN).feature, 'model3d');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/${ID}`, ORIGIN).feature, 'images');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/videos/${ID}`, ORIGIN).feature, 'videos');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/music/${ID}`, ORIGIN).feature, 'music');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/models-3d/${ID}`, ORIGIN).feature, 'model3d');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/wrong`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
@@ -106,6 +109,17 @@ test('answers become ordinary responses, downloads keep their name', async () =>
   const file = toResponse({ status: 200, download: { content_type: 'text/markdown', filename: 'm.md', data: Buffer.from('# hi').toString('base64') } });
   assert.equal(await file.text(), '# hi');
   assert.match(file.headers.get('Content-Disposition'), /m\.md/);
+});
+
+test('binary shim downloads preserve Chinese and emoji names in an ASCII-compatible header', async () => {
+  const filename = '陶瓷花瓶 🏺.glb';
+  const file = toResponse({status: 200, download: {
+    content_type: 'model/gltf-binary', filename, data: 'Z2xURg==', inline: true,
+  }});
+  assert.equal(await file.text(), 'glTF');
+  const header = file.headers.get('Content-Disposition');
+  assert.match(header, /^inline; filename="[ -~]+";/);
+  assert.equal(decodeURIComponent(header.split("filename*=UTF-8''")[1]), filename);
 });
 
 test('does nothing on pages served by the legacy platform', () => {

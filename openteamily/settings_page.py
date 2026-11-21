@@ -61,6 +61,9 @@ class SettingsPage:
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-preview.mjs': ('shell', 'model3d-preview.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
@@ -234,6 +237,8 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path in ('/chat', '/chat/', '/space', '/artifacts'):
+            csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
                    ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),

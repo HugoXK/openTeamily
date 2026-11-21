@@ -103,6 +103,7 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings', '#video-api'), 'model-api');
   assert.equal(settingsViewFromLocation('/settings/model-api', '#video-api'), 'model-api');
   assert.equal(settingsViewFromLocation('/settings', '#music-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#model3d-api'), 'model-api');
 });
 
 test('applySettingsView shows one recorded page at a time', () => {
@@ -603,6 +604,8 @@ test('the video model form saves and clears the write-only key using its own rev
   () => checkMediaModelForm('video', 'runway', 'gen4.5'));
 test('the music model form saves and clears the write-only key using its own revision',
   () => checkMediaModelForm('music', 'elevenlabs', 'music_v2_5'));
+test('the 3D model form saves and clears the write-only Meshy key using its own revision',
+  () => checkMediaModelForm('model3d', 'meshy', 'meshy-7.1'));
 
 function secretRow(list, name) {
   return list.children.find(row => row.children.some(child => child.tagName === 'button' && child.textContent === '删除')

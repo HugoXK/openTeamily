@@ -256,6 +256,11 @@ class FakeElement {
     }
   }
   appendChild(node) { this.append(node); return node; }
+  insertBefore(node, before) {
+    node.parent = this;
+    this.children.splice(this.children.indexOf(before), 0, node);
+    return node;
+  }
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
@@ -1520,7 +1525,7 @@ test('composer + attach shortcuts narrow the file picker without widening it', (
   assert.equal(plusAttachAccept('image', ''), '');
 });
 
-test('composer + creation grid deep-links real editors and labels the rest 未接通', () => {
+test('composer + creation grid opens real editors and generation dialogs', () => {
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
   for (const kind of ['website', 'document', 'slides', 'spreadsheet']) {
     assert.ok(html.includes(`href="/space?new=${kind}" data-create-artifact="${kind}"`),kind);
@@ -1530,7 +1535,9 @@ test('composer + creation grid deep-links real editors and labels the rest 未�
   assert.match(html, /<video id="video-create-preview"[^>]+controls/);
   assert.match(html, /id="composer-music-create"[^>]+aria-haspopup="dialog"/);
   assert.match(html, /<audio id="music-create-preview"[^>]+controls/);
-  assert.match(html, /data-tone="cube" title="未接通/);
+  assert.match(html, /id="composer-model3d-create"[^>]+aria-haspopup="dialog"/);
+  assert.match(html, /<select name="source">\s*<option value="text">根据描述<\/option>\s*<option value="image">根据参考图<\/option>/);
+  assert.match(html, /id="model3d-create-open-preview"[^>]+aria-expanded="false"/);
 });
 
 // Media shared in a chat is uploaded to the workspace library before the
@@ -1613,6 +1620,28 @@ test('an audio attachment keeps the document card instead of becoming an image',
       descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
       'a non-image attachment keeps the document card',
     );
+  } finally {
+    restore();
+  }
+});
+
+test('a received GLB offers a collapsed viewer and an independent download', async () => {
+  const attachment = {title: '风车.glb', mime: 'model/gltf-binary', bytes: 512, path: '/fixture/windmill.glb'};
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(attachment)).fetcher});
+    await settle();
+    const nodes = descendants(el('message-list').children[0]);
+    const button = nodes.find(node => node.classList.contains('chat-file-model3d-toggle'));
+    const frame = nodes.find(node => node.classList.contains('chat-file-model3d-preview'));
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(frame.hidden, true);
+    assert.equal(frame.children.length, 0);
+    assert.equal(nodes.find(node => node.download === attachment.title).href, attachment.path + '?download=1');
+    await fire(el('multi-select-toggle'), 'click');
+    const renderedAgain = descendants(el('message-list').children[0]);
+    assert.equal(renderedAgain.find(node => node.classList.contains('chat-file-model3d-preview')), frame);
   } finally {
     restore();
   }

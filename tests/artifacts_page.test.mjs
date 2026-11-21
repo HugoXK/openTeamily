@@ -50,10 +50,12 @@ test('visibleArtifacts maps recorded filters onto existing fields', () => {
     {title: 'Clip', kind: 'document', created_by: 'alice', updated: now / 1000 - 60,
       source: {kind: 'agent_message', conversation_id: 'c2'}},
   ];
-  assert.equal(FILE_TYPE_LABELS.length, 13);
+  assert.equal(FILE_TYPE_LABELS.length, 14);
   assert.equal(artifactMatchesType(items[0], '云文档'), true);
   assert.equal(artifactMatchesType(items[5], '云文档'), false);
   assert.equal(artifactMatchesType(items[2], '图片'), true);
+  assert.equal(artifactMatchesType(items[2], '3D 模型'), false);
+  assert.equal(artifactMatchesType({kind: 'media', media: {mime: 'model/gltf-binary'}}, '3D 模型'), true);
   assert.equal(artifactMatchesType(items[0], 'Markdown'), false);
   assert.equal(artifactMatchesType({kind: 'slides'}, '幻灯片'), true);
   assert.equal(artifactMatchesType({kind: 'document'}, '幻灯片'), false);

@@ -340,6 +340,24 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   height: auto;
 }
 
+#media-model3d-preview {
+  width: 100%;
+  min-height: 12rem;
+  margin-bottom: .75rem;
+  background: var(--ot-surface-2);
+  border-radius: .75rem;
+}
+#media-model3d-preview canvas {
+  display: block;
+  width: 100%;
+  height: clamp(12rem, 48dvh, 28rem);
+  touch-action: none;
+  cursor: grab;
+}
+#media-model3d-preview canvas:active { cursor: grabbing; }
+#media-model3d-preview canvas:focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
+#media-model3d-status:empty { display: none; }
+
 #board-canvas {
   width: 100%;
   max-width: 800px;
@@ -909,6 +927,17 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: .9375rem; line-height: 1.7; color: var(--ot-ink);
 }
 #editor-form > label:first-of-type input[name="title"]:focus-visible, #editor-form > #body-label textarea:focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--ot-accent); }
+@media (max-width: 700px) {
+  body #main-panel > #editor-form:not([hidden]) {
+    box-sizing: border-box;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: .875rem;
+  }
+  #editor-form > label:first-of-type input[name="title"]:not(:focus) { text-overflow: ellipsis; }
+  #editor-form #export-format { max-width: 100%; box-sizing: border-box; }
+  #editor-form #media-meta { overflow-wrap: anywhere; }
+}
 
 /* Page parity follow-up: typography and a disabled bookmark on grid covers. */
 #artifact-list[data-layout="grid"] .artifact-item .link,

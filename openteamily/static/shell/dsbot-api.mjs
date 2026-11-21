@@ -35,10 +35,11 @@ export const MOVED = [
   [/^\/v1\/settings$/, 'settings'],
   [/^\/v1\/notification-prefs$/, 'settings'],
   [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
-  [/^\/v1\/model-api(?:\/(?:image|video|music))?$/, 'model-api'],
+  [/^\/v1\/model-api(?:\/(?:image|video|music|model3d))?$/, 'model-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/images(?:\/[0-9a-f]{32})?$/, 'images'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/videos(?:\/[0-9a-f]{32})?$/, 'videos'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/music(?:\/[0-9a-f]{32})?$/, 'music'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/models-3d(?:\/[0-9a-f]{32})?$/, 'model3d'],
   [/^\/v1\/composio$/, 'connectors'],
   [/^\/v1\/composio\/key$/, 'connectors'],
   [/^\/v1\/composio\/toolkits$/, 'connectors'],
@@ -121,12 +122,37 @@ export function envelope(target, method, headers, body) {
   return { endpoint: `${target.feature}/v1`, payload };
 }
 
+function downloadDisposition(download) {
+  const filename = String(download.filename || 'download').replace(/[\ud800-\udfff]/gu, '\ufffd');
+  const fallback = filename.replace(/[^ -~]|["\\/]/g, '_');
+  const encoded = encodeURIComponent(filename).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16));
+  return `${download.inline ? 'inline' : 'attachment'}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+function responseFilename(response) {
+  const header = response.headers.get('Content-Disposition') || '';
+  const extended = /;\s*filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (extended) {
+    try { return decodeURIComponent(extended[1]); } catch {}
+  }
+  return /;\s*filename="([^"]+)"/i.exec(header)?.[1] || 'download';
+}
+
 export function toResponse(value) {
-  if (value.download) {
-    const bytes = Uint8Array.from(atob(value.download.data), (c) => c.charCodeAt(0));
-    return new Response(bytes, { status: value.status, headers: {
-      'Content-Type': value.download.content_type,
-      'Content-Disposition': `attachment; filename="${value.download.filename}"` } });
+  const download = value.download;
+  if (download) {
+    let bytes;
+    if (Uint8Array.fromBase64) bytes = Uint8Array.fromBase64(download.data);
+    else {
+      const binary = atob(download.data);
+      bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    }
+    return new Response(bytes, {status: value.status, headers: {
+      'Content-Type': download.content_type,
+      'Content-Length': String(bytes.byteLength),
+      'Content-Disposition': downloadDisposition(download),
+    }});
   }
   return new Response(JSON.stringify(value.body ?? {}), { status: value.status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -171,10 +197,9 @@ export function install(win = globalThis.window) {
       return;
     }
     const blob = await response.blob();
-    const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
     const link = win.document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = name ? name[1] : 'download';
+    link.download = responseFilename(response);
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
   }, true);

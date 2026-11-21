@@ -1,5 +1,6 @@
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
 export function artifactTargetFromSearch(search) {
   const params=new URLSearchParams(search||'');
@@ -43,7 +44,9 @@ export function listQuery(search) {
 }
 
 export const FILE_TYPE_LABELS = ['云文档', 'Markdown', 'DOCX', 'PDF', '电子表格', '幻灯片',
-  'Web 应用', '网页', '图片', '视频', '音频', '白板', '消息'];
+  'Web 应用', '网页', '图片', '视频', '音频', '3D 模型', '白板', '消息'];
+
+const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
 
 export function artifactMatchesType(item, type) {
   const mime = String((item && item.media && item.media.mime) || '');
@@ -52,6 +55,7 @@ export function artifactMatchesType(item, type) {
   if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
+  if (type === '3D 模型') return isModel3d(item);
   if (type === '白板') return item.kind === 'whiteboard';
   if (type === '电子表格') return item.kind === 'spreadsheet';
   if (type === '幻灯片') return item.kind === 'slides';
@@ -355,9 +359,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function kindLabel(kind) {
+  function kindLabel(kind, mime) {
     if (kind === 'website') return '网站';
-    if (kind === 'media') return '媒体';
+    if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
     if (kind === 'whiteboard') return '白板';
     if (kind === 'slides') return '幻灯片';
     if (kind === 'dashboard') return '看板';
@@ -701,6 +705,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   const sendSpreadsheet = document.getElementById('send-saved-spreadsheet');
   const downloadSpreadsheet = document.getElementById('download-spreadsheet');
+  const model3dPanel = document.getElementById('media-model3d');
+  const model3dDownload = document.getElementById('media-model3d-download');
+  const model3dPreview = bindModel3dPreview(document.getElementById('media-model3d-toggle'),
+    document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
 
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
@@ -710,7 +718,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const meta = document.getElementById('editor-meta');
     const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', spreadsheet: '新电子表格', document: '新文档'};
     if (item && item.id) {
-      meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
+      meta.textContent = `${kindLabel(kind, item.media?.mime)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
@@ -758,6 +766,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const audio = document.getElementById('media-audio');
     const video = document.getElementById('media-video');
     const mediaMeta = document.getElementById('media-meta');
+    const model3d = Boolean(item?.id && isModel3d(item));
+    const picker = document.getElementById('media-file-picker');
+    if (picker) picker.hidden = model3d;
+    if (model3d) document.getElementById('media-file').value = '';
+    if (model3dPanel) model3dPanel.hidden = !model3d;
+    let model3dSource = '';
     image.hidden = true; audio.hidden = true; video.hidden = true;
     image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
     if (kind === 'media') {
@@ -767,10 +781,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
         else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
         else if ((item.media.mime || '').startsWith('video/')) { video.hidden = false; video.src = src; }
+        else if (model3d) {
+          model3dSource = src;
+          if (model3dDownload) model3dDownload.href = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/export`;
+        }
       } else {
         mediaMeta.textContent = '选择一张图片或一段音视频，大小不超过 2 MB。';
       }
     }
+    model3dPreview.setSource(model3dSource);
     if (kind === 'whiteboard') {
       boardState = item && item.board ? item.board : {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
       drawBoard();
@@ -1302,7 +1321,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const meta = document.createElement('span');
       meta.className = 'note';
       const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
-      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
+      meta.textContent = `${kindLabel(item.kind, item.media?.mime)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
       const cover = document.createElement('span');
@@ -1322,13 +1341,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         cover.classList.add('has-thumb');
         cover.append(img);
       } else {
-        cover.textContent = kindLabel(item.kind);
+        cover.textContent = kindLabel(item.kind, mime);
       }
       row.appendChild(cover);
       const badge = document.createElement('span');
       badge.className = 'artifact-kind';
       badge.setAttribute('aria-hidden', 'true');
-      badge.textContent = kindBadge(item.kind);
+      badge.textContent = isModel3d(item) ? '3D' : kindBadge(item.kind);
       row.appendChild(badge);
       const bookmark = document.createElement('button');
       bookmark.type = 'button';
@@ -1365,6 +1384,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openEditor(item) {
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeNewMenu();
+    model3dPreview.setSource('');
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -1675,6 +1695,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     if (pendingDeleteCancel) pendingDeleteCancel();
+    model3dPreview.setSource('');
     meetingLoadedFor = '';
     meetingItems = [];
     meetingError = '';
@@ -1885,6 +1906,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     if (pendingDeleteCancel) pendingDeleteCancel();
+    model3dPreview.setSource('');
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -2452,6 +2474,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
     }
+    model3dPreview.setSource('');
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -2594,6 +2617,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
+    model3dPreview.setSource('');
     current = null;
     await load();
   });
