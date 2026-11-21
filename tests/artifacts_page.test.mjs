@@ -1096,6 +1096,8 @@ test('an older save cannot replace a new draft after returning from the direct e
   await page.mounted;
   page.form.elements.body.value = '首次修改';
   const saving = page.form.dispatch('submit');
+  assert.equal(page.elements.get('mobile-editor-save').disabled, true);
+  assert.equal(page.elements.get('mobile-editor-save').textContent, '保存中…');
   assert.deepEqual(JSON.parse(page.calls.at(-1).body), {revision: 1, changes: {title: '资料直链', body: '首次修改'}});
   await page.elements.get('cancel-editor').dispatch('click');
   await page.elements.get('new-artifact').dispatch('click');
@@ -1106,6 +1108,74 @@ test('an older save cannot replace a new draft after returning from the direct e
   assert.equal(page.form.elements.title.value, '另一份新文档');
   assert.equal(page.form.elements.body.value, '另一份草稿');
   assert.equal(page.elements.get('save-artifact').disabled, false);
+  assert.equal(page.elements.get('mobile-editor-save').disabled, false);
+  assert.equal(page.elements.get('mobile-editor-save').textContent, '保存');
+});
+
+test('the compact editor opens existing panels and keeps an unsaved draft when dismissing actions', async () => {
+  const page = await openArtifactsPage({items: [{id: 'a1', title: 'Doc', kind: 'document'}]});
+  try {
+    await artifactRows(page.elements.get('artifact-list'))[0].children[0].dispatch('click');
+    const el = id => page.elements.get(id);
+    const menu = el('mobile-editor-menu');
+    assert.equal(menu.hidden, false);
+    assert.equal(el('mobile-editor-delete').hidden, false);
+    assert.equal(el('mobile-editor-markdown').hidden, false);
+    assert.equal(el('version-panel').open, false);
+    assert.equal(page.calls.some(call => call.path.endsWith('/versions')), false);
+    menu.open = true;
+    await el('mobile-editor-version').dispatch('click');
+    assert.equal(menu.open, false);
+    assert.equal(el('version-panel').open, true);
+    await el('version-panel').dispatch('toggle');
+    assert.equal(page.calls.at(-1).path, '/v1/workspaces/w1/artifacts/a1/versions');
+
+    page.form.elements.body.value = '未保存的正文';
+    menu.open = true;
+    const deleting = el('mobile-editor-delete').dispatch('click');
+    const [confirmation] = page.alertdialog();
+    assert.ok(confirmation);
+    await page.doc.dispatch('keydown', {key: 'Escape'});
+    await deleting;
+    assert.equal(page.removeCalls().length, 0);
+    assert.equal(page.form.elements.body.value, '未保存的正文');
+    assert.equal(page.doc.activeElement, el('mobile-editor-delete'));
+
+    await menu.dispatch('keydown', {key: 'Escape'});
+    assert.equal(menu.open, false);
+    assert.equal(page.doc.activeElement, el('mobile-editor-more'));
+    await el('cancel-editor-load').dispatch('click');
+    assert.equal(el('list-panel').hidden, false);
+    assert.equal(page.doc.activeElement, el('new-menu-button'));
+    await el('new-artifact').dispatch('click');
+    assert.equal(el('mobile-editor-delete').hidden, true);
+    assert.equal(el('mobile-editor-version').hidden, true);
+  } finally {
+    page.close();
+  }
+});
+
+test('wrapping editor titles stay on one stored line and respect IME Enter', async () => {
+  const page = await openArtifactsPage();
+  try {
+    await page.elements.get('new-artifact').dispatch('click');
+    const title = page.form.elements.title;
+    title.value = '开头\n\n下半段';
+    await title.dispatch('input');
+    assert.equal(title.value, '开头 下半段');
+    let prevented = false;
+    let submissions = 0;
+    page.form.requestSubmit = () => { submissions++; };
+    const preventDefault = () => { prevented = true; };
+    await title.dispatch('keydown', {key: 'Enter', isComposing: true, preventDefault});
+    assert.equal(prevented, false);
+    assert.equal(submissions, 0);
+    await title.dispatch('keydown', {key: 'Enter', isComposing: false, preventDefault});
+    assert.equal(prevented, true);
+    assert.equal(submissions, 1);
+  } finally {
+    page.close();
+  }
 });
 
 test('website helpers keep titles and escaped stubs bounded and honest', () => {

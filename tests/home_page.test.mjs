@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta } from '../openteamily/static/home/app.mjs';
+import { waitForRuntime } from '../openteamily/static/home/runtime-readiness.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
+
+test('runtime readiness retries temporary failures and stops at confirmed states', async () => {
+  const replies = [null, {status: 200, body: {state: 'starting'}}, {status: 200, body: {state: 'ready'}}];
+  const waits = [];
+  const state = await waitForRuntime(async () => {
+    const reply = replies.shift();
+    if (!reply) throw new Error('network interruption');
+    return reply;
+  }, {delay: async ms => waits.push(ms)});
+  assert.equal(state, 'ready');
+  assert.deepEqual(waits, [1000, 1000]);
+  assert.equal(await waitForRuntime(async () => ({status: 401})), 'signed-out');
+  assert.equal(await waitForRuntime(async () => ({status: 200, body: {state: 'starting'}}), {attempts: 1}), 'timeout');
+});
 
 test('conversationTitle names agent, DM and group rows without inventing data', () => {
   assert.equal(conversationTitle({source: 'agent', agent_name: 'Helper', title: 'Old'}, alice), 'Old');

@@ -15,7 +15,7 @@ from . import custom_mcp, skill_packages, agents, artifacts, bot_social, composi
 
 
 
-from .dsbot_gateway import moved_api  # noqa: E402
+from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
 GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
@@ -580,6 +580,11 @@ class App:
             if method == 'POST':
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
+        if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+                state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
+            return 200, {'state': state}, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
@@ -868,6 +873,7 @@ class App:
             provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
             payload['personal_agent']['runtime_provisioning'] = {
                 'state': provision['state'], 'instance_id': provision['instance_id'],
+                'readiness': owner_runtime_readiness(db, session['user_id']),
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []

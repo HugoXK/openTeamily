@@ -369,6 +369,15 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     if (input.includes('image') !== hasImageInput) await saveInput(input)
   }
 
+  function requireModel(botId) {
+    const model = rt.botOf(botId)?.model
+    if ((!model || model === MODEL_ID || model === PROVIDER + '/' + MODEL_ID) && !state.startupModel()) {
+      throw Object.assign(new Error('Configure a model API for this OpenTeamily runtime.'), {
+        code: 'agents/model-unconfigured', status: 503,
+      })
+    }
+  }
+
   // Native turns share a queue because they switch the active DS-Bot part.
   let turnQueue = Promise.resolve()
   function exclusive(fn) {
@@ -377,7 +386,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     return run
   }
   return {
-    state, setup: ensureSetup, prepareModel, exclusive, selectConversation,
+    state, setup: ensureSetup, prepareModel, requireModel, exclusive, selectConversation,
     legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId },
   }
 }

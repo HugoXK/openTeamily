@@ -3,6 +3,7 @@ import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/pub
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { csrfCookie, waitForRuntime } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -42,11 +43,6 @@ export function meetingMeta(item) {
   const actions = Number(item && item.action_count) || 0;
   const done = Number(item && item.done_count) || 0;
   return actions ? `${actions} 个行动项 · ${done} 已完成` : '没有行动项';
-}
-
-function csrfCookie(source) {
-  const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
-  return match ? decodeURIComponent(match[1]) : '';
 }
 
 function hashWorkspace() {
@@ -267,16 +263,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     mainPanel.hidden = true;
     show(document, 'loading', loadingText);
     try {
-      const [, initial] = await Promise.all([
-        request('POST', '/v1/personal-agent').catch(() => ({status: 0})),
-        request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0})),
-      ]);
-      let ready = initial;
-      for (let attempt = 0; attempt < 23 && !ready.body?.items?.length; attempt++) {
-        if (!stillCurrent()) return;
-        await new Promise(resolve => globalThis.setTimeout(resolve, 1000));
-        ready = await request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0}));
-      }
+      const personal = await initializePersonalAgent();
+      if (!stillCurrent() || !personal) return;
+      const ready = await request('GET', '/v1/workspaces?scope=personal');
       if (!stillCurrent()) return;
       if (ready.status === 200 && ready.body?.items?.length) {
         view.location.replace(target);
@@ -297,6 +286,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     back.className = 'public-agent-action';
     back.textContent = '返回公开页面';
     status.append(retry, back);
+  }
+
+  async function initializePersonalAgent() {
+    const result = await request('POST', '/v1/personal-agent').catch(() => null);
+    const agent = result?.body?.personal_agent;
+    const provisioning = agent?.runtime_provisioning;
+    if (agent && (!provisioning || ['ready', 'unmanaged'].includes(provisioning.readiness))) return agent;
+
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    let state;
+    if (provisioning?.readiness === 'starting') {
+      show(document, 'loading', '正在启动你的专属智能体。就绪后会自动继续。');
+      state = await waitForRuntime(() => request('GET', '/v1/auth/runtime-readiness'));
+      if (state === 'ready' || state === 'unmanaged') return agent;
+      if (state === 'signed-out') {
+        view.location.replace('/login' + view.location.hash);
+        return null;
+      }
+    }
+    const message = provisioning?.state === 'capacity'
+      ? '当前运行容量已满，请稍后重试。'
+      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
+        : '暂时无法打开你的工作区，请重试。';
+    show(document, 'error', message);
+    const retry = element('button', 'public-agent-action', '重试');
+    retry.type = 'button';
+    retry.id = 'runtime-startup-retry';
+    retry.addEventListener('click', () => void load());
+    document.getElementById('status')?.append(retry);
+    return null;
   }
 
   async function load() {
@@ -324,13 +344,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       let meeting = meetingFromLink;
       try {
         meeting ||= view.sessionStorage.getItem(pendingKey);
-        view.sessionStorage.removeItem(pendingKey);
       } catch {}
       const target = meetingHref(meeting);
       if (target) {
+        if (!await initializePersonalAgent()) return;
+        try { view.sessionStorage.removeItem(pendingKey); } catch {}
         view.location.replace(target);
         return;
       }
+      try { view.sessionStorage.removeItem(pendingKey); } catch {}
       if (view.location?.pathname === '/login') {
         const hash = view.location.hash;
         const intent = publicAgentIntentFromHash(hash);
@@ -353,15 +375,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       }
       currentUser = session.body.user;
       loginPanel.hidden = true;
+      personal = await initializePersonalAgent();
+      if (!personal) return;
       mainPanel.hidden = false;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
       // Personal initialization creates the first workspace: do not race its listing.
-      const personalResult=await request('POST', '/v1/personal-agent');
       const [listed, onboarding] = await Promise.all([
         request('GET', '/v1/workspaces?limit=100'),
         request('GET', '/v1/onboarding'),
       ]);
-      personal = [200,201].includes(personalResult.status) ? personalResult.body.personal_agent : null;
       profile = onboarding.status === 200 ? onboarding.body.onboarding : null;
       workspaces = listed.status === 200 ? (listed.body.items || []) : [];
       const banner = document.getElementById('home-onboarding');

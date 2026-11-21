@@ -133,6 +133,20 @@ test('the DeepSeek Flash vision model updates a retained provider and follows ac
   ])
 })
 
+test('a missing model is actionable and does not block other native providers', () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, {port:1})
+  const bot = fake.rt.botOf('bot1')
+  bot.model = 'openteamily/' + MODEL_ID
+  bridge.state.startupModel = () => null
+  assert.throws(() => bridge.requireModel(bot.id), {code:'agents/model-unconfigured', status:503})
+  bot.model = 'other-provider/alternate'
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+  bot.model = MODEL_ID
+  bridge.state.startupModel = () => ({model:'owner-selected'})
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+})
+
 test('a provisioned DS-Bot starts its native proxy and runs a turn without polling retired routes', async t => {
   const origins = []
   const management = createServer((req, res) => {

@@ -304,8 +304,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const form = document.getElementById('editor-form');
   const listPanel = document.getElementById('list-panel');
   const editorLoading = document.getElementById('editor-loading');
+  const main = document.getElementById('main');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
-  const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save']
+  const mobileMenu = document.getElementById('mobile-editor-menu');
+  const mobileMore = document.getElementById('mobile-editor-more');
+  const mobileMarkdown = document.getElementById('mobile-editor-markdown');
+  const mobileDelete = document.getElementById('mobile-editor-delete');
+  const mobileSave = document.getElementById('mobile-editor-save');
+  const mobilePanels = new Map([...editorPanels.keys()].map(name => [name, document.getElementById('mobile-editor-' + name)]));
+  const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save', 'mobile-editor-save']
     .map(id => document.getElementById(id)).filter(Boolean);
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
@@ -334,6 +341,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
+
+  form.elements.title.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    form.requestSubmit?.();
+  });
+  form.elements.title.addEventListener('input', () => {
+    const title = form.elements.title;
+    if (/[\r\n]/.test(title.value)) title.value = title.value.replace(/[\r\n]+/g, ' ');
+  });
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -1487,6 +1504,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !!selection && editor === selection && selection.account === currentUser && selection.workspace === workspaceId();
   }
 
+  function setSaving(saving) {
+    for (const button of saveButtons) button.disabled = saving;
+    if (mobileSave) mobileSave.textContent = saving ? '保存中…' : '保存';
+  }
+
+  function updateMobileActions() {
+    const saved = Boolean(current?.id);
+    const isDocument = current?.kind === 'document';
+    if (mobileMenu) mobileMenu.hidden = false;
+    if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
+    if (mobileDelete) mobileDelete.hidden = !saved;
+    for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+  }
+
   function hideEditor() {
     if (pendingDeleteCancel) pendingDeleteCancel();
     editor?.controller.abort();
@@ -1510,7 +1541,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.inert = false;
     editorLoading.hidden = true;
     listPanel.hidden = false;
-    for (const button of saveButtons) button.disabled = false;
+    if (mobileMenu) mobileMenu.open = false;
+    setSaving(false);
   }
 
   function resetEditorPanels() {
@@ -1539,6 +1571,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const selection = {workspace, account: currentUser, controller: new AbortController(), reads: new Map()};
     editor = selection;
     listPanel.hidden = true;
+    if (main) main.scrollTop = 0;
     if (item?.id) {
       editorLoading.hidden = false;
       const seen = await request('GET', `/v1/workspaces/${workspace}/artifacts/${item.id}`, undefined, undefined, selection.controller.signal)
@@ -1556,6 +1589,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = item;
     fillEditor(current);
     resetEditorPanels();
+    updateMobileActions();
     document.getElementById('remove-artifact').hidden = !current?.id;
     editorLoading.hidden = true;
     form.hidden = false;
@@ -2124,6 +2158,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.addEventListener('click', (event) => {
     const wrap = document.querySelector('.filter-wrap');
     if (wrap && !wrap.contains(event.target)) closeFilterPanel();
+    if (mobileMenu?.open && !mobileMenu.contains(event.target)) {
+      pendingDeleteCancel?.();
+      mobileMenu.open = false;
+    }
+  });
+
+  mobileMenu?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !mobileMenu.open || pendingDeleteCancel) return;
+    event.preventDefault();
+    mobileMenu.open = false;
+    mobileMore?.focus();
+  });
+  for (const [name, button] of mobilePanels) {
+    button?.addEventListener('click', () => {
+      const panel = editorPanels.get(name);
+      if (!activeEditor(editor) || !current?.id || !panel || panel.hidden) return;
+      pendingDeleteCancel?.();
+      mobileMenu.open = false;
+      panel.open = true;
+      panel.querySelector?.('summary')?.focus?.();
+    });
+  }
+  mobileMarkdown?.addEventListener('click', () => {
+    if (!activeEditor(editor) || current?.kind !== 'document') return;
+    pendingDeleteCancel?.();
+    mobileMenu.open = false;
+    document.getElementById('document-source-toggle')?.click();
+  });
+  document.getElementById('mobile-editor-reconnect')?.addEventListener('click', () => {
+    if (!activeEditor(editor)) return;
+    pendingDeleteCancel?.();
+    mobileMenu.open = false;
+    mobileMore?.focus();
+    document.getElementById('workspace-events-retry')?.click();
   });
 
   function returnToCatalog() {
@@ -2134,7 +2202,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('cancel-editor').addEventListener('click', returnToCatalog);
-  document.getElementById('cancel-editor-load').addEventListener('click', returnToCatalog);
+  document.getElementById('cancel-editor-load').addEventListener('click', () => {
+    returnToCatalog();
+    document.getElementById('new-menu-button')?.focus?.({preventScroll: true});
+  });
 
   async function uploadMedia(path, extraFields) {
     const file = document.getElementById('media-file').files[0];
@@ -2170,7 +2241,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!activeEditor(selection) || !current || selection.saving) return;
     if (websiteInteractive) renderWebsitePreview();
     selection.saving = true;
-    for (const button of saveButtons) button.disabled = true;
+    setSaving(true);
     try {
     if (!workspaceId()) {
       show('error', '先选择一个工作区。');
@@ -2299,6 +2370,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (inputTitle !== form.elements.title.value || body !== form.elements.body.value);
     if (newerDraft) updateEditorMeta(current, kind);
     else fillEditor(current);
+    updateMobileActions();
     document.getElementById('remove-artifact').hidden = false;
     if (isNew) resetEditorPanels();
     for (const [name, panel] of editorPanels) {
@@ -2311,13 +2383,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selection.saving = false;
       if (activeEditor(selection)) {
         form.inert = false;
-        for (const button of saveButtons) button.disabled = false;
+        setSaving(false);
       }
     }
   });
 
-  function askDeleteConfirmation() {
-    const trigger = document.getElementById('remove-artifact');
+  function askDeleteConfirmation(trigger) {
     const target = {workspace: workspaceId(), id: current && current.id};
     const prompt = artifactDeletePrompt(current);
     const box = document.createElement('div');
@@ -2720,11 +2791,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openAgentTaskDialog();
   });
 
-  document.getElementById('remove-artifact').addEventListener('click', async () => {
+  async function removeArtifact(trigger) {
     const selection = editor;
-    if (!activeEditor(selection) || !current?.id) return;
-    const target = await askDeleteConfirmation();
+    if (!activeEditor(selection) || !current?.id || pendingDeleteCancel) return;
+    const target = await askDeleteConfirmation(trigger);
     if (!target || editor !== selection) return;
+    if (trigger === mobileDelete) {
+      mobileMenu.open = false;
+      mobileMore?.focus();
+    }
     const result = await request('POST', editorPath(selection, target.id) + '/remove', {})
       .catch(() => ({status: 0, body: {}}));
     if (result.status === 200 && catalog?.workspace === target.workspace && catalog.account === selection.account) {
@@ -2738,7 +2813,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     returnToCatalog();
     show('ok', '已删除。');
-  });
+  }
+  const desktopDelete = document.getElementById('remove-artifact');
+  desktopDelete.addEventListener('click', () => removeArtifact(desktopDelete));
+  mobileDelete?.addEventListener('click', () => removeArtifact(mobileDelete));
 
   const canvas = document.getElementById('board-canvas');
   canvas.addEventListener('pointerdown', event => {
