@@ -104,6 +104,7 @@ FEATURE_TABLES.update({
          'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY r.id'),
     ],
     'agents': [
+        ('personal_agents', 'SELECT * FROM personal_agents WHERE user_id=? ORDER BY agent_id'),
         ('workspace_agents', _scoped('workspace_agents')),
         ('workspace_agent_categories',
          'SELECT c.* FROM workspace_agent_categories c JOIN workspace_agents a ON a.id = c.agent_id '
@@ -192,6 +193,32 @@ def build(db, user_id, feature, now=None, data_dir=None):
         bundle['media'] = text
         bundle['manifest']['media'] = {'rows': len(media), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
     return bundle
+
+
+def build_personal_bootstrap(db, user_id, instance_id, now):
+    """Seed the initial roster and welcome message for an auto-provisioned DS-Bot."""
+    from .security import digest
+    binding = db.execute('SELECT * FROM personal_agents WHERE user_id=?', (user_id,)).fetchone()
+    if binding is None:
+        return None
+    workspace = binding['workspace_id']
+    roster = db.execute(
+        'SELECT a.* FROM workspace_agents a LEFT JOIN builtin_agents b ON b.agent_id=a.id '
+        'WHERE a.workspace_id=? AND (a.id=? OR b.workspace_id=?) ORDER BY a.id',
+        (workspace, binding['agent_id'], workspace)).fetchall()
+    welcome = db.execute(
+        'SELECT * FROM agent_conversations WHERE workspace_id=? AND agent_id=? AND key_hash=?',
+        (workspace, binding['agent_id'], digest('personal-conversation:' + user_id))).fetchone()
+    messages = db.execute(
+        'SELECT * FROM agent_messages WHERE conversation_id=? AND seq=1 AND role=?',
+        (welcome['id'], 'assistant')).fetchall() if welcome else []
+    raw = {'personal_agents': [binding], 'workspace_agents': roster,
+           'agent_conversations': [welcome] if welcome else [], 'agent_messages': messages}
+    tables = {name: canonical([dict(row) for row in rows]) for name, rows in raw.items()}
+    manifest = {name: {'rows': len(raw[name]), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+                for name, text in tables.items()}
+    return {'format': FORMAT, 'version': 1, 'feature': 'agents', 'instance_id': instance_id,
+            'created': now, 'tables': tables, 'manifest': manifest}
 
 
 def dumps(bundle):

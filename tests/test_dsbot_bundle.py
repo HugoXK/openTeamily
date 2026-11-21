@@ -196,5 +196,30 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(media[0]['data']), PNG)
 
 
+class PersonalBootstrapTests(unittest.TestCase):
+    def test_personal_bootstrap_seeds_only_initial_roster_and_welcome(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = Store(Path(temp.name) / 'state')
+        app = App(store, Config(ORIGIN, allow_registration=True), clock=lambda: 1800000000)
+        alice, bob = Client(app), Client(app, peer='127.0.0.2')
+        self.assertEqual(alice.register('alice')['status'], 201)
+        self.assertEqual(bob.register('bob')['status'], 201)
+        private = alice.call('POST', '/v1/personal-agent', {})['body']['personal_agent']
+        other = bob.call('POST', '/v1/personal-agent', {})['body']['personal_agent']
+        with store.connect() as db:
+            aid = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            bundle = dsbot_bundle.build_personal_bootstrap(db, aid, 'a' * 32, 1800000000)
+        self.assertEqual(bundle['instance_id'], 'a' * 32)
+        tables = {name: json.loads(raw) for name, raw in bundle['tables'].items()}
+        self.assertEqual(tables['personal_agents'][0]['user_id'], aid)
+        self.assertTrue(all(a['workspace_id'] == private['workspace']['id'] for a in tables['workspace_agents']))
+        self.assertEqual(len(tables['workspace_agents']), 11)
+        self.assertEqual(len(tables['agent_messages']), 1)
+        self.assertEqual(tables['agent_messages'][0]['agent_id'], private['agent']['id'])
+        self.assertNotIn(other['workspace']['id'], str(bundle))
+        for name, raw in bundle['tables'].items():
+            self.assertEqual(bundle['manifest'][name]['sha256'], hashlib.sha256(raw.encode()).hexdigest())
+
 if __name__ == '__main__':
     unittest.main()
