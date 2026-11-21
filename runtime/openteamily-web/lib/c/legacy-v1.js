@@ -21,6 +21,7 @@ const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
+const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
 const WORK_LABELS = {
   document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
   image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板', model3d: '3D 作品',
@@ -1163,6 +1164,41 @@ function discoverRoutes(host) {
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
   return [
+    {
+      method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
+      async handle({ match, query }) {
+        return wrap(async () => {
+          const q = parseQuery(query)
+          const notices = match[1] === 'follow-work'
+          const keys = notices ? ['q', 'cursor', 'limit'] : ['view', 'q', 'cursor', 'limit']
+          if ([...q.keys()].some(key => !keys.includes(key) || q.getAll(key).length !== 1)) {
+            throw new Fault(400, 'invalid', '无效的主页列表请求。')
+          }
+          return [200, await client(host).get('/v1/ot/profile/social' + qs({
+            view: notices ? 'work-notices' : q.get('view'), q: q.get('q'), cursor: q.get('cursor'), limit: q.get('limit'),
+          }))]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/profile\/(social|follow-work)$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const notices = match[1] === 'follow-work'
+          const key = notices ? 'enabled' : 'on'
+          if (!body || Array.isArray(body) || Object.keys(body).length !== 2
+            || typeof body.handle !== 'string' || !PROFILE_HANDLE.test(body.handle) || typeof body[key] !== 'boolean') {
+            throw new Fault(400, 'invalid', '请选择作者和更新状态。')
+          }
+          if (notices) {
+            const result = await client(host).post('/v1/ot/follows/notifications', {handle: body.handle, enabled: body.enabled})
+            return [200, {enabled: result.enabled === true}]
+          }
+          const result = await client(host).post('/v1/ot/follows', {handle: body.handle, on: body.on})
+          return [200, {following: result.following === true}]
+        })
+      },
+    },
     // Publish a work (artifact on this DS-Bot) to the public Bot Social catalog (/w/<slug>).
     {
       method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/discover$/,
@@ -1275,10 +1311,10 @@ function discoverRoutes(host) {
       async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
-          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort'].includes(key) || q.getAll(key).length !== 1)) {
+          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator'].includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的作品浏览请求。')
           }
-          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort')}
+          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'), creator: q.get('creator')}
           const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null

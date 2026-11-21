@@ -76,6 +76,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
     (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$'), 'messenger'),
+    (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
     (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
@@ -131,6 +132,8 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-directory { return 418; }',
     'location ^~ /v1/team-directory/ { return 418; }',
     'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
+    'location = /v1/profile/social { return 418; }',
+    'location = /v1/profile/follow-work { return 418; }',
     'location ^~ /v1/discover/ { return 418; }',
     'location ~ ^/v1/contacts(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
@@ -223,6 +226,8 @@ def target_for(uri, routes):
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
     if path == '/space' and 'artifacts' in routes['moved_pages']:
         path = '/artifacts'
+    if path == '/profile/edit/' and 'profile' in routes['moved_pages']:
+        path = '/profile/edit'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')

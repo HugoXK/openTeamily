@@ -63,6 +63,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/directory$/, 'teams'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations(?:\/[A-Za-z0-9._-]{1,80}(?:\/[A-Za-z0-9._\/-]{1,120})?)?$/, 'messenger'],
   [/^\/v1\/meeting-calls\/(?:create|preview|join|poll|signal|leave|end)$/, 'messenger'],
+  [/^\/v1\/profile\/(?:social|follow-work)$/, 'discover'],
   [/^\/v1\/discover\/(?:agents|works|me\/works)$/, 'discover'],
   [/^\/v1\/discover\/agents\/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\/(?:start|remix)$/, 'discover'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/[0-9a-f]{32}\/discover(?:\/revoke)?$/, 'discover'],

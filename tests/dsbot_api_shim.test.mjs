@@ -78,6 +78,11 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
 
 
 test('members, team, messenger and discover /v1 routes go to the C features', () => {
+  assert.deepEqual(movedTarget('/v1/profile/social?view=following', ORIGIN), {
+    feature: 'discover', path: '/v1/profile/social?view=following',
+  });
+  assert.equal(movedTarget('/v1/profile', ORIGIN), null);
+  assert.equal(movedTarget('/v1/profile/avatar', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');

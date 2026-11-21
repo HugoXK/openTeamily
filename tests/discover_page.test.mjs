@@ -590,6 +590,7 @@ test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('', ''), 'limit=12');
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
   assert.equal(feedQuery('设计', 'hot-key', '', 'popular'), 'limit=12&q=%E8%AE%BE%E8%AE%A1&cursor=hot-key&sort=popular');
+  assert.equal(feedQuery('', '', '', 'latest', 'vera.home'), 'limit=12&creator=vera.home');
 });
 
 test('the activity feed renders opted-in work cards from the public API', async () => {

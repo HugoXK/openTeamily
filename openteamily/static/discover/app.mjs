@@ -6,6 +6,7 @@ import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -72,12 +73,13 @@ export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video', 'model3d'];
 
-export function feedQuery(query, cursor = '', kind = '', sort = 'latest') {
+export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
   if (sort === 'popular') params.set('sort', sort);
+  if (creator) params.set('creator', creator);
   return params.toString();
 }
 
@@ -90,11 +92,14 @@ export function feedStateFromSearch(search) {
   const tab = feed === 'following' || feed === 'collected' ? feed : 'activity';
   const requestedKind = params.get('kind');
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
+  const requestedCreator = params.get('creator');
+  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator : '';
   return {
     tab,
     kind,
-    sort: tab === 'activity' && !kind && params.get('sort') === 'popular' ? 'popular' : 'latest',
+    sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
     query: (params.get('q') || '').slice(0, 80),
+    ...(creator ? {creator} : {}),
   };
 }
 
@@ -103,8 +108,9 @@ export function feedSearchText(state) {
   const tab = state && state.tab;
   if (tab === 'following' || tab === 'collected') params.set('feed', tab);
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
-  if (tab === 'activity' && !state.kind && state.sort === 'popular') params.set('sort', 'popular');
+  if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
+  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator);
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -837,8 +843,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const popular = feedState.tab === 'activity' && feedState.sort === 'popular';
     const popularButton = document.getElementById('feed-sort-popular');
     if (popularButton) {
-      popularButton.hidden = feedState.tab !== 'activity';
+      popularButton.hidden = feedState.tab !== 'activity' || Boolean(feedState.creator);
       popularButton.setAttribute('aria-current', String(popular));
+    }
+    const creatorFilter = document.getElementById('feed-creator-filter');
+    if (creatorFilter) {
+      creatorFilter.hidden = !feedState.creator;
+      creatorFilter.textContent = feedState.creator ? '@' + feedState.creator + ' ×' : '';
+      creatorFilter.setAttribute('aria-label', feedState.creator ? '清除作者筛选 @' + feedState.creator : '清除作者筛选');
     }
     for (const kind of FEED_KINDS) {
       const node = document.getElementById('feed-kind-' + (kind || 'all'));
@@ -864,7 +876,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     window.addEventListener('popstate', () => {
       const next = feedStateFromSearch(location?.search);
       const feedChanged = feedSearchText(next) !== feedSearchText(feedState);
-      Object.assign(feedState, next);
+      Object.assign(feedState, {creator: '', ...next});
       applyFeedChrome({restoreQuery: true});
       const intent = workDetailFromSearch(location?.search);
       if (!intent) {
@@ -895,7 +907,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
-    else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length
+    else note.textContent = (feedState.query || feedState.kind || feedState.creator) && !feedState.items.length
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
 
@@ -1172,7 +1184,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
     const sort = needsViewer ? 'latest' : feedState.sort;
-    const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort);
+    const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     let result;
@@ -1860,6 +1872,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     feedState.sort = 'popular';
     applyFeedChrome();
     pushFeedUrl();
+    return loadFeed();
+  });
+  document.getElementById('feed-creator-filter')?.addEventListener('click', () => {
+    feedState.creator = '';
+    applyFeedChrome();
+    pushFeedUrl();
+    document.getElementById('feed-tab-' + feedState.tab)?.focus?.();
     return loadFeed();
   });
   const feedSearch = document.getElementById('feed-search');

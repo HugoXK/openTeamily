@@ -8,11 +8,7 @@ Group agent request completion is also listed for the requester, and saving a wo
 in the artifact library notifies the other workspace members who can see it. The
 artifact write side only; the /artifacts notification button is a later slice.
 A due message reminder is listed too, derived from the one-shot automation run it fires.
-A follower who turned on 作品通知 for a creator they follow is told once per newly listed
-public work; that source reuses ``discover_follows`` and hides an item again
-when the work stops being listed. User-agent conversation unread aggregation
-and server push are not implemented here; do not describe this as Teamily
-notification parity.
+Creator publication notices and their settings live on Bot Social.
 """
 import json
 import re
@@ -33,25 +29,6 @@ CREATE TABLE IF NOT EXISTS social_notifications (
  UNIQUE(message_id, user_id, kind));
 CREATE INDEX IF NOT EXISTS social_notification_inbox
  ON social_notifications(workspace_id, user_id, seq);
-CREATE TABLE IF NOT EXISTS social_follow_work_subs (
- follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- creator_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
- updated INTEGER NOT NULL,
- PRIMARY KEY(follower_id, creator_id));
-CREATE TABLE IF NOT EXISTS social_follow_work_notifications (
- id TEXT PRIMARY KEY,
- user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
- slug TEXT NOT NULL,
- title TEXT NOT NULL,
- seq INTEGER NOT NULL,
- created INTEGER NOT NULL,
- read INTEGER NOT NULL DEFAULT 0 CHECK(read IN (0,1)),
- UNIQUE(artifact_id, user_id));
-CREATE INDEX IF NOT EXISTS social_follow_work_inbox
- ON social_follow_work_notifications(user_id, seq);
 CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -83,7 +60,6 @@ EXCERPT = 140
 # A mention starts at the beginning or after whitespace/punctuation and must end
 # at a boundary, so e-mail addresses and "@bobby" never notify "bob".
 MENTION = re.compile(r'(?<![\w@.])@([A-Za-z0-9_.-]{1,64})(?![\w-])')
-HEX32 = re.compile(r'[0-9a-f]{32}')
 
 
 def mentioned_names(text):
@@ -283,85 +259,6 @@ def _mark_reminders(db, workspace_id, user_id, now, run_id=None):
         db.execute('INSERT OR IGNORE INTO automation_reminder_reads(run_id,user_id) VALUES(?,?)',
                    (row['id'], user_id))
 
-FOLLOW_WORK = '''
- FROM social_follow_work_notifications n
- JOIN artifact_discover d ON d.artifact_id=n.artifact_id AND d.listed=1
- JOIN users a ON a.id=n.actor_id
- JOIN discover_follows f ON f.follower_id=n.user_id AND f.creator_id=n.actor_id
- WHERE n.user_id=?
-'''
-
-
-def follow_work_view(row):
-    return {'id': row['id'], 'kind': 'follow_work', 'actor_id': row['actor_id'],
-            'actor_username': row['actor_username'], 'artifact_id': row['artifact_id'],
-            'title': row['title'], 'slug': row['slug'], 'path': '/w/' + row['slug'],
-            'created': row['created'], 'read': bool(row['read'])}
-
-
-def follow_work_listing(db, user_id, unread_only=False):
-    rows = db.execute(
-        'SELECT n.*, a.username AS actor_username' + FOLLOW_WORK
-        + (' AND n.read=0' if unread_only else '')
-        + ' ORDER BY n.created DESC, n.id DESC LIMIT ?', (user_id, LIMIT)).fetchall()
-    return [follow_work_view(row) for row in rows]
-
-
-SWITCH = '''
- FROM discover_follows f
- JOIN users u ON u.id=f.creator_id
- LEFT JOIN user_profiles p ON p.user_id=f.creator_id
- LEFT JOIN social_follow_work_subs s ON s.follower_id=f.follower_id AND s.creator_id=f.creator_id
-'''
-
-
-def follow_work_switches(db, user_id):
-    return db.execute(
-        'SELECT f.creator_id, u.username, p.handle, p.name, COALESCE(s.enabled,0) AS enabled'
-        + SWITCH + ' WHERE f.follower_id=? ORDER BY u.username', (user_id,)).fetchall()
-
-
-def follow_work_switch_view(row):
-    return {'creator_id': row['creator_id'], 'username': row['username'],
-            'handle': row['handle'] or '', 'name': row['name'] or row['username'],
-            'enabled': row['enabled'] == 1}
-
-
-def set_follow_work(db, follower_id, creator_id, enabled, now):
-    """Turn one followed creator's 作品通知 on or off; follow the creator first."""
-    if follower_id == creator_id:
-        return None
-    row = db.execute('SELECT 1' + SWITCH + ' WHERE f.follower_id=? AND f.creator_id=?',
-                     (follower_id, creator_id)).fetchone()
-    if row is None:
-        return None
-    db.execute('INSERT INTO social_follow_work_subs(follower_id,creator_id,enabled,updated) VALUES(?,?,?,?) '
-               'ON CONFLICT(follower_id,creator_id) DO UPDATE SET enabled=excluded.enabled, updated=excluded.updated',
-               (follower_id, creator_id, 1 if enabled else 0, now))
-    return follow_work_switch_view(db.execute(
-        'SELECT f.creator_id, u.username, p.handle, p.name, s.enabled'
-        + SWITCH + ' WHERE f.follower_id=? AND f.creator_id=?', (follower_id, creator_id)).fetchone())
-
-
-def deliver_follow_work(db, artifact_id, slug, title, creator_id, now):
-    """One unread item per subscribed follower when a work becomes publicly listed."""
-    subs = db.execute('SELECT s.follower_id FROM social_follow_work_subs s '
-                      'JOIN discover_follows f ON f.follower_id=s.follower_id AND f.creator_id=s.creator_id '
-                      'WHERE s.creator_id=? AND s.enabled=1 AND s.follower_id<>?',
-                      (creator_id, creator_id)).fetchall()
-    if not subs:
-        return 0
-    seq = db.execute('SELECT COALESCE(MAX(seq),0) FROM social_follow_work_notifications').fetchone()[0]
-    added = 0
-    for row in subs:
-        seq += 1
-        added += db.execute(
-            'INSERT OR IGNORE INTO social_follow_work_notifications '
-            '(id,user_id,actor_id,artifact_id,slug,title,seq,created,read) VALUES(?,?,?,?,?,?,?,?,0)',
-            (uuid4().hex, row['follower_id'], creator_id, artifact_id, slug, title, seq, now)).rowcount
-    return added
-
-
 def listing(db, workspace_id, user_id, unread_only=False, now=0):
     rows = db.execute(
         'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
@@ -378,8 +275,7 @@ def listing(db, workspace_id, user_id, unread_only=False, now=0):
     reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL' if unread_only else '')
     items = ([view(row) for row in rows] + [reply_view(row) for row in replies]
              + [artifact_view(row) for row in artifacts_listed]
-             + [reminder_view(row) for row in reminders]
-             + follow_work_listing(db, user_id, unread_only))
+             + [reminder_view(row) for row in reminders])
     items.sort(key=lambda item: item['created'], reverse=True)
     return items[:LIMIT]
 
@@ -390,8 +286,7 @@ def unread_count(db, workspace_id, user_id, now=0):
     saved = db.execute('SELECT COUNT(*)' + VISIBLE_ARTIFACTS + ' AND n.read=0',
                        (workspace_id, user_id)).fetchone()[0]
     reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL')
-    follows = db.execute('SELECT COUNT(*)' + FOLLOW_WORK + ' AND n.read=0', (user_id,)).fetchone()[0]
-    return mentions + replies + saved + len(reminders) + follows
+    return mentions + replies + saved + len(reminders)
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -407,14 +302,10 @@ def mark_read(db, workspace_id, user_id, notification_id=None, now=0):
         db.execute('UPDATE artifact_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_reminders(db, workspace_id, user_id, now)
-        db.execute('UPDATE social_follow_work_notifications SET read=1 WHERE user_id=? AND read=0', (user_id,))
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
                         (notification_id, workspace_id, user_id))
     if cursor.rowcount == 1:
-        return True
-    if db.execute('UPDATE social_follow_work_notifications SET read=1 WHERE id=? AND user_id=?',
-                  (notification_id, user_id)).rowcount == 1:
         return True
     if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
         _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))

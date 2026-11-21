@@ -103,6 +103,7 @@ class SettingsPage:
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/profile/social.mjs': ('profile', 'social.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
         '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding/app.css': ('onboarding', 'app.css', 'text/css; charset=utf-8'),

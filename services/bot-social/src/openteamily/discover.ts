@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
 CREATE INDEX IF NOT EXISTS ot_listings_recent_works ON ot_listings(updated_at DESC, id DESC) WHERE listed = 1 AND kind = 'work';
+CREATE INDEX IF NOT EXISTS ot_listings_profile_works ON ot_listings(owner_id, created_at, id) WHERE listed = 1 AND kind = 'work';
 CREATE TABLE IF NOT EXISTS ot_listing_models (
   listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
   owner_id TEXT NOT NULL, content BLOB NOT NULL
@@ -32,10 +33,16 @@ CREATE TABLE IF NOT EXISTS ot_listing_sites (
 );
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
-CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
+CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1)),
+  PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
 CREATE INDEX IF NOT EXISTS ot_follows_creator ON ot_follows(creator_id);
 CREATE INDEX IF NOT EXISTS ot_likes_recent ON ot_likes(listing_id, created_at);
 CREATE INDEX IF NOT EXISTS ot_collections_recent ON ot_collections(listing_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_likes_profile_recent ON ot_likes(owner_id, created_at, listing_id);
+CREATE INDEX IF NOT EXISTS ot_collections_profile_recent ON ot_collections(owner_id, created_at, listing_id);
+CREATE INDEX IF NOT EXISTS ot_follows_profile_outgoing ON ot_follows(follower_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_follows_profile_incoming ON ot_follows(creator_id, created_at);
 ${WORK_COMMENTS_SCHEMA}
 `;
 
@@ -89,10 +96,14 @@ function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
 const LISTING_CARD_COLUMNS = `l.id, l.owner_id, l.kind, l.slug, l.title, l.summary, l.category, l.work_kind,
   l.listed, l.chat_enabled, l.updated_at, l.created_at`;
 
-const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
+const listingFields = (ot: OtContext, l: any) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
-  creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
-  path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
+  updated_at: l.updated_at, created_at: l.created_at, path: listingPath(ot, l),
+});
+
+const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
+  ...listingFields(ot, l), creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled,
+  ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
   ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id), site_available: publishedSiteAvailable(ot, l)} : {}),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
@@ -460,12 +471,83 @@ function popularWorks(ot: OtContext) {
   };
 }
 
+function profileSocialCounts(ot: OtContext, owner: string) {
+  return ot.get(`SELECT
+    (SELECT COUNT(*) FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.creator_id
+      WHERE f.follower_id = ?) AS following,
+    (SELECT COUNT(*) FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.follower_id
+      WHERE f.creator_id = ?) AS followers,
+    (SELECT COUNT(*) FROM ot_listings l JOIN ot_likes r ON r.listing_id = l.id
+      WHERE l.owner_id = ? AND l.listed = 1 AND r.owner_id <> l.owner_id) AS likes_received,
+    (SELECT COUNT(*) FROM ot_listings l JOIN ot_collections r ON r.listing_id = l.id
+      WHERE l.owner_id = ? AND l.listed = 1 AND r.owner_id <> l.owner_id) AS collections_received`,
+  owner, owner, owner, owner);
+}
+
+type ProfileSocialKey = {
+  activity_at: number;
+  page_key: string;
+};
+
+const foldProfileSearch = (value: string) => value.normalize("NFKC").toLowerCase();
+
+function profileSocialCursor(cursor: string | undefined, scope: string, isFollowList: boolean): unknown[] {
+  if (cursor === undefined) return [];
+  const match = /^([a-f0-9]{24})\.([0-9]{1,16})\.([A-Za-z0-9][A-Za-z0-9_.-]{0,79})$/.exec(cursor);
+  assert(match && match[1] === scope, 400, "invalid_request", "invalid profile social cursor");
+  const at = Number(match[2]);
+  assert(Number.isSafeInteger(at) && (isFollowList || LISTING_ID.test(match[3])), 400, "invalid_request", "invalid profile social cursor");
+  return [at, match[3]];
+}
+
+function profileFollowRows(ot: OtContext, owner: string, outgoing: boolean, search: string, cursor: unknown[], limit: number) {
+  const [actor, peer] = outgoing ? ["follower_id", "creator_id"] : ["creator_id", "follower_id"];
+  return ot.all<ProfileSocialKey & {handle: string; display_name: string; bio: string; following: number; work_notices: number}>(`
+    SELECT p.handle, p.display_name, p.bio, f.work_notices, f.created_at AS activity_at, p.handle AS page_key,
+      EXISTS (SELECT 1 FROM ot_follows outgoing WHERE outgoing.follower_id = ? AND outgoing.creator_id = p.owner_id) AS following
+    FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.${peer}
+    WHERE f.${actor} = ?
+      ${search ? "AND (instr(ot_profile_fold(p.handle), ?) > 0 OR instr(ot_profile_fold(p.display_name), ?) > 0)" : ""}
+      ${cursor.length ? "AND (f.created_at, p.handle) < (?, ?)" : ""}
+    ORDER BY f.created_at DESC, p.handle DESC LIMIT ?`,
+  owner, owner, ...(search ? [search, search] : []), ...cursor, limit);
+}
+
+function profileListingRows(ot: OtContext, owner: string, view: "liked" | "collected" | "published", cursor: unknown[], limit: number) {
+  const activity = view === "published"
+    ? "SELECT id AS listing_id, created_at FROM ot_listings WHERE owner_id = ? AND listed = 1 AND kind = 'work'"
+    : `SELECT listing_id, created_at FROM ${view === "liked" ? "ot_likes" : "ot_collections"} WHERE owner_id = ?`;
+  return ot.all(`WITH profile_activity AS (${activity})
+    SELECT ${LISTING_CARD_COLUMNS}, a.created_at AS activity_at, a.listing_id AS page_key,
+      p.handle, COALESCE(p.display_name, '(left)') AS display_name, COALESCE(p.bio, '') AS bio,
+      EXISTS (SELECT 1 FROM ot_likes r WHERE r.listing_id = l.id AND r.owner_id = ?) AS liked,
+      EXISTS (SELECT 1 FROM ot_collections r WHERE r.listing_id = l.id AND r.owner_id = ?) AS collected
+    FROM profile_activity a JOIN ot_listings l ON l.id = a.listing_id
+    LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.listed = 1 ${cursor.length ? "AND (a.created_at, a.listing_id) < (?, ?)" : ""}
+    ORDER BY a.created_at DESC, a.listing_id DESC LIMIT ?`,
+  owner, owner, owner, ...cursor, limit);
+}
+
+function profileSocialPage<T extends ProfileSocialKey, R>(rows: T[], limit: number, scope: string, project: (row: T) => R) {
+  const last = rows.length > limit ? rows[limit - 1] : null;
+  return {
+    items: rows.slice(0, limit).map(project),
+    next_cursor: last ? `${scope}.${last.activity_at}.${last.page_key}` : null,
+  };
+}
+
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const popular = popularWorks(ot);
   registerWorkComments(app, ot);
+  ot.db.function("ot_profile_fold", {deterministic: true}, foldProfileSearch);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+  const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
+  if (!followColumns.some(column => column.name === "work_notices")) {
+    ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
+  }
 
   app.put("/v1/ot/listings", {
     bodyLimit: CHAT_FILE_BODY_LIMIT,
@@ -527,8 +609,11 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
       }
       if (!existing || !existing.listed) {
-        for (const f of ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? LIMIT 5000", me.ownerId)) {
-          ot.notify(f.follower_id, "discover.published", { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) });
+        const followers = ot.all<{follower_id: string}>("SELECT follower_id FROM ot_follows WHERE creator_id = ? AND (? <> 'work' OR work_notices = 1) LIMIT 5000",
+          me.ownerId, b.kind);
+        if (followers.length) {
+          const data = { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) };
+          for (const {follower_id} of followers) ot.notify(follower_id, "discover.published", data);
         }
       }
     });
@@ -570,7 +655,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
     const me = ot.me(req);
     const q = query(req);
-    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q"].includes(key)),
+    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q", "creator"].includes(key)),
       400, "invalid_request", "unknown work detail filter");
     const scope = discoverScope(ot, {...q, kind: "work"}, me.ownerId);
     const slug = params(req).slug;
@@ -621,6 +706,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     if (r.changes) ot.notify(creator, "follow.new", { follower: ot.profileView(me.ownerId) });
     return { following: true };
   });
+  app.post("/v1/ot/follows/notifications", async (req, reply) => {
+    const owner = ot.me(req).ownerId;
+    reply.header("Cache-Control", "private, no-store");
+    const b = body(req);
+    assert(typeof b.handle === "string" && typeof b.enabled === "boolean" && Object.keys(b).length === 2,
+      400, "invalid_request", "provide a creator handle and an enabled boolean");
+    const creator = ot.ownerByHandle(text(b.handle, "handle", {min: 1, max: 100}));
+    const changed = ot.run("UPDATE ot_follows SET work_notices = ? WHERE follower_id = ? AND creator_id = ?",
+      Number(b.enabled), owner, creator);
+    assert(changed.changes === 1, 404, "follow_not_found", "you are not following this creator");
+    return {enabled: b.enabled};
+  });
   app.get("/v1/ot/follows", async (req) => {
     const me = ot.me(req);
     const handle = one(query(req).handle, "handle");
@@ -629,6 +726,39 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       following: ot.all<any>("SELECT creator_id FROM ot_follows WHERE follower_id = ? ORDER BY created_at DESC LIMIT 500", who).map((r) => ot.profileView(r.creator_id)),
       followers: ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? ORDER BY created_at DESC LIMIT 500", who).map((r) => ot.profileView(r.follower_id)),
     };
+  });
+  app.get("/v1/ot/profile/social", async (req, reply) => {
+    const owner = ot.me(req).ownerId;
+    reply.header("Cache-Control", "private, no-store");
+    const q = query(req);
+    const view = one(q.view, "view") ?? "counts";
+    if (view === "counts") {
+      assert(Object.keys(q).every(key => key === "view"), 400, "invalid_request", "unknown profile counts filter");
+      return profileSocialCounts(ot, owner);
+    }
+    const isFollowList = view === "following" || view === "followers" || view === "work-notices";
+    assert(isFollowList || view === "liked" || view === "collected" || view === "published",
+      400, "invalid_request", "unknown profile social view");
+    assert(Object.keys(q).every(key => ["view", "cursor", "limit"].includes(key) || (key === "q" && isFollowList)),
+      400, "invalid_request", "unknown profile social filter");
+    const term = one(q.q, "q");
+    const search = term === undefined ? "" : foldProfileSearch(text(term, "q", {max: 80})).replace(/^@/, "");
+    const limit = Math.max(1, intParam(q.limit, "limit", 20, 50));
+    const scope = hashCode(JSON.stringify([owner, view, search])).slice(0, 24);
+    const cursor = profileSocialCursor(one(q.cursor, "cursor"), scope, isFollowList);
+    if (isFollowList) {
+      const rows = profileFollowRows(ot, owner, view !== "followers", search, cursor, limit + 1);
+      if (view === "work-notices") {
+        return profileSocialPage(rows, limit, scope, ({handle, display_name, bio, work_notices}) =>
+          ({handle, display_name, bio, enabled: Boolean(work_notices)}));
+      }
+      return profileSocialPage(rows, limit, scope, ({handle, display_name, bio, following}) =>
+        ({handle, display_name, bio, following: Boolean(following)}));
+    }
+    const rows = profileListingRows(ot, owner, view, cursor, limit + 1);
+    return profileSocialPage(rows, limit, scope, row =>
+      ({...listingFields(ot, row), creator: {handle: row.handle, display_name: row.display_name, bio: row.bio},
+        liked: Boolean(row.liked), collected: Boolean(row.collected)}));
   });
 
   // Public catalog pages: no connector token. The isolated site exposes them at
