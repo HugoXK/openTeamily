@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import heapq
 
-from . import agent_runtime, bot_social, members, model_api, runtime_autoprovision, runtime_keys
+from . import bot_social, dsbot_bundle, members, model_api, runtime_autoprovision
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS instances (
  desired TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), operation_id TEXT NOT NULL,
  operation_type TEXT NOT NULL, observed TEXT NOT NULL, observed_revision INTEGER,
  health TEXT NOT NULL DEFAULT 'unknown', process_ref TEXT, error_code TEXT, blocked INTEGER NOT NULL DEFAULT 0,
- create_key TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(workspace_id,create_key));
+ create_key TEXT NOT NULL, created INTEGER NOT NULL,
+ retired_at INTEGER, retired_to TEXT REFERENCES instances(id), UNIQUE(workspace_id,create_key));
 CREATE INDEX IF NOT EXISTS instance_owner ON instances(owner_id,workspace_id,id);
 CREATE TABLE IF NOT EXISTS runtime_jobs (
  id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES instances(id), revision INTEGER NOT NULL,
@@ -35,6 +36,66 @@ CREATE TABLE IF NOT EXISTS runtime_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS one_running_job ON runtime_jobs(instance_id) WHERE status='running';
 CREATE INDEX IF NOT EXISTS pending_runtime_jobs ON runtime_jobs(instance_id,status,revision);
 ''' + runtime_autoprovision.SCHEMA
+
+
+def ensure_retirement_schema(db):
+    """Add retirement metadata and prevent a new live Compose duplicate in an active transaction."""
+    columns = {row[1] for row in db.execute('PRAGMA table_info(instances)')}
+    if 'retired_at' not in columns:
+        db.execute('ALTER TABLE instances ADD COLUMN retired_at INTEGER')
+    if 'retired_to' not in columns:
+        db.execute('ALTER TABLE instances ADD COLUMN retired_to TEXT REFERENCES instances(id)')
+    # Existing duplicates remain available for explicit operator reconciliation.
+    db.execute("""CREATE TRIGGER IF NOT EXISTS instances_one_live_compose_insert
+        BEFORE INSERT ON instances
+        WHEN NEW.backend_mode='compose' AND NEW.retired_at IS NULL AND EXISTS (
+            SELECT 1 FROM instances WHERE owner_id=NEW.owner_id AND backend_mode='compose' AND retired_at IS NULL
+        )
+        BEGIN SELECT RAISE(ABORT, 'Owner already has an active Compose runtime'); END
+    """)
+    db.execute("""CREATE TRIGGER IF NOT EXISTS instances_one_live_compose_update
+        BEFORE UPDATE OF owner_id,backend_mode,retired_at ON instances
+        WHEN NEW.backend_mode='compose' AND NEW.retired_at IS NULL
+          AND (OLD.owner_id<>NEW.owner_id OR OLD.backend_mode<>'compose' OR OLD.retired_at IS NOT NULL)
+          AND EXISTS (
+              SELECT 1 FROM instances WHERE owner_id=NEW.owner_id AND id<>OLD.id
+              AND backend_mode='compose' AND retired_at IS NULL
+          )
+        BEGIN SELECT RAISE(ABORT, 'Owner already has an active Compose runtime'); END
+    """)
+
+
+def retire_instance(db, iid, canonical, retired_at):
+    """Archive an attested stopped Compose duplicate inside the caller's IMMEDIATE transaction."""
+    if (not all(isinstance(value, str) and ID.fullmatch(value) for value in (iid, canonical))
+            or iid == canonical or type(retired_at) is not int or retired_at < 0):
+        raise ValueError('Invalid runtime retirement arguments')
+    cursor = db.execute('SELECT * FROM instances WHERE id IN (?,?)', (iid, canonical))
+    columns = [column[0] for column in cursor.description]
+    rows = {row[0]: dict(zip(columns, row)) for row in cursor}
+    source, target = rows.get(iid), rows.get(canonical)
+    if (source is None or target is None or source['owner_id'] != target['owner_id']
+            or source['backend_mode'] != 'compose' or target['backend_mode'] != 'compose'
+            or target['retired_at'] is not None):
+        raise ValueError('Retirement requires a live Compose runtime for the same owner')
+    if source['retired_at'] is not None:
+        if source['retired_to'] == canonical:
+            return False
+        raise ValueError('The runtime is already retired to another target')
+    if (source['desired'] != 'stopped' or source['observed'] != 'stopped'
+            or source['revision'] != source['observed_revision'] or source['blocked'] or source['process_ref'] is not None):
+        raise ValueError('The runtime must be stopped and converged before retirement')
+    provisioned = db.execute('SELECT instance_id FROM runtime_auto_provisions WHERE user_id=?',
+                             (source['owner_id'],)).fetchone()
+    if provisioned is not None and provisioned[0] != canonical:
+        raise ValueError('The retirement target must remain the provisioned runtime')
+    if db.execute("SELECT 1 FROM runtime_jobs WHERE instance_id=? AND status IN ('queued','running')", (iid,)).fetchone():
+        raise ValueError('A pending manager job prevents runtime retirement')
+    row = db.execute('UPDATE instances SET retired_at=?,retired_to=? WHERE id=? AND retired_at IS NULL',
+                     (retired_at, canonical, iid))
+    if row.rowcount != 1:
+        raise ValueError('The runtime changed before retirement')
+    return True
 
 
 class RuntimeFault(Exception):
@@ -123,7 +184,9 @@ class Lifecycle:
             table = db.execute("SELECT name FROM sqlite_master WHERE name='runtime_schema'").fetchone()
             if table and [r[0] for r in db.execute('SELECT version FROM runtime_schema')] != [1]:
                 raise ValueError('Unsupported runtime schema')
-            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + '\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
+            ensure_retirement_schema(db)
+            db.commit()
 
     def expire(self):
         # A timed-out external operation might still be running: DO NOT auto-retry or
@@ -133,7 +196,9 @@ class Lifecycle:
 
     def expire_with(self, db):
         now = int(self.clock())
-        ids = [r[0] for r in db.execute("SELECT instance_id FROM runtime_jobs WHERE status='running' AND lease_until<=?", (now,))]
+        ids = [r[0] for r in db.execute(
+            "SELECT j.instance_id FROM runtime_jobs j JOIN instances i ON i.id=j.instance_id "
+            "WHERE i.retired_at IS NULL AND j.status='running' AND j.lease_until<=?", (now,))]
         for iid in ids:
             db.execute("UPDATE runtime_jobs SET status='interrupted',error_code='interrupted',finished=?,lease_hash=NULL WHERE instance_id=? AND status='running'", (now, iid))
             db.execute("UPDATE instances SET blocked=1,observed='unknown',health='unknown',error_code='interrupted' WHERE id=?", (iid,))
@@ -149,9 +214,13 @@ class Lifecycle:
 
     @staticmethod
     def owned(db, user, iid, write=False):
-        row = db.execute('SELECT * FROM instances WHERE id=?', (iid,)).fetchone()
+        row = db.execute('SELECT * FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
         if row is None:
             fail(404, 'not_found', 'Instance not found')
+        if row['backend_mode'] == 'compose':
+            if row['owner_id'] != user or runtime_autoprovision.owned_instance(db, user) != iid:
+                fail(404, 'not_found', 'Instance not found')
+            return row
         workspace = members.load(db, row['workspace_id'], user)
         if workspace is None:
             fail(404, 'not_found', 'Instance not found')
@@ -161,8 +230,9 @@ class Lifecycle:
 
     @staticmethod
     def grants(db, manager, iid):
-        return iid in manager.instance_ids or (
+        allowed = iid in manager.instance_ids or (
             manager.auto_provisioned and runtime_autoprovision.assigned(db, manager.id, iid))
+        return allowed and db.execute('SELECT 1 FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone() is not None
 
     @staticmethod
     def managed(db, manager, iid):
@@ -197,28 +267,35 @@ class Lifecycle:
         if db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0] >= self.policy.max_jobs:
             fail(429, 'quota', 'Runtime job capacity reached; operator archival required')
 
-    def create(self, owner, wid, key):
+    def create(self, owner, wid, key, *, per_user=False):
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         with self.store.transaction() as db:
-            return self.create_with(db, owner, wid, key)
+            return self.create_with(db, owner, wid, key, per_user=per_user)
 
-    def create_with(self, db, owner, wid, key):
+    def create_with(self, db, owner, wid, key, *, per_user=False):
         """Create inside the caller's IMMEDIATE transaction (server-side auto-provisioning)."""
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         now = int(self.clock())
         self.workspace(db, owner, wid, write=True)
-        old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
-        if old:
-            return False, self.result(db, old['id'])
+        owner_scoped = per_user or self.policy.backend_mode == 'compose'
+        if owner_scoped:
+            existing = runtime_autoprovision.owned_instance(db, owner)
+            if existing is not None:
+                return False, self.result(db, existing)
+        else:
+            old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=? AND retired_at IS NULL', (wid, digest(key))).fetchone()
+            if old:
+                return False, self.result(db, old['id'])
         self.capacity(db)
-        if (db.execute('SELECT COUNT(*) FROM instances WHERE workspace_id=?', (wid,)).fetchone()[0] >= self.policy.max_instances_per_workspace
-                or db.execute('SELECT COUNT(*) FROM instances').fetchone()[0] >= self.policy.max_instances):
+        if (db.execute('SELECT COUNT(*) FROM instances WHERE workspace_id=? AND retired_at IS NULL', (wid,)).fetchone()[0] >= self.policy.max_instances_per_workspace
+                or db.execute('SELECT COUNT(*) FROM instances WHERE retired_at IS NULL').fetchone()[0] >= self.policy.max_instances):
             fail(429, 'quota', 'Instance capacity reached')
         iid, op, jid = uuid4().hex, uuid4().hex, uuid4().hex
+        create_key = digest('owner:' + owner + ':' + key) if owner_scoped else digest(key)
         db.execute('INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,operation_id,operation_type,observed,create_key,created) VALUES(?,?,?,?,?,?,?,\'stopped\',1,?,\'create\',\'pending\',?,?)',
-                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, digest(key), now))
+                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, create_key, now))
         db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,1,?,'create','queued',?)", (jid, iid, op, now))
         return True, self.result(db, iid)
 
@@ -231,7 +308,11 @@ class Lifecycle:
         self.expire()
         with self.store.connect() as db:
             self.workspace(db, owner, wid)
-            rows = db.execute('SELECT * FROM instances WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?', (wid, cursor, limit + 1)).fetchall()
+            if self.policy.backend_mode == 'compose':
+                iid = runtime_autoprovision.owned_instance(db, owner)
+                row = db.execute('SELECT * FROM instances WHERE id=? AND id>? AND retired_at IS NULL', (iid, cursor)).fetchone() if iid else None
+                return {'items': [self.snapshot(row)] if row else [], 'cursor': None}
+            rows = db.execute('SELECT * FROM instances WHERE workspace_id=? AND id>? AND retired_at IS NULL ORDER BY id LIMIT ?', (wid, cursor, limit + 1)).fetchall()
             return {'items': [self.snapshot(r) for r in rows[:limit]], 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
     def intent(self, owner, iid, action, operation_id=None, expected_revision=None):
@@ -278,7 +359,7 @@ class Lifecycle:
     def get_job(self, owner, jid):
         self.expire()
         with self.store.connect() as db:
-            row = db.execute('SELECT j.* FROM runtime_jobs j JOIN instances i ON i.id=j.instance_id WHERE j.id=?', (jid,)).fetchone()
+            row = db.execute('SELECT j.* FROM runtime_jobs j JOIN instances i ON i.id=j.instance_id WHERE j.id=? AND i.retired_at IS NULL', (jid,)).fetchone()
             if row is None:
                 fail(404, 'not_found', 'Job not found')
             try:
@@ -301,7 +382,7 @@ class Lifecycle:
                 if iid == last:
                     continue
                 last = iid
-                row = db.execute('SELECT * FROM instances WHERE id=? AND backend_mode=?', (iid, manager.backend_mode)).fetchone()
+                row = db.execute('SELECT * FROM instances WHERE id=? AND backend_mode=? AND retired_at IS NULL', (iid, manager.backend_mode)).fetchone()
                 if row and (desired is None or row['desired'] == desired):
                     rows.append(row)
                     if len(rows) > limit:
@@ -362,40 +443,26 @@ class Lifecycle:
                 fail(409, 'bot_social_not_applicable', 'Bot Social config is only issued for create, start or restart')
             public, source = bot_social.resolve(db, workspace_id=row['workspace_id'])
             payload = bot_social.container_payload(public, source)
+            if payload is not None and 'displayName' not in payload:
+                # Phase C: the user's DS-Bot onboards as @<username>.home, so teammates find each
+                # other by the OpenTeamily username. Public name only, never a credential.
+                owner = db.execute('SELECT username FROM users WHERE id=?', (row['owner_id'],)).fetchone()
+                name = bot_social.flatten_name(owner['username']) if owner else None
+                if name:
+                    payload['displayName'] = name
             return {'bot_social_present': payload is not None, 'bot_social': payload}
 
-    def runtime_agent_key(self, manager, iid, jid, revision, lease, origin):
-        """Lease-gated instance runtime key for the container task loop. Token is not stored on the job."""
+    def runtime_agent_bootstrap(self, manager, iid, jid, revision, lease):
+        """Return the provisioned owner's initial DS-Bot data for a leased startup."""
         self.expire()
-        if not isinstance(origin, str) or not origin.startswith('http') or any(ord(ch) < 32 for ch in origin) or len(origin) > 512:
-            fail(409, 'runtime_key_unavailable', 'Management origin is not configured')
         with self.store.transaction() as db:
             row, job = self.leased(db, manager, iid, jid, revision, lease)
             if job['operation_type'] not in ('create', 'start', 'restart'):
-                fail(409, 'runtime_key_not_applicable', 'Instance runtime key is only issued for create, start or restart')
-            existing = agent_runtime.load_instance_key(db, iid)
-            wrap_key = agent_runtime.wrapping_key(self.store)
-            if existing and existing['issued_job_id'] == job['id']:
-                token = agent_runtime.unwrap(wrap_key, existing['token_blob'])
-                return {'runtime_key_present': True, 'runtime_key': {
-                    'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
-            if existing:
-                runtime_keys.revoke(db, existing['key_id'])
-            now = int(self.clock())
-            key_id, token = runtime_keys.issue_instance(db, row['owner_id'], now, iid)
-            blob = agent_runtime.wrap(wrap_key, token)
-            if existing:
-                db.execute(
-                    'UPDATE instance_runtime_keys SET key_id=?, token_blob=?, issued_job_id=?, updated=? WHERE instance_id=?',
-                    (key_id, blob, job['id'], now, iid),
-                )
-            else:
-                db.execute(
-                    'INSERT INTO instance_runtime_keys VALUES(?,?,?,?,?,?,?)',
-                    (iid, row['workspace_id'], key_id, blob, job['id'], now, now),
-                )
-            return {'runtime_key_present': True, 'runtime_key': {
-                'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+                fail(409, 'agent_bootstrap_not_applicable', 'Personal agent bootstrap is only available for create, start or restart')
+            bootstrap = None
+            if runtime_autoprovision.is_auto(db, iid):
+                bootstrap = dsbot_bundle.build_personal_bootstrap(db, row['owner_id'], iid, int(self.clock()))
+            return {'agent_bootstrap': bootstrap}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()

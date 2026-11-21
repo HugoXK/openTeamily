@@ -390,22 +390,6 @@ def unread_count(db, conversation_id, user_id):
         (conversation_id, user_id, conversation_id, user_id)).fetchone()[0]
 
 
-def first_unread(db, conversation_id, user_id):
-    """Id of the oldest message this reader has not acknowledged yet, if any.
-
-    Same filters as unread_count: retracted messages and the reader's own
-    messages never hold the boundary.
-    """
-    row = db.execute(
-        f"""SELECT msg.id FROM ({MESSAGE_ROWS}) msg
-        WHERE msg.conversation_id=? AND msg.retracted=0 AND (msg.user_id IS NULL OR msg.user_id<>?)
-        AND msg.seq>COALESCE((SELECT read_seq FROM social_reads
-                             WHERE conversation_id=? AND user_id=?),0)
-        ORDER BY msg.seq LIMIT 1""",
-        (conversation_id, user_id, conversation_id, user_id)).fetchone()
-    return None if row is None else row['id']
-
-
 def mark_read(db, conversation_id, user_id, message_id):
     message = db.execute(f'SELECT seq FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
                          (conversation_id, message_id)).fetchone()

@@ -66,14 +66,14 @@ jobs:
       - name: Smoke the image as the compose manager would start it
         run: node runtime/flybot-image/test/smoke.mjs openteamily-flybot:test
 
-      - name: Prove an agent conversation through a running container
-        run: python3 runtime/flybot-image/test/container-agent-chat.py openteamily-flybot:test
-
-      - name: Prove compose manager starts a digest-pinned image
-        run: python3 runtime/flybot-image/test/container-compose-chat.py openteamily-flybot:test
+      - name: Prove Compose lifecycle, personal bootstrap and retained volume
+        run: python3 runtime/flybot-image/test/container-compose-lifecycle.py openteamily-flybot:test
 
       - name: Prove the platform gateway routes each user only to their own DS-Bot
         run: python3 runtime/flybot-image/test/container-gateway-isolation.py openteamily-flybot:test
+
+      - name: Prove two users' DS-Bots collaborate through a real Bot Social (team, invite, DM, group, discover)
+        run: python3 runtime/flybot-image/test/container-social-two-dsbots.py openteamily-flybot:test
 
       - name: Inventory licenses in the built image
         run: |
