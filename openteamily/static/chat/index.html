@@ -337,10 +337,24 @@
       <span id="forward-count">已选 0 条</span>
       <label>转发到 <select id="forward-target"></select></label>
       <button type="button" id="forward-submit" disabled>转发</button>
+      <button type="button" id="selection-group-capture" aria-haspopup="dialog" hidden>提炼记忆</button>
       <button type="button" id="selection-memory" disabled>保存到记忆</button>
       <button type="button" id="selection-meeting" disabled>整理会议纪要</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="group-capture-dialog" class="chat-save-dialog" aria-labelledby="group-capture-title">
+      <form id="group-capture-form">
+        <h2 id="group-capture-title">提炼群聊记忆</h2>
+        <p id="group-capture-review"></p>
+        <p class="note">建议会出现在你的「记忆建议」中，可核对原消息后再保存。</p>
+        <p id="group-capture-status" role="status"></p>
+        <div class="actions">
+          <a id="group-capture-inbox" hidden>打开记忆建议</a>
+          <button type="button" id="group-capture-close">关闭</button>
+          <button type="submit" id="group-capture-submit" class="primary">开始提炼</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="selection-memory-dialog" class="chat-save-dialog" aria-labelledby="selection-memory-heading">
       <form id="selection-memory-form">
         <h2 id="selection-memory-heading">保存到记忆</h2>

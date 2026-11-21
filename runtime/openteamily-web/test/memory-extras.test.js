@@ -221,3 +221,61 @@ test('selected history combines explicit context and remains separate from autom
     assert.deepEqual(await memory.endpoints.enqueueHistory({...scope,message_ids:[second]}),{queued:0,skipped:1,full:0})
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
+
+test('group drafts recheck the full batch on save and hide when group access is lost', async () => {
+  const {default: memoryFeature} = await import('../features/memory/index.js')
+  const {mkdtempSync, rmSync} = await import('node:fs')
+  const {tmpdir} = await import('node:os')
+  const {join} = await import('node:path')
+  const {setTimeout: delay} = await import('node:timers/promises')
+  const dir = mkdtempSync(join(tmpdir(),'memory-group-'))
+  const scope = {workspace_id:WS,conversation_id:'otc_group-fixture'}
+  const input = [
+    {id:'otm_context',revision:1,title:'发布群',author:'甲',text:'我们在讨论荔枝项目。'},
+    {id:'otm_decision',revision:1,title:'发布群',author:'乙',text:'确定周五发布。'},
+  ]
+  let accessible = true
+  const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
+    async call(name,payload) {
+      assert.equal(name,'messenger/captureSources')
+      assert.equal(payload.workspace_id,WS)
+      assert.equal(payload.conversation_id,scope.conversation_id)
+      if (!accessible) throw new Error('Group inaccessible')
+      return {items:input.filter(item => payload.message_ids.includes(item.id))}
+    },
+    currentRuntime:()=>({async backgroundTextOnly(prompt) {
+      const {messages} = JSON.parse(prompt.split('\n').at(-1))
+      assert.deepEqual(messages.map(item=>item.speaker),['甲','乙'])
+      assert.deepEqual(messages.map(item=>item.text),input.map(item=>item.text))
+      return JSON.stringify([{source_id:messages[1].id,title:'发布计划',body:'荔枝项目确定周五发布。'}])
+    }}),
+  })
+  const path = base('/candidates')
+  const v1 = (method,tail='',body) => memory.endpoints.v1({method,path:path+tail,body})
+  const job = {...scope,messages:input.map(({id,revision})=>({id,revision}))}
+  try {
+    await assert.rejects(memory.endpoints.enqueueGroupHistory(job))
+    assert.deepEqual(await memory.endpoints.enqueueGroupHistory(job,{internal:true}),{queued:2,skipped:0,full:0})
+    let listing
+    for(let i=0;i<100;i++) {
+      listing = (await v1('GET')).body
+      if (listing.items.length) break
+      await delay(50)
+    }
+    const draft = listing.items[0]
+    assert.equal(draft.source.kind,'group')
+    assert.equal(draft.source.message_id,input[1].id)
+    assert.equal(draft.source.conversation_id,scope.conversation_id)
+    accessible = false
+    assert.equal((await v1('GET')).body.items.length,0)
+    const save = () => v1('POST','/'+draft.id,{action:'save',title:draft.title,body:draft.body})
+    assert.equal((await save()).status,409)
+    accessible = true
+    input[0].revision = 2
+    assert.equal((await save()).status,409, 'a supporting source changed')
+    input[0].revision = 1
+    const done = await save()
+    assert.equal(done.status,201)
+    assert.equal(done.body.page.source.message_id,input[1].id)
+  } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
+})

@@ -1,4 +1,9 @@
 export function sourceHref(workspace, source) {
+  if (source?.kind === 'group') {
+    const valid = /^[0-9a-f]{32}$/.test(workspace) &&
+      [source.conversation_id,source.message_id].every(id => /^[A-Za-z0-9._-]{1,80}$/.test(id || ''));
+    return valid ? '/chat#' + new URLSearchParams({workspace,social:source.conversation_id,message:source.message_id}) : '';
+  }
   if (![workspace,source?.agent_id,source?.conversation_id,source?.message_id].every(id => /^[0-9a-f]{32}$/.test(id || ''))) return '';
   return '/chat#' + new URLSearchParams({workspace, agent:source.agent_id, conversation:source.conversation_id, message:source.message_id});
 }
@@ -32,7 +37,7 @@ export function mountCandidates(document, {request, workspaceId}) {
     get('memory-review-body').value = item.body;
     const link = get('memory-review-source');
     link.href = sourceHref(workspace, item.source);
-    link.textContent = '查看原消息 · ' + (item.source.title || '智能体私聊');
+    link.textContent = '查看原消息 · ' + (item.source.title || (item.source.kind === 'group' ? '群聊' : '智能体私聊'));
     get('memory-review-excerpt').textContent = item.source.excerpt || '';
     error.textContent = '';
     review.showModal();

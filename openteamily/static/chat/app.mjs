@@ -1455,6 +1455,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
     const target = document.getElementById('forward-target');
     document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    const capture = document.getElementById('selection-group-capture');
+    if (capture) {
+      capture.hidden = !servedByDsbot || currentSource !== 'social' || currentConversation?.kind !== 'group' || Boolean(currentConversation.public_agent);
+      capture.disabled = !selectedMessages.size;
+    }
     for (const id of ['selection-memory', 'selection-meeting']) {
       const action = document.getElementById(id);
       if (action) action.disabled = !selectedMessages.size;
@@ -3389,7 +3394,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (start.social) {
-      await openSocialConversation(start.social);
+      if (await openSocialConversation(start.social, {acknowledge:!start.message}) && /^[A-Za-z0-9._-]{1,80}$/.test(start.message)) {
+        if (await jumpToMessage(start.message,null) === false) {
+          show('error','找不到这条来源消息。');
+          return;
+        }
+        writeHash({workspace:workspaceId(),social:start.social,message:start.message});
+      }
     } else if (start.agent && start.conversation) {
       if (await openAgentConversation(start.agent, start.conversation) && /^[0-9a-f]{32}$/.test(start.message)) {
         if (await jumpToMessage(start.message, null) === false) {
@@ -3445,6 +3456,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.defaultView.location.assign(href);
     } catch {
       show('error', '无法打开会议草稿，请重试。');
+    }
+  });
+
+  const groupCaptureDialog = document.getElementById('group-capture-dialog');
+  const groupCaptureStatus = document.getElementById('group-capture-status');
+  const groupCaptureSubmit = document.getElementById('group-capture-submit');
+  const groupCaptureInbox = document.getElementById('group-capture-inbox');
+  let groupCapture = null;
+  document.getElementById('selection-group-capture')?.addEventListener('click', () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const matching = lastSocialItems.filter(item => selectedMessages.has(item.id));
+    if (!matching.length || matching.length !== selectedMessages.size || matching.length > 12
+        || matching.some(item => item.role === 'agent' || item.retracted || item.voice || item.attachment || !item.body?.trim())) {
+      show('error','请选择当前记录中 1 到 12 条群成员发出的文字消息。');
+      return;
+    }
+    const workspace = workspaceId();
+    groupCapture = {scope:sendScope(), ids:matching.map(item => item.id),
+      path:`${socialBase()}/${currentConversation.id}/memory/capture`,busy:false};
+    groupCaptureStatus.textContent = '';
+    groupCaptureSubmit.disabled = false;
+    groupCaptureInbox.hidden = true;
+    groupCaptureInbox.href = '/memory?' + new URLSearchParams({workspace,page:'candidates'});
+    document.getElementById('group-capture-review').textContent =
+      `已选 ${matching.length} 条群聊文字消息，将由你的 DS-Bot 在后台生成待核对建议。`;
+    groupCaptureDialog.showModal();
+  });
+  document.getElementById('group-capture-close')?.addEventListener('click', () => groupCaptureDialog.close());
+  groupCaptureDialog?.addEventListener('close', () => {groupCapture = null;});
+  document.getElementById('group-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = groupCapture;
+    if (!draft || draft.busy || sendScope() !== draft.scope) return;
+    draft.busy = groupCaptureSubmit.disabled = true;
+    groupCaptureStatus.textContent = '正在核对群聊消息…';
+    let done = false;
+    try {
+      const result = await request('POST',draft.path,{message_ids:draft.ids});
+      if (groupCapture !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        groupCaptureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      groupCaptureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      groupCaptureInbox.hidden = !(queued || skipped);
+      done = !full;
+      if (done) setSelecting(false);
+    } catch {
+      if (groupCapture === draft) groupCaptureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (groupCapture === draft) { draft.busy = false; groupCaptureSubmit.disabled = done; }
     }
   });
 

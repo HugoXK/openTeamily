@@ -67,7 +67,8 @@ export function replaceTopics(store, workspaceId, pageId, names) {
 }
 
 export const captureSourceView = row => ({
-  agent_id:row.agent_id, conversation_id:row.conversation_id, message_id:row.id,
+  agent_id:row.agent_id || undefined, conversation_id:row.conversation_id, message_id:row.source_message_id || row.id,
+  ...(row.source_message_id ? {kind:'group'} : {}),
   title:row.source_title, excerpt:row.excerpt,
 })
 
