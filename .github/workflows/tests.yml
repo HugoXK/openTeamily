@@ -31,12 +31,14 @@ jobs:
       - run: node --test tests/chat_language.test.mjs
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_dsbot.test.mjs
+      - run: node --test tests/chat_calls_handoff.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
       - run: node --test tests/ci_test_list.test.mjs
       - run: node --test tests/guide_page.test.mjs
       - run: node --test tests/members_page.test.mjs
       - run: node --test tests/messenger_page.test.mjs
       - run: node --test tests/team_page.test.mjs
+      - run: node --test tests/team_runs_page.test.mjs
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
