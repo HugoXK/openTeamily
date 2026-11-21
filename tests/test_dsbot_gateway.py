@@ -163,6 +163,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/team/', gw.load_routes()), '/api/openteamily/page?path=%2Fteam%2F')
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
         self.assertEqual(gw.moved_api('/v1/model-api/image'), 'model-api')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images/{aid}'), 'images')

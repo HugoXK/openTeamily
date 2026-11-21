@@ -91,6 +91,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$'), 'artifacts'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
@@ -144,6 +145,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
 

@@ -352,7 +352,7 @@ test("members can page, search and anchor shared history inside their conversati
   assert.equal((await C.call("GET",path+"?q=planning")).status,404);
 });
 
-test("workspace message search requires active workspace and conversation membership", async () => {
+test("workspace message search and scoped history require access to the workspace and conversation", async () => {
   const A = await home(S.base, "search-a");
   const B = await home(S.base, "search-b");
   const C = await home(S.base, "search-c");
@@ -380,6 +380,15 @@ test("workspace message search requires active workspace and conversation member
   await A.ok("DELETE", `/v1/ot/messages/${removed.id}`);
   await send(A, current.id, "schedule but without a percentage sign");
   const newest = await send(A, current.id, "SCHEDULE% approved");
+
+  const scopedHistory = (conversation: string, workspace: string) =>
+    `/v1/ot/conversations/${conversation}/messages?workspace_id=${workspace}&limit=1`;
+  const currentPage = await A.ok("GET", scopedHistory(current.id, primary.workspace_id));
+  assert.equal(currentPage.messages[0].id, newest.id);
+  assert.equal((await A.call("GET", scopedHistory(outside.id, primary.workspace_id))).status, 404);
+  assert.equal((await C.call("GET", scopedHistory(current.id, primary.workspace_id))).status, 404);
+  assert.equal((await A.ok("GET", scopedHistory(dm.id, primary.workspace_id))).messages[0].id, direct.id);
+  assert.equal((await A.call("GET", scopedHistory(outsideDm.id, primary.workspace_id))).status, 404);
 
   const search = `/v1/ot/workspaces/${primary.workspace_id}/messages/search?q=schedule%25&limit=2`;
   const first = await A.ok("GET", search);

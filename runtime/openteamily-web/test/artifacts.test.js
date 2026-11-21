@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
@@ -178,4 +179,58 @@ test('chat attachments export the selected saved version and require an internal
     assert.match(attachment.mime,mime)
     if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
   }
+})
+
+test('native workbook versions preserve distinct worksheets and Excel treats unsupported formulas as text', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const spreadsheet = {schema:'openteamily.spreadsheet.v1',sheets:[
+    {name:'明细',rows:[['商品','金额'],['笔','12.50'],['胶水','7'],['总计','=sum(B2:B3)']]},
+    {name:'库存',rows:[['编号','备注'],['00123','=HYPERLINK("https://example.test/","link")']]},
+  ]}
+  const payload = {title:'采购清单',kind:'spreadsheet',spreadsheet}
+  const invalid = await call('POST',base(),{
+    ...payload,spreadsheet:{...spreadsheet,sheets:[{name:'Sheet',rows:[]},{name:'sheet',rows:[]}]},
+  },key())
+  assert.equal(invalid.status,400)
+  const created = await call('POST',base(),payload,key())
+  assert.equal(created.status,201,JSON.stringify(created.body))
+  const {artifact} = created.body
+  const route = '/' + artifact.id
+  assert.equal(artifact.kind,'spreadsheet')
+  assert.deepEqual(artifact.spreadsheet,spreadsheet)
+  assert.equal((await call('GET',base())).body.items[0].spreadsheet,undefined)
+  const updated = structuredClone(spreadsheet)
+  updated.sheets[0].rows[1][1] = '15'
+  assert.equal((await call('POST',base(route),{revision:1,changes:{spreadsheet:updated}})).body.artifact.revision,2)
+  const stale = await call('POST',base(route),{revision:1,changes:{spreadsheet}})
+  assert.equal(stale.status,409)
+  const historical = await call('GET',base(route+'/versions/1/export'))
+  assert.equal(historical.status,200)
+  assert.match(historical.download.content_type,/spreadsheetml/)
+  const bytes = Buffer.from(historical.download.data,'base64')
+  const parts = new Map()
+  for (let offset=0; bytes.readUInt32LE(offset) === 0x04034b50;) {
+    const nameAt = offset+30
+    const dataAt = nameAt+bytes.readUInt16LE(offset+26)+bytes.readUInt16LE(offset+28)
+    const next = dataAt+bytes.readUInt32LE(offset+18)
+    parts.set(bytes.toString('utf8',nameAt,dataAt),inflateRawSync(bytes.subarray(dataAt,next)).toString())
+    offset = next
+  }
+  assert.match(parts.get('xl/workbook.xml'),/name="明细".*name="库存"/)
+  assert.match(parts.get('xl/worksheets/sheet1.xml'),/<c r="B2"><v>12\.50<\/v><\/c>/)
+  assert.match(parts.get('xl/worksheets/sheet1.xml'),/<f>SUM\(B2:B3\)<\/f>/)
+  assert.match(parts.get('xl/worksheets/sheet2.xml'),/<t xml:space="preserve">00123<\/t>/)
+  assert.match(parts.get('xl/worksheets/sheet2.xml'),/<t xml:space="preserve">=HYPERLINK/)
+  assert.doesNotMatch(parts.get('xl/worksheets/sheet2.xml'),/<f>/)
+  const attachment = await bot.features.table['artifacts/chatAttachment']({
+    workspace_id:WS,artifact_id:artifact.id,revision:1,
+  },{internal:true})
+  assert.equal(attachment.attachment.title,'采购清单-v1.xlsx')
+  assert.equal(attachment.attachment.data,historical.download.data)
+  const restored = await call('POST',base(route+'/restore'),{revision:2,to:1})
+  assert.equal(restored.body.artifact.revision,3)
+  assert.deepEqual(restored.body.artifact.spreadsheet,spreadsheet)
+  const preview = await call('GET',base(route+'/preview'))
+  assert.match(preview.text,/<td>12\.50<\/td>/)
 })

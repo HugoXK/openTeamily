@@ -58,7 +58,7 @@ function seedForeignComment(bot, threadId, { created = 1000 } = {}) {
   } finally { db.close() }
 }
 
-test('the artifacts feature serves annotations and records migration 3', async () => {
+test('the artifacts feature serves annotations and records migration 4', async () => {
   const { bot, artifactId } = await setup()
   const listed = await ok(bot, 'artifacts/annotations-list', { workspace_id: WS, artifact_id: artifactId })
   assert.deepEqual(listed.items, [])
@@ -66,7 +66,7 @@ test('the artifacts feature serves annotations and records migration 3', async (
   const db = store(bot)
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3])
+    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4])
   } finally { db.close() }
 })
 
@@ -320,7 +320,7 @@ test('migrations are idempotent and threads survive a reboot', async () => {
   const db = store(again)
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3])
+    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4])
   } finally { db.close() }
 })
 

@@ -93,6 +93,10 @@ CREATE TABLE IF NOT EXISTS artifact_chat_sources (
   conversation_title TEXT,
   UNIQUE(workspace_id, message_id));
 `, `
+CREATE TABLE artifact_spreadsheets (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  workbook TEXT NOT NULL);
+`, `
 -- Artifact annotation threads (retried from the retired openteamily/annotations.py).
 -- The artifact row is the parent: threads and comments are dropped with the
 -- artifact, and the workspace column keeps every query scoped to one workspace.

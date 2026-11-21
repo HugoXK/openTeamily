@@ -4691,8 +4691,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncMemoryRecall();
     imageCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
+    const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
+    const workspace = workspaceId();
+    const scope = new URLSearchParams();
+    if (workspace) {
+      scope.set('workspace',workspace);
+      if (shareable) scope.set('conversation',currentConversation.id);
+    }
+    for (const link of document.querySelectorAll('[data-create-artifact]')) {
+      link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
+    }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);
+    const available = servedByDsbot && (shareable || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;
