@@ -37,6 +37,119 @@ test('listQuery encodes search and omits empty q', () => {
   ]);
 });
 
+test('native Space shows title, body and filename matches as safe text', async () => {
+  const title = '蓝图🌱提纲';
+  const text = '会议正文 <img src=x onerror=alert(1)> 蓝图🌱 交付计划';
+  const filename = '附件蓝图🌱.png';
+  const needle = '蓝图🌱';
+  const hit = (kind, source) => {
+    const start = source.indexOf(needle);
+    return {kind, text: source, start, end: start + needle.length};
+  };
+  const item = (id, title, match) => ({id, title, match, kind: 'document'});
+  const page = await openArtifactsPage({native: true, extraRequest(path) {
+    if (path === '/v1/workspaces/w1/artifacts?q=' + encodeURIComponent(needle) + '&order=recent') {
+      return reply({body: {items: [
+        item('title', title, hit('title', title)),
+        item('body', '周会备忘', hit('body', text)),
+        item('file', '附件', hit('filename', filename)),
+        item('invalid', '偏移无效', {kind:'body',text:'含🌱',start:1,end:2}),
+      ]}});
+    }
+  }});
+  try {
+    const search = page.elements.get('search');
+    search.value = needle;
+    await search.dispatch('keydown', {key: 'Enter'});
+    const rows = artifactRows(page.elements.get('artifact-list'));
+    assert.deepEqual(rows.map(row => row.dataset.artifactId), ['title','body','file','invalid']);
+    const titleButton = rows[0].children[0];
+    assert.equal(titleButton.textContent, title);
+    assert.equal(titleButton.children.find(node => node.tagName === 'MARK').textContent, needle);
+    const contexts = rows.slice(1).map(row => row.children.find(node => node.className === 'artifact-search-context'));
+    assert.match(contexts[0].textContent, /^正文 · …/);
+    assert.match(contexts[1].textContent, /^文件名 · 附件/);
+    assert.deepEqual(contexts.slice(0, 2).map(context => context.children.find(node => node.tagName === 'MARK').textContent),
+      [needle, needle]);
+    assert.equal(contexts[2], undefined, 'an offset splitting a surrogate is discarded');
+    assert.equal(page.created.some(node => node.tagName === 'IMG'), false, 'stored text never becomes HTML');
+  } finally { page.close(); }
+});
+
+test('Space debounces composition and ignores obsolete search responses', {timeout: 3000}, async () => {
+  const earlier = deferred();
+  const started = deferred();
+  const latest = deferred();
+  const page = await openArtifactsPage({native: true,
+    items:[{id:'base',title:'起始作品',kind:'document'}],
+    extraRequest(path) {
+      if (path === '/v1/workspaces/w1/artifacts?q=old&order=recent') return earlier.promise;
+      if (path === '/v1/workspaces/w1/artifacts?q=' + encodeURIComponent('最终正文') + '&order=recent') {
+        started.finish();
+        return latest.promise;
+      }
+    },
+  });
+  try {
+    const search = page.elements.get('search');
+    const listing = page.elements.get('artifact-list');
+    search.value = 'old';
+    const pending = search.dispatch('keydown', {key:'Enter'});
+    search.value = '暂存字';
+    await search.dispatch('input', {isComposing: true});
+    assert.equal(page.calls.some(call => call.path.includes(encodeURIComponent('暂存字'))), false);
+    search.value = '临时';
+    await search.dispatch('compositionend');
+    search.value = '最终正文';
+    await search.dispatch('input');
+    assert.equal(page.elements.get('artifact-list-note').textContent, '正在搜索作品…');
+    assert.equal(page.elements.get('list-empty').hidden, true);
+    earlier.finish(reply({body:{items:[{id:'old',title:'旧搜索',kind:'document'}]}}));
+    await pending;
+    assert.deepEqual(artifactRows(listing), []);
+    await started.promise;
+    latest.finish(reply({body:{items:[{id:'new',title:'只命中正文',kind:'document'}]}}));
+    await new Promise(setImmediate);
+    assert.deepEqual(artifactRows(listing).map(row => row.dataset.artifactId), ['new']);
+    assert.equal(page.calls.filter(call => call.path.includes('?q=')).length, 2);
+  } finally { page.close(); }
+});
+
+test('Space separates a failed search from an empty result and clears the query with Escape', async () => {
+  const failed = deferred();
+  let takes = 0;
+  const page = await openArtifactsPage({native:true, items:[{id:'base',title:'原目录',kind:'document'}], extraRequest(path) {
+    if (path === '/v1/workspaces/w1/artifacts?q=missing&order=recent') {
+      takes += 1;
+      return takes === 1 ? failed.promise : reply({body:{items:[]}});
+    }
+  }});
+  try {
+    const search = page.elements.get('search');
+    const retry = page.elements.get('retry-artifact-list');
+    const empty = page.elements.get('list-empty');
+    search.value = 'missing';
+    const pending = search.dispatch('keydown',{key:'Enter'});
+    assert.equal(retry.hidden, true);
+    assert.equal(empty.hidden, true);
+    failed.finish(reply({status:503}));
+    await pending;
+    assert.equal(retry.hidden, false);
+    assert.equal(empty.hidden, true);
+    assert.equal(page.elements.get('artifact-list').getAttribute('aria-busy'), 'false');
+    assert.match(page.elements.get('artifact-list-note').textContent, /搜索作品失败/);
+    await retry.dispatch('click');
+    assert.equal(retry.hidden, true);
+    assert.equal(empty.hidden, false);
+    assert.equal(page.elements.get('empty-no-match').hidden, false);
+    await search.dispatch('keydown',{key:'Escape'});
+    assert.equal(search.value, '');
+    assert.equal(page.doc.activeElement, search);
+    assert.equal(page.elements.get('clear-artifact-search').hidden, true);
+    assert.deepEqual(artifactRows(page.elements.get('artifact-list')).map(row => row.dataset.artifactId), ['base']);
+  } finally { page.close(); }
+});
+
 test('custom dates include both local dates and stop at the next local midnight', () => {
   const start = '2026-03-08';
   const end = start;
@@ -1397,6 +1510,11 @@ test('an authorized direct link opens editable content with the catalog and opti
   assert.equal(page.form.elements.body.value, '持续写入的草稿');
   assert.equal(page.elements.get('version-list').children[0].children[1].href,
     linkedDetail + '/versions/1/export');
+  page.view.confirm = () => false;
+  await page.elements.get('cancel-editor').dispatch('click');
+  assert.equal(page.view.location.search, linkedSearch);
+  assert.equal(page.form.elements.body.value, '持续写入的草稿');
+  page.view.confirm = () => true;
   await page.elements.get('cancel-editor').dispatch('click');
   assert.equal(page.view.location.search, '');
   assert.equal(page.elements.get('list-panel').hidden, false);
@@ -1506,6 +1624,7 @@ test('the compact editor opens existing panels and keeps an unsaved draft when d
     await menu.dispatch('keydown', {key: 'Escape'});
     assert.equal(menu.open, false);
     assert.equal(page.doc.activeElement, el('mobile-editor-more'));
+    page.doc.defaultView = {confirm: () => true};
     await el('cancel-editor-load').dispatch('click');
     assert.equal(el('list-panel').hidden, false);
     assert.equal(page.doc.activeElement, el('new-menu-button'));

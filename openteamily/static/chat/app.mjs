@@ -321,7 +321,7 @@ export const RUNTIME_WAIT_ERRORS = {
 
 export function sendNotice(reply) {
   const code = reply && reply.error_code;
-  if (code === 'model-unconfigured') return {kind: 'error', text: '消息已保存。配置模型 API 后，智能体才能回复。'};
+  if (code === 'model-unconfigured') return {kind: 'error', text: '消息已保存，当前没有可用的模型。'};
   if (code === 'no_agent') return {kind: 'error', text: '消息已保存，正在等待已连接的运行时。'};
   if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
   if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
@@ -1688,11 +1688,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       body.setAttribute('aria-live', 'off');
       body.hidden = true;
     } else if (failed && item.error_code === 'model-unconfigured') {
-      body.textContent = uiLabel('这个智能体还没有可用模型。', 'This agent has no model configured.');
+      body.textContent = uiLabel('当前没有可用的模型。', 'No model is currently available.');
       const configure = document.createElement('a');
       configure.className = 'chat-model-settings';
       configure.href = '/settings#model-api';
-      configure.textContent = uiLabel('配置模型 API', 'Configure model API');
+      configure.textContent = uiLabel('查看模型设置', 'View model settings');
       body.append(configure);
     } else {
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
@@ -3152,7 +3152,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       sessions = mergeSessions(privateRows, socialConversations, user.id);
       renderSessions();
     }
-    if (isLocalPersonal && listed.status === 200) onPrivate?.();
+    if (isLocalPersonal && listed.status === 200) {
+      onPrivate?.(privateRows.length ? sessions.find(row => row.source === 'agent') : null);
+    }
     const social = await socialRequest;
     if (!current()) return;
     partial ||= social.status !== 200;
@@ -3481,7 +3483,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (status.dataset.kind === 'loading' && status.textContent === '正在打开对话…') show('', '');
   }
 
-  async function openAgentConversation(agentId, conversationId, {refresh = false, acknowledge = true, link, transition} = {}) {
+  function readStartupSnapshot(wid, aid, cid) {
+    if (![wid, aid, cid].every(id => /^[a-f0-9]{32}$/.test(id))) return null;
+    const maxAge = 1800;
+    const expires = performance.now() + maxAge;
+    const path = agentConversationPath(wid, aid, cid);
+    const pending = request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
+      undefined, undefined, AbortSignal.timeout(maxAge)).then(result => {
+        const {agent, conversation, items, has_newer} = result.body;
+        // Use only a bounded view of the precise, already authorized candidate.
+        return result.status === 200 && agent?.id === aid && agent.workspace_id === wid &&
+          !agent.archived && !agent.native_deleted && conversation?.id === cid &&
+          conversation.agent_id === aid && conversation.workspace_id === wid && has_newer === false &&
+          Array.isArray(items) && items.length <= Number(HISTORY_PAGE_SIZE) &&
+          items.every(item => item?.workspace_id === wid && item.agent_id === aid && item.conversation_id === cid)
+          ? result : null;
+      }).catch(() => null);
+    return async () => {
+      if (performance.now() >= expires) return null;
+      const result = await pending;
+      return performance.now() < expires ? result : null;
+    };
+  }
+
+  async function openAgentConversation(agentId, conversationId, {
+    refresh = false, acknowledge = true, link, transition, startupSnapshot,
+  } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
     const nativeRefresh = refresh && servedByDsbot;
@@ -3503,7 +3530,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
-    const result = await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path)
+    const snapshot = startupSnapshot ? await startupSnapshot() : null;
+    if (startupSnapshot && !stillOpen()) return false;
+    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path)
       .catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
@@ -4497,10 +4526,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else openEmptyAgentChat(start.agent);
     };
     let openingAgent;
+    let firstSnapshot;
+    const snapshotOnStartup = openLocal && local.directory && !hash && !narrowScreen();
     await loadSessions(undefined, {
       nativeDirectory: openLocal ? local.directory : null,
-      onPrivate: !hasLink && start.agent ? () => {
-        if (bootCurrent()) openingAgent = openStartingAgent();
+      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? recent => {
+        if (!bootCurrent()) return;
+        if (start.agent) {
+          openingAgent = openStartingAgent();
+        } else if (recent) {
+          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
+        }
       } : null,
     });
     if (openingAgent) {
@@ -4516,8 +4552,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       await openStartingAgent();
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
-      if (first.source === 'social') await openSocialConversation(first.id);
-      else await openAgentConversation(first.agent_id, first.id);
+      if (first.source === 'social') {
+        if (!await openSocialConversation(first.id)) return;
+      } else {
+        const startupSnapshot = firstSnapshot?.row.id === first.id && firstSnapshot.row.agent_id === first.agent_id
+          ? firstSnapshot.read : undefined;
+        if (!await openAgentConversation(first.agent_id, first.id, {startupSnapshot})) return;
+      }
     }
     show('', '');
   }

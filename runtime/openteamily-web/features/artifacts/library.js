@@ -4,6 +4,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import { GLB_MIME } from '../../lib/glb.js'
+import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
   emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
@@ -50,15 +51,16 @@ function matchesFileTypes(row, kind, types) {
 function filteredPage(store, { boundary, bindings, order, metadata }, limit, filters, user) {
   const { needle, scope, kind, owner, ownerUsername, favorites, types, creators, sessions } = filters
   const columns = metadata
-    ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime,
+    ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime, md.filename AS media_filename,
        b.board <> '' AS board_json, sl.deck <> '' AS slides_json, d.dashboard <> '' AS dashboard_json,
        x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id, cs.conversation_id
        ${ROW_JOINS} LEFT JOIN ot_users u ON u.id=a.created_by `
-    : 'SELECT a.id, a.title FROM artifacts a '
+    : `SELECT a.id, a.title, md.mime AS media_mime, md.filename AS media_filename
+       FROM artifacts a LEFT JOIN artifact_media md ON md.artifact_id=a.id `
   const candidates = store.all(columns + boundary + order, ...bindings)
+  const matches = new Map()
   const ids = []
   for (const row of candidates) {
-    if (needle && !row.title.toLocaleLowerCase('en-US').includes(needle)) continue
     if (scope === 'favorites' && !favorites.has(row.id)) continue
     if (scope === 'mine' && row.created_by !== owner && !row.is_owner &&
         (!ownerUsername || row.username !== ownerUsername)) continue
@@ -68,12 +70,24 @@ function filteredPage(store, { boundary, bindings, order, metadata }, limit, fil
     if (types.size && !matchesFileTypes(row, artifactKind, types)) continue
     if (creators.size && !creators.has(user(row.created_by))) continue
     if (sessions.size && !sessions.has(row.conversation_id)) continue
+    if (needle) {
+      let match = catalogMatch('title', row.title, needle) || catalogMatch('filename', row.media_filename, needle)
+      if (!match && !row.media_mime) {
+        // Decode content only for candidates that survive the catalog filters
+        // and do not already match their cheap title or filename projection.
+        const content = store.get(ROW_SELECT + 'WHERE a.workspace_id=? AND a.id=?', bindings[0], row.id)
+        match = catalogContentMatch(content, needle)
+      }
+      if (!match) continue
+      matches.set(row.id, match)
+    }
     ids.push(row.id)
     if (ids.length >= limit) break
   }
   if (!ids.length) return []
   const placeholders = ids.map(() => '?').join(',')
   return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders})` + order, bindings[0], ...ids)
+    .map(row => needle ? { ...row, match: matches.get(row.id) } : row)
 }
 
 export function listing(store, workspaceId, cursor, limit, filters) {
@@ -140,6 +154,7 @@ export function view(row, includeBody = true, { favorited } = {}) {
   if (!includeBody) {
     const thumb = preview(row, { decodeBoard, decodeSlides, decodeDashboard })
     if (thumb != null) data.preview = thumb
+    if (row.match) data.match = row.match
   }
   if (favorited !== undefined) data.favorited = favorited
   return data

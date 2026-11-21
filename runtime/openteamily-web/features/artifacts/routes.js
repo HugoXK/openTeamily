@@ -9,7 +9,8 @@ import {
 } from './library.js'
 import { decodeUpload } from './media.js'
 import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
-import { publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
+import { catalogSearchText } from './catalog-search.js'
+import { casefold, publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
 import { normalizeSlides } from './structured.js'
 import { decodeWorkbook, normalizeWorkbook, WORKBOOK_SCHEMA, workbookText } from './workbook.js'
 
@@ -57,7 +58,7 @@ function catalogQuery(query) {
   const single = new URLSearchParams(query)
   for (const key of ['type', 'creator', 'session']) single.delete(key)
   const { limit, cursor, args } = pagination(single, ['q', 'scope', 'kind', 'order', 'updated_since', 'updated_before'])
-  const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
+  const needle = casefold(catalogSearchText(args.get('q')))
   const scope = args.get('scope') ?? 'all'
   const kind = args.get('kind') ?? 'all'
   const order = args.get('order') ?? 'id'

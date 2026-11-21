@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {mount} from '../openteamily/static/memory/app.mjs';
 import test from 'node:test';
-import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -10,23 +10,18 @@ test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('csrf=nope; other=1'), '');
 });
 
-test('matchingMemoryPages filters titles in place without inventing body search', () => {
-  const rows = [
-    {id: 'a', title: '项目简报'},
-    {id: 'b', title: '运维手册'},
-    {id: 'c', title: 'Project Brief'},
-  ];
-  assert.deepEqual(matchingMemoryPages(rows, '').map((row) => row.id), ['a', 'b', 'c']);
-  assert.deepEqual(matchingMemoryPages(rows, '运维').map((row) => row.title), ['运维手册']);
-  assert.deepEqual(matchingMemoryPages(rows, '简报').map((row) => row.title), ['项目简报']);
-  assert.deepEqual(matchingMemoryPages(rows, 'BRIEF').map((row) => row.title), ['Project Brief']);
+test('empty memory directory and no search match use different messages', () => {
   assert.equal(MEMORY_EMPTY_WORKSPACE, '这个工作区还没有记忆页。');
   assert.equal(MEMORY_EMPTY_NO_MATCH, '没有匹配的记忆页。试试其他关键词。');
 });
 
-test('listQuery and actionQuery encode filters and omit empty values', () => {
-  assert.equal(listQuery(''), '');
-  assert.equal(listQuery('brief'), '?q=brief');
+test('directory and action queries encode filters and omit empty values', () => {
+  assert.equal(memoryDirectoryQuery(), '?order=recent&limit=20');
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(memoryDirectoryQuery({
+    needle:'正文', topic:'研发 & 策划', updatedAfter:1795200000, cursor:'cursor?=opaque',
+  }))), {
+    order:'recent', limit:'20', q:'正文', topic:'研发 & 策划', updated_after:'1795200000', cursor:'cursor?=opaque',
+  });
   assert.equal(actionQuery('', 'open'), '?status=open');
   assert.equal(actionQuery('跟进', 'done'), '?q=%E8%B7%9F%E8%BF%9B&status=done');
   assert.equal(actionQuery('', ''), '');
@@ -394,7 +389,7 @@ function prefFetcher(calls, store = {items: []}) {
     if (path === '/v1/auth/session') return prefJson(200, {user: {id: 'user-1', username: 'alice'}});
     if (path === '/v1/settings') return prefJson(404, {});
     if (path === '/v1/workspaces') return prefJson(200, {items: [{id: 'ws-1', name: 'Desk', owner_id: 'user-1'}]});
-    if (path === '/v1/workspaces/ws-1/memory') return prefJson(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/memory?order=recent&limit=20') return prefJson(200, {items: [], total: 0});
     if (path === '/v1/workspaces/ws-1/memory/actions') return prefJson(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/preferences') {
       if (method === 'GET') return prefJson(200, {items: store.items});
@@ -717,8 +712,8 @@ function memoryFetcher() {
     if (path === '/v1/workspaces') {
       return jsonResponse(200, {items: [{id: 'ws1', name: '团队'}, {id: 'ws2', name: '另一个'}]});
     }
-    const listed = /^\/v1\/workspaces\/(ws[12])\/memory$/.exec(path);
-    if (listed) return jsonResponse(200, {items: Object.values(pages)});
+    const listed = /^\/v1\/workspaces\/(ws[12])\/memory\?order=recent&limit=20$/.exec(path);
+    if (listed) return jsonResponse(200, {items: Object.values(pages), total: Object.keys(pages).length});
     const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path);
     if (actions) return jsonResponse(200, {items: [action]});
     const graphPath = /^\/v1\/workspaces\/(ws[12])\/memory\/graph$/.exec(path);

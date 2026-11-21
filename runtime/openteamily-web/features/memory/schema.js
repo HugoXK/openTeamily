@@ -72,6 +72,8 @@ CREATE TABLE memory_action_draft_saves (
   workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL,
   request_hash TEXT NOT NULL, action_ids TEXT NOT NULL,
   PRIMARY KEY (workspace_id,owner_id,key_hash));
+`, `
+CREATE INDEX IF NOT EXISTS memory_page_workspace_recent ON memory_pages(workspace_id, updated DESC, id);
 `]
 
 export const IMPORT_TABLES = {

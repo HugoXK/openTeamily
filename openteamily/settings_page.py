@@ -3,6 +3,7 @@
 Serves only an exact asset allowlist. API security stays in App; this wrapper
 does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 """
+from hashlib import sha256
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,18 @@ import stat
 from urllib.parse import parse_qsl, urlsplit
 
 from . import discover
+
+
+_OPAQUE_ETAG = r'"[\x21\x23-\x7e\x80-\xff]*"'
+_ETAG_LIST = re.compile(rf'(?:W/)?{_OPAQUE_ETAG}(?:[ \t]*,[ \t]*(?:W/)?{_OPAQUE_ETAG})*')
+_ETAG_VALUES = re.compile(_OPAQUE_ETAG)
+
+
+def _matches_asset_etag(value, opaque_tag):
+    value = value.strip(' \t')
+    if value == '*':
+        return True
+    return bool(_ETAG_LIST.fullmatch(value) and opaque_tag in _ETAG_VALUES.findall(value))
 
 
 class SettingsPage:
@@ -260,7 +273,8 @@ class SettingsPage:
         if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
             csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'
-        headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
+        cache_control = 'no-store'
+        headers = [('X-Content-Type-Options', 'nosniff'),
                    ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
                    ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
@@ -288,6 +302,16 @@ class SettingsPage:
             except OSError:
                 status, data = '503 Service Unavailable', b'UI asset unavailable'
                 content_type = 'text/plain; charset=utf-8'
-        headers += [('Content-Type', content_type), ('Content-Length', str(len(data)))]
+            else:
+                if name.endswith(('.css', '.js', '.mjs')):
+                    cache_control = 'private, no-cache'
+                    opaque_tag = f'"sha256-{sha256(data).hexdigest()}"'
+                    # Proxies may encode these same package bytes with gzip or zstd.
+                    headers.append(('ETag', 'W/' + opaque_tag))
+                    if _matches_asset_etag(env.get('HTTP_IF_NONE_MATCH', ''), opaque_tag):
+                        start_response('304 Not Modified', headers + [('Cache-Control', cache_control)])
+                        return []
+        headers += [('Cache-Control', cache_control), ('Content-Type', content_type),
+                    ('Content-Length', str(len(data)))]
         start_response(status, headers)
         return [] if env.get('REQUEST_METHOD') == 'HEAD' else [data]

@@ -155,6 +155,99 @@ test('Space catalog paginates through Unicode title matches and keeps scoped pre
   assert.equal(last.activity_version, allFirst.activity_version)
 })
 
+test('Space catalog finds deep document and structured text with bounded original match offsets', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  async function create(fields, workspace = WS) {
+    const result = await call('POST', base('', workspace), fields, key())
+    assert.equal(result.status, 201, JSON.stringify(result.body))
+    return result.body.artifact.id
+  }
+  const document = await create({
+    title: '全文归档',
+    body: `${'😀 普通前文 '.repeat(90)} İSTANBUL \n星海季度更新 ${'😀 普通后文 '.repeat(90)}`,
+  })
+  const site = await create({
+    title: '发布站点', kind: 'website',
+    body: [
+      '<h1 data-label="attribute-secret">星海<strong>季度</strong>更新 &amp; 明细</h1>',
+      '<script>const script-secret = "private"</script><style>.style-secret{display:none}</style>',
+      '<span hidden><b>hidden-secret</b></span>',
+      '<div style="color:red; display: none">css-hidden-secret</div>',
+      '<template><template>template-secret</template>nested-hidden-secret</template>',
+      '<!-- comment-secret --><script>unclosed-secret',
+    ].join(''),
+  })
+  const slides = await create({
+    title: '路演', kind: 'slides',
+    slides: {schema:'openteamily.slides.v1', slides:[
+      {title:'首页', bullets:['背景']},
+      {title:'收尾', bullets:['星海季度更新']},
+    ]},
+  })
+  const sheet = await create({
+    title:'账簿', kind:'spreadsheet', spreadsheet:{schema:'openteamily.spreadsheet.v1',sheets:[
+      {name:'模板',rows:[['汇总轴']]}, {name:'第二工作表',rows:[['A列','星海季度更新']]},
+    ]},
+  })
+  await create({
+    title:'项目看板', kind:'dashboard', dashboard:{schema:'openteamily.dashboard.v1',widgets:[
+      {type:'metric', title:'总体', value:'8', note:'已验收'},
+      {type:'bar', title:'投入', labels:['业务支持'], values:[10]},
+      {type:'table', title:'本周', columns:['事项'], rows:[['星海季度更新']]},
+    ]},
+  })
+  await create({
+    title:'方案草图', kind:'whiteboard', board:{width:800, height:600, strokes:[
+      {id:'shape-text',type:'text',x:30,y:40,text:'星海季度更新'},
+    ]},
+  })
+  const photo = await create({_multipart:true, fields:{title:'封面'},
+    files:{file:{filename:'star-quarter-map.png',content_type:'image/png',data:PNG.toString('base64')}}})
+  await create({title:'其他工作区',body:'星海季度更新'}, 'b'.repeat(32))
+
+  const list = async (query, options = {}) => {
+    const params = new URLSearchParams({order:'recent',q:query,...options})
+    const result = await call('GET', base('?' + params))
+    assert.equal(result.status,200)
+    return result.body
+  }
+  const first = await list('星海季度更新', {limit:2})
+  const second = await list('星海季度更新', {limit:2,cursor:first.cursor})
+  const third = await list('星海季度更新', {limit:2,cursor:second.cursor})
+  const matches = [...first.items,...second.items,...third.items]
+  assert.equal(third.cursor,null)
+  assert.equal(new Set(matches.map(item => item.id)).size,6)
+  assert.equal(first.activity_version,third.activity_version)
+  for (const item of matches) {
+    assert.equal(item.workspace_id,WS)
+    assert.equal(item.body,undefined)
+    assert.equal(item.match.kind,'body')
+    assert.equal(item.match.text.slice(item.match.start,item.match.end),'星海季度更新')
+    assert.ok(item.match.text.length <= 160)
+    assert.ok(!/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/u.test(item.match.text))
+  }
+  const unicode = (await list(' İstanbul 星海季度更新 ')).items[0]
+  assert.equal(unicode.id,document)
+  assert.equal(unicode.match.text.slice(unicode.match.start,unicode.match.end),'İSTANBUL 星海季度更新')
+  assert.ok(unicode.match.text.startsWith('…'))
+  assert.equal((await list('星海季度更新 & 明细')).items[0].id,site)
+  assert.match((await list('星海季度更新',{kind:'website'})).items[0].match.text, /& 明细/)
+  assert.deepEqual((await list('secret')).items,[])
+  const filename = await list('quarter-map', {type:'image'})
+  assert.deepEqual(filename.items.map(item => item.id),[photo])
+  assert.deepEqual(filename.items[0].match,{kind:'filename',text:'star-quarter-map.png',start:5,end:16})
+
+  await call('POST',base('/' + slides + '/favorite'),{enabled:true})
+  await call('POST',base('/' + sheet + '/favorite'),{enabled:true})
+  assert.deepEqual((await list('星海季度更新',{scope:'favorites',type:'slides'})).items.map(item => item.id),[slides])
+  const updated = await call('POST',base('/' + document),{revision:1,changes:{body:'更新后的关键词'}})
+  assert.equal(updated.status,200)
+  assert.ok(!(await list('星海季度更新')).items.some(item => item.id === document))
+  assert.deepEqual((await list('更新后的关键词')).items.map(item => item.id),[document])
+  assert.ok((await list('')).items.every(item => !Object.hasOwn(item,'match')))
+})
+
 test('Space recent pages, scopes and facets include matches beyond the first page', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)

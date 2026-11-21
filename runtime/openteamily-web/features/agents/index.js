@@ -552,11 +552,21 @@ export function createAgents({ db, host }) {
           (history.around !== undefined && (typeof history.around !== 'string' || !ID.test(history.around))) ||
           (history.before !== undefined && history.around !== undefined)) fail('invalid', 'Invalid history parameters', 400)
       }
-      const {native_name, ...mapping} = await native.readSession(agent, `agent:${agent.id}:${row.id}`, row.title)
+      const snapshot = p.snapshot === true
+      if (snapshot && (!history || history.limit > 50 || history.before !== undefined || history.around !== undefined)) {
+        fail('invalid', 'A snapshot requires a recent window of at most 50 messages', 400)
+      }
+      const key = `agent:${agent.id}:${row.id}`
+      // A candidate can lose to a pinned or newer Social thread at startup.
+      // Only the selected thread can materialize missing native state.
+      const mapped = snapshot ? native.mappedSession(agent, key) : await native.readSession(agent, key, row.title)
+      if (!mapped) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
+      const {native_name, ...mapping} = mapped
       const current = load(agent.workspace_id, agent.id)
       const rt = host.currentRuntime?.()?.rt
       const observed = observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function')
+      if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       return {
         agent: view(observed),
         conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},

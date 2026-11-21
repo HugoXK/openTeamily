@@ -84,13 +84,14 @@
           </button>
         </div>
         <button type="button" id="new-page" disabled>+ 新建</button>
-        <label class="dir-search">
-          <span class="visually-hidden">搜索主题</span>
-          <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
-        </label>
+        <div class="dir-search">
+          <label for="search" class="visually-hidden">搜索记忆标题、正文或标签</label>
+          <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索标题、正文或标签">
+          <button type="button" id="memory-search-clear" aria-label="清除搜索" hidden>×</button>
+        </div>
         <div class="memory-filters" role="group" aria-label="筛选">
-          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count">0</span></button>
-          <button type="button" data-filter="updated" title="按最近更新排序；数字是最近 7 天更新过的页面数（还没有已读状态接口，所以不是未读数）。">更新 <span id="filter-updated-count" class="filter-count">0</span></button>
+          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count" hidden></span></button>
+          <button type="button" data-filter="updated" aria-pressed="false">近 7 天</button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
@@ -104,8 +105,11 @@
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
           <a href="/space?view=meetings"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>我的会议</a>
         </nav>
-        <ul id="memory-list"></ul>
+        <p id="memory-directory-status" class="memory-directory-status" role="status"></p>
+        <ul id="memory-list" aria-busy="false"></ul>
         <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
+        <button type="button" id="memory-directory-retry" class="memory-directory-button" aria-controls="memory-list" hidden>重试</button>
+        <button type="button" id="memory-load-more" class="memory-directory-button" aria-controls="memory-list" hidden>加载更多</button>
       </aside>
       <section id="overview-panel" class="memory-center">
         <label class="topic-search">搜索主题

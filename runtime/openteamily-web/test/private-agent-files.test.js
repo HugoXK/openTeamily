@@ -56,6 +56,58 @@ const createRuntime = () => {
   }
 }
 
+test('startup snapshots are bounded, scoped and cannot materialize native conversations', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  let allowRuntime = true
+  const {endpoints} = createAgents({db,host:{
+    currentRuntime: () => runtime,
+    runtime: async () => {
+      assert.ok(allowRuntime, 'A snapshot must not start the native runtime')
+      return runtime
+    },
+  }})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Startup fixture',idempotency_key:'startup-agent-1234'})
+  const newConversation = () => endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation: mapped} = await newConversation()
+  const {conversation: unmapped} = await newConversation()
+  const insert = db.prepare("INSERT INTO agent_messages VALUES(?,?,'user',?,'succeeded',?,'{}')")
+  for (let i = 0; i < 65; i++) insert.run(i.toString(16).padStart(32,'0'),mapped.id,`Message ${i}`,i)
+  db.prepare('DELETE FROM native_agent_sessions WHERE conversation_key=?').run(`agent:${agent.id}:${unmapped.id}`)
+  const request = legacyRequest(endpoints)
+  const path = id => `${root}/${agent.id}/conversations/${id}`
+  const query = 'limit=50&snapshot=1'
+  const ordinary = await (await request(path(mapped.id),{},'limit=50')).json()
+
+  db.exec('PRAGMA query_only=ON')
+  allowRuntime = false
+  const snapshot = await request(path(mapped.id),{},query)
+  assert.equal(snapshot.status,200)
+  const body = await snapshot.json()
+  assert.deepEqual(body,ordinary)
+  assert.equal(body.items.length,50)
+  assert.equal(body.items[0].body,'Message 15')
+  assert.equal(body.cursor,body.items[0].id)
+  assert.equal((await request(path(unmapped.id),{},query)).status,409)
+  assert.equal((await request(path(mapped.id).replace(workspace,'b'.repeat(32)),{},query)).status,404)
+  assert.equal((await request(path('c'.repeat(32)),{},query)).status,404)
+  for (const value of ['snapshot=0','snapshot=1&snapshot=1','snapshot=1&limit=51', `snapshot=1&around=${body.cursor}`]) {
+    assert.equal((await request(path(mapped.id),{},value)).status,400,value)
+  }
+  runtime.rt.botOf(body.agent.native_bot_id).hidden = true
+  assert.equal((await request(path(mapped.id),{},query)).status,409)
+  runtime.rt.botOf(body.agent.native_bot_id).hidden = false
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,1)
+
+  db.exec('PRAGMA query_only=OFF')
+  allowRuntime = true
+  const selected = await request(path(unmapped.id),{},'limit=50')
+  assert.equal(selected.status,200)
+  assert.equal((await selected.json()).conversation.native_session_id,unmapped.native_session_id)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,2)
+})
+
 test('private history pages and anchors keep native message order and conversation scope', async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
