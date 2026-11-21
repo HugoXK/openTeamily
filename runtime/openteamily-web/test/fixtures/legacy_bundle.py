@@ -1,5 +1,5 @@
-"""CI fixture: create legacy OpenTeamily data for test accounts through the real
-legacy API (in-process WSGI, temp state), then print the DS-Bot import bundles
+"""CI fixture: create legacy OpenTeamily data for test accounts in a temp store,
+then print the DS-Bot import bundles
 that openteamily.dsbot_bundle builds for one of those accounts.
 
 usage: python3 legacy_bundle.py <feature> [<feature> ...]  -> JSON {feature: bundle_text, "expect": {...}}
@@ -19,16 +19,21 @@ from openteamily.store import Store  # noqa: E402
 from tests.test_management import Client, ORIGIN  # noqa: E402
 
 
-def seed_meetings(alice, bob, wid, bob_wid):
-    created = alice.call('POST', f'/v1/workspaces/{wid}/meetings',
-                         {'title': '周会', 'attendees': ['alice'], 'summary': '同步进度。', 'transcript': '讨论排期。',
-                          'action_items': [{'text': '订会议室', 'owner': 'alice'}]},
-                         {'HTTP_IDEMPOTENCY_KEY': 'fixture-meeting-0001'})
-    assert created['status'] == 201, created
-    other = bob.call('POST', f'/v1/workspaces/{bob_wid}/meetings', {'title': 'bob 的会'},
-                     {'HTTP_IDEMPOTENCY_KEY': 'fixture-meeting-0002'})
-    assert other['status'] == 201, other
-    return {'meeting_id': created['body']['meeting']['id'], 'title': '周会', 'foreign_title': 'bob 的会'}
+def meeting_fixture(store):
+    now = 1800000000
+    title, foreign_title = '周会', 'bob 的会'
+    with store.transaction() as db:
+        for i, (name, heading) in enumerate((('alice', title), ('bob', foreign_title)), 1):
+            user_id, workspace_id, meeting_id = (str(i + offset) * 32 for offset in (0, 2, 4))
+            db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, name, 'fixture-only', now))
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (workspace_id, user_id, name, now, '7' * 64, '8' * 64))
+            db.execute('INSERT INTO meetings VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (meeting_id, workspace_id, heading, '9' * 64, now, json.dumps([name]), '讨论排期。',
+                        '同步进度。', json.dumps([{'text': '订会议室', 'owner': name, 'done': False}]),
+                        1, now, now, user_id, user_id, 'a' * 64, 'b' * 64))
+    return {'workspace_id': '3' * 32,
+            'meetings': {'meeting_id': '5' * 32, 'title': title, 'foreign_title': foreign_title}}
 
 
 def seed_memory(alice, bob, wid, bob_wid):
@@ -61,21 +66,25 @@ def seed_artifacts(alice, bob, wid, bob_wid):
             'foreign_title': 'bob 的文档'}
 
 
-SEEDS = {'meetings': seed_meetings, 'memory': seed_memory, 'artifacts': seed_artifacts}
+SEEDS = {'memory': seed_memory, 'artifacts': seed_artifacts}
 
 
 def main(features):
     with tempfile.TemporaryDirectory() as temp:
         store = Store(Path(temp) / 'state')
-        app = App(store, Config(ORIGIN, allow_registration=True), clock=lambda: 1800000000)
-        alice, bob = Client(app), Client(app, peer='127.0.0.2')
-        alice.register('alice')
-        bob.register('bob')
-        wid = alice.workspace()['body']['workspace']['id']
-        bob_wid = bob.workspace(key='request_example_0002')['body']['workspace']['id']
-        expect = {'workspace_id': wid}
-        for feature in features:
-            expect[feature] = SEEDS[feature](alice, bob, wid, bob_wid)
+        if features == ['meetings']:
+            # The platform write routes were retired. Reproduce their retained database rows.
+            expect = meeting_fixture(store)
+        else:
+            app = App(store, Config(ORIGIN, allow_registration=True), clock=lambda: 1800000000)
+            alice, bob = Client(app), Client(app, peer='127.0.0.2')
+            alice.register('alice')
+            bob.register('bob')
+            wid = alice.workspace()['body']['workspace']['id']
+            bob_wid = bob.workspace(key='request_example_0002')['body']['workspace']['id']
+            expect = {'workspace_id': wid}
+            for feature in features:
+                expect[feature] = SEEDS[feature](alice, bob, wid, bob_wid)
         with store.connect() as db:
             user_id = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
             bundles = {feature: dsbot_bundle.dumps(dsbot_bundle.build(db, user_id, feature, now=1800000000, data_dir=store.data_dir))

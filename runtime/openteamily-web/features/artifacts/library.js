@@ -1,7 +1,6 @@
 // Works-library operations (legacy artifacts.py + app.py artifact_*), executed
-// inside this user's DS-Bot. Public share pages stay on the platform; this
-// module only stores and lists revocable share records, returning the same
-// /share/<token> path the existing UI already uses.
+// inside this user's DS-Bot. Share records live here; the public /share/<token>
+// page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import {
@@ -196,7 +195,7 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
@@ -226,13 +225,24 @@ export function createArtifact(ctx, workspaceId, input, key) {
   const keyHash = digest('artifact:' + key)
   const requestHash = digest(stableJson(payload))
   return store.transaction(() => {
-    const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-    if (prior) {
-      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, body: { artifact: view(load(store, workspaceId, prior.id)) } }
-    }
     const source = input.source
     const already = existingSource(store, workspaceId, source)
+    // A saved chat message is a snapshot. Subsequent edits and title changes do not replace it.
+    if (already && reuseChatSource) return { status: 200, body: { artifact: view(already) } }
+    const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (prior) {
+      const row = load(store, workspaceId, prior.id)
+      // Older Bot Social saves used the same key without recording the source.
+      if (reuseChatSource && !source.agent_id && !row.chat_message_id && !row.source_kind && publicKind(row) === 'document') {
+        const first = store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)
+        if (first?.body === bodyText) {
+          attachSource(store, row.id, workspaceId, row.created, source)
+          return { status: 200, body: { artifact: view(load(store, workspaceId, row.id)) } }
+        }
+      }
+      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+      return { status: 200, body: { artifact: view(row) } }
+    }
     if (already) return { status: 200, body: { artifact: view(already) } }
     const hash = titleHash(trimmed)
     if (store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) {

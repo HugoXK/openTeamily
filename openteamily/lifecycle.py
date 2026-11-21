@@ -152,6 +152,10 @@ class Lifecycle:
         row = db.execute('SELECT * FROM instances WHERE id=?', (iid,)).fetchone()
         if row is None:
             fail(404, 'not_found', 'Instance not found')
+        if row['backend_mode'] == 'compose':
+            if row['owner_id'] != user or runtime_autoprovision.owned_instance(db, user) != iid:
+                fail(404, 'not_found', 'Instance not found')
+            return row
         workspace = members.load(db, row['workspace_id'], user)
         if workspace is None:
             fail(404, 'not_found', 'Instance not found')
@@ -197,28 +201,35 @@ class Lifecycle:
         if db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0] >= self.policy.max_jobs:
             fail(429, 'quota', 'Runtime job capacity reached; operator archival required')
 
-    def create(self, owner, wid, key):
+    def create(self, owner, wid, key, *, per_user=False):
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         with self.store.transaction() as db:
-            return self.create_with(db, owner, wid, key)
+            return self.create_with(db, owner, wid, key, per_user=per_user)
 
-    def create_with(self, db, owner, wid, key):
+    def create_with(self, db, owner, wid, key, *, per_user=False):
         """Create inside the caller's IMMEDIATE transaction (server-side auto-provisioning)."""
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         now = int(self.clock())
         self.workspace(db, owner, wid, write=True)
-        old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
-        if old:
-            return False, self.result(db, old['id'])
+        owner_scoped = per_user or self.policy.backend_mode == 'compose'
+        if owner_scoped:
+            existing = runtime_autoprovision.owned_instance(db, owner)
+            if existing is not None:
+                return False, self.result(db, existing)
+        else:
+            old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
+            if old:
+                return False, self.result(db, old['id'])
         self.capacity(db)
         if (db.execute('SELECT COUNT(*) FROM instances WHERE workspace_id=?', (wid,)).fetchone()[0] >= self.policy.max_instances_per_workspace
                 or db.execute('SELECT COUNT(*) FROM instances').fetchone()[0] >= self.policy.max_instances):
             fail(429, 'quota', 'Instance capacity reached')
         iid, op, jid = uuid4().hex, uuid4().hex, uuid4().hex
+        create_key = digest('owner:' + owner + ':' + key) if owner_scoped else digest(key)
         db.execute('INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,operation_id,operation_type,observed,create_key,created) VALUES(?,?,?,?,?,?,?,\'stopped\',1,?,\'create\',\'pending\',?,?)',
-                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, digest(key), now))
+                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, create_key, now))
         db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,1,?,'create','queued',?)", (jid, iid, op, now))
         return True, self.result(db, iid)
 
@@ -231,6 +242,10 @@ class Lifecycle:
         self.expire()
         with self.store.connect() as db:
             self.workspace(db, owner, wid)
+            if self.policy.backend_mode == 'compose':
+                iid = runtime_autoprovision.owned_instance(db, owner)
+                row = db.execute('SELECT * FROM instances WHERE id=? AND id>?', (iid, cursor)).fetchone() if iid else None
+                return {'items': [self.snapshot(row)] if row else [], 'cursor': None}
             rows = db.execute('SELECT * FROM instances WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?', (wid, cursor, limit + 1)).fetchall()
             return {'items': [self.snapshot(r) for r in rows[:limit]], 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
@@ -382,13 +397,18 @@ class Lifecycle:
                 fail(409, 'runtime_key_not_applicable', 'Instance runtime key is only issued for create, start or restart')
             existing = agent_runtime.load_instance_key(db, iid)
             wrap_key = agent_runtime.wrapping_key(self.store)
+            now = int(self.clock())
+            payload = {'origin': origin, 'hostname': agent_runtime.hostname_for(iid)}
+            if runtime_autoprovision.is_auto(db, iid):
+                from . import dsbot_bundle
+                bootstrap = dsbot_bundle.build_personal_bootstrap(db, row['owner_id'], iid, now)
+                if bootstrap is not None:
+                    payload['agent_bootstrap'] = bootstrap
             if existing and existing['issued_job_id'] == job['id']:
                 token = agent_runtime.unwrap(wrap_key, existing['token_blob'])
-                return {'runtime_key_present': True, 'runtime_key': {
-                    'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+                return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
             if existing:
                 runtime_keys.revoke(db, existing['key_id'])
-            now = int(self.clock())
             key_id, token = runtime_keys.issue_instance(db, row['owner_id'], now, iid)
             blob = agent_runtime.wrap(wrap_key, token)
             if existing:
@@ -401,8 +421,7 @@ class Lifecycle:
                     'INSERT INTO instance_runtime_keys VALUES(?,?,?,?,?,?,?)',
                     (iid, row['workspace_id'], key_id, blob, job['id'], now, now),
                 )
-            return {'runtime_key_present': True, 'runtime_key': {
-                'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+            return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()

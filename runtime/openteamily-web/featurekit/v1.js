@@ -11,6 +11,7 @@ import { FeatureError } from './http.js'
 
 export const BODY_LIMIT = 2 * 1024 * 1024
 const METHODS = new Set(['GET', 'POST'])
+const USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 
 export function parseTarget(raw) {
   if (typeof raw !== 'string' || raw.length < 4 || raw.length > 4096 || !raw.startsWith('/v1/')) return null
@@ -36,7 +37,7 @@ const errorBody = (error) => {
 }
 
 export function createV1Endpoint({ feature, routes, context }) {
-  return async (payload) => {
+  return async (payload, call) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw Object.assign(new Error('payload object required'), { code: `${feature}/invalid` })
     }
@@ -48,6 +49,7 @@ export function createV1Endpoint({ feature, routes, context }) {
     const headers = new Headers()
     if (typeof payload.idempotency_key === 'string') headers.set('idempotency-key', payload.idempotency_key)
     const raw = payload.body
+    const username = call?.request?.headers?.get('x-ot-owner-username') ?? process.env.OPENTEAMILY_OWNER_USERNAME ?? ''
     const req = {
       ...context,
       method,
@@ -55,7 +57,9 @@ export function createV1Endpoint({ feature, routes, context }) {
       query: target.query,
       queryString: target.query.toString(),
       headers,
+      ownerUsername: USERNAME.test(username) ? username : '',
       params: found.params,
+      signal: call?.request?.signal,
       now: Math.floor(Date.now() / 1000),
       async json(limit = BODY_LIMIT) {
         if (raw === undefined || raw === null) return {}
@@ -74,6 +78,7 @@ export function createV1Endpoint({ feature, routes, context }) {
           download: {
             content_type: result.headers?.['content-type'] ?? 'application/octet-stream',
             filename: result.filename ?? /filename="([^"]+)"/.exec(result.headers?.['content-disposition'] ?? '')?.[1] ?? 'download',
+            ...(result.inline ? {inline:true} : {}),
             encoding: 'base64',
             data: bytes.toString('base64'),
           },

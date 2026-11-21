@@ -1,3 +1,4 @@
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
 export function artifactTargetFromSearch(search) {
@@ -12,7 +13,7 @@ import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import {
   renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
-  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch,
+  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch, conversationChatHref,
 } from '../shell/thumb.mjs';
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
@@ -140,7 +141,8 @@ export function meetingsForScope(items, {scope = 'all', username = '', userId = 
   if (scope !== 'joined') return rows;
   const name = (username || '').trim().toLowerCase();
   return rows.filter((row) => {
-    if (userId && row.created_by === userId) return true;
+    // The single-owner DS-Bot uses this marker when its platform user ID is unavailable.
+    if (userId && (row.created_by === userId || row.created_by === 'owner')) return true;
     const attendees = Array.isArray(row.attendees) ? row.attendees : [];
     return Boolean(name) && attendees.some((item) => String(item).trim().toLowerCase() === name);
   });
@@ -286,7 +288,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   let currentUser = null;
-  let workspaces = [];
+  let workspaceLoad = 0;
   let current = null;
   let draftKind = 'document';
   let catalogKind = 'all';
@@ -302,6 +304,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let meetingError = '';
   let meetingLoadedFor = '';
   let meetingLoading = false;
+  let meetingRequest = 0;
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -633,7 +636,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       drawBoard();
     }
     const source = document.getElementById('editor-source');
-    if (item && item.source) {
+    if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
+      const {conversation_id: id, agent_id, conversation_title} = item.source;
+      const link = document.createElement('a');
+      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id});
+      link.textContent = conversation_title || '打开会话';
+      source.hidden = false;
+      source.textContent = '来源会话：';
+      source.append(link);
+    } else if (item && item.source) {
       source.hidden = false;
       const from = item.source.kind === 'agent_message' ? '对话消息'
         : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
@@ -672,7 +683,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const url = worksPath() + queryForView(catalogKind, catalogScope);
+    const fragment = catalogKind === 'meetings' && workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
+    const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     view.history.replaceState({}, '', url);
   }
 
@@ -680,6 +692,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
+    const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
+    search.placeholder = searchLabel;
+    search.setAttribute('aria-label', searchLabel);
     for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
       if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
@@ -752,21 +767,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function loadMeetings() {
     const id = workspaceId();
+    if (!id || meetingLoadedFor === id) return;
+    const seq = ++meetingRequest;
     meetingItems = [];
     meetingError = '';
     meetingLoadedFor = id;
-    if (!id) return;
     meetingLoading = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=50`);
+    renderCatalog();
+    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=100`).catch(() => ({status: 0, body: {}}));
+    if (seq !== meetingRequest || workspaceId() !== id) return;
     meetingLoading = false;
-    if (listed.status !== 200) {
-      meetingItems = [];
+    if (listed.status === 200) {
+      meetingItems = listed.body.items || [];
+    } else {
+      meetingLoadedFor = '';
       meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
-      show('error', meetingError);
-      return;
     }
-    meetingItems = listed.body.items || [];
-    meetingError = '';
+    if (catalogKind === 'meetings') renderCatalog();
   }
 
   function renderMeetings() {
@@ -774,7 +791,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('list-empty');
     const emptyMeetings = document.getElementById('empty-meetings');
     const errorBox = document.getElementById('meetings-error');
-    const rows = meetingRows(meetingsForScope(meetingItems, {
+    const needle = search.value.trim().toLocaleLowerCase();
+    const matches = meetingItems.filter(item => [item.title, ...(item.attendees || [])]
+      .some(value => String(value).toLocaleLowerCase().includes(needle)));
+    const rows = meetingRows(meetingsForScope(matches, {
       scope: meetingScope,
       username: currentUser && currentUser.username,
       userId: currentUser && currentUser.id,
@@ -792,12 +812,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const emptyKind = document.getElementById('empty-kind');
     if (emptyKind) emptyKind.hidden = true;
-    if (emptyMeetings) emptyMeetings.hidden = Boolean(meetingError) || rows.length > 0 || meetingLoading;
-    if (empty) empty.hidden = Boolean(meetingError) || rows.length > 0;
+    const waiting = document.getElementById('meetings-loading');
+    if (waiting) waiting.hidden = !meetingLoading;
+    const noMatch = document.getElementById('meetings-no-match');
+    const filtered = Boolean(needle) || meetingScope === 'joined';
+    if (noMatch) noMatch.hidden = !filtered || Boolean(meetingError) || meetingLoading || rows.length > 0;
+    if (emptyMeetings) emptyMeetings.hidden = filtered || Boolean(meetingError) || rows.length > 0 || meetingLoading || !workspaceId();
+    if (empty) empty.hidden = !meetingError && rows.length > 0;
+    const retry = document.getElementById('retry-meetings');
+    if (retry) retry.hidden = !meetingError;
+    const create = document.getElementById('new-meeting-in-space');
+    if (create) {
+      create.hidden = !workspaceId();
+      create.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
+    }
     for (const row of rows) {
       const item = document.createElement('li');
-      item.className = 'artifact-item';
+      item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
+      const link = document.createElement('a');
+      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), meeting: row.id});
       const title = document.createElement('span');
       title.className = 'meeting-title';
       title.textContent = row.title;
@@ -807,7 +841,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const actions = document.createElement('span');
       actions.className = 'note meeting-actions';
       actions.textContent = row.actionLabel;
-      item.append(title, when, actions);
+      link.append(title, when, actions);
+      item.appendChild(link);
       list.appendChild(item);
     }
     return rows;
@@ -877,95 +912,112 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendEmpty = document.getElementById('send-to-chat-empty');
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
+  const sendConfirm = document.getElementById('send-to-chat-confirm');
+  const sendCancel = document.getElementById('send-to-chat-cancel');
   let sendingArtifact = null;
-  let sendPending = false, sendKeys = new Map();
+
+  function sendStatus(message = '') {
+    if (!sendError) return;
+    sendError.textContent = message;
+    sendError.hidden = !message;
+  }
 
   function closeSendDialog() {
-    if (!sendDialog) return;
+    if (!sendDialog || sendingArtifact?.pending) return;
     sendDialog.hidden = true;
     sendingArtifact = null;
   }
 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
-    sendingArtifact = item;
-    sendKeys = new Map();
+    const wid = workspaceId();
+    const state = {item, wid, destination: null, pending: false, keys: new Map()};
+    sendingArtifact = state;
     sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
-    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = false;
-      sendEmpty.textContent = '正在读取会话…';
-    }
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
-    if (sendingArtifact !== item) return;
+    sendConfirm.disabled = true;
+    const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
+      slides:'PowerPoint 文件', dashboard:'Excel 文件', media:'媒体文件'};
+    sendLead.textContent = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。请选择接收会话。`;
+    sendStatus();
+    sendList.replaceChildren();
+    sendEmpty.hidden = false;
+    sendEmpty.textContent = '正在读取会话…';
+    sendCancel?.focus();
+    const listed = await request('GET', `/v1/workspaces/${wid}/social/conversations?limit=100`)
+      .catch(() => ({status:0, body:{}}));
+    if (sendingArtifact !== state || workspaceId() !== wid) return;
     if (listed.status !== 200) {
-      if (sendEmpty) {
-        sendEmpty.hidden = false;
-        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
-      }
+      sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
       return;
     }
-    const items = listed.body.items || [];
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = items.length > 0;
-      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
-    }
+    const items = (listed.body.items || []).filter(item => !item.public_agent && item.direct?.open !== false);
+    sendEmpty.hidden = items.length > 0;
+    sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
     for (const conversation of items) {
       const row = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = conversationLabel(conversation);
-      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
-      row.appendChild(button);
-      sendList.appendChild(row);
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => {
+        if (state.pending) return;
+        state.destination = conversation;
+        for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
+        sendConfirm.disabled = false;
+        sendStatus();
+      });
+      row.append(button);
+      sendList.append(row);
     }
   }
 
-  async function sendArtifactToConversation(item, conversation) {
-    if (!workspaceId() || !item || !conversation || !conversation.id) return;
-    if (sendPending) return;
-    sendPending = true;
-    const wid = workspaceId();
-    const key = sendKeys.get(conversation.id) || idempotencyKey();
-    sendKeys.set(conversation.id, key);
+  sendConfirm?.addEventListener('click', async () => {
+    const state = sendingArtifact;
+    if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
+    const {wid, item, destination, keys} = state;
+    const key = keys.get(destination.id) || idempotencyKey();
+    keys.set(destination.id, key);
+    state.pending = true;
+    sendConfirm.disabled = true;
+    sendConfirm.textContent = '正在发送…';
+    if (sendCancel) sendCancel.disabled = true;
+    sendStatus();
     try {
-    const result = await request(
-      'POST',
-      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id, artifact_revision: item.revision},
-      {'Idempotency-Key': key},
-    );
-    if (workspaceId() !== wid || sendingArtifact !== item) return;
-    if (result.status !== 200 && result.status !== 201) {
-      if (sendError) {
-        sendError.hidden = false;
-        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${destination.id}/messages`,
+        {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
+      if (sendingArtifact !== state || workspaceId() !== wid) return;
+      if (result.status !== 200 && result.status !== 201) {
+        sendStatus(messageFor(result.body.error, '发送失败，请重试。'));
+        return;
       }
-      show('error', messageFor(result.body.error, '发送到聊天失败。'));
-      return;
+      state.pending = false;
+      closeSendDialog();
+      show('ok', '已发送到「' + conversationLabel(destination) + '」。');
+    } catch {
+      if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
+    } finally {
+      state.pending = false;
+      if (sendingArtifact === state || !sendingArtifact) {
+        sendConfirm.textContent = '确认发送';
+        sendConfirm.disabled = !sendingArtifact?.destination;
+        if (sendCancel) sendCancel.disabled = false;
+      }
     }
-    closeSendDialog();
-    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
-    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
-    finally { sendPending = false; }
-  }
+  });
 
-  if (document.getElementById('send-to-chat-cancel')) {
-    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
-  }
-  if (sendDialog) {
-    sendDialog.addEventListener('click', event => {
-      if (event.target === sendDialog) closeSendDialog();
-    });
-  }
+  sendCancel?.addEventListener('click', closeSendDialog);
+  sendDialog?.addEventListener('click', event => {
+    if (event.target === sendDialog) closeSendDialog();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !sendDialog?.hidden) closeSendDialog();
+  });
 
   let openItemMenu = null;
   function closeItemMenu() {
     if (!openItemMenu) return;
     openItemMenu.menu.hidden = true;
+    openItemMenu.menu.remove();
     openItemMenu.button.setAttribute('aria-expanded', 'false');
     openItemMenu = null;
   }
@@ -995,14 +1047,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.textContent = '发送到聊天';
     if (canSendArtifactToChat(item)) {
       send.disabled = false;
-      send.title = '把这件媒体作品发到一个群或单聊';
+      send.title = '把此作品的保存版本发到群聊或单聊';
       send.addEventListener('click', () => {
         closeItemMenu();
         openSendDialog(item);
       });
     } else {
       send.disabled = true;
-      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+      send.title = '请先保存作品再发送';
     }
     const rename = document.createElement('button');
     rename.type = 'button';
@@ -1038,11 +1090,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const wasOpen = openItemMenu && openItemMenu.menu === menu;
       closeItemMenu();
       if (wasOpen) return;
+      document.body.appendChild(menu);
       menu.hidden = false;
+      const anchor = button.getBoundingClientRect?.() || {right:0, top:0, bottom:0};
+      const viewport = document.defaultView;
+      const height = viewport?.visualViewport?.height || viewport?.innerHeight || 800;
+      const width = viewport?.visualViewport?.width || viewport?.innerWidth || 400;
+      const top = anchor.bottom + menu.offsetHeight + 8 > height ? anchor.top - menu.offsetHeight - 4 : anchor.bottom + 4;
+      menu.style.top = Math.max(8, top) + 'px';
+      menu.style.left = Math.max(8, Math.min(width - menu.offsetWidth - 8, anchor.right - menu.offsetWidth)) + 'px';
       button.setAttribute('aria-expanded', 'true');
       openItemMenu = {menu, button};
     });
-    wrap.append(button, menu);
+    wrap.append(button);
     return wrap;
   }
 
@@ -1312,6 +1372,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const banner=document.getElementById('artifact-live-update');if(banner)banner.hidden=true;
   });
   async function loadList() {
+    if (catalogKind === 'meetings') {
+      listGeneration += 1;
+      workspaceEvents.start('');
+      await loadMeetings();
+      return;
+    }
     workspaceEvents.start(workspaceId());
     const generation = ++listGeneration;
     const id = workspaceId();
@@ -1328,8 +1394,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderCatalog();
   }
 
+  function fillWorkspaces(items, selected) {
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+  }
+
   async function load() {
+    const seq = ++workspaceLoad;
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== workspaceLoad) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -1347,24 +1426,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
-    const space = await request('GET', '/v1/workspaces?limit=100');
+    const requested = artifactTargetFromSearch(document.defaultView?.location?.search);
+    const fragment = new URLSearchParams((document.defaultView?.location?.hash || '').slice(1));
+    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' ? fragment.get('workspace') : '');
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) space = shared;
+      supplemental = null;
+    }
+    if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
-      show('error', messageFor(space.body.error, '无法读取工作区。'));
+      show('error', '无法读取工作区。');
       return;
     }
-    workspaces = space.body.items || [];
-    const requested=artifactTargetFromSearch(document.defaultView?.location?.search);
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
+    const workspaces = space.body.items || [];
+    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    void supplemental?.then(shared => {
+      if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
+    });
     if (!workspaces.length) {
       allItems = [];
       document.getElementById('artifact-list').textContent = '';
@@ -1377,6 +1457,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     form.hidden = true;
     listPanel.hidden = false;
+    if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
+      renderCatalog();
+      return;
+    }
     if(requested){
       if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
         await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
@@ -1406,11 +1492,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meetingLoadedFor = '';
     meetingItems = [];
     meetingError = '';
-    loadList().then(() => {
-      if (catalogKind === 'meetings') loadMeetings().then(() => renderCatalog());
-    });
+    meetingLoading = false;
+    if (catalogKind === 'meetings') syncViewUrl();
+    void loadList();
   });
-  search.addEventListener('input', () => loadList());
+  search.addEventListener('input', () => {
+    if (catalogKind === 'meetings') renderMeetings();
+    else void loadList();
+  });
+  document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
     draftKind = 'document';
@@ -1506,17 +1596,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const kind = button.getAttribute('data-kind') || 'all';
       const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
       applyView(kind, scope);
-      if (kind === 'meetings' && meetingLoadedFor !== workspaceId()) {
-        meetingLoading = true;
-        renderCatalog();
-        await loadMeetings();
-        renderCatalog();
-      }
+      await loadList();
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
     button.addEventListener('click', () => {
+      const leavingMeetings = catalogKind === 'meetings';
       applyView('all', button.getAttribute('data-scope') || 'all');
+      if (leavingMeetings) void loadList();
     });
   }
   for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
@@ -1920,92 +2007,111 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSaveMessageDialog() {
-    if (!workspaceId()) { show('error', '先选择一个工作区。'); return; }
+    const workspace = workspaceId();
+    if (!workspace) { show('error', '先选择一个工作区。'); return; }
     const ui = openSpaceDialog('save-message-dialog', '保存聊天中的消息');
+    const current = () => spaceActionDialog === ui.dialog && workspaceId() === workspace;
+    const feedback = text => {
+      ui.note.hidden = !text;
+      ui.note.textContent = text;
+    };
+    ui.note.setAttribute('role', 'status');
+
+    const label = document.createElement('label');
+    label.textContent = '会话';
+    const select = document.createElement('select');
+    select.id = 'save-message-conversation';
+    select.disabled = true;
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.textContent = '选择要查看的会话';
+    select.append(prompt);
+    label.append(select);
     const list = document.createElement('ul');
     list.id = 'save-message-list';
     const close = document.createElement('button');
     close.type = 'button';
     close.textContent = '关闭';
-    close.addEventListener('click', () => closeSpaceActionDialog());
-    ui.card.append(list, close);
-    const candidates = [];
-    const social = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=20`);
-    if (social.status === 200) {
-      for (const conversation of social.body.items || []) {
-        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?limit=20`);
-        if (messages.status !== 200) continue;
-        for (const item of messages.body.items || []) {
-          if (saveableSocialMessage(item)) {
-            candidates.push({
-              label: (conversation.title || '会话') + ' · ' + defaultSaveTitle(item.body),
-              path: socialSavePath(workspaceId(), conversation.id, item.id),
-              title: defaultSaveTitle(item.body),
-              revision: item.revision || 1,
-              social: true,
-            });
+    close.addEventListener('click', closeSpaceActionDialog);
+    ui.card.append(label, list, close);
+    feedback('正在加载会话…');
+
+    const base = `/v1/workspaces/${workspace}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, agents] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      get('/agents?limit=100&include=conversations'),
+    ]);
+    if (!current()) return;
+    const agentById = new Map((agents.body.items || []).map(agent => [agent.id, agent]));
+    const conversations = [
+      ...(social.body.items || []).map(row => ({...row, label: conversationLabel(row), social: true})),
+      ...(agents.body.conversations || []).filter(row => agentById.has(row.agent_id)).map(row => ({
+        ...row, label: agentById.get(row.agent_id).name + ' · ' + row.title,
+      })),
+    ].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const incomplete = social.status !== 200 || agents.status !== 200 || !Array.isArray(agents.body.conversations);
+    feedback(incomplete ? '部分会话无法加载。' : (conversations.length ? '' : '这个工作区还没有会话。'));
+    if (!conversations.length) return;
+    conversations.forEach((row, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = row.label;
+      select.append(option);
+    });
+    select.disabled = false;
+    select.focus();
+
+    let search = 0;
+    select.addEventListener('change', async () => {
+      const selected = ++search;
+      list.replaceChildren();
+      const conversation = conversations[select.value === '' ? -1 : Number(select.value)];
+      if (!conversation) { feedback(''); return; }
+      feedback('正在加载消息…');
+      const path = conversation.social ? `/social/conversations/${conversation.id}/messages?limit=20`
+        : `/agents/${conversation.agent_id}/conversations/${conversation.id}`;
+      const result = await get(path);
+      if (!current() || selected !== search) return;
+      if (result.status !== 200) { feedback('无法加载消息，请重试。'); return; }
+      const items = (result.body.items || []).filter(conversation.social ? saveableSocialMessage : saveableAgentMessage);
+      feedback(items.length ? '' : '这段会话还没有可保存的文字消息。');
+      for (const item of items.slice(-20).reverse()) {
+        const row = document.createElement('li');
+        const preview = document.createElement('span');
+        preview.textContent = defaultSaveTitle(item.body);
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '保存';
+        save.addEventListener('click', async () => {
+          const endpoint = conversation.social ? socialSavePath(workspace, conversation.id, item.id)
+            : agentSavePath(workspace, conversation.agent_id, conversation.id, item.id);
+          const body = {title: preview.textContent};
+          if (conversation.social) body.revision = item.revision || 1;
+          save.disabled = true;
+          feedback('');
+          try {
+            const saved = await request('POST', endpoint, body);
+            if (!current() || selected !== search) return;
+            if (saved.status !== 200 && saved.status !== 201) {
+              feedback(messageFor(saved.body.error, '保存失败，请重试。'));
+              return;
+            }
+            closeSpaceActionDialog();
+            show('ok', saved.status === 201 ? '已保存为文档。' : '已打开已有副本。');
+            if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+            await loadList();
+            if (workspaceId() === workspace && saved.body.artifact) openEditor(saved.body.artifact);
+          } catch {
+            if (current() && selected === search) feedback('无法确认保存结果，请重试。');
+          } finally {
+            save.disabled = false;
           }
-        }
+        });
+        row.append(preview, save);
+        list.append(row);
       }
-    }
-    const agents = await request('GET', `/v1/workspaces/${workspaceId()}/agents?limit=100`);
-    const agentItems = agents.status === 200 ? (agents.body.items || []) : [];
-    const personal = await request('GET', '/v1/personal-agent');
-    const personalSave = personal.status === 200 ? personal.body.personal_agent : null;
-    if (personalSave && personalSave.agent && personalSave.workspace && personalSave.workspace.id === workspaceId()) {
-      const agent = personalSave.agent;
-      if (!agentItems.some((row) => row.id === agent.id)) agentItems.unshift(agent);
-    }
-    for (const agent of agentItems) {
-      const conversations = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations?limit=20`);
-      if (conversations.status !== 200) continue;
-      for (const conversation of conversations.body.items || []) {
-        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations/${conversation.id}/messages?limit=20`);
-        if (messages.status !== 200) continue;
-        for (const item of messages.body.items || []) {
-          if (saveableAgentMessage(item)) {
-            candidates.push({
-              label: (agent.name || '智能体') + ' · ' + defaultSaveTitle(item.body),
-              path: agentSavePath(workspaceId(), agent.id, conversation.id, item.id),
-              title: defaultSaveTitle(item.body),
-              social: false,
-            });
-          }
-        }
-      }
-    }
-    if (!candidates.length) {
-      ui.note.hidden = false;
-      ui.note.textContent = '这个工作区还没有可保存的已完成消息。';
-      return;
-    }
-    for (const candidate of candidates.slice(0, 40)) {
-      const row = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = candidate.label;
-      const save = document.createElement('button');
-      save.type = 'button';
-      save.textContent = '保存';
-      save.addEventListener('click', async () => {
-        save.disabled = true;
-        const body = {title: candidate.title};
-        if (candidate.social) body.revision = candidate.revision;
-        const saved = await request('POST', candidate.path, body);
-        if (saved.status === 200 || saved.status === 201) {
-          closeSpaceActionDialog();
-          show('ok', '已保存为云文档。');
-          if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
-          await loadList();
-          if (saved.body.artifact) openEditor(saved.body.artifact);
-          return;
-        }
-        save.disabled = false;
-        ui.note.hidden = false;
-        ui.note.textContent = messageFor(saved.body.error, '保存失败。');
-      });
-      row.append(label, save);
-      list.append(row);
-    }
+    });
   }
 
 
@@ -2262,6 +2368,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.addEventListener('popstate', () => {
       const next = viewFromSearch(view.location.search);
       applyView(next.kind, next.scope, {sync: false});
+      void loadList();
     });
   }
   return load().then(() => {
