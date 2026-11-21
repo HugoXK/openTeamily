@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/agents/app.css">
   <link rel="stylesheet" href="/look/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/agents/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -79,7 +80,7 @@
     <p id="role-note" class="note"></p>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者下拉按创建人筛选智能体，可以和类目叠加使用；AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
+      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者下拉按创建人筛选智能体，可以和类目叠加使用；AI 团队模板从服务端读取并可一键应用到当前工作区（建或复用同名智能体，再建一个群会话）；模板本身不能在这里编辑。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
     </details>
     <div class="filter-row" aria-label="筛选">
       <button type="button" class="pill" data-category="all" aria-pressed="true">全部</button>
@@ -112,7 +113,9 @@
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
     <section id="teams-panel" hidden>
-      <p class="note">AI 团队目录还没有在 OpenTeamily 实现，不会列出模板，也不能从这里创建。</p>
+      <p class="note">模板来自服务端：选一个模板会在当前工作区创建（或复用同名的）三个智能体，并建一个群会话。只有工作区所有者或管理员可以建团队。</p>
+      <ul id="team-template-list" class="card-grid" aria-live="polite"></ul>
+      <p id="teams-empty" class="note" hidden>模板列表没有加载出来；可以稍后重试。</p>
     </section>
     <aside id="manage-drawer" hidden>
       <form id="create-form" method="post" action="/v1/workspaces" hidden>
@@ -121,6 +124,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
@@ -133,6 +137,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
@@ -143,13 +148,8 @@
       </form>
       <section id="homepage-panel" hidden>
         <h2>公开主页</h2>
-        <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
-        <p id="homepage-status" class="note"></p>
-        <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
-        <div class="actions">
-          <button type="button" id="publish-homepage">发布链接</button>
-          <button type="button" id="revoke-homepage">撤回链接</button>
-        </div>
+        <p class="note">在发现页管理公开主页、访客聊天和快捷开场。</p>
+        <a id="manage-public-homepage" href="/discover?tab=agents#catalog-manage">管理公开主页</a>
       </section>
       <section id="api-key-panel" hidden>
         <h2>外部 API 访问</h2>

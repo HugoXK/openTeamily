@@ -100,6 +100,9 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
   assert.equal(settingsViewFromLocation('/settings', '#message-display'), 'message-folding');
   assert.equal(settingsViewFromLocation('/settings', '#model-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#video-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings/model-api', '#video-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#music-api'), 'model-api');
 });
 
 test('applySettingsView shows one recorded page at a time', () => {
@@ -547,6 +550,59 @@ async function mountSettingsPage({secrets} = {}) {
     status: doc.getElementById('status'),
   };
 }
+
+async function checkMediaModelForm(type, provider, model) {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const changes = [];
+  const key = 'synthetic-' + type + '-key';
+  let config = {provider, model, has_api_key: false, revision: 2};
+  const fetcher = async (path, options) => {
+    if (path === '/v1/model-api/' + type) {
+      if (options.method === 'POST') {
+        const change = JSON.parse(options.body);
+        changes.push(change);
+        config = {...config, has_api_key: change.api_key !== null, revision: config.revision + 1};
+      }
+      return settingsJson(200, {[type + '_api']: config});
+    }
+    if (path === '/v1/model-api/image') return settingsJson(404, {});
+    return api.fetcher(path, options);
+  };
+  const previousLocation = globalThis.location;
+  globalThis.location = {pathname: '/settings/model-api', hash: '#' + type + '-api'};
+  const restoreListeners = stubWindowListeners();
+  stubFormData(doc.getElementById('settings-form'));
+  try {
+    await mount(doc, {fetcher});
+    const form = doc.getElementById(type + '-api-form');
+    const remove = doc.getElementById('clear-' + type + '-api');
+    assert.equal(doc.getElementById(type + '-api').disabled, false);
+    assert.equal(remove.hidden, true);
+    form.elements.api_key.value = key;
+    doc.fire('submit', {target: form});
+    assert.equal(form.elements.api_key.value, '');
+    await settleSettings();
+    assert.equal(remove.hidden, false);
+    doc.fire('click', {target: remove});
+    await settleSettings();
+    assert.equal(remove.hidden, true);
+    assert.deepEqual(changes, [
+      {revision: 2, api_key: key},
+      {revision: 3, api_key: null},
+    ]);
+  } finally {
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+}
+
+test('the video model form saves and clears the write-only key using its own revision',
+  () => checkMediaModelForm('video', 'runway', 'gen4.5'));
+test('the music model form saves and clears the write-only key using its own revision',
+  () => checkMediaModelForm('music', 'elevenlabs', 'music_v2_5'));
 
 function secretRow(list, name) {
   return list.children.find(row => row.children.some(child => child.tagName === 'button' && child.textContent === '删除')
