@@ -82,7 +82,7 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('单击查看 · 双击打开 · 悬停预览', html)
         self.assertIn('id="graph-hover-card"', html)
         self.assertIn('class="graph-hover-title"', html)
-        self.assertIn('悬停预览卡的版式未经核实', html)
+        self.assertIn('也可以在编辑器里添加连接。', html)
         self.assertNotIn('尚未实现这些手势', html)
         self.assertIn('id="topic-list"', html)
         self.assertIn('id="memory-list"', html)
@@ -142,6 +142,17 @@ class MemoryPageServingTests(unittest.TestCase):
             self.assertEqual(page['status'], 200, query)
             self.assertIn('我的资料', page['body'].decode())
         self.assertEqual(self.raw.call('POST', '/memory')['status'], 405)
+
+    def test_the_dream_button_asks_the_server_and_can_be_declined(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="dream-page"', html)
+        self.assertIn('id="dream-accept"', html)
+        self.assertIn('id="dream-ignore"', html)
+        self.assertIn('id="dream-panel"', html)
+        js = self.raw.call('GET', '/memory/app.mjs')['body'].decode()
+        self.assertIn('/dream', js)
+        self.assertIn('已忽略，原文没有改动。', js)
 
     def test_wrapper_still_exposes_the_memory_api(self):
         workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},

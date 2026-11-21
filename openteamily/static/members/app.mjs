@@ -1,3 +1,5 @@
+import { conversationChatHref } from '../shell/thumb.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -26,11 +28,24 @@ export function readInvite(form) {
 export function directoryMembershipLabel(team) {
   if (team.membership === 'member') return '已加入';
   if (team.membership === 'pending') return '等待审批';
+  if (team.membership === 'suspended') return '已暂停';
   return '';
 }
 
+// self may be a platform user object or just an id. After the page is served by
+// this user's DS-Bot, member.user_id may be a Bot Social owner id or handle.
+export function samePerson(item, self) {
+  if (!item || self == null || self === '') return false;
+  const user = typeof self === 'object' ? self : {id: self};
+  if (item.user_id && user.id && item.user_id === user.id) return true;
+  const strip = (value) => String(value || '').toLowerCase().replace(/^@/, '').replace(/\.home$/, '');
+  const mine = new Set([user.id, user.username, user.handle].filter(Boolean).map(strip).filter(Boolean));
+  if (!mine.size) return false;
+  return [item.user_id, item.username, item.handle].some((value) => value && mine.has(strip(value)));
+}
+
 export function canSuspend(actorRole, item, selfId) {
-  if (!item || item.role === 'owner' || item.user_id === selfId) return false;
+  if (!item || item.role === 'owner' || samePerson(item, selfId)) return false;
   if (actorRole === 'owner') return true;
   return actorRole === 'admin' && item.role === 'member';
 }
@@ -66,7 +81,7 @@ export function canInvite(actor) {
 
 export function canRemove(actor, target, selfId) {
   if (!target || target.role === 'owner') return false;
-  if (target.user_id === selfId) return actor === 'admin' || actor === 'member';
+  if (samePerson(target, selfId)) return actor === 'admin' || actor === 'member';
   if (actor === 'owner') return target.role === 'admin' || target.role === 'member';
   if (actor === 'admin') return target.role === 'member';
   return false;
@@ -74,7 +89,7 @@ export function canRemove(actor, target, selfId) {
 
 export function removalPrompt(item, selfId) {
   if (!item) return {question: '', confirmLabel: '确认'};
-  if (item.user_id === selfId) return {question: '退出工作区？', confirmLabel: '确认退出'};
+  if (samePerson(item, selfId)) return {question: '退出工作区？', confirmLabel: '确认退出'};
   const name = item.username || '';
   return {question: name ? `移除 ${name}？` : '移除此成员？', confirmLabel: '确认'};
 }
@@ -110,7 +125,8 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), assign} = {}) {
+  const goTo = assign || ((href) => globalThis.location.assign(href));
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -124,9 +140,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, extraHeaders) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -303,6 +320,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return wrap;
   }
 
+  function messageKey() {
+    const raw = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : (String(Date.now()) + 'dmxxxxxxxx');
+    return ('member-dm-' + raw.replace(/-/g, '')).slice(0, 64);
+  }
+
+  async function startDirectMessage(item) {
+    const id = workspaceId();
+    if (!id || !item || !item.user_id) return;
+    if (currentUser && samePerson(item, currentUser)) {
+      show('error', '不能给自己发消息。');
+      return;
+    }
+    const result = await request('POST', `/v1/workspaces/${id}/social/conversations`, {
+      kind: 'dm', member_ids: [item.user_id],
+    }, {'Idempotency-Key': messageKey()});
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法打开与对方的单聊。'));
+      return;
+    }
+    const conversation = result.body.conversation;
+    if (!conversation || !conversation.id) {
+      show('error', '已发起会话，但没有返回可打开的对话。');
+      return;
+    }
+    goTo(conversationChatHref(id, {source: 'social', id: conversation.id}));
+  }
+
   function renderMembers(items) {
     const list = document.getElementById('member-list');
     const empty = document.getElementById('members-empty');
@@ -310,7 +354,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
-    const selfId = currentUser && currentUser.id;
+    const selfId = currentUser;
     for (const item of items) {
       const row = document.createElement('li');
       const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
@@ -319,6 +363,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
       role.textContent = ROLE_LABELS[item.role] || item.role;
       row.appendChild(role);
+      if (!samePerson(item, selfId)) {
+        const message = document.createElement('button');
+        message.type = 'button';
+        message.textContent = '发消息';
+        message.title = '打开与对方的人与人单聊';
+        message.addEventListener('click', () => startDirectMessage(item));
+        row.appendChild(message);
+      }
       if (canSuspend(actor, item, selfId)) {
         const suspend = document.createElement('button');
         suspend.type = 'button';
@@ -337,7 +389,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (canRemove(actor, item, selfId)) {
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.textContent = item.user_id === selfId ? '退出' : '移除';
+        remove.textContent = samePerson(item, selfId) ? '退出' : '移除';
         remove.dataset.rowAction = 'remove';
         remove.dataset.userId = item.user_id;
         row.appendChild(remove);
@@ -413,7 +465,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法移除成员。'));
       return;
     }
-    show('ok', item.user_id === currentUser.id ? '已退出工作区。' : '已移除。');
+    show('ok', samePerson(item, currentUser) ? '已退出工作区。' : '已移除。');
     await load();
   }
 
@@ -493,7 +545,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const items = listed.body.items || [];
-    const self = items.find(item => currentUser && item.user_id === currentUser.id);
+    const self = items.find(item => samePerson(item, currentUser));
     actor = self ? self.role : null;
     document.getElementById('role-note').textContent = actor
       ? `当前角色：${ROLE_LABELS[actor] || actor}`

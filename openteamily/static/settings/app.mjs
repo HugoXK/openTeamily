@@ -111,6 +111,7 @@ const HASH_VIEWS = {
   'send-shortcut': 'shortcuts',
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
+  'image-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -369,6 +370,22 @@ export function newlineBinding(sendShortcut) {
   return sendShortcut === 'mod_enter' ? 'Enter' : 'Shift+Enter';
 }
 
+// The stored value is a code; the sentence a user reads has to say what the
+// choice actually does when a message is sent, not just echo the label.
+export function chatLanguageEffect(value, label = '') {
+  if (!value || value === 'auto') {
+    return '跟随界面语言：发消息时不指定语言，智能体按你消息的语种回复。';
+  }
+  return '发消息时会带上「' + (label || value) + '」：智能体按这个语言回复。';
+}
+
+export function syncChatLanguageNote(document, value, label = '') {
+  const text = chatLanguageEffect(value, label);
+  const note = document.getElementById('chat-language-effect');
+  if (note) note.textContent = text;
+  return text;
+}
+
 export function syncShortcutRows(document, values) {
   const keys = document.getElementById('newline-keys');
   if (!keys) return;
@@ -420,6 +437,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const imageForm = document.getElementById('image-api-form');
+  const imageFields = document.getElementById('image-api');
+  const imageStatus = document.getElementById('image-api-status');
+  const removeImageKey = document.getElementById('clear-image-api');
+  let imageAccount = null;
+  let imageRevision = null;
+  let imageLoading = false;
+  let imageSaving = false;
   let revision = 0;
   let current = null;
   let modelRevision = 0;
@@ -479,6 +504,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const view = settingsViewFromLocation(location.pathname, location.hash);
     applySettingsView(document, view);
     if (current) syncAppearanceExtras(document, current);
+    if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
+    if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
   }
 
   function refreshAppearance() {
@@ -491,6 +518,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (languageCurrent && languageSelect) {
       const option = languageSelect.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
+    }
+    const chatLanguageSelect = form.elements.chat_language;
+    if (chatLanguageSelect) {
+      const chosen = chatLanguageSelect.selectedOptions && chatLanguageSelect.selectedOptions[0];
+      syncChatLanguageNote(document, chatLanguageSelect.value, chosen ? chosen.textContent : '');
     }
     if (current) {
       syncShortcutRows(document, current);
@@ -519,6 +551,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
+      switchImageAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -529,6 +562,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
+    switchImageAccount(session.body.user.id ?? session.body.user.username);
     const settings = await request('GET', '/v1/settings');
     if (settings.status !== 200) {
       show('error', messageFor(settings.body.error, '无法读取设置。'));
@@ -641,6 +675,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       event.target.setAttribute('aria-checked', event.target.checked ? 'true' : 'false');
     }
     if (name === 'send_shortcut') syncShortcutRows(document, readForm(form));
+    if (name === 'chat_language' && event.target) {
+      const selected = event.target.selectedOptions && event.target.selectedOptions[0];
+      syncChatLanguageNote(document, event.target.value, selected ? selected.textContent : '');
+    }
     if (!AUTOSAVE_KEYS.includes(name)) return;
     const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
       ? '外观已更新。' : '已保存。';
@@ -734,6 +772,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+  function switchImageAccount(account) {
+    if (!imageForm || imageAccount === account) return;
+    imageAccount = account;
+    imageRevision = null;
+    imageLoading = imageSaving = false;
+    imageForm.reset?.();
+    imageFields.disabled = true;
+    removeImageKey.hidden = true;
+    imageStatus.textContent = '';
+  }
+
+  function fillImageApi(config,message) {
+    imageRevision = config.revision;
+    imageForm.elements.base_url.value = config.base_url;
+    imageForm.elements.model.value = config.model;
+    imageForm.elements.api_key.value = '';
+    removeImageKey.hidden = !config.api_key_set;
+    imageStatus.textContent = message || (config.api_key_set ? '图片密钥已保存。' : '尚未配置图片密钥。');
+    imageFields.disabled = false;
+  }
+
+  async function loadImageApi() {
+    if (imageLoading) return;
+    const account = imageAccount;
+    imageLoading = true;
+    imageStatus.textContent = '正在读取图片配置…';
+    const response = await request('GET','/v1/model-api/image').catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageLoading = false;
+    if (response.status === 200 && response.body.image_api) fillImageApi(response.body.image_api);
+    else imageStatus.textContent = '无法读取图片配置，请刷新后重试。';
+  }
+
+  async function saveImageApi(changes) {
+    if (imageRevision === null || imageLoading || imageSaving) return;
+    const account = imageAccount;
+    imageSaving = imageFields.disabled = true;
+    imageStatus.textContent = '正在保存…';
+    const response = await request('POST','/v1/model-api/image',{revision:imageRevision,changes})
+      .catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageSaving = imageFields.disabled = false;
+    imageForm.elements.api_key.value = '';
+    if (response.status === 200 && response.body.image_api) {
+      fillImageApi(response.body.image_api,changes.api_key === null ? '已移除图片密钥。' : '图片配置已保存。');
+    } else if (response.status === 409) await loadImageApi();
+    else imageStatus.textContent = messageFor(response.body.error,'无法保存图片配置，请重试。');
+  }
+
+  imageForm?.addEventListener('submit',event => {
+    event.preventDefault();
+    const {base_url,model,api_key} = imageForm.elements;
+    const secret = api_key.value.trim();
+    void saveImageApi({base_url:base_url.value.trim(),model:model.value.trim(),...(secret ? {api_key:secret} : {})});
+  });
+  removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
+
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -767,6 +862,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     current = null;
     revision = 0;
+    switchImageAccount(null);
     await load();
   });
 
