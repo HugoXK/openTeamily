@@ -5,12 +5,14 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { excerpt, rank } from '../../features/chat/recall.js'
 
 const MAX_CONTEXT_CHARS = 6000
 const REPLY_TEXT_LIMIT = 4000
 const PROGRESS_INTERVAL = 250
 const INBOX_INTERVAL = 2500
+const DELIVERY_RETRY_DELAY = 150
 
 export function selectGroupMemories(query, items) {
   if (!Array.isArray(items)) return []
@@ -177,10 +179,19 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
           continue
         }
         try {
-          await bs.post(`/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`, {
+          const path = `/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`
+          const payload = {
             agent_ref: item.agent_ref, body: text.slice(0, REPLY_TEXT_LIMIT).toWellFormed(), reply_to: id, mode: item.mode, client_key: replyKey,
             ...(item.job_id ? {job_id: item.job_id, attempt: item.attempt} : {}),
             ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
+          }
+          await bs.post(path, payload).catch(async error => {
+            const status = error?.status
+            const transient = status === undefined ? error?.code === 'social/unreachable' : status >= 500 && status < 600
+            if (!item.job_id || !transient) throw error
+            // Bot Social returns the stored reply when a managed attempt was delivered before the connection dropped.
+            await delay(DELIVERY_RETRY_DELAY)
+            await bs.post(path, payload)
           })
           replied++
         } catch (error) {

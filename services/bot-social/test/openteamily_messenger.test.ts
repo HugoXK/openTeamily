@@ -515,7 +515,7 @@ test("team reply progress uses both memberships and drops work when access is re
 
   await worker.ok("PUT", helper, {name: "Helper", auto_reply: true});
   const {id, source} = await createJob("@helper draft a message");
-  assert.deepEqual(await reader.ok("GET", scoped), {items: [{id, message_id: source.id, attempt: 1, text: "Shared draft"}]});
+  assert.deepEqual(await reader.ok("GET", scoped), {items: [{id, message_id: source.id, attempt: 1, status: "running", text: "Shared draft"}]});
   assert.equal((await reader.call("GET", scoped.replace(workspace, otherWorkspace))).status, 404);
   assert.equal((await outsider.call("GET", scoped)).status, 404);
   assert.equal((await reader.call("GET", room + "/reply-progress")).status, 404);

@@ -146,10 +146,73 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   assert.equal(posts[3].body.attempt,2)
 })
 
+test('a managed reply retries transient delivery once with the same payload and no second model turn', async t => {
+  const job = {job_id:'otj_live',attempt:2,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_source',revision:3}}
+  const scenarios = [
+    {name:'connection drops after commit', outcomes:['lost','ok'], replied:1},
+    {name:'server recovers from 503', outcomes:[503,'ok'], replied:1},
+    {name:'repeated 503 runs out of retries', outcomes:[503,503], replied:0},
+    {name:'conflict is not retried', outcomes:[409], replied:0},
+  ]
+  for (const {name,outcomes,replied} of scenarios) {
+    await t.test(name, async () => {
+      const dir = fixture()
+      const deliveries = []
+      const actions = []
+      let message, turns = 0, writes = 0
+      const bs = createBotSocial({
+        server:SERVER, credentialsPath:join(dir,'bot','flybot-social.json'),
+        async fetch(url, options) {
+          const path = url.slice(SERVER.length)
+          if (path.startsWith('/v1/ot/agent-inbox?')) return Response.json({cursor:0,jobs:[job]})
+          if (path === '/v1/ot/agent-reply-jobs/otj_live') {
+            actions.push(JSON.parse(options.body))
+            return Response.json({ok:true})
+          }
+          assert.equal(path,'/v1/ot/conversations/otc_group/agent-messages')
+          const outcome = outcomes[deliveries.push(options.body) - 1]
+          if (typeof outcome === 'number') return Response.json({}, {status:outcome})
+          if (!message) {
+            message = {id:'otm_reply'}
+            writes++
+          }
+          if (outcome === 'lost') throw new TypeError('connection dropped')
+          return Response.json(message,{status:201})
+        },
+      })
+      const replier = createAgentReplier({bs,stateFile:join(dir,'inbox.json'),host:{
+        currentRuntime: () => ({chatTurn() {}}),
+        async call(endpoint) {
+          assert.equal(endpoint,'agents/groupTurn')
+          turns++
+          return {text:'Complete answer'}
+        },
+      }})
+      assert.deepEqual(await replier.once(),{replied,cursor:0})
+      assert.equal(turns,1)
+      assert.equal(writes,replied)
+      assert.equal(deliveries.length,outcomes.length)
+      assert.equal(new Set(deliveries).size,1)
+      assert.deepEqual(JSON.parse(deliveries[0]),{
+        agent_ref:'helper',body:'Complete answer',reply_to:'otm_source',mode:'mention',
+        client_key:'r:' + createHash('sha256').update(JSON.stringify(['otm_source','helper'])).digest('hex'),
+        job_id:'otj_live',attempt:2,
+      })
+      assert.deepEqual(actions,[
+        {action:'start',attempt:2,source_revision:3},
+        ...(replied ? [] : [{action:'fail',attempt:2}]),
+      ])
+    })
+  }
+})
+
 test('manual group reply uses the same managed send and progress reads follow the chosen workspace', async () => {
   const workspace = 'a'.repeat(32)
   const personal = 'b'.repeat(32)
   const wrong = 'c'.repeat(32)
+  const sharedProgress = {id:'otj_live',message_id:'otm_source',attempt:1,status:'running',text:''}
+  const accountProgress = {...sharedProgress,status:'queued'}
   const f = fake({
     'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
     [`GET /v1/ot/teams/by-workspace/${workspace}`]: () => ({id:'ott_group'}),
@@ -158,10 +221,8 @@ test('manual group reply uses the same managed send and progress reads follow th
       agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
     'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_source',body:input.body,
       reply_jobs:[{id:'otj_live',status:'queued',attempt:1}]}),
-    [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/reply-progress`]: () => ({items:[
-      {id:'otj_live',message_id:'otm_source',attempt:1,text:'Live reply'},
-    ]}),
-    'GET /v1/ot/conversations/otc_account/reply-progress': () => ({items:[]}),
+    [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/reply-progress`]: () => ({items:[sharedProgress]}),
+    'GET /v1/ot/conversations/otc_account/reply-progress': () => ({items:[accountProgress]}),
   })
   const dir = fixture()
   setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
@@ -181,9 +242,9 @@ test('manual group reply uses the same managed send and progress reads follow th
   assert.equal((await feature.v1({...payload,path:from(wrong)+'/agent-replies'})).status,404)
   assert.equal(f.calls.filter(call => call.method === 'POST').length,1)
   const shared = await feature.v1({method:'GET',path:from(workspace)+'/reply-progress'})
-  assert.equal(shared.body.items[0].text,'Live reply')
+  assert.deepEqual(shared,{status:200,body:{items:[sharedProgress]}})
   const account = await feature.v1({method:'GET',path:from(personal,'otc_account')+'/reply-progress'})
-  assert.deepEqual(account,{status:200,body:{items:[]}})
+  assert.deepEqual(account,{status:200,body:{items:[accountProgress]}})
   assert.equal(f.calls.at(-1).path,'/v1/ot/conversations/otc_account/reply-progress')
 })
 

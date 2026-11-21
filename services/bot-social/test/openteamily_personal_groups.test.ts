@@ -83,13 +83,16 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   const retry = room + "/messages/" + message.id + "/agent-retry";
   const answer = (job: any) => ({agent_ref: job.agent_ref, body: "Checked", reply_to: message.id,
     job_id: job.job_id, attempt: job.attempt});
-  const draftSnapshot = (attempt: number, text: string) => ({id: draft.job_id, message_id: message.id, attempt, text});
+  const draftSnapshot = (attempt: number, text: string, status = "running") =>
+    ({id: draft.job_id, message_id: message.id, attempt, status, text});
   const view = () => sender.ok("GET", listProgress);
 
   assert.equal((await sender.call("POST", change(draft), {action: "start", attempt: 1})).status, 404);
   assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 1, text: "Too early"})).status, 409);
   assert.equal((await fetch(S.base + listProgress)).status, 401);
+  assert.deepEqual((await view()).items.at(-1), draftSnapshot(1, "", "queued"));
   await owner.ok("POST", change(draft), {action: "start", attempt: 1});
+  assert.deepEqual((await view()).items.at(-1), draftSnapshot(1, ""));
   await owner.ok("POST", change(review), {action: "start", attempt: 1});
   assert.equal((await owner.call("POST", change(draft), {action: "start", attempt: 1})).status, 409);
   assert.deepEqual((await owner.ok("GET", later)).jobs, []);
@@ -100,7 +103,7 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   await owner.ok("POST", progress(draft), {attempt: 1, revision: 1, text: "Starting a draft"});
   await owner.ok("POST", progress(review), {attempt: 1, revision: 1, text: "Starting a review"});
   assert.deepEqual((await view()).items, [
-    {id: review.job_id, message_id: message.id, attempt: 1, text: "Starting a review"},
+    {id: review.job_id, message_id: message.id, attempt: 1, status: "running", text: "Starting a review"},
     draftSnapshot(1, "Starting a draft"),
   ]);
   assert.deepEqual(await sender.ok("GET", activity + "&since=" + before.version), {version: before.version});
@@ -120,7 +123,7 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   const retried = await sender.ok("POST", retry, {job_id: draft.job_id});
   assert.deepEqual(retried.reply_jobs.map((job: any) => job.status), ["queued", "replied"]);
   assert.deepEqual(retried.reply_jobs.map((job: any) => job.attempt), [2, 1]);
-  assert.deepEqual((await view()).items, [draftSnapshot(2, "")]);
+  assert.deepEqual((await view()).items, [draftSnapshot(2, "", "queued")]);
   assert.equal((await sender.call("POST", retry, {job_id: draft.job_id})).status, 409);
   const next = (await owner.ok("GET", later)).jobs;
   assert.deepEqual(next.map((job: any) => [job.job_id, job.attempt]), [[draft.job_id, 2]]);

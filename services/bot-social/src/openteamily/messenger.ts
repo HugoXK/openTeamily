@@ -1186,7 +1186,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       ORDER BY src.seq DESC,j.rowid DESC LIMIT ?`, conv.id, now - REPLY_JOB_TIMEOUT, me.ownerId, REPLY_PROGRESS_PAGE);
     return {items: jobs.map(job => {
       const snapshot = replyProgress.get(job.id);
-      return {id: job.id, message_id: job.message_id, attempt: job.attempt,
+      return {id: job.id, message_id: job.message_id, attempt: job.attempt, status: job.status,
         text: job.status === "running" && snapshot?.attempt === job.attempt && snapshot.expires > now ? snapshot.text : ""};
     })};
   };

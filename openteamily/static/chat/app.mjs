@@ -741,6 +741,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
+  const pinButton = document.getElementById('pin-conversation');
+  const groupPin = document.getElementById('group-info-pin');
+  const conversationPins = new Map();
+  let pinReceipt = 0;
   let sessionTransition = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
@@ -2331,22 +2335,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && canWatchReply() && groupReplyViews.size > 0;
   }
 
+  function matchesGroupReply(snapshot, view) {
+    return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
+  }
+
   function paintGroupReplyProgress(items) {
     const changes = [];
     for (const [id, view] of groupReplyViews) {
-      const snapshot = items.get(id);
-      const text = snapshot && snapshot.message_id === view.messageId && snapshot.attempt === view.attempt
-        && typeof snapshot.text === 'string' ? snapshot.text : '';
-      if (view.preview.textContent !== text) changes.push({view, text});
+      const item = items.get(id);
+      const snapshot = matchesGroupReply(item, view) ? item : null;
+      const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
+      const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
+      if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
     const scroller = document.getElementById('message-scroller');
     const top = scroller.scrollTop;
     const follow = messageScrollerAtBottom(scroller);
-    for (const {view, text} of changes) {
+    for (const {view, text, state} of changes) {
       view.preview.textContent = text;
       view.preview.hidden = !text;
-      const state = text ? 'running' : view.job.status;
       view.row.dataset.state = state;
       view.note.textContent = view.job.agent_name + GROUP_REPLY_LABELS[state];
     }
@@ -2388,19 +2396,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (result?.status === 200 && Array.isArray(result.body.items)) {
       const items = new Map(result.body.items.filter(item => item?.id).map(item => [item.id, item]));
-      const settled = [...watch.items.values()].some(snapshot => {
-        const view = groupReplyViews.get(snapshot.id);
-        return view && view.messageId === snapshot.message_id && view.attempt === snapshot.attempt
-          && items.get(snapshot.id)?.attempt !== snapshot.attempt;
+      const missing = [...groupReplyViews].filter(([id, view]) => {
+        const snapshot = items.get(id);
+        return !snapshot || (snapshot.message_id === view.messageId && snapshot.attempt > view.attempt);
       });
+      const transitioned = missing.some(([id, view]) => matchesGroupReply(watch.items.get(id), view));
       watch.items = items;
       if (watch.degraded) stopPolling();
       watch.degraded = false;
       paintGroupReplyProgress(items);
-      if (settled) {
+      // Replies can settle before the first progress poll, between tab visits,
+      // or while Social activity delivery is reconnecting. Reconcile from the
+      // durable transcript even when this watch never saw an active snapshot.
+      if (missing.length) {
         if (readingSocialContext()) {
           if (liveBanner) liveBanner.hidden = false;
-        } else if (!pollTimer) schedulePoll(1200);
+        } else if (!pollTimer && (transitioned || Date.now() >= watch.nextReconcileAt)) {
+          // The progress feed is bounded. Throttle repeated reads for any
+          // still-pending jobs that are outside its current window.
+          watch.nextReconcileAt = Date.now() + 8000;
+          schedulePoll(350);
+        }
       }
       scheduleGroupReplyProgress(watch);
     } else if ([401, 403, 404].includes(result?.status)) {
@@ -2425,7 +2441,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     stopGroupReplyProgress();
     groupReplyWatch = {
-      scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(),
+      scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(), nextReconcileAt: 0,
     };
     scheduleGroupReplyProgress(groupReplyWatch);
   }
@@ -3054,13 +3070,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!directoryChanged) return;
     const sequence = sessionsRequest;
     const user = currentUser;
+    const readPinReceipt = pinReceipt;
     const result = await request('GET', `${socialBase()}?limit=100`);
     if (sequence !== sessionsRequest || user !== currentUser || wid !== workspaceId() || result.status !== 200) return;
-    const changed = result.body.items || [];
+    const changed = (result.body.items || []).map(row => mergePinRead(row, user.id, wid, readPinReceipt));
     const incoming = changed.some(row => !listed.has(row.id) || row.last_seq > listed.get(row.id).last_seq);
     socialConversations = changed;
     sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], changed, user.id)]);
     renderSessions();
+    if (currentSource === 'social') syncConversationPin(currentConversation);
     if (incoming || !document.getElementById('notifications-panel')?.hidden) void loadNotifications();
     if (['all', 'groups'].includes(searchTab)) refreshDirectorySearch();
   }
@@ -3109,6 +3127,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     // Group conversations can wait on Bot Social. An owned local directory
     // can already paint and open an explicitly selected private agent.
+    const readPinReceipt = pinReceipt;
     const socialRequest = read('/social/conversations?limit=100');
     const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
       : await read('/agents?limit=100&include=conversations');
@@ -3152,12 +3171,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const social = await socialRequest;
     if (!current()) return;
     partial ||= social.status !== 200;
-    socialConversations = social.status === 200 ? social.body.items || [] : [];
+    socialConversations = social.status === 200
+      ? (social.body.items || []).map(row => mergePinRead(row, user.id, id, readPinReceipt))
+      : [];
     applyReceipt('social', socialConversations);
     applyReceipt('agent', privateRows);
     sessions = mergeSessions(privateRows, socialConversations, user.id);
     setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
+    if (currentSource === 'social') syncConversationPin(currentConversation);
     if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
     if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
     // Start activity checks after the initial directory commits.
@@ -3359,6 +3381,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setGroupInfo(conversation) {
     if (!conversation) autoTranslation.open(null);
+    syncConversationPin(conversation);
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
@@ -3386,8 +3409,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const peopleList = document.getElementById('group-info-people');
     peopleList.replaceChildren(...(conversation.members || []).map(member =>
       memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : (conversation.account_group ? '群成员' : '工作区成员'), 'person')));
-    const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
-    document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
   }
 
   function setGroupInfoOpen(open) {
@@ -3627,6 +3648,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopPolling();
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
     const stillOpen = () => sameScope() && (!link || link.current());
+    const readPinReceipt = pinReceipt;
     const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
@@ -3639,7 +3661,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
-    const updated = result.body.conversation;
+    const updated = mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt);
     if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
@@ -3672,9 +3694,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentMentions.refresh();
     voiceRecorder.refresh();
     setSessionsOpen(false);
-    const pin = document.getElementById('pin-conversation');
     syncMuteButton(currentConversation);
-    if (pin) { pin.hidden = false; pin.textContent = socialPinned(updated) ? '取消置顶' : '置顶会话'; }
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = Boolean(currentConversation.public_agent) || !agentNote.textContent;
@@ -3734,6 +3754,76 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function socialPinned(conversation) {
     const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
     return Boolean(row?.pinned ?? conversation.pinned);
+  }
+
+  function pinKey(owner, workspace, conversation) {
+    return JSON.stringify([owner, workspace, conversation]);
+  }
+
+  function mergePinRead(conversation, owner, workspace, readReceipt) {
+    if (!conversation) return conversation;
+    const change = conversationPins.get(pinKey(owner, workspace, conversation.id));
+    // A directory or detail read started before a save may still return its old value.
+    if (change && (change.pending || change.receipt > readReceipt)) {
+      return {...conversation, pinned: change.pinned};
+    }
+    return conversation;
+  }
+
+  function syncConversationPin(conversation) {
+    const change = conversation && conversationPins.get(pinKey(currentUser?.id, workspaceId(), conversation.id));
+    const pinned = Boolean(conversation && (change?.pending ? change.pinned : socialPinned(conversation)));
+    const busy = Boolean(change?.pending);
+    if (pinButton) {
+      pinButton.hidden = !conversation;
+      pinButton.disabled = busy;
+      pinButton.setAttribute('aria-pressed', String(pinned));
+      pinButton.textContent = pinned ? uiLabel('取消置顶', 'Unpin conversation') : uiLabel('置顶会话', 'Pin conversation');
+    }
+    if (groupPin) {
+      groupPin.disabled = busy;
+      groupPin.setAttribute('aria-checked', String(pinned));
+    }
+  }
+
+  async function toggleConversationPin() {
+    if (!currentUser || currentSource !== 'social' || !currentConversation || sessionTransition?.pending) return;
+    const {id} = currentConversation;
+    const owner = currentUser.id;
+    const workspace = workspaceId();
+    const key = pinKey(owner, workspace, id);
+    if (conversationPins.get(key)?.pending) return;
+    const previous = socialPinned(currentConversation);
+    const change = {pinned: !previous, pending: true, receipt: pinReceipt};
+    conversationPins.set(key, change);
+    const matchesWorkspace = () => workspaceId() === workspace && currentUser?.id === owner;
+    const matchesConversation = () => matchesWorkspace() && currentSource === 'social' && currentConversation?.id === id;
+    function apply() {
+      if (!matchesWorkspace()) return;
+      if (sessionsWorkspace === workspace && sessionsUser?.id === owner) {
+        const directoryRow = socialConversations.find(row => row.id === id);
+        const sessionRow = sessions.find(row => row.source === 'social' && row.id === id);
+        if (directoryRow) directoryRow.pinned = change.pinned;
+        if (sessionRow) sessionRow.pinned = change.pinned;
+        sortSessions(sessions);
+        renderSessions();
+      }
+      if (matchesConversation()) {
+        currentConversation.pinned = change.pinned;
+        syncConversationPin(currentConversation);
+      }
+    }
+    apply();
+    const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${id}/preferences`, {pinned: change.pinned})
+      .catch(() => ({status: 0, body: {}}));
+    const saved = result.status === 200 && result.body?.pinned === change.pinned;
+    if (!saved) change.pinned = previous;
+    change.pending = false;
+    change.receipt = ++pinReceipt;
+    apply();
+    if (!saved && matchesConversation() && !sessionTransition?.pending) {
+      show('error', uiLabel('置顶未保存，请重试。', 'Couldn’t save the pin. Try again.'));
+    }
   }
 
   function scheduleSocialPoll(conversation) {
@@ -4830,6 +4920,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentMentions.clear();
     currentAgent = null;
     currentConversation = null;
+    syncConversationPin(null);
     currentSource = 'agent';
     renderAgentQuickStarts();
     publicDraft.enter(sendScope());
@@ -5159,18 +5250,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-memory-open')?.addEventListener('click', () => openGroupMemory());
     document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
-    document.getElementById('group-info-pin').addEventListener('click', async () => {
-      const pin = document.getElementById('pin-conversation');
-      if (!pin || pin.hidden) return;
-      pin.click();
-      const switchButton = document.getElementById('group-info-pin');
-      const wanted = switchButton.getAttribute('aria-checked') !== 'true';
-      for (let tries = 0; tries < 20; tries += 1) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        const now = pin.textContent === '取消置顶';
-        if (now === wanted) { switchButton.setAttribute('aria-checked', String(now)); break; }
-      }
-    });
+    groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
     });
@@ -5335,15 +5415,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   muteButton?.addEventListener('click', toggleMute);
   groupMute?.addEventListener('click', toggleMute);
-  const pinButton = document.getElementById('pin-conversation');
-  if (pinButton) pinButton.addEventListener('click', async () => {
-    if (currentSource !== 'social' || !currentConversation) return;
-    const id = currentConversation.id;
-    const pinned = socialPinned(currentConversation);
-    const result = await request('POST', `${socialBase()}/${id}/preferences`, {pinned: !pinned});
-    if (result.status !== 200) { show('error', '置顶未保存。'); return; }
-    await loadSessions(); await openSocialConversation(id);
-  });
+  pinButton?.addEventListener('click', toggleConversationPin);
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('chat-back').addEventListener('click', () => {
     cancelStartupLink();
