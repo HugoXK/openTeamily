@@ -1,0 +1,1170 @@
+{
+  "slug": "ev299after",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-21T19:41:47.079Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8821"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 98053
+      },
+      "sha256": "1246e9a8f90d7c8d5454555593b690e9cc0175a317e4e4cc5abafd7069619abc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 408
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 408,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-minted",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 122068
+      },
+      "sha256": "5bc309ca0dd9178138c656b45c3045cc859394f0e474b52d33678c20e48d16a8",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 481
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 481,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__memory__share-active.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-active",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 105295
+      },
+      "sha256": "db53dc0e5b41416bac421291ea8137e491ebd0fd9a7963bd92a764c0db678f07",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 441
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 441,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-revoked",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 107154
+      },
+      "sha256": "fc10f06fd888978162cb3841e759079c844c4ca83b97dbc2ade1c71e49bd129b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 440
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 440,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 110259
+      },
+      "sha256": "a9914d2c21c629329dc8d89c368824e0004285815a328ff7bfc1fd12cbf11bb4",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 408
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 408,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-minted",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 129501
+      },
+      "sha256": "37627868f5aa0545898e770a479bc8298ac5807b97df503808601f4636eea6e7",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 481
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 481,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__memory__share-active.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-active",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 114227
+      },
+      "sha256": "e947da3dc2379f1c2cb44d8c6ee462fde94794e7a81734b8a9c40a281422cdca",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 441
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 441,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-revoked",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 113132
+      },
+      "sha256": "0d7d4a0ed48ee906d17025d94070763d41d2290b91fde7c87a5a02fc058c5d43",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 440
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 440,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 98076
+      },
+      "sha256": "ac43be55d1530a40038f541f96cd695deb491ac06558c592ea579517763bc4b4",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 408
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 408,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-minted",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 123049
+      },
+      "sha256": "641287c999932c10653341c856dfbfebf8c175d5d0fc1d78e137b46d189bf25b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 481
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 481,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__memory__share-active.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-active",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 105326
+      },
+      "sha256": "e15ae733125718987af9633825fe64161423def09c77e82d701fa3ebf33c473a",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 441
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 441,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-revoked",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 107187
+      },
+      "sha256": "a3fdcbedb90d7b518307af6424fb41d2382d73100f8370eacaa06b4b413441fe",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 440
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 440,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 110259
+      },
+      "sha256": "a9914d2c21c629329dc8d89c368824e0004285815a328ff7bfc1fd12cbf11bb4",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 408
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 408,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-minted",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 128942
+      },
+      "sha256": "8b2a5debc368db1171e551ce03e725f3e6f1246890225a1968ecb2e69e37a808",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 481
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 481,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__memory__share-active.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-active",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 114264
+      },
+      "sha256": "1f87a5203feb06f28d9bbb02bd2dec81292690023b0ca40652a9894ef602b62e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 441
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 441,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-revoked",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 113132
+      },
+      "sha256": "0d7d4a0ed48ee906d17025d94070763d41d2290b91fde7c87a5a02fc058c5d43",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 440
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2026-11-21 季度计划 第三季度把迁移收口；每周五复盘一次，决定下周的两件事。",
+        "textLength": 440,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 62135
+      },
+      "sha256": "e2ed2d6ed42adc66ca0f3be70ad1176338bf31c9b90f02e07078103258bcff00",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 464
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 464,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-minted",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 71785
+      },
+      "sha256": "637bf6f8f7f9afa08b98b6d8a3532698a167817078493310b57cafcce548f5dc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 537
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 537,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__memory__share-active.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-active",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59644
+      },
+      "sha256": "da87fc9620d19ced23d7ded4a37dc4aab1f83023ed3224b738c0495512878bc5",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 497
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 497,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-revoked",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59175
+      },
+      "sha256": "5c6d8aafe5b570e418d946a1042c0b287d34299efaf5108be9eefb8b4b124413",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 496
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 496,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 66297
+      },
+      "sha256": "ea043941d7eff8383d8cf8c504e5299a25e77b2dcdf38fa9da3068c553895c81",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 464
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 464,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-minted",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 74147
+      },
+      "sha256": "bea4197d4aae6d8934c398c5f8377f8550ad2d4a3dff3dd2be4c850561efcede",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 537
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 537,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__memory__share-active.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-active",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 63251
+      },
+      "sha256": "81a4f279f1d8cbe637f20cff561ee3b905050e1542b2fadd625ab0d13b2921bf",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 497
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 497,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-revoked",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 60643
+      },
+      "sha256": "03a3702e2410945da39acddda785818c613c85de76906f8d8bd56114610320a3",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 496
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 496,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 62135
+      },
+      "sha256": "e2ed2d6ed42adc66ca0f3be70ad1176338bf31c9b90f02e07078103258bcff00",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 464
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 464,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-minted",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 71812
+      },
+      "sha256": "e6903d4c3f53dad7b2d40ed9162cd35d81d89035258f6cb5d0c0e8e1673842ba",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 537
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 537,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__memory__share-active.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-active",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59634
+      },
+      "sha256": "f86ac158ec0c8313b8f94af0c1a76975fd6694f386054f6bcc2d5334ca538b55",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 497
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 497,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-revoked",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59138
+      },
+      "sha256": "d16a674faf755a7c8f6011dadd7cee80be1af2d766fc16311ff97229d499f6fb",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 496
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 496,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 66304
+      },
+      "sha256": "78ab87934589ad4abb5391aa34c8c9942f4f36e2fd0771caffc99f395d95ab0c",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 464
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 464,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__memory__share-minted.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-minted",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 74248
+      },
+      "sha256": "941cb65f4344b6c3c820c0ecb1d3a841974c51a3101953c1faa208550c4014c6",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 537
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 537,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__memory__share-active.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-active",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 63252
+      },
+      "sha256": "3d6b5d84216712e5dbf9ce964c894d294bb61250b26fbb175c61e9b5493d7874",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 497
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 497,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__memory__share-revoked.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-revoked",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 60638
+      },
+      "sha256": "6e6419ccf266cb67fb1273b8f02d2630eb50d7d99cf4ff7fc2132b724bda0f53",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 496
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299after 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度回顾 上一季度把迁移收口；每周五复盘一次，决定",
+        "textLength": 496,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}

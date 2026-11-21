@@ -1,0 +1,306 @@
+{
+  "slug": "ev299before",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-21T19:42:29.631Z",
+  "sides": [
+    {
+      "name": "before",
+      "url": "http://127.0.0.1:8822"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 97380
+      },
+      "sha256": "caee1483582381b9c99cf8984e1e8aa9cb1c478ac5216084267d0553051ec5f8",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 405
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相机电池充满。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2",
+        "textLength": 405,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 109463
+      },
+      "sha256": "046f8f290794e7e3929604a3c1f70effece06f1ba062fbb35f003ff35e5e7788",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 405
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相机电池充满。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2",
+        "textLength": 405,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 97380
+      },
+      "sha256": "caee1483582381b9c99cf8984e1e8aa9cb1c478ac5216084267d0553051ec5f8",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 405
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相机电池充满。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2",
+        "textLength": 405,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__1440x900__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "share-unshared",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 109463
+      },
+      "sha256": "046f8f290794e7e3929604a3c1f70effece06f1ba062fbb35f003ff35e5e7788",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 405
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相机电池充满。 2026-11-21 季度回顾 上一季度把迁移收口；每周五复盘一次，决定下周的两件事。 2",
+        "textLength": 405,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 62078
+      },
+      "sha256": "496a1552de803208818950e45f984cefdd8533e61dd13d70b9bc50eebcfcc764",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 462
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299before 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决",
+        "textLength": 462,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 67130
+      },
+      "sha256": "5f65df134b8e6b45ea025d71779bba9c288f6759032d0c39c3d66bfb6160bebe",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 462
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299before 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相",
+        "textLength": 462,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 62086
+      },
+      "sha256": "61c3145d34d47ea9745b718ce06fa95de0e495b3d84a43f52725d522aa5544f7",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 462
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 记忆 总览 已登录：qa299before 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 旅行清单 护照、充电器、转换插头；出发前一天把相",
+        "textLength": 462,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__390x844__memory__share-unshared.png",
+      "route": "/memory",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "share-unshared",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 66608
+      },
+      "sha256": "87d7ec6689d03c6b8fc163ab20e65b72807e2d8d2cf4153ecbb33f7cc76b61a5",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 462
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 记忆 总览 已登录：qa299before 工作区 个人空间 3 节点 0 连接 3 未连接 0 话题 记忆 + 新建 搜索主题 全部 3 更新 3 标签 ▾ 总览 记忆建议 我的资料 下一步行动 我的作品 我的会议 季度计划 第三季度把迁移收口；每周五复盘一次，决",
+        "textLength": 462,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}
