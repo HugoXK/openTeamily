@@ -208,6 +208,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/action'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/revoke'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'A' * 26), 'meetings')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'O' * 26))
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/draft'))
 
     def test_team_runs_are_forwarded_only_to_the_signed_in_users_runtime(self):

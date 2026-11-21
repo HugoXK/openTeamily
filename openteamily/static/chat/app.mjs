@@ -3,7 +3,7 @@ import { mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, deferModule, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatActivity } from './activity.mjs';
-import { meetingCodeFromHash, stageMeetingFromChat } from '../shell/meeting-link.mjs';
+import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
@@ -275,14 +275,39 @@ function fillBold(doc, node, text) {
   }
 }
 
+export function meetingCallHrefInMessage(text, origin) {
+  if (!origin || typeof text !== 'string' || !text.includes('from-call=')) return '';
+  for (const match of text.matchAll(/(?:^|\s)(https?:\/\/[^\s<>"']+|\/meetings#[^\s<>"']+)/gu)) {
+    let url;
+    try { url = new URL(match[1].replace(/[.,;!?)。，；！）]+$/u, ''), origin); } catch { continue; }
+    if (url.origin !== origin || url.username || url.password || url.pathname !== '/meetings' || url.search) continue;
+    const params = new URLSearchParams(url.hash.slice(1));
+    const workspace = params.get('workspace');
+    if (params.size !== (workspace === null ? 1 : 2) || (workspace !== null && !/^[a-f0-9]{32}$/.test(workspace))) continue;
+    const href = meetingDraftFromCallHref(params.get('from-call'), workspace);
+    if (href) return href;
+  }
+  return '';
+}
+
 function renderMessageBody(doc, node, text, prefs) {
   const source = String(text || '');
   // Bold markers are ours; everything else keeps the shared folding and link preview path.
-  if (inlineBold(source).some(part => part.bold)) {
-    fillBold(doc, node, source);
-    return;
+  if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
+  else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
+  const origin = doc.defaultView?.location?.origin;
+  const href = meetingCallHrefInMessage(source, origin);
+  if (href) {
+    const existing = Array.from(node.children).find(child => child.tagName === 'A' && meetingCallHrefInMessage(child.href, origin) === href);
+    const link = existing || doc.createElement('a');
+    link.className = 'chat-link-card';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = '整理会议纪要';
+    link.title = '';
+    if (!existing) node.append(link);
   }
-  renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
 }
 
 export function highlightParts(text, query) {
@@ -769,7 +794,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (calls) return calls;
     const {mountChatCalls} = await loadCalls();
     if (!calls) {
-      calls = mountChatCalls(document, {request, context: callContext});
+      calls = mountChatCalls(document, {request, context: callContext, account: () => currentUser?.id ?? null});
       calls.sync();
     }
     return calls;

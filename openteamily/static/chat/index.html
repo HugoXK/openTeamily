@@ -774,10 +774,13 @@
     </div>
     <p id="chat-meeting-share-status" role="status"></p>
   </div>
+  <p id="chat-meeting-notes-hint" class="note" aria-live="polite" hidden></p>
   <div class="actions" id="chat-call-footer">
     <button type="button" id="chat-meeting-end" hidden data-ui-text="chat.meetings.end">结束会议</button>
     <button type="button" id="chat-meeting-hangup" hidden data-ui-text="chat.meetings.leave">离开会议</button>
     <button type="button" id="chat-call-close" data-ui-text="chat.close">关闭</button>
+    <button type="button" id="chat-meeting-notes-copy" hidden>复制纪要入口</button>
+    <a id="chat-meeting-notes" data-ui-text="chat.meetings.organize" hidden>整理会议纪要</a>
     <button type="submit" form="chat-meeting-form" id="chat-meeting-submit" hidden><span data-ui-text="chat.meetings.join">加入会议</span></button>
   </div>
 </dialog>
