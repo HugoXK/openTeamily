@@ -1,5 +1,6 @@
 """Settings page serving tests. In-process WSGI only; not browser E2E."""
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ class RawClient:
     def __init__(self, app, peer='127.0.0.1'):
         self.app, self.peer = app, peer
 
-    def call(self, method, path, origin=ORIGIN, host='management.test', site='', query=''):
+    def call(self, method, path, origin=ORIGIN, host='management.test', site='', query='', if_none_match=None):
         env = {'REQUEST_METHOD': method, 'PATH_INFO': path, 'QUERY_STRING': query,
                'HTTP_HOST': host, 'REMOTE_ADDR': self.peer, 'CONTENT_LENGTH': '0',
                'wsgi.input': io.BytesIO()}
@@ -22,6 +23,8 @@ class RawClient:
             env['HTTP_ORIGIN'] = origin
         if site:
             env['HTTP_SEC_FETCH_SITE'] = site
+        if if_none_match is not None:
+            env['HTTP_IF_NONE_MATCH'] = if_none_match
         result = {}
         def start(status, values):
             result['status'], result['headers'] = int(status.split()[0]), dict(values)
@@ -62,6 +65,67 @@ class SettingsPageTests(unittest.TestCase):
         head = self.raw.call('HEAD', '/settings')
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
+
+    def test_static_validators_revalidate_get_and_head_without_a_body(self):
+        for path in ('/shell/app.css', '/look/app.mjs'):
+            first = self.raw.call('GET', path)
+            self.assertEqual(first['status'], 200)
+            self.assertEqual(first['headers']['Cache-Control'], 'private, no-cache')
+            tag = first['headers']['ETag']
+            self.assertRegex(tag, r'^W/"sha256-[0-9a-f]{64}"$')
+            head = self.raw.call('HEAD', path)
+            self.assertEqual(head['headers']['Content-Length'], str(len(first['body'])))
+            self.assertEqual(head['headers']['ETag'], tag)
+            self.assertEqual(head['body'], b'')
+            for method in ('GET', 'HEAD'):
+                for candidate in (tag, tag[2:], '"old,tag",\t' + tag, '*'):
+                    with self.subTest(path=path, method=method, candidate=candidate):
+                        cached = self.raw.call(method, path, if_none_match=candidate)
+                        self.assertEqual(cached['status'], 304)
+                        self.assertEqual(cached['headers']['ETag'], tag)
+                        self.assertEqual(cached['headers']['Cache-Control'], 'private, no-cache')
+                        self.assertNotIn('Content-Length', cached['headers'])
+                        self.assertEqual(cached['body'], b'')
+            for candidate in ('"outdated"', '"prefix,' + tag[3:-1] + '"', '*, ' + tag):
+                self.assertEqual(self.raw.call('GET', path, if_none_match=candidate)['status'], 200)
+
+    def test_static_validator_changes_when_only_contents_change(self):
+        self.app.root = Path(self.temp.name) / 'package'
+        file = self.app.root / 'shell' / 'app.css'
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b'a{}')
+        tag = self.raw.call('GET', '/shell/app.css')['headers']['ETag']
+        info = file.stat()
+        file.write_bytes(b'b{}')
+        os.utime(file, ns=(info.st_atime_ns, info.st_mtime_ns))
+        updated = self.raw.call('GET', '/shell/app.css', if_none_match=tag)
+        self.assertEqual(updated['status'], 200)
+        self.assertNotEqual(updated['headers']['ETag'], tag)
+        self.assertEqual(updated['body'], b'b{}')
+        file.unlink()
+        missing = self.raw.call('GET', '/shell/app.css', if_none_match='*')
+        self.assertEqual(missing['status'], 503)
+        self.assertEqual(missing['headers']['Cache-Control'], 'no-store')
+        self.assertNotIn('ETag', missing['headers'])
+
+    def test_static_validators_do_not_bypass_request_checks_or_apply_to_pages(self):
+        path = '/shell/app.css'
+        for method, url, status, options in (
+                ('GET', path, 403, {'origin': 'https://evil.test'}),
+                ('GET', path, 403, {'host': 'evil.test'}),
+                ('GET', path, 403, {'site': 'cross-site'}),
+                ('POST', path, 405, {}),
+                ('GET', path, 400, {'query': 'v=1'}),
+                ('GET', '/shell/missing.css', 404, {}),
+                ('GET', '/shell/../settings_page.py', 404, {}),
+                ('GET', '/settings', 200, {}),
+                ('GET', '/login', 200, {}),
+                ('GET', '/v1/auth/session', 401, {})):
+            with self.subTest(path=url, method=method, options=options):
+                result = self.raw.call(method, url, if_none_match='*', **options)
+                self.assertEqual(result['status'], status)
+                self.assertEqual(result['headers']['Cache-Control'], 'no-store')
+                self.assertNotIn('ETag', result['headers'])
 
     def test_composer_deep_links_pass_only_known_queries(self):
         for kind in ('document', 'website', 'slides', 'dashboard', 'whiteboard'):

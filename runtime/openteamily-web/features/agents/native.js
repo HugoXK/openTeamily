@@ -101,15 +101,18 @@ export function nativeAgents({ host, db }) {
     const bind = () => serial(() => bindSession(s, row, key, title))
     return s.exclusive ? s.exclusive(bind) : bind()
   }
-  async function readSession(row, key, title) {
+  function mappedSession(row, key) {
     // An established conversation can show its durable messages while a model
     // turn holds the bridge lock. Reconciliation still runs before native writes.
     const mapping = one(`SELECT o.bot_id AS native_bot_id, o.last_name AS native_name, s.session_id AS native_session_id
       FROM native_agent_sessions s JOIN native_agent_objects o ON o.agent_id=s.agent_id
       WHERE s.conversation_key=? AND s.agent_id=?`, key, row.id)
     const rt = host.currentRuntime?.()?.rt
-    if (mapping && (!rt || rt.botOf(mapping.native_bot_id))) return mapping
-    return session(row, key, title)
+    return mapping && (!rt || rt.botOf(mapping.native_bot_id)) ? mapping : null
   }
-  return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)), session, readSession }
+  async function readSession(row, key, title) {
+    return mappedSession(row, key) || session(row, key, title)
+  }
+  return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)),
+    session, readSession, mappedSession }
 }

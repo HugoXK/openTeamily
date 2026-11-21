@@ -2817,18 +2817,20 @@ const linkSocialOlder = 'otm_' + '9'.repeat(26);
 const linkSocialLatest = 'otm_' + 'A'.repeat(26);
 const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
-const linkPersonalStartup = '/v1/workspaces?scope=personal&include=chat&workspace=';
+const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
+const linkPersonalStartup = linkPersonalDefault + '&workspace=';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
 const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
 const linkNativeLatest = linkNativePath + '?limit=50';
+const linkNativeSnapshot = linkNativeLatest + '&snapshot=1';
 const linkSocialPath = '/social/conversations/' + linkSocial;
 const linkMember = {user_id: alice, username: 'alice'};
 
-function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
+function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) {
   const {doc, el} = fakeChatDocument(chatHtml());
   doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
   doc.visibilityState = visibility;
-  const restore = installChatGlobals();
+  const restore = installChatGlobals({narrow});
   const browser = {handlers: {}};
   globalThis.addEventListener = (type, handler) => (browser.handlers[type] ||= []).push(handler);
   globalThis.location.hash = hash;
@@ -2894,13 +2896,166 @@ function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
   return {doc, el, fetcher, routes, calls, scrolls, navigate, messages, selected, agent, nativeThread, nativeRows, restore};
 }
 
-function linkedChatSnapshot(fixture, owner = alice) {
+function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nativeThread]) {
   return json(200, {
     items: [{id: linkWork, kind: 'personal', name: 'Personal', owner_id: owner}],
     personal_agent_id: linkAgent,
-    chat: {items: [fixture.agent], conversations: [fixture.nativeThread]},
+    chat: {items: [fixture.agent], conversations},
   });
 }
+
+function settledNativeSnapshot(fixture) {
+  return {agent: fixture.agent, conversation: fixture.nativeThread, cursor: null, has_newer: false,
+    items: fixture.nativeRows.map(row => ({...row, workspace_id: linkWork, agent_id: linkAgent, conversation_id: linkThread}))};
+}
+
+test('desktop startup reads one bounded private candidate alongside Social, then opens and acknowledges only the winner', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture('');
+  const auth = Promise.withResolvers();
+  const social = Promise.withResolvers();
+  const olderPrivate = {id: linkAgentOlder, agent_id: linkAgent, title: 'Older private chat', updated: 3};
+  fixture.routes.set('/v1/auth/session', () => auth.promise);
+  fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture, alice, [olderPrivate, fixture.nativeThread]));
+  fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+  fixture.routes.set(scope + linkNativeSnapshot, () => json(200, settledNativeSnapshot(fixture)));
+  try {
+    const loaded = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.some(call => call.path.startsWith(scope)), false);
+    auth.resolve(json(200, {user: {id: alice, username: 'alice'}}));
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory));
+    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('&snapshot=1')).map(call => call.path), [scope + linkNativeSnapshot]);
+    assert.deepEqual(fixture.messages(), []);
+    assert.equal(fixture.selected(), undefined);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    social.resolve(json(200, {items: [{id: linkSocial, kind: 'group', title: 'Older group', updated: 4}]}));
+    await loaded;
+    await settle();
+    assert.equal(fixture.selected(), linkThread);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest || call.path === scope + linkSocialPath), false);
+    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('/read')), [
+      {path: scope + linkNativePath + '/read', method: 'POST', body: {message_id: linkAgentLatest}},
+    ]);
+  } finally {
+    auth.resolve(json(401, {}));
+    social.resolve(json(503, {}));
+    fixture.restore();
+  }
+});
+
+for (const socialWinner of [{pinned: true, updated: 2}, {pinned: false, updated: 30}]) {
+  test(`desktop keeps the ${socialWinner.pinned ? 'older pinned' : 'more recent'} Social winner when a private snapshot is pending`, async () => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture('');
+    const social = Promise.withResolvers();
+    const snapshot = Promise.withResolvers();
+    fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture));
+    fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+    fixture.routes.set(scope + linkNativeSnapshot, () => snapshot.promise);
+    try {
+      const loaded = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.ok(fixture.calls.some(call => call.path === scope + linkNativeSnapshot));
+      assert.deepEqual(fixture.messages(), []);
+      social.resolve(json(200, {items: [{id: linkSocial, kind: 'group', title: 'Selected group', ...socialWinner}]}));
+      await settle();
+      assert.equal(fixture.selected(), linkSocial);
+      assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+      snapshot.resolve(json(200, settledNativeSnapshot(fixture)));
+      await loaded;
+      await settle();
+      assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+      assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest || call.path === scope + linkNativePath + '/read'), false);
+    } finally {
+      social.resolve(json(503, {}));
+      snapshot.resolve(json(409, {}));
+      fixture.restore();
+    }
+  });
+}
+
+for (const cause of ['has no native mapping', 'contains a foreign message', 'has expired']) {
+  test(`desktop falls back to the normal private open only after selection when the snapshot ${cause}`, async t => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture('');
+    const social = Promise.withResolvers();
+    fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture));
+    fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+    const snapshot = settledNativeSnapshot(fixture);
+    if (cause === 'contains a foreign message') snapshot.items[0].workspace_id = linkTeam;
+    let now = 10;
+    if (cause === 'has expired') t.mock.method(performance, 'now', () => now);
+    fixture.routes.set(scope + linkNativeSnapshot, () => cause === 'has no native mapping' ? json(409, {}) : json(200, snapshot));
+    try {
+      const loaded = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.ok(fixture.calls.some(call => call.path === scope + linkNativeSnapshot));
+      assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest), false);
+      assert.deepEqual(fixture.messages(), []);
+      now += 2000;
+      social.resolve(json(200, {items: []}));
+      await loaded;
+      await settle();
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+      assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    } finally {
+      social.resolve(json(503, {}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a late private startup snapshot cannot replace an exact link opened during desktop startup', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture('');
+  const social = Promise.withResolvers();
+  const snapshot = Promise.withResolvers();
+  fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture));
+  fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+  fixture.routes.set(scope + linkNativeSnapshot, () => snapshot.promise);
+  try {
+    const loaded = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkNativeSnapshot));
+    await fixture.navigate(`#workspace=${linkTeam}&social=${linkSocial}`);
+    await settle();
+    assert.equal(fixture.selected(), linkSocial);
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    social.resolve(json(200, {items: []}));
+    snapshot.resolve(json(200, settledNativeSnapshot(fixture)));
+    await loaded;
+    await settle();
+    assert.equal(fixture.selected(), linkSocial);
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest || call.path === scope + linkNativePath + '/read'), false);
+  } finally {
+    social.resolve(json(503, {}));
+    snapshot.resolve(json(409, {}));
+    fixture.restore();
+  }
+});
+
+test('a mobile startup lists owned conversations without fetching the desktop snapshot', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture('', {narrow: true});
+  fixture.routes.set(linkPersonalDefault, () => linkedChatSnapshot(fixture));
+  fixture.routes.set(scope + linkSocialDirectory, () => json(200, {items: []}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    const listed = sessionRows(fixture.el).find(row => row?.dataset.conversation === linkThread);
+    assert.ok(listed);
+    assert.deepEqual(fixture.messages(), []);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('&snapshot=1')), false);
+    await fire(fixture.el('conversation-list'), 'click', {target: listed});
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+  } finally {
+    fixture.restore();
+  }
+});
 
 for (const target of ['linked', 'bare agent']) {
   test(`a verified native personal snapshot opens the ${target} conversation before shared lists return`, async () => {
