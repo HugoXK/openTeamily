@@ -364,6 +364,10 @@ body.app-workspace #main-panel {
   align-items: center;
 }
 
+#manual-run-note { margin: 0 0 .75rem; }
+#manual-run-status:empty { display: none; }
+#automation-link-retry { margin: 0 1rem .75rem; min-height: 2.75rem; }
+
 #tick-automation,
 #remove-automation {
   border-radius: 999px;

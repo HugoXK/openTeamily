@@ -97,7 +97,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
-    (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look))?$'), 'settings'),
+    (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look|progress))?$'), 'settings'),
     (re.compile(r'^/v1/model-api(?:/(?:image|video|music|model3d))?$'), 'model-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$'), 'images'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$'), 'videos'),

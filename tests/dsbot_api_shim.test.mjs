@@ -51,6 +51,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/settings', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/notification-prefs', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/onboarding/progress', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/recommendations', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/model-api', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/image', ORIGIN).feature, 'model-api');

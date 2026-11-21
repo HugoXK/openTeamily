@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -13,6 +13,16 @@ test('listQuery encodes tab and search', () => {
   assert.equal(listQuery('work', '  brief '), '?category=work&q=brief');
   assert.equal(tabCategory('life'), 'life');
   assert.equal(tabCategory('other'), 'mine');
+});
+
+test('an onboarding link must name exactly one saved automation and its workspace', () => {
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&runs=failed`),
+    {workspace, automation});
+  assert.equal(automationTargetFromSearch('?template=daily_brief'), null);
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&automation=${automation}`), {invalid: true});
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=missing`), {invalid: true});
 });
 
 test('scheduleFromForm and namesFromList map editor fields', () => {
@@ -215,6 +225,72 @@ test('personal automations are available while the team workspaces and templates
     resolveTeams(respond({items: []}));
     resolveCatalog(respond({items: []}));
     await mounted;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
+
+test('an exact onboarding link opens before unrelated loads and an explicit paused run shows its result', async () => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const entry = `?workspace=${workspace}&automation=${automation}`;
+  const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+  const view = {location: {search: entry, pathname: '/automations'}, history: {
+    replaceState(state, title, url) { view.location.search = new URL(url, 'https://test.local').search; },
+    pushState(state, title, url) { view.location.search = new URL(url, 'https://test.local').search; },
+  }};
+  doc.defaultView = view;
+  doc.getElementById('run-panel').scrollIntoView = () => {};
+  const {promise: templates, resolve: resolveTemplates} = Promise.withResolvers();
+  const {promise: teams, resolve: resolveTeams} = Promise.withResolvers();
+  const calls = [];
+  let started = false;
+  const item = {id: automation, workspace_id: workspace, title: '引导创建的日报', enabled: false,
+    template_id: 'daily_brief', schedule: {kind: 'daily', time: '09:00', time_zone: 'Asia/Shanghai'}};
+  const respond = (body, status = 200) => ({status, json: async () => body});
+  const fetcher = async (target, {method} = {}) => {
+    calls.push([method, target]);
+    if (target === '/v1/auth/session') return respond({user: {username: 'alice'}});
+    if (target === '/v1/workspaces?scope=personal') return respond({items: [{id: workspace, name: '个人工作区'}]});
+    if (target === '/v1/workspaces?limit=100') return teams;
+    if (target === '/v1/automation-templates') return templates;
+    if (target.endsWith('/automations?category=mine')) return respond({items: []});
+    if (target === path) return respond({automation: item});
+    if (target.startsWith(path + '/runs?')) return respond({items: started ? [{id: run, status: 'succeeded', result: {text: '今日简报已整理'}}] : []});
+    if (target === path + '/run' && method === 'POST') {
+      started = true;
+      return respond({run: {id: run, status: 'queued'}}, 202);
+    }
+    throw new Error('unexpected ' + target);
+  };
+  const restorePolling = holdRunPolling();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const mounted = mount(doc, {fetcher});
+  try {
+    await flush();
+    assert.equal(elements.get('editor-heading').textContent, item.title);
+    assert.equal(elements.get('editor-form').hidden, false);
+    assert.equal(elements.get('editor-form').elements.enabled.checked, false);
+    assert.match(elements.get('manual-run-note').textContent, /仍保持暂停/);
+    assert.equal(calls.filter(([method]) => method === 'POST').length, 0);
+    await elements.get('run-filter-succeeded').handlers.click[0]();
+    assert.equal(view.location.search, entry + '&runs=succeeded');
+    await elements.get('tick-automation').handlers.click[0]();
+    assert.equal(view.location.search, entry);
+    assert.equal(elements.get('manual-run-status').textContent, '已完成');
+    assert.match(elements.get('run-list').textContent, /今日简报已整理/);
+    assert.equal(elements.get('run-list').children[0].children[1].hidden, false, 'the requested output opens in place');
+    assert.equal(elements.get('editor-form').elements.enabled.checked, false);
+    assert.deepEqual(calls.filter(([method]) => method === 'POST'), [['POST', path + '/run']]);
+    await elements.get('cancel-editor').handlers.click[0]();
+    assert.equal(view.location.search, '');
+  } finally {
+    resolveTeams(respond({items: []}));
+    resolveTemplates(respond({items: []}));
+    await mounted;
+    restorePolling();
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
   }
 });

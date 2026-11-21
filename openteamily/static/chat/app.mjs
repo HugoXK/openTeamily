@@ -4115,7 +4115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = owner;
     if (banner) void request('GET', '/v1/onboarding').then(onboarding => {
       if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname || onboarding.status !== 200) return;
-      banner.hidden = Boolean(onboarding.body.onboarding?.completed);
+      banner.hidden = Boolean(onboarding.body.progress?.completed ?? onboarding.body.onboarding?.completed);
     }).catch(() => {});
     const publicIntent = publicAgentIntentFromHash(hash);
     if (publicIntent) show('loading', publicIntent.quickStart === undefined ? '正在打开公开智能体…' : '正在准备快捷开场…');
@@ -4156,7 +4156,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
     const personalWorkspace = personalEntity?.workspace?.id || '';
     personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
-    personalLook = personalEntity ? personalEntity.look || null : null;
+    personalLook = personalEntity ? settings.body?.personal_look || personalEntity.look || null : null;
     if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;

@@ -306,17 +306,20 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       const created = [], skipped = []
       for (const id of ids) {
         const title = TEMPLATES[id].title
-        if (one('SELECT 1 FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(title.toLowerCase()))) {
-          skipped.push({ template_id: id, title })
+        const key = 'onboarding-template-' + id
+        const existing = one('SELECT id, title, template_id FROM ot_automations WHERE workspace_id=? AND key_hash=?',
+          workspaceId, sha(key)) ?? one('SELECT id, title, template_id FROM ot_automations WHERE workspace_id=? AND title_hash=?',
+          workspaceId, sha(title.toLowerCase()))
+        if (existing) {
+          skipped.push(existing.template_id === id ? { id: existing.id, template_id: id, title: existing.title } : { template_id: id, title })
           continue
         }
         const result = createInTransaction({
           workspace_id: workspaceId, title, template_id: id,
           schedule: { kind: 'daily', time: '09:00', time_zone: 'Asia/Shanghai' },
-          participants: [payload.username], scope: 'ongoing', idempotency_key: 'onboarding-template-' + id,
+          participants: [payload.username], scope: 'ongoing', enabled: false, idempotency_key: key,
         })
-        if (result.status === 201) created.push({ id: result.automation.id, template_id: id, title })
-        else skipped.push({ template_id: id, title })
+        created.push({ id: result.automation.id, template_id: id, title })
       }
       return { status: created.length ? 201 : 200, created, skipped }
     })

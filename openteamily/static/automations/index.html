@@ -54,6 +54,7 @@
     </div>
   </nav>
   <p id="status" role="status"></p>
+  <button type="button" id="automation-link-retry" hidden>重新打开自动化</button>
   <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
@@ -159,6 +160,7 @@
           <label>参与的智能体 <input type="text" name="agents" maxlength="512" autocomplete="off" placeholder="名称，以逗号分隔"></label>
         </div>
       </details>
+      <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
         <button type="button" id="tick-automation" hidden>运行一次</button>
@@ -167,6 +169,7 @@
     </form>
     <section id="run-panel" hidden>
       <h2 id="run-heading" tabindex="-1">运行记录</h2>
+      <p id="manual-run-status" class="note" role="status" aria-live="polite"></p>
       <div class="run-history-tools">
         <nav class="run-filters" aria-label="运行状态">
           <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>

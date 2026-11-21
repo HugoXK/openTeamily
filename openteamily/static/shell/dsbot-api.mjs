@@ -35,7 +35,7 @@ export const MOVED = [
   // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],
   [/^\/v1\/notification-prefs$/, 'settings'],
-  [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
+  [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look|progress))?$/, 'settings'],
   [/^\/v1\/model-api(?:\/(?:image|video|music|model3d))?$/, 'model-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/images(?:\/[0-9a-f]{32})?$/, 'images'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/videos(?:\/[0-9a-f]{32})?$/, 'videos'],

@@ -142,6 +142,17 @@ export function templateFromSearch(search) {
   return /^[a-z0-9_-]{1,64}$/.test(value) ? value : '';
 }
 
+export function automationTargetFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  if (!params.has('workspace') && !params.has('automation')) return null;
+  const workspace = params.get('workspace');
+  const automation = params.get('automation');
+  const id = /^[0-9a-f]{32}$/;
+  if (params.getAll('workspace').length !== 1 || params.getAll('automation').length !== 1 ||
+      !id.test(workspace || '') || !id.test(automation || '')) return {invalid: true};
+  return {workspace, automation};
+}
+
 // `/automations?runs=failed` keeps the run-history filter across refresh,
 // back/forward and sharing. One recorded value at a time; anything else is 全部.
 export const RUN_FILTERS = Object.freeze(['all', 'succeeded', 'failed']);
@@ -379,6 +390,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newButton = document.getElementById('new-automation');
   const saveButton = document.getElementById('save-automation');
   const backButton = document.getElementById('cancel-editor');
+  const manualRunNote = document.getElementById('manual-run-note');
+  const manualRunStatus = document.getElementById('manual-run-status');
+  const linkRetry = document.getElementById('automation-link-retry');
   const tabs = document.querySelectorAll('.tabs [data-category]');
   const workspaceStatus = document.getElementById('workspace-status');
   let currentUser = null;
@@ -395,6 +409,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let runCursors = [''];
   let nextRunCursor = '';
   let activeRun = false;
+  let editorRequest = 0;
+  let watchedRun = '';
   const savedRunResults = new Map();
   const savingRunResults = new Set();
   const manualKeys = new Map();
@@ -407,11 +423,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const expandedRuns = new Set();
 
   function pushRunFilter(filter) {
-    const text = runFilterSearchText(filter);
     if (!view || !view.history || !view.location) return;
-    if ((view.location.search || '') === text) return;
+    const target = automationTargetFromSearch(readSearch());
     const base = view.location.pathname || '/automations';
+    const params = new URLSearchParams();
+    if (target?.automation) {
+      params.set('workspace', target.workspace);
+      params.set('automation', target.automation);
+    }
+    if (filter !== 'all') params.set('runs', filter);
+    const text = params.size ? '?' + params : '';
+    if ((view.location.search || '') === text) return;
     view.history.pushState({runs: filter}, '', text ? base + text : base);
+  }
+
+  function clearEditorLink() {
+    if (!automationTargetFromSearch(readSearch())) return;
+    if (linkRetry) linkRetry.hidden = true;
+    show('', '');
+    view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + runFilterSearchText(runFilter));
   }
 
   const RUN_FILTER_BUTTONS = {all: 'run-filter-all', succeeded: 'run-filter-succeeded', failed: 'run-filter-failed'};
@@ -615,7 +645,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         const note = document.createElement('p');
         note.className = 'note';
-        note.textContent = RUN_DETAIL_EMPTY;
+        note.textContent = item.status === 'queued' ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
         detail.appendChild(note);
       }
       if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
@@ -755,6 +785,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
     setRunPageControls();
     renderRuns(items);
+    const watched = watchedRun && items.find(item => item.id === watchedRun);
+    if (watched && manualRunStatus) manualRunStatus.textContent = runStatusLabel(watched);
     if (focus) showRunHistory();
     activeRun = listed.body.has_pending === true || items.some(item => item.status === 'queued');
     runButton.disabled = activeRun || manualPending.has(automation);
@@ -786,10 +818,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillTemplates() {
     const select = form.elements.template_id;
-    const selected = select.value;
+    const selected = select.value || current?.template_id;
     select.textContent = '';
     const available = templates.some(item => item.id === 'custom')
-      ? templates : [{id: 'custom', title: '自定义'}, ...templates];
+      ? [...templates] : [{id: 'custom', title: '自定义'}, ...templates];
+    if (current?.id && current.template_id && !available.some(item => item.id === current.template_id)) {
+      available.push({id: current.template_id, title: '已保存的模板'});
+    }
     for (const item of available) {
       const option = document.createElement('option');
       option.value = item.id;
@@ -813,16 +848,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
+    editorRequest += 1;
+    if (linkRetry) linkRetry.hidden = true;
     current = item;
     draftSave = null;
     recentRuns = [];
     activeRun = false;
+    watchedRun = '';
+    if (manualRunStatus) manualRunStatus.textContent = '';
     resetRunPages();
     if (runHistoryButton) runHistoryButton.hidden = !item?.id;
     stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
     mainPanel.classList.add('is-editing');
+    fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
     form.elements.template_id.disabled = Boolean(item?.id);
     const heading = document.getElementById('editor-heading');
@@ -831,7 +871,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runButton.hidden = !item?.id;
     runButton.disabled = Boolean(item?.id && manualPending.has(item.id));
     runButton.textContent = '运行一次';
+    renderManualRunNote();
     loadRuns();
+  }
+
+  function renderManualRunNote() {
+    if (!manualRunNote) return;
+    manualRunNote.hidden = !current?.id;
+    manualRunNote.textContent = current?.enabled
+      ? '按计划自动运行。也可用已保存的设置额外运行一次。'
+      : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
+  }
+
+  async function openLinkedAutomation(target, loadSeq) {
+    const seq = ++editorRequest;
+    show('', '正在打开自动化…');
+    const result = await request('GET', `/v1/workspaces/${target.workspace}/automations/${target.automation}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (seq !== editorRequest || loadSeq !== loadRequest || workspaceId() !== target.workspace || !form.hidden) return;
+    const item = result.body.automation;
+    if (result.status === 200 && item?.id === target.automation && item.workspace_id === target.workspace) {
+      show('', '');
+      openEditor(item);
+      return;
+    }
+    show('error', [403, 404].includes(result.status) ? '这条自动化已不可用。' : '暂时无法打开自动化。');
+    if (linkRetry) linkRetry.hidden = [403, 404].includes(result.status);
   }
 
   function selectCategory(value) {
@@ -864,14 +929,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     empty.hidden = false;
     setBusy(empty, true);
     empty.textContent = '正在加载自动化…';
-    const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
+    const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
+      .catch(() => ({status: 0, body: {}}));
     if (seq !== listRequest || workspaceId() !== id) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
       empty.hidden = false;
       empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
-      show('error', messageFor(listed.body.error, '无法读取自动化列表。'));
       return;
     }
     empty.textContent = '这个分类下还没有自动化。';
@@ -892,9 +957,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function load() {
     const seq = ++loadRequest;
+    const target = automationTargetFromSearch(readSearch());
     newButton.disabled = true;
     workspaceStatus.textContent = '';
-    const session = await request('GET', '/v1/auth/session');
+    if (linkRetry) linkRetry.hidden = true;
+    const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     if (seq !== loadRequest) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
@@ -912,7 +979,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     const catalog = loadTemplates(seq);
-    const {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (target?.workspace && !space.body?.items?.some(item => item.id === target.workspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) space = shared;
+      supplemental = null;
+    }
     if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
@@ -931,12 +1003,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
+    let opening;
+    if (target?.workspace && items.some(item => item.id === target.workspace)) {
+      workspaceSelect.value = target.workspace;
+      opening = openLinkedAutomation(target, seq);
+    } else if (target) {
+      show('error', '这条自动化链接已不可用。');
+    }
     void supplemental?.then(result => {
       if (seq !== loadRequest) return;
       if (result.status === 200) fillWorkspaces(result.body.items);
       else workspaceStatus.textContent = '团队工作区暂时无法加载。';
     });
-    await Promise.all([loadList(), catalog]);
+    await Promise.all([loadList(), catalog, opening]);
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -954,9 +1033,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   workspaceSelect.addEventListener('change', () => {
+    editorRequest += 1;
+    clearEditorLink();
     closeConfirm({restoreFocus: false});
     loadList();
   });
+  linkRetry?.addEventListener('click', () => load());
   search.addEventListener('input', () => loadList());
   runHistoryButton?.addEventListener('click', () => {
     if (runPanel?.hidden) void loadRuns({focus: true});
@@ -993,6 +1075,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   for (const tab of tabs) {
     tab.addEventListener('click', async () => {
+      editorRequest += 1;
+      clearEditorLink();
       selectCategory(tabCategory(tab.dataset.category));
       form.hidden = true;
       listPanel.hidden = false;
@@ -1006,11 +1090,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   newButton.addEventListener('click', () => {
+    clearEditorLink();
     openEditor(null);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
 
   backButton.addEventListener('click', async () => {
+    editorRequest += 1;
+    clearEditorLink();
     closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
@@ -1080,6 +1167,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('remove-automation').hidden = false;
     runButton.hidden = false;
     if (runHistoryButton) runHistoryButton.hidden = false;
+    renderManualRunNote();
     show('ok', current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns();
   });
@@ -1107,6 +1195,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       syncRunFilters();
       pushRunFilter(runFilter);
       activeRun = result.body.run.status === 'queued';
+      watchedRun = result.body.run.id;
+      expandedRuns.add(watchedRun);
+      if (manualRunStatus) manualRunStatus.textContent = runStatusLabel(result.body.run);
       renderRuns([result.body.run, ...(onLatest ? recentRuns.filter(run => run.id !== result.body.run.id) : [])].slice(0, 20));
       show('ok', '已提交，结果会出现在运行记录中。');
       showRunHistory();
@@ -1132,6 +1223,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = null;
+    clearEditorLink();
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
@@ -1171,7 +1263,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load().then(() => {
     const view = document.defaultView;
     const wanted = templateFromSearch(view && view.location && view.location.search);
-    if (!wanted || mainPanel.hidden || !workspaceId() || !form.hidden) return;
+    if (!wanted || automationTargetFromSearch(readSearch()) || mainPanel.hidden || !workspaceId() || !form.hidden) return;
     const template = templates.find(item => item.id === wanted);
     if (!template) return;
     openEditor(draftFromTemplate(template, currentUser && currentUser.username));
