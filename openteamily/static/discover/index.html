@@ -93,13 +93,10 @@
         <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
         <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
       </div>
-      <div class="feed-creator-row">
-        <label class="feed-creator-label" for="feed-creator">作者</label>
-        <select id="feed-creator">
-          <option value="">全部作者</option>
-        </select>
-        <span class="feed-creator-hint" id="feed-creator-hint">只看某位作者的公开作品。</span>
-      </div>
+      <p class="feed-creator-row" id="feed-creator-chip" hidden>
+        <span id="feed-creator-label"></span>
+        <a id="feed-creator-clear" href="/discover" title="清除作者筛选，回到全部作者">查看全部作者</a>
+      </p>
       <section id="feed-following-empty" class="feed-following-empty" hidden>
         <h2>关注列表暂无动态</h2>
         <p>你关注的人发布动态后会显示在这里。</p>

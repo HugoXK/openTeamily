@@ -238,16 +238,14 @@ a.catalog-create[hidden] { display: none; }
   color: var(--ot-muted);
   font-size: .85rem;
 }
-.feed-creator-row select {
-  min-height: 2rem;
-  padding: 0 .5rem;
-  border: 1px solid var(--ot-line);
-  border-radius: .5rem;
-  background: var(--ot-surface);
-  color: var(--ot-ink);
-  font: inherit;
+.feed-creator-row[hidden] { display: none; }
+.feed-creator-row a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
-.feed-creator-hint { font-size: .8rem; }
+.feed-creator-row a:hover { text-decoration-thickness: 2px; }
 #feed-more {
   margin: 0 0 1rem;
 }

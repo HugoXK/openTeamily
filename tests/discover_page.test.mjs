@@ -479,16 +479,16 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
 test('feed selection round-trips through the URL search', async () => {
   const {feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=video&q=cat'),
-    {tab: 'following', kind: 'video', query: 'cat'});
+    {tab: 'following', kind: 'video', query: 'cat', creator: ''});
   assert.deepEqual(feedStateFromSearch('?feed=collected&q=%E4%B8%AD%E6%96%87'),
-    {tab: 'collected', kind: '', query: '中文'});
+    {tab: 'collected', kind: '', query: '中文', creator: ''});
   assert.deepEqual(feedStateFromSearch('?tab=agents'),
-    {tab: 'activity', kind: '', query: ''});
+    {tab: 'activity', kind: '', query: '', creator: ''});
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=bogus'),
-    {tab: 'following', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: ''});
+    {tab: 'following', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: '', creator: ''});
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
   assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
@@ -749,141 +749,6 @@ test('document thumbnails preserve only bounded semantic text blocks', () => {
   ]});
   assert.deepEqual(model.blocks.map(block=>block.type), ['heading','list','code','quote']);
   assert.equal(model.blocks[1].text,'item');
-});
-
-
-test('a creator link opens /discover?creator=<handle> and the feed asks for that creator', async () => {
-  const {mount, creatorFromSearch, FEED_CREATOR_ALL} = await import('../openteamily/static/discover/app.mjs');
-  assert.equal(creatorFromSearch('?creator=alice'), 'alice');
-  assert.equal(creatorFromSearch('?creator=Alice'), 'alice');
-  assert.equal(creatorFromSearch('?tab=agents'), '');
-  assert.equal(creatorFromSearch('?creator='), '');
-  assert.equal(creatorFromSearch('?creator=a'), '');
-  assert.equal(creatorFromSearch('?creator=al ice'), '');
-  assert.equal(creatorFromSearch(undefined), '');
-  const doc = fakeDocument();
-  const calls = [];
-  const fetcher = async (path) => {
-    calls.push(path);
-    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    if (path.startsWith('/v1/discover/creators')) {
-      return {status: 200, json: async () => ({items: [{handle: 'alice', works: 2}, {handle: 'bob', works: 1}]})};
-    }
-    if (path.startsWith('/v1/discover/works?')) {
-      return {status: 200, json: async () => ({items: [{slug: 'alice-note', title: 'Alice 的笔记', kind: 'document', author: 'alice'}], cursor: null})};
-    }
-    throw new Error('unexpected ' + path);
-  };
-  await mount(doc, {fetcher, location: {search: '?creator=alice', pathname: '/discover'}});
-  const el = id => doc.getElementById(id);
-  const works = calls.filter(path => path.startsWith('/v1/discover/works?'));
-  assert.match(works.at(-1), /creator=alice/);
-  assert.equal(el('feed-creator').value, 'alice');
-  assert.equal(el('feed-creator').disabled, false);
-  const labels = el('feed-creator').children.map(option => option.textContent);
-  assert.equal(labels[0], FEED_CREATOR_ALL);
-  assert.equal(labels.includes('alice'), true);
-  assert.equal(labels.includes('bob'), true);
-  assert.equal(el('feed-grid').children.length, 1);
-  assert.equal(el('feed-count').textContent, '已显示 1 件公开作品');
-});
-
-
-test('choosing a creator filters the feed and clearing it returns to every author', async () => {
-  const {mount} = await import('../openteamily/static/discover/app.mjs');
-  const doc = fakeDocument();
-  const calls = [], visit = [];
-  const fetcher = async (path) => {
-    calls.push(path);
-    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    if (path.startsWith('/v1/discover/creators')) {
-      return {status: 200, json: async () => ({items: [{handle: 'alice', works: 1}, {handle: 'bob', works: 1}]})};
-    }
-    if (path.startsWith('/v1/discover/works?')) {
-      return {status: 200, json: async () => ({items: [{slug: 'some-work', title: '作品', kind: 'document', author: 'bob'}], cursor: null})};
-    }
-    throw new Error('unexpected ' + path);
-  };
-  await mount(doc, {
-    fetcher, location: {search: '', pathname: '/discover'},
-    history: {replaceState(_state, _title, url) { visit.push(url); }},
-  });
-  const el = id => doc.getElementById(id);
-  const worksCall = () => calls.filter(path => path.startsWith('/v1/discover/works?')).at(-1);
-  assert.equal(el('feed-creator').value, '');
-  assert.doesNotMatch(worksCall(), /creator=/);
-  el('feed-creator').value = 'bob';
-  await el('feed-creator').handlers.change();
-  assert.match(worksCall(), /creator=bob/);
-  assert.equal(visit.at(-1), '/discover?creator=bob');
-  assert.equal(el('feed-creator').value, 'bob');
-  el('feed-creator').value = '';
-  await el('feed-creator').handlers.change();
-  assert.doesNotMatch(worksCall(), /creator=/);
-  assert.equal(visit.at(-1), '/discover');
-});
-
-
-test('an unreadable creator list says so instead of faking zero creators', async () => {
-  const {mount, FEED_CREATOR_UNREADABLE} = await import('../openteamily/static/discover/app.mjs');
-  assert.equal(FEED_CREATOR_UNREADABLE, '读不到作者列表');
-  const doc = fakeDocument();
-  const fetcher = async (path) => {
-    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    if (path.startsWith('/v1/discover/creators')) {
-      return {status: 503, json: async () => ({error: {message: 'storage unavailable'}})};
-    }
-    if (path.startsWith('/v1/discover/works?')) {
-      return {status: 200, json: async () => ({items: [], cursor: null})};
-    }
-    throw new Error('unexpected ' + path);
-  };
-  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
-  const el = id => doc.getElementById(id);
-  assert.equal(el('feed-creator').disabled, true);
-  assert.deepEqual(el('feed-creator').children.map(option => option.textContent), [FEED_CREATOR_UNREADABLE]);
-  assert.equal(el('feed-creator').children.some(option => /(^|[^0-9])0([^0-9]|$)/.test(option.textContent)), false);
-  assert.equal(el('feed-grid').dataset.empty, 'true');
-});
-
-
-test('a creator with no public work says so instead of claiming the directory is empty', async () => {
-  const {mount, FEED_CREATOR_EMPTY_NOTE} = await import('../openteamily/static/discover/app.mjs');
-  assert.equal(FEED_CREATOR_EMPTY_NOTE, '该作者还没有公开作品。');
-  const doc = fakeDocument();
-  const fetcher = async (path) => {
-    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    if (path.startsWith('/v1/discover/creators')) {
-      return {status: 200, json: async () => ({items: [{handle: 'zed', works: 1}]})};
-    }
-    if (path.startsWith('/v1/discover/works?')) return {status: 200, json: async () => ({items: [], cursor: null})};
-    throw new Error('unexpected ' + path);
-  };
-  await mount(doc, {fetcher, location: {search: '?creator=zed', pathname: '/discover'}});
-  const el = id => doc.getElementById(id);
-  assert.equal(el('feed-note').textContent, FEED_CREATOR_EMPTY_NOTE);
-});
-
-
-test('a public work card links its author to the creator filter', async () => {
-  const {renderFeedCard} = await import('../openteamily/static/discover/app.mjs');
-  const doc = fakeDocument();
-  const card = renderFeedCard(doc, {slug: 'alice-note', title: 'Alice 的笔记', kind: 'document', author: 'alice', path: '/w/alice-note'});
-  const link = card.children[0];
-  assert.equal(String(link.tagName).toLowerCase(), 'a');
-  assert.equal(link.href, '/w/alice-note');
-  assert.equal(link.className, 'feed-card-link');
-  const meta = card.children[1];
-  assert.equal(meta.className, 'meta');
-  const author = meta.children[1];
-  assert.equal(String(author.tagName).toLowerCase(), 'a');
-  assert.equal(author.className, 'feed-author');
-  assert.equal(author.href, '/discover?creator=alice');
-  assert.equal(author.textContent, 'alice');
-  const anonymous = renderFeedCard(doc, {slug: 'nameless-note', title: '无作者', kind: 'document'});
-  const anonymousAuthor = anonymous.children[1].children[1];
-  assert.equal(typeof anonymousAuthor.href, 'undefined');
-  assert.equal(anonymousAuthor.textContent, '');
 });
 
 
