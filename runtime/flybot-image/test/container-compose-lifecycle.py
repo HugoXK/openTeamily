@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
-"""CI proof: the real compose manager starts a digest-pinned FlyBot image.
+"""CI proof of a real Compose Manager with a digest-pinned DS-Bot image.
 
-This is not the #68 simulation path. A local loopback registry is used only
-to obtain a repo digest for the image that this workflow just built. The
-image is not published. Compose still requires name@sha256:<64 hex> and
-the existing isolation contract is unchanged.
-
-The manager worker creates and starts the instance, issues a lease-gated
-runtime key, and bind-mounts it. An authorized conversation is then
-dispatched over /v1/agent and written back to history. A volume sentinel
-is kept across a no-delete container recreate.
-
-The model backend is a labeled local fake OpenAI-compatible server. This
-is not a real vendor inference acceptance and not a Teamily comparison.
+A loopback registry supplies the digest of the just-built image. The manager
+starts the runtime and passes in the personal agent bundle. The native plugin
+imports the binding and keeps it, alongside the data volume, across a recreate.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -26,7 +18,7 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -37,19 +29,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from openteamily.app import App, Config
+from openteamily.dsbot_gateway import exchange_launch_url
 from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
 from openteamily.manager.client import ManagerClient
 from openteamily.manager.engine import IMAGE, ComposeEngine, Registry, Runner
 from openteamily.manager.safety import write_new
 from openteamily.manager.worker import ManagerWorker
 from openteamily.security import digest, opaque
+from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.server import QuietHandler, ThreadedWSGIServer
 from openteamily.store import Store
 from tests.test_management import Client
 
 
-FAKE_TEXT = 'compose-manager-loop-ok-from-labeled-fake-provider'
-FAKE_SECRET = 'synthetic-ci-model-key-not-a-vendor'
 HEALTHCHECK = ['CMD', 'node', '/opt/openteamily/runtime/flybot-image/healthcheck.mjs']
 POLL_SECONDS = 90
 PLUGIN_CANDIDATES = (
@@ -81,30 +73,20 @@ def describe_error(error, secrets):
     return redact(' '.join(parts), secrets)
 
 
-def trace_engine(engine, secrets, iid):
-    def current_secrets():
-        extra = list(secrets)
-        try:
-            token = json.loads(engine.runtime_key_path(iid).read_text()).get('token')
-            if token:
-                extra.append(token)
-        except Exception:
-            pass
-        return extra
-
+def trace_engine(engine, secrets):
     def wrap(method):
         def wrapped(*args, **kwargs):
             try:
                 return method(*args, **kwargs)
             except Exception as error:
-                print('compose engine %s: %s' % (method.__name__, describe_error(error, current_secrets())), file=sys.stderr)
+                print('compose engine %s: %s' % (method.__name__, describe_error(error, secrets)), file=sys.stderr)
                 raise
         return wrapped
 
     engine.inspect = wrap(engine.inspect)
     engine.compose = wrap(engine.compose)
     engine.wait = wrap(engine.wait)
-    engine.install_runtime_key = wrap(engine.install_runtime_key)
+    engine.install_agent_bootstrap = wrap(engine.install_agent_bootstrap)
     return engine
 
 
@@ -145,59 +127,6 @@ def find_compose_plugin():
     return None
 
 
-def start_http_listener(host, port, handler_factory):
-    server = ThreadingHTTPServer((host, port), handler_factory)
-    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
-    thread.start()
-    return server, thread
-
-
-def fake_handler(secret, body_text):
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            length = int(self.headers.get('Content-Length', '0'))
-            raw = self.rfile.read(length)
-            if self.path.rstrip('/') != '/v1/chat/completions':
-                self.send_response(404)
-                self.end_headers()
-                return
-            if self.headers.get('Authorization') != 'Bearer ' + secret:
-                self.send_response(401)
-                self.end_headers()
-                self.wfile.write(b'{"error":"unauthorized"}')
-                return
-            try:
-                stream = bool(json.loads(raw or b'{}').get('stream'))
-            except ValueError:
-                stream = False
-            if stream:  # DS-Bot's provider SDK streams (OpenAI SSE)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/event-stream')
-                self.end_headers()
-                base = {'id': 'chatcmpl-fake', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'fake-model'}
-                for chunk in (
-                    dict(base, choices=[{'index': 0, 'delta': {'role': 'assistant', 'content': body_text}, 'finish_reason': None}]),
-                    dict(base, choices=[{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]),
-                ):
-                    self.wfile.write(b'data: ' + json.dumps(chunk).encode() + b'\n\n')
-                self.wfile.write(b'data: [DONE]\n\n')
-                self.close_connection = True
-                return
-            payload = json.dumps({
-                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': body_text}, 'finish_reason': 'stop'}],
-                'model': 'fake-model',
-            }).encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, format, *args):
-            return
-    return Handler
-
-
 def pin_local_image(tag, secrets):
     """Push the just-built image to a loopback registry and return name@sha256."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -231,13 +160,31 @@ def pin_local_image(tag, secrets):
         raise
 
 
-def network_gateway(iid, secrets):
-    network = 'ot-%s_default' % iid
-    result = docker(['network', 'inspect', network], secrets=secrets)
-    data = json.loads(result.stdout)
-    gateways = [cfg.get('Gateway') for cfg in data[0].get('IPAM', {}).get('Config', []) if cfg.get('Gateway')]
-    require(gateways, 'compose network has no gateway')
-    return gateways[0], network
+def native_binding(cid, network, secrets):
+    address = docker(['inspect', '-f', '{{(index .NetworkSettings.Networks "%s").IPAddress}}' % network, cid],
+                     secrets=secrets).stdout.strip() + ':8080'
+
+    def launch_url():
+        logs = docker(['logs', cid], allow_failure=True, secrets=secrets)
+        match = re.search(r'http://[0-9.]+:8080/\?token=[^\s]+', logs.stdout + '\n' + logs.stderr)
+        return match[0] if match else None
+
+    url = wait_until('DSH launch URL', launch_url, secrets=secrets)
+    secrets.append(url.split('token=', 1)[1])
+    cookie = exchange_launch_url(url, address)
+    secrets.append(cookie.split('=', 1)[1])
+    host, port = address.split(':')
+    conn = HTTPConnection(host, int(port), timeout=POLL_SECONDS)
+    try:
+        conn.request('POST', '/api/openteamily',
+                     body=json.dumps({'endpoint': 'agents/personal-binding', 'payload': {}}),
+                     headers={'Host': address, 'Cookie': cookie, 'Content-Type': 'application/json'})
+        response = conn.getresponse()
+        result = json.loads(response.read())
+        require(response.status == 200 and result.get('ok'), 'native personal binding lookup failed')
+        return result['value']
+    finally:
+        conn.close()
 
 
 def compose_container_id(iid, secrets):
@@ -284,7 +231,7 @@ def diagnose_container(cid, iid, image_ref, secrets):
 
 def main(argv):
     if len(argv) != 2:
-        print('usage: python3 runtime/flybot-image/test/container-compose-chat.py <image>', file=sys.stderr)
+        print('usage: python3 runtime/flybot-image/test/container-compose-lifecycle.py <image>', file=sys.stderr)
         return 2
     image = argv[1]
     if not shutil.which('docker'):
@@ -303,18 +250,16 @@ def main(argv):
         print('docker socket not found', file=sys.stderr)
         return 2
 
-    secrets = [FAKE_SECRET]
+    secrets = []
     registry_name = None
-    httpd = gateway_httpd = None
-    provider = gateway_provider = None
-    provider_thread = None
+    httpd = None
     iid = None
     volume = None
     network = None
     # Runner.trusted_path rejects group/world-writable ancestors. GitHub Actions
     # sets TMPDIR to a 0775 workspace path, so the operator root must live under
     # sticky, root-owned /tmp rather than the default TemporaryDirectory location.
-    temp = tempfile.TemporaryDirectory(prefix='ot-compose-chat-', dir='/tmp')
+    temp = tempfile.TemporaryDirectory(prefix='ot-compose-bootstrap-', dir='/tmp')
     try:
         os.chmod(temp.name, 0o700)
         root = Path(temp.name) / 'operator'
@@ -329,31 +274,27 @@ def main(argv):
         registry_name, image_ref = pin_local_image(image, secrets)
         require(IMAGE.fullmatch(image_ref), 'digest pin failed the existing image regex: %s' % image_ref)
 
-        provider, provider_thread = start_http_listener('127.0.0.1', 0, fake_handler(FAKE_SECRET, FAKE_TEXT))
-        fake_port = provider.server_address[1]
-        fake_base = 'http://127.0.0.1:%s/v1' % fake_port
-
         store = Store(Path(temp.name) / 'state')
         policy = RuntimePolicy(image_ref=image_ref, profile='local-compose', backend_mode='compose', lease_seconds=60)
         lifecycle = Lifecycle(store, policy)
         httpd = make_server('127.0.0.1', 0, lambda *a: None, handler_class=QuietHandler, server_class=ThreadedWSGIServer)
         loopback_origin = 'http://127.0.0.1:%s' % httpd.server_address[1]
+        manager_token = opaque()
+        secrets.append(manager_token)
         app = App(
-            store,
-            Config(loopback_origin, insecure_local=True, allow_registration=True,
-                   runtime_heartbeat_seconds=45, runtime_task_timeout_seconds=60),
+            store, Config(loopback_origin, insecure_local=True, allow_registration=True),
             lifecycle=lifecycle,
+            manager_auth=ManagerAuth([
+                ManagerIdentity('manager-a', digest(manager_token), frozenset(), 'compose', auto_provisioned=True),
+            ]),
+            auto_provision=AutoProvisionPolicy(enabled=True, manager_id='manager-a', max_instances=1),
         )
         httpd.set_app(app)
         threading.Thread(target=httpd.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True).start()
-        mgmt_port = httpd.server_address[1]
 
         class ApiClient(Client):
             def __init__(self, app, origin):
                 super().__init__(app)
-                self.origin_value = origin
-
-            def set_origin(self, origin):
                 self.origin_value = origin
 
             def call(self, method, path, body=None, headers=None, raw=None, csrf=True, origin=None, parse='json'):
@@ -366,36 +307,20 @@ def main(argv):
 
         user = ApiClient(app, loopback_origin)
         require(user.register('alice')['status'] == 201, 'register failed')
-        saved = user.call('POST', '/v1/model-api', {
-            'revision': 0,
-            'changes': {'provider': 'openai', 'base_url': fake_base, 'model': 'fake-model', 'api_key': FAKE_SECRET},
-        })
-        require(saved['status'] == 200, 'model-api failed: %r' % saved, secrets)
-        workspace = user.workspace('CI compose chat', 'ci_compose_chat_0001')
-        require(workspace['status'] == 201, 'workspace failed: %r' % workspace)
-        wid = workspace['body']['workspace']['id']
-        created_agent = user.call(
-            'POST', f'/v1/workspaces/{wid}/agents',
-            {'name': '容器助手', 'summary': '', 'instructions': 'Answer with one short sentence.'},
-            {'HTTP_IDEMPOTENCY_KEY': 'ci-compose-chat-agent-01'},
-        )
-        require(created_agent['status'] == 201, 'agent failed: %r' % created_agent)
-        agent_id = created_agent['body']['agent']['id']
-        created_instance = user.call(
-            'POST', f'/v1/workspaces/{wid}/instances', {},
-            {'HTTP_IDEMPOTENCY_KEY': 'ci-compose-chat-inst-01'},
-        )
-        require(created_instance['status'] == 201, 'instance failed: %r' % created_instance)
-        iid = created_instance['body']['instance']['id']
+        enrolled = user.call('POST', '/v1/personal-agent')
+        require(enrolled['status'] == 201, 'personal agent failed: %r' % enrolled)
+        personal = enrolled['body']['personal_agent']
+        provision = personal['runtime_provisioning']
+        require(provision['state'] == 'provisioned', 'personal runtime was not provisioned')
+        iid = provision['instance_id']
         volume = 'ot-' + iid
-        require(created_instance['body']['instance']['image_ref'] == image_ref, 'instance did not pin the digest')
-        require(created_instance['body']['instance']['backend_mode'] == 'compose', 'instance is not compose mode')
+        network = volume + '_default'
+        binding = {'workspace_id': personal['workspace']['id'], 'agent_id': personal['agent']['id']}
+        instance = user.call('GET', f'/v1/instances/{iid}')
+        require(instance['status'] == 200, 'provisioned instance not found')
+        require(instance['body']['instance']['image_ref'] == image_ref, 'instance did not pin the digest')
+        require(instance['body']['instance']['backend_mode'] == 'compose', 'instance is not compose mode')
 
-        manager_token = opaque()
-        secrets.append(manager_token)
-        app.manager_auth = ManagerAuth([
-            ManagerIdentity('manager-a', digest(manager_token), frozenset([iid]), 'compose'),
-        ])
         write_new(root / 'manager.json', {
             'version': 1,
             'execution_enabled': True,
@@ -408,7 +333,7 @@ def main(argv):
             'instances': {iid: {'image': image_ref, 'healthcheck': HEALTHCHECK, 'publish_port': None}},
         })
         registry = Registry(str(root / 'manager.json'))
-        engine = trace_engine(ComposeEngine(registry, Runner(registry, enabled=True)), secrets, iid)
+        engine = trace_engine(ComposeEngine(registry, Runner(registry, enabled=True)), secrets)
         client = ManagerClient(loopback_origin, 'manager-a', manager_token, enabled=True, timeout=5)
         worker = ManagerWorker(client, registry, engine)
 
@@ -419,94 +344,23 @@ def main(argv):
             except Exception as error:
                 print(redact('compose inspect diagnosis unavailable: %s' % error, secrets), file=sys.stderr)
             raise RuntimeError(redact('compose create failed: %r' % created, secrets))
-        gateway, network = network_gateway(iid, secrets)
-        container_origin = 'http://%s:%s' % (gateway, mgmt_port)
-        gateway_httpd = make_server(gateway, mgmt_port, app, handler_class=QuietHandler, server_class=ThreadedWSGIServer)
-        threading.Thread(target=gateway_httpd.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True).start()
-        gateway_provider, _ = start_http_listener(gateway, fake_port, fake_handler(FAKE_SECRET, FAKE_TEXT))
-        app.config = Config(container_origin, insecure_local=True, allow_registration=True,
-                            runtime_heartbeat_seconds=45, runtime_task_timeout_seconds=60)
-        user.set_origin(container_origin)
-        # Re-issue model API URL the container can reach; keep the labeled fake provider.
-        current = user.call('GET', '/v1/model-api')
-        require(current['status'] == 200, 'model-api read failed: %r' % current, secrets)
-        updated = user.call('POST', '/v1/model-api', {
-            'revision': current['body']['model_api']['revision'],
-            'changes': {'base_url': 'http://%s:%s/v1' % (gateway, fake_port)},
-        })
-        require(updated['status'] == 200, 'model-api update failed: %r' % updated, secrets)
-        client = ManagerClient(loopback_origin, 'manager-a', manager_token, enabled=True, timeout=5,
-                               host_header=urlsplit(container_origin).netloc)
-        worker = ManagerWorker(client, registry, engine)
-
-        started = user.call('POST', f'/v1/instances/{iid}/start', {})
-        require(started['status'] == 202, 'start failed: %r' % started)
         running = worker.run_once(iid)
         if running.get('status') != 'observed' or running.get('observed') != 'running':
             logs = docker(['logs', compose_container_id(iid, secrets)], allow_failure=True, secrets=secrets)
             print(redact((logs.stdout or '') + '\n' + (logs.stderr or ''), secrets), file=sys.stderr)
             raise RuntimeError(redact('compose start failed: %r' % running, secrets))
 
-        key_path = engine.runtime_key_path(iid)
-        require(key_path.exists() and (key_path.stat().st_mode & 0o777) in (0o600, 0o644),
-                'runtime key file missing or mode unexpected')
-        key_doc = json.loads(key_path.read_text())
-        require(key_doc.get('origin') == container_origin and key_doc.get('token') and key_doc.get('hostname'),
-                'runtime key file incomplete', secrets)
-        secrets.append(key_doc['token'])
-        require('token' not in json.dumps(running), 'runtime token leaked in worker observe result', secrets)
+        def assert_bootstrap_file():
+            path = engine.agent_bootstrap_path(iid)
+            require(path.exists() and (path.stat().st_mode & 0o777) in (0o600, 0o644),
+                    'personal-agent bootstrap file missing or mode unexpected', secrets)
+            document = json.loads(path.read_text())
+            require(set(document) == {'agent_bootstrap'} and document['agent_bootstrap'].get('instance_id') == iid,
+                    'personal-agent bootstrap file has unexpected fields or instance', secrets)
 
-        bound = user.call('POST', f'/v1/workspaces/{wid}/agents/{agent_id}/runtime', {'instance_id': iid})
-        require(bound['status'] == 201, 'bind failed: %r' % bound)
-
-        def binding_online():
-            row = user.call('GET', f'/v1/workspaces/{wid}/agents/{agent_id}/runtime')
-            status = ((row.get('body') or {}).get('runtime') or {}).get('status')
-            return row if row.get('status') == 200 and status == 'online' else None
-
-        try:
-            wait_until('compose instance connection online', binding_online, secrets=secrets)
-        except Exception:
-            logs = docker(['logs', compose_container_id(iid, secrets)], allow_failure=True, secrets=secrets)
-            print(redact((logs.stdout or '') + '\n' + (logs.stderr or ''), secrets), file=sys.stderr)
-            raise
-
-        conversations = f'/v1/workspaces/{wid}/agents/{agent_id}/conversations'
-        created_conv = user.call(
-            'POST', conversations, {'title': 'CI compose chat'},
-            {'HTTP_IDEMPOTENCY_KEY': 'ci-compose-chat-conv-01'},
-        )
-        require(created_conv['status'] == 201, 'conversation failed: %r' % created_conv)
-        conv_id = created_conv['body']['conversation']['id']
-        sent = user.call(
-            'POST', f'{conversations}/{conv_id}/messages',
-            {'body': '请用一句话确认你在 compose 启动的容器里。'},
-            {'HTTP_IDEMPOTENCY_KEY': 'ci-compose-chat-msg-01'},
-        )
-        require(sent['status'] == 201, 'send failed: %r' % sent)
-        reply = sent['body']['reply']
-        require(reply.get('dispatch', {}).get('source') == 'instance', 'dispatch was not the instance: %r' % reply)
-        require(reply.get('dispatch', {}).get('instance_id') == iid, 'dispatch instance mismatch: %r' % reply)
-        require(reply.get('task_id'), 'instance dispatch did not queue a task: %r' % reply)
-
-        def assistant_done():
-            listed = user.call('GET', f'{conversations}/{conv_id}')
-            if listed.get('status') != 200:
-                return None
-            items = listed['body'].get('items') or []
-            found = [row for row in items if row.get('role') == 'assistant' and row.get('body') == FAKE_TEXT]
-            return found[-1] if found else None
-
-        try:
-            done = wait_until('assistant reply in history', assistant_done, secrets=secrets)
-        except Exception:
-            logs = docker(['logs', compose_container_id(iid, secrets)], allow_failure=True, secrets=secrets)
-            print(redact((logs.stdout or '') + '\n' + (logs.stderr or ''), secrets), file=sys.stderr)
-            print(redact(json.dumps(user.call('GET', f'{conversations}/{conv_id}'), ensure_ascii=False), secrets), file=sys.stderr)
-            raise
-        require(done.get('dispatch', {}).get('source') == 'instance', 'history dispatch was not instance: %r' % done)
-
+        assert_bootstrap_file()
         cid = compose_container_id(iid, secrets)
+        require(native_binding(cid, network, secrets) == binding, 'personal agent was not imported on first start')
         docker(['exec', '-u', '1000:1000', cid, 'sh', '-c', 'echo persistent-test-content > /data/volume-sentinel'], secrets=secrets)
         stopped = user.call('POST', f'/v1/instances/{iid}/stop', {})
         require(stopped['status'] == 202, 'stop failed: %r' % stopped)
@@ -523,17 +377,13 @@ def main(argv):
         sentinel = docker(['exec', '-u', '1000:1000', cid, 'cat', '/data/volume-sentinel'], secrets=secrets)
         require(sentinel.stdout.strip() == 'persistent-test-content',
                 'volume sentinel missing after no-delete recreate: %r' % sentinel.stdout)
-        logs = docker(['logs', cid], allow_failure=True, secrets=secrets)
-        combined = (logs.stdout or '') + '\n' + (logs.stderr or '')
-        require(key_doc['token'] not in combined, 'runtime token appeared in container logs')
-        require(FAKE_SECRET not in combined, 'model key appeared in container logs')
-        print(
-            'PASS: compose manager created and started a digest-pinned FlyBot image, '
-            'injected a lease-issued runtime key, dispatched an agent conversation, '
-            'wrote the labeled fake-provider reply back to history, and kept the '
-            'data volume across a no-delete container recreate. '
-            'This is not a real vendor inference acceptance.'
-        )
+        assert_bootstrap_file()
+        with store.connect() as db:
+            require(db.execute('SELECT COUNT(*) FROM instance_runtime_keys').fetchone()[0] == 0,
+                    'container lifecycle created a retired instance credential')
+        require(native_binding(cid, network, secrets) == binding, 'recreated DS-Bot lost its personal agent')
+        print('PASS: Compose manager started a digest-pinned DS-Bot, provisioned its personal agent, '
+              'and preserved the binding and data volume across recreate.')
         return 0
     finally:
         if iid:
@@ -548,15 +398,9 @@ def main(argv):
             docker(['volume', 'rm', volume], allow_failure=True, secrets=secrets)
         if registry_name:
             docker(['rm', '--force', registry_name], allow_failure=True, secrets=secrets)
-        for server in (gateway_httpd, httpd, gateway_provider, provider):
-            if server is not None:
-                try:
-                    server.shutdown()
-                    server.server_close()
-                except Exception:
-                    pass
-        if provider_thread is not None:
-            provider_thread.join(3)
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
         temp.cleanup()
 
 

@@ -1125,13 +1125,13 @@ class App:
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
             return 200, runtime.runtime_bot_social(manager, collaboration[1], body['job_id'], body['observed_revision'], body['lease']), []
-        agent_key = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-agent-key', path)
-        if agent_key and method == 'POST' and not query:
+        bootstrap = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-agent-bootstrap', path)
+        if bootstrap and method == 'POST' and not query:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
-            return 200, runtime.runtime_agent_key(
-                manager, agent_key[1], body['job_id'], body['observed_revision'], body['lease'], self.config.origin), []
+            return 200, runtime.runtime_agent_bootstrap(
+                manager, bootstrap[1], body['job_id'], body['observed_revision'], body['lease']), []
         match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
         if match and method == 'POST':
             allowed = ['job_id', 'observed_revision', 'lease']

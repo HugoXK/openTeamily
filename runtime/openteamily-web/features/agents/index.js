@@ -1,4 +1,4 @@
-import { loadRuntimeKey } from '../../../flybot-image/agent-loop.mjs'
+import { loadPersonalAgentBootstrap } from '../../../flybot-image/agent-bootstrap.mjs'
 import { nativeAgents } from './native.js'
 import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
@@ -628,7 +628,7 @@ export default async function agents(host) {
   await importPending({ host, db, migrate })
   if (!await endpoints['personal-binding']()) {
     let bootstrap
-    try { bootstrap = loadRuntimeKey()?.agentBootstrap } catch {
+    try { bootstrap = loadPersonalAgentBootstrap() } catch {
       throw new Error('Personal agent bootstrap configuration is unreadable')
     }
     if (bootstrap) {

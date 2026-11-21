@@ -47,6 +47,10 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/recommendations', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/model-api', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget('/v1/model-api/image', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/images`, ORIGIN).feature, 'images');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/images/${ID}`, ORIGIN).feature, 'images');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/images/wrong`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
@@ -109,6 +113,8 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/file`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/export`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/spreadsheet/draft`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/slides/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');

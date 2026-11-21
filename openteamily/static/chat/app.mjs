@@ -3,6 +3,7 @@ import { mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
+import { mountImageCreator } from './image-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -4667,13 +4668,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   const plus = document.querySelector('details.composer-plus');
+  const imageCreator = mountImageCreator(document,{
+    request, key:() => idempotencyKey('chat-image-'),
+    context() {
+      if (!servedByDsbot || !currentUser || !workspaceId()) return null;
+      if (currentSource === 'agent' && currentAgent) {
+        return {workspace:workspaceId(),scope:sendScope(),private:true,attachLabel:'添加到输入框'};
+      }
+      if (currentSource === 'social' && currentConversation && !currentConversation.public_agent && !sendClosed()) {
+        return {workspace:workspaceId(),scope:sendScope(),private:false,
+          attachLabel:currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+      }
+      return null;
+    },
+    attach: (file,scope) => Boolean(attachmentSender?.addFiles?.([file],scope)),
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
+  });
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
     syncMemoryRecall();
+    imageCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
+    const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
+    const workspace = workspaceId();
+    const scope = new URLSearchParams();
+    if (workspace) {
+      scope.set('workspace',workspace);
+      if (shareable) scope.set('conversation',currentConversation.id);
+    }
+    for (const link of document.querySelectorAll('[data-create-artifact]')) {
+      link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
+    }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);
+    const available = servedByDsbot && (shareable || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;
