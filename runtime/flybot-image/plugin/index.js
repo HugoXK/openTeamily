@@ -10,6 +10,8 @@ import { loadBotSocialConfig } from '../bot-social-config.js'
 import { startBridge, runTurn } from '../ds-bot-bridge.mjs'
 import { normalizeImportedSession } from '../../openteamily-web/features/agents/history.js'
 import { attachRuntime } from '../../openteamily-web/src/host.js'
+import { boundName } from '../../openteamily-web/features/skills/index.js'
+import { nativeSkillFilter, reconcileStartupSkills } from '../../openteamily-web/features/skills/library.js'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -20,7 +22,13 @@ export function apply(ctx, config = {}) {
   // Prepare is detached/read-only: no Session is entered, persisted or announced.
   // Install before core agent restoration, whose projections read old imports.
   normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))
-  const rt = createRuntime(ctx, config)
+  const dataDir = process.env.DSH_HOME ?? '/data'
+  const filterNativeCapabilities = nativeSkillFilter(dataDir, boundName)
+  const rt = createRuntime(ctx, { ...config, filterNativeCapabilities })
+  ctx.effect(() => {
+    void reconcileStartupSkills(rt, dataDir, boundName)
+      .catch(error => rt.warn('openteamily: could not reconcile startup skills: %s', error.name))
+  }, 'openteamily: startup skill consent')
   // Publish once, after the complete bridge services exist. Early pending imports
   // must not capture a permanently incomplete frozen runtime handle.
   const collaboration = loadBotSocialConfig()
@@ -43,6 +51,7 @@ export function apply(ctx, config = {}) {
     const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
       await bridge.prepareModel()
       await bridge.selectConversation(key)
+      bridge.requireModel(bridge.botId)
       return runTurn(rt, ctx, bridge.botId, text, requestId)
     })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
@@ -56,16 +65,21 @@ export function apply(ctx, config = {}) {
       const uploads = ctx.get?.('fileUploads')
       for (const file of options.files || []) {
         if (!uploads) throw Object.assign(new Error('Native attachment service unavailable'), {code:'agents/attachment-unavailable'})
-        const data = (async function* () { yield file.data })()
-        const scope = {sessionId:rt.chatOf(botId), name:file.title, data}
+        const bytes = async function* () { yield file.data }
+        const scope = {sessionId:rt.chatOf(botId), name:file.title, data:bytes()}
         const image = file.mime.startsWith('image/')
         const result = image ? await uploads.uploadImageStream({...scope, mediaType:file.mime}) : await uploads.uploadStream(scope)
-        const ref = image ? result.image : result.file
+        // Prompt images may be normalized by DSH. A shared work's download
+        // must keep the exact bytes of the saved revision.
+        const original = file.resource && image
+          ? await attachmentStore().saveFileStream({name:file.title,data:bytes()}) : null
+        const ref = original || (image ? result.image : result.file)
         parts.push({type:'file', receiptId:result.receiptId})
-        stored.push({title:file.title, mime:ref.mediaType || file.mime, bytes:ref.bytes, image, ref})
+        stored.push({title:file.title, mime:original ? file.mime : ref.mediaType || file.mime, bytes:ref.bytes, image:image && !original, ref})
       }
       if (stored.length) options.onStaged?.(stored)
-      return runTurn(rt, ctx, botId, text, requestId, undefined, parts)
+      bridge.requireModel(botId)
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress })
     })
     const readNativeAttachment = async file => {
       const store = attachmentStore()

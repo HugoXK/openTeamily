@@ -8,23 +8,54 @@ import { DatabaseSync } from 'node:sqlite'
 import { dueAt, validSchedule, zonedEpoch } from '../features/automations/schedule.js'
 import { createAutomations, dsBotTurn } from '../features/automations/automations.js'
 import { TEMPLATES } from '../features/automations/templates.js'
-import { loadFeatures } from '../src/features.js'
+import { featureHost, loadFeatures, registerFeature } from '../src/features.js'
+import artifactsFeature from '../features/artifacts/index.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const flush = () => new Promise((r) => setImmediate(r))
 
-function fixture(turn, at = 1_800_000_000) {
+function fixture(turn, at = 1_800_000_000, saveArtifact) {
   const clock = { now: at }
   const calls = []
   const feature = createAutomations({
     personalBinding: async () => ({workspace_id: W}),
+    saveArtifact,
     db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
   return { feature, clock, calls, e: feature.endpoints }
 }
+
+test('a successful native run saves a durable, idempotent document from its own output', async () => {
+  const table = {}
+  const host = featureHost({name: 'artifacts', identity: {instanceId: W},
+    dataDir: mkdtempSync(join(tmpdir(), 'ot-auto-artifacts-')), table})
+  const artifacts = artifactsFeature(host)
+  registerFeature(table, 'artifacts', artifacts)
+  const {e, feature} = fixture(undefined, undefined, payload => host.call('artifacts/saveAutomationRun', payload))
+  const {automation} = e['automations/create']({workspace_id: W, title: '保存工作简报', participants: ['alice'],
+    template_id: 'custom', schedule: {kind: 'now', time_zone: 'UTC'},
+    prompt: 'Summarize the day.', idempotency_key: 'create-save-run-001'})
+  const {run} = e['automations/runNow']({workspace_id: W, id: automation.id, idempotency_key: 'start-save-run-001'})
+  await feature.inflight.get(run.id)
+  const path = `/v1/workspaces/${W}/automations/${automation.id}/runs/${run.id}/artifact`
+  const save = () => e['automations/v1']({method: 'POST', path, body: {body: 'caller cannot override output'}})
+  const first = await save()
+  assert.equal(first.status, 201)
+  const {artifact} = first.body
+  assert.equal(artifact.body, 'DS-Bot did it')
+  assert.equal(artifact.source.kind, 'automation_run')
+  assert.equal(artifact.source.id, run.id)
+  assert.equal(artifact.source.automation_id, automation.id)
+  const repeat = await save()
+  assert.equal(repeat.status, 200)
+  assert.equal(repeat.body.artifact.id, artifact.id)
+  assert.equal((await e['automations/v1']({method: 'GET', path})).status, 405)
+  assert.equal((await e['automations/v1']({method: 'POST', path: path.replace(W, 'b'.repeat(32))})).status, 404)
+  await assert.rejects(() => artifacts.endpoints.saveAutomationRun({}, {internal: false}), /Save results/)
+})
 
 test('schedule slots match the server rules across time zones', () => {
   const zone = 'Asia/Shanghai'
@@ -258,18 +289,34 @@ test('official import bundle marks the current slot skipped and does not re-impo
   assert.equal((await feature.migrate(bundle)).imported, 0)
 })
 
-test('onboarding creates a paused automation in DS-Bot and skips retries', async () => {
-  const { e } = fixture()
+test('onboarding creates a paused automation for the verified owner and returns its exact ID on replay', async () => {
+  const {calls, e, feature} = fixture()
   const request = {method: 'POST', path: '/v1/onboarding/automations',
-    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'alice'}}
-  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}})
+    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'forged-account'}}
+  const call = {request: new Request('https://example.test', {headers: {'x-ot-owner-username': 'alice'}})}
+  assert.equal((await e['automations/v1'](request, {request: new Request('https://example.test', {headers: {'x-ot-owner-username': ''}})})).status, 403)
+  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}}, call)
   assert.equal(denied.status, 403)
-  const result = await e['automations/v1'](request)
+  const result = await e['automations/v1'](request, call)
   assert.equal(result.status, 201)
   const id = result.body.created[0].id
-  assert.equal(e['automations/get']({workspace_id: W, id}).automation.enabled, false)
-  const retry = await e['automations/v1'](request)
+  const path = `/v1/workspaces/${W}/automations/${id}`
+  const current = () => e['automations/get']({workspace_id: W, id}).automation
+  assert.equal(current().enabled, false)
+  assert.deepEqual(current().participants, [{username: 'alice'}])
+  assert.equal(calls.length, 0)
+  assert.equal((await e['automations/v1']({method: 'GET', path: path + '/remove'}, call)).status, 405)
+  assert.equal((await e['automations/v1']({method: 'GET', path: `/v1/workspaces/${W}/automations/tick`}, call)).status, 405)
+  e['automations/update']({workspace_id: W, id, revision: 1, changes: {title: '改名的简报'}})
+  const retry = await e['automations/v1'](request, call)
   assert.equal(retry.status, 200)
   assert.deepEqual(retry.body.created, [])
-  assert.equal(retry.body.skipped[0].template_id, 'daily_brief')
+  assert.deepEqual(retry.body.skipped, [{id, template_id: 'daily_brief', title: '改名的简报'}])
+  assert.equal(e['automations/list']({workspace_id: W}).items.length, 1)
+  const run = await e['automations/v1']({method: 'POST', path: path + '/run', idempotency_key: 'onboarding-manual-1'}, call)
+  assert.equal(run.status, 202)
+  await feature.inflight.get(run.body.run.id)
+  assert.equal(e['automations/run']({workspace_id: W, id, run_id: run.body.run.id}).run.result.text, 'DS-Bot did it')
+  assert.equal(calls.length, 1)
+  assert.equal(current().enabled, false)
 })
