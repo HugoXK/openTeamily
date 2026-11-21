@@ -408,8 +408,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       void request('GET', '/v1/onboarding').then(onboarding => {
         if (currentUser !== activeUser || onboarding.status !== 200) return;
         profile = onboarding.body.onboarding;
-        if (banner) banner.hidden = Boolean(profile?.completed);
-        renderPersonalContext();
+        if (banner) banner.hidden = Boolean(onboarding.body.progress?.completed ?? profile?.completed);
+        if (onboarding.body.steps?.look && personal) {
+          personal = {...personal, look: onboarding.body.steps.look};
+          renderPersonal();
+        } else renderPersonalContext();
       }).catch(() => {});
       const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0, body: {}}));
       if (currentUser !== activeUser) return;

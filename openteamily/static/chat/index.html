@@ -5,9 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title data-ui-text="chat.page.title">聊天 · OpenTeamily</title>
+  <script type="module" src="/chat/startup.mjs" async></script>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/chat/app.css">
   <link rel="stylesheet" href="/look/app.css">
+  <!-- Start the Chat module graph alongside its entry script. -->
+  <link rel="modulepreload" href="/chat/voice.mjs">
+  <link rel="modulepreload" href="/chat/mentions.mjs">
+  <link rel="modulepreload" href="/chat/files.mjs">
+  <link rel="modulepreload" href="/chat/translation.mjs">
+  <link rel="modulepreload" href="/chat/activity.mjs">
+  <link rel="modulepreload" href="/chat/public-draft.mjs">
+  <link rel="modulepreload" href="/chat/utilities.mjs">
+  <link rel="modulepreload" href="/chat/dsbot.mjs">
+  <link rel="modulepreload" href="/shell/meeting-link.mjs">
+  <link rel="modulepreload" href="/shell/work-notification.mjs">
+  <link rel="modulepreload" href="/shell/public-agent-link.mjs">
+  <link rel="modulepreload" href="/shell/chat-utils.mjs">
+  <link rel="modulepreload" href="/shell/thumb.mjs">
+  <link rel="modulepreload" href="/look/app.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/chat/app.mjs"></script>
@@ -100,7 +116,7 @@
       <button type="button" id="workspace-events-retry" data-ui-text="chat.connection.reconnect">重连</button>
     </div>
     <p id="whoami"></p>
-    <p id="onboarding-banner" class="note" hidden><span data-ui-text="chat.onboarding.complete">完善</span><strong data-ui-text="chat.onboarding.background">工作背景</strong><span data-ui-text="chat.onboarding.why">，让自动化推荐更贴合你。</span><a href="/onboarding" data-ui-text="chat.settings.open">去设置</a></p>
+    <p id="onboarding-banner" class="note" hidden><span data-ui-text="chat.onboarding.complete">完善</span><strong data-ui-text="chat.onboarding.background">工作背景</strong><span data-ui-text="chat.onboarding.why">，让自动化推荐更贴合你。</span><a href="/onboarding" data-ui-text="chat.onboarding.open">打开新手引导</a></p>
     <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
       <div class="notifications-head">
         <h2 id="notifications-heading" data-ui-text="chat.inbox.notifications">通知</h2>
@@ -146,6 +162,10 @@
       <div class="inbox-conversations-head">
         <h2 id="conversation-heading"><span data-ui-text="chat.sessions.conversations">对话</span></h2>
         <button type="button" id="conversations-read-all" hidden data-ui-text="chat.sessions.mark_read">单聊和群聊已读</button>
+      </div>
+      <div id="session-transition" class="session-transition" hidden>
+        <p id="session-transition-status" role="status"></p>
+        <button id="session-transition-retry" type="button" hidden>重试</button>
       </div>
       <ul id="conversation-list"></ul>
       <p id="conversations-status" class="note" role="status" hidden></p>
@@ -630,6 +650,7 @@
                   <button type="button" id="composer-model3d-create" disabled data-tone="cube" title="用描述或参考图生成 3D 模型" aria-haspopup="dialog" data-ui-title="chat.create.model_hint"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span data-ui-text="chat.model_3d">3D 模型</span></button>
                 </div>
               </section>
+              <p class="plus-hint" id="composer-create-status" role="status" hidden></p>
               <section class="plus-section" aria-labelledby="plus-auto">
                 <div class="plus-section-head"><h3 class="plus-heading" id="plus-auto" data-ui-text="chat.nav.automations">自动化</h3><a class="plus-more" href="/automations"><span data-ui-text="chat.automations.all">全部自动化</span><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></a></div>
                 <div class="plus-auto">

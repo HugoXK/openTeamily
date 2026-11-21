@@ -4,8 +4,8 @@ import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
-  socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref, messengerHref,
-  parseMessengerHash, describeWebsiteDispatch, spaceHref, escapeHtml,
+  socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref,
+  describeWebsiteDispatch, spaceHref, escapeHtml,
 } from '../openteamily/static/shell/thumb.mjs';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
@@ -1581,11 +1581,6 @@ test('deep links point at existing space and chat routes, not invented pages', (
     conversationChatHref(wid, {source: 'agent', id, agent_id: aid}),
     '/chat#workspace=' + wid + '&agent=' + aid + '&conversation=' + id,
   );
-  assert.equal(messengerHref(wid, id), '/messenger#workspace=' + wid + '&conversation=' + id);
-  assert.deepEqual(parseMessengerHash('#workspace=' + wid + '&conversation=' + id), {
-    workspace: wid, conversation: id,
-  });
-  assert.deepEqual(parseMessengerHash(''), {workspace: '', conversation: ''});
 });
 
 test('website dispatch copy distinguishes queued work from a missing runtime', () => {

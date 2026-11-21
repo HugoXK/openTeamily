@@ -468,17 +468,29 @@ function teamsRoutes(host) {
           const q = parseQuery(query)
           const binding = host.call('agents/personal-binding', {})
           if (q.get('scope') === 'personal') {
-            const personal = personalWorkspace(await binding, env)
+            const localBinding = await binding
+            const personal = personalWorkspace(localBinding, env)
             const result = { items: personal ? [personal] : [], cursor: null }
-            if (q.get('include') === 'artifacts') {
+            const include = q.get('include')
+            if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
-              if (personal && (personal.owner_id || result.viewer_username) &&
-                  (!q.has('workspace') || q.get('workspace') === personal.id)) {
-                const order = q.get('order') === 'recent' ? '?order=recent' : ''
-                const catalog = await host.call('artifacts/v1', {
-                  method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts${order}`,
-                }).catch(() => null)
-                if (catalog?.status === 200 && Array.isArray(catalog.body?.items)) result.catalog = catalog.body
+              if (personal && (personal.owner_id || result.viewer_username)) {
+                if (include === 'chat') result.personal_agent_id = localBinding.agent_id
+                if (!q.has('workspace') || q.get('workspace') === personal.id) {
+                  if (include === 'chat') {
+                    const directory = await host.call('agents/v1', {
+                      method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
+                    }).catch(() => null)
+                    if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
+                        Array.isArray(directory.body.conversations)) result.chat = directory.body
+                  } else {
+                    const order = q.get('order') === 'recent' ? '?order=recent' : ''
+                    const catalog = await host.call('artifacts/v1', {
+                      method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts${order}`,
+                    }).catch(() => null)
+                    if (catalog?.status === 200 && Array.isArray(catalog.body?.items)) result.catalog = catalog.body
+                  }
+                }
               }
             }
             return [200, result]

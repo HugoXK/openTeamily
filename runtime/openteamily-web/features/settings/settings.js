@@ -137,11 +137,36 @@ const stepsView = (row, industry) => ({
   compared: false,
 })
 
+function wizardProgress({ onboarding, onboarding_steps: steps, onboarding_progress: progress }) {
+  if (progress) return progress
+  if (steps?.look || (onboarding?.completed && !onboarding.industry && !onboarding.role)) {
+    return { step: 4, completed: true }
+  }
+  if (steps) return { step: 4, completed: false }
+  if (onboarding?.completed || (onboarding?.industry && onboarding.role)) return { step: 2, completed: false }
+  return { step: 1, completed: false }
+}
+
+function onboardingPayload(state) {
+  const { onboarding: row, onboarding_steps: steps } = state
+  return {
+    onboarding: row ? onboardingView(row) : null,
+    industries: industriesView(),
+    automation_templates: automationRecommendations(row?.role ?? ''),
+    steps: stepsView(steps, row?.industry ?? ''),
+    progress: wizardProgress(state),
+  }
+}
+
 export function createSettingsFeature({ dir, clock = nowSeconds }) {
   const store = openJsonStore(dir, 'settings')
   const state = () => store.read()
 
-  const getSettings = () => ({ settings: settingsView(state().settings) })
+  const getSettings = () => {
+    const snapshot = state()
+    const look = snapshot.onboarding_steps?.look
+    return { settings: settingsView(snapshot.settings), ...(look && validLook(look) ? {personal_look: look} : {}) }
+  }
   function saveSettings(raw) {
     const body = bodyOf(raw, ['revision', 'changes'])
     const { revision } = body
@@ -174,15 +199,32 @@ export function createSettingsFeature({ dir, clock = nowSeconds }) {
     })
   }
 
-  function getOnboarding() {
-    const { onboarding: row, onboarding_steps: steps } = state()
-    return {
-      onboarding: row ? onboardingView(row) : null,
-      industries: industriesView(),
-      automation_templates: automationRecommendations(row ? row.role : ''),
-      steps: stepsView(steps, row ? row.industry : ''),
+  const getOnboarding = () => onboardingPayload(state())
+
+  function finishOnboarding(draft) {
+    draft.onboarding_progress = { step: 4, completed: true }
+    const row = draft.onboarding
+    if (row && !row.completed) {
+      draft.onboarding = { ...row, completed: 1, revision: row.revision + 1, updated: clock() }
     }
   }
+
+  function saveWizardProgress(raw) {
+    const body = bodyOf(raw, ['step', 'completed'])
+    const finish = body.completed === true && Object.keys(body).length === 1
+    const advance = [3, 4].includes(body.step) && Object.keys(body).length === 1
+    if (!finish && !advance) fail(400, 'invalid', 'Provide the next onboarding step or finish the wizard')
+    return store.update(draft => {
+      const current = wizardProgress(draft)
+      if (!current.completed && advance && body.step > current.step + 1) {
+        fail(409, 'conflict', 'Complete the current onboarding step first', current)
+      }
+      if (finish) finishOnboarding(draft)
+      else draft.onboarding_progress = { ...current, step: Math.max(current.step, body.step) }
+      return { progress: draft.onboarding_progress }
+    })
+  }
+
   function saveOnboarding(raw) {
     const body = bodyOf(raw, ['industry', 'role', 'completed'])
     let industry = body.industry ?? ''
@@ -193,16 +235,22 @@ export function createSettingsFeature({ dir, clock = nowSeconds }) {
     role = role.trim()
     const now = clock()
     return store.update((draft) => {
-      const created = !draft.onboarding
-      draft.onboarding = created
-        ? { industry, role, completed: completed ? 1 : 0, revision: 1, created: now, updated: now }
-        : { ...draft.onboarding, industry, role, completed: completed ? 1 : 0, revision: draft.onboarding.revision + 1, updated: now }
-      return [created ? 201 : 200, { onboarding: onboardingView(draft.onboarding) }]
+      const current = draft.onboarding
+      const progress = wizardProgress(draft)
+      const profileComplete = Number(completed || progress.completed)
+      if (!current || current.industry !== industry || current.role !== role || current.completed !== profileComplete) {
+        draft.onboarding = { industry, role, completed: profileComplete,
+          revision: (current?.revision ?? 0) + 1, created: current?.created ?? now, updated: now }
+      }
+      if (completed && !industry && !role) finishOnboarding(draft)
+      else if (industry && role) draft.onboarding_progress = { ...progress, step: Math.max(2, progress.step) }
+      return [current ? 200 : 201, onboardingPayload(draft)]
     })
   }
   function saveStep(step, raw) {
     return store.update((draft) => {
       const current = draft.onboarding_steps
+      const progress = wizardProgress(draft)
       let picks = current ? current.picks : []
       let look = current ? current.look : null
       if (step === 'picks') {
@@ -212,13 +260,18 @@ export function createSettingsFeature({ dir, clock = nowSeconds }) {
           fail(400, 'invalid', 'Pick at most six known suggestions')
         }
         picks = value
+        if (progress.step >= 2) draft.onboarding_progress = { ...progress, step: 4 }
       } else {
-        const value = bodyOf(raw, ['look']).look
+        const { look: value, finish } = bodyOf(raw, ['look', 'finish'])
         if (!validLook(value)) fail(400, 'invalid', 'Provide color, expression, headwear, glasses and hand from the options')
+        if (finish !== undefined && typeof finish !== 'boolean') fail(400, 'invalid', 'Invalid finish flag')
+        if (finish && progress.step < 4) fail(409, 'conflict', 'Complete the current onboarding step first', progress)
         look = Object.fromEntries(Object.keys(LOOK_OPTIONS).map(name => [name, value[name]]))
+        if (finish) finishOnboarding(draft)
       }
       draft.onboarding_steps = { picks, look, updated: clock() }
-      return { steps: stepsView(draft.onboarding_steps, draft.onboarding ? draft.onboarding.industry : '') }
+      draft.onboarding_progress ??= progress
+      return { steps: stepsView(draft.onboarding_steps, draft.onboarding?.industry ?? ''), progress: draft.onboarding_progress }
     })
   }
   const lookOf = () => {
@@ -247,8 +300,15 @@ export function createSettingsFeature({ dir, clock = nowSeconds }) {
       { method: 'POST', path: /\/v1\/settings/, handle: async ({ body }) => [200, saveSettings(body)] },
       { method: 'GET', path: /\/v1\/notification-prefs/, handle: async ({ query }) => { noQuery(query); return [200, getNotificationPrefs()] } },
       { method: 'PUT', path: /\/v1\/notification-prefs/, handle: async ({ body }) => [200, saveNotificationPrefs(body)] },
-      { method: 'GET', path: /\/v1\/onboarding/, handle: async ({ query }) => { noQuery(query); return [200, getOnboarding()] } },
+      { method: 'GET', path: /\/v1\/onboarding/, handle: async ({ query }, call) => {
+        noQuery(query)
+        const payload = getOnboarding()
+        const viewer = call?.request?.headers?.get('x-ot-owner-username')
+        if (typeof viewer === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(viewer)) payload.viewer_username = viewer
+        return [200, payload]
+      } },
       { method: 'POST', path: /\/v1\/onboarding/, handle: async ({ body }) => saveOnboarding(body) },
+      { method: 'POST', path: /\/v1\/onboarding\/progress/, handle: async ({ body }) => [200, saveWizardProgress(body)] },
       { method: 'GET', path: /\/v1\/onboarding\/recommendations/, handle: async ({ query }) => { noQuery(query); return [200, { items: automationRecommendations(state().onboarding?.role ?? '') }] } },
       { method: 'POST', path: /\/v1\/onboarding\/(picks|look)/, handle: async ({ match, body }) => [200, saveStep(match[1], body)] },
     ],

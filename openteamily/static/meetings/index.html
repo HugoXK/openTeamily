@@ -83,8 +83,19 @@
           <button type="button" id="new-meeting" disabled>新建会议</button>
         </div>
         <button type="button" id="meeting-shares-history" class="secondary" aria-haspopup="dialog" hidden>分享记录</button>
+        <button type="button" id="meeting-resume" class="secondary" hidden>继续编辑会议</button>
+        <form id="meeting-list-filters" role="search" hidden>
+          <label for="meeting-search">搜索会议</label>
+          <input id="meeting-search" type="search" maxlength="80" placeholder="标题、参会人、摘要或行动项">
+          <label class="meeting-open-filter"><input id="meeting-open-only" type="checkbox"> 只看有未完成行动项的会议</label>
+        </form>
+        <p id="meeting-list-status" class="note" role="status"></p>
         <ul id="meeting-list"></ul>
         <p id="meetings-empty" class="note" hidden>还没有会议记录。点击「新建会议」开始。</p>
+        <div class="meeting-list-pagination">
+          <button type="button" id="meeting-list-more" class="secondary" hidden>加载更多会议</button>
+          <button type="button" id="meeting-list-retry" class="secondary" hidden>重试加载会议</button>
+        </div>
       </section>
       <section class="meeting-editor-pane" id="meeting-editor-pane" aria-label="会议详情" tabindex="-1">
         <p id="meeting-empty" class="note">选择一份会议记录，或新建会议。</p>
@@ -150,8 +161,14 @@
             <button type="submit" id="save-meeting">保存</button>
             <button type="button" id="cancel-meeting" class="secondary">取消</button>
             <button type="button" id="share-meeting" class="secondary" aria-haspopup="dialog" hidden>分享纪要</button>
+            <button type="button" id="save-meeting-artifact" class="secondary" aria-describedby="meeting-artifact-description" title="按已保存的摘要和行动项生成纪要" hidden>保存到资料空间</button>
             <a id="export-meeting" class="secondary" download hidden>导出 Markdown</a>
             <button type="button" id="remove-meeting" class="secondary" hidden>删除</button>
+          </div>
+          <div class="meeting-artifact-result">
+            <p id="meeting-artifact-description" class="visually-hidden">将会议已保存版本的摘要和行动项复制到当前工作区。</p>
+            <p id="meeting-artifact-status" class="note" role="status"></p>
+            <a id="meeting-artifact-link" target="_blank" rel="noopener" hidden>打开已保存的纪要</a>
           </div>
         </form>
       </section>

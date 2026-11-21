@@ -227,22 +227,6 @@ export function conversationChatHref(workspaceId, item) {
     + '&social=' + encodeURIComponent(item.id);
 }
 
-export function messengerHref(workspaceId, conversationId) {
-  const parts = [];
-  if (workspaceId) parts.push('workspace=' + encodeURIComponent(workspaceId));
-  if (conversationId) parts.push('conversation=' + encodeURIComponent(conversationId));
-  return parts.length ? '/messenger#' + parts.join('&') : '/messenger';
-}
-
-export function parseMessengerHash(hash) {
-  const raw = String(hash || '').replace(/^#/, '');
-  const params = new URLSearchParams(raw);
-  return {
-    workspace: params.get('workspace') || '',
-    conversation: params.get('conversation') || '',
-  };
-}
-
 export function describeWebsiteDispatch(result) {
   if (!result) return '已创建网站作品，但未能发出搭建请求。';
   if (result.status === 'queued' && result.task_id) {

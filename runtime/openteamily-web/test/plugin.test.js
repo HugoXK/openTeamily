@@ -37,7 +37,7 @@ function fixture() {
   return { root, pages, data }
 }
 
-const get = (route, path) => route.fetch(new Request(`http://10.0.0.2:8080${PAGE_PATH}?path=${encodeURIComponent(path)}`))
+const get = (route, path, headers) => route.fetch(new Request(`http://10.0.0.2:8080${PAGE_PATH}?path=${encodeURIComponent(path)}`, {headers}))
 const post = (route, body) => route.fetch(new Request(`http://10.0.0.2:8080${API_PATH}`, { method: 'POST', body: JSON.stringify(body) }))
 
 test('plugin identifies itself and only asks DSH for the connection service', () => {
@@ -73,6 +73,47 @@ test('serves pages from this runtime, marked with this runtime identity', async 
   const css = await get(route, '/shell/app.css')
   assert.equal(css.status, 200)
   assert.match(css.headers.get('content-type'), /text\/css/)
+})
+
+test('legacy Messenger entry resolves to the native Chat inbox', async () => {
+  const { pages, data } = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, { pagesDir: pages, dataDir: data })
+  const route = ctx.routes.get(PAGE_PATH)
+  for (const path of ['/messenger', '/messenger/', '/messenger/index.html']) {
+    const response = await get(route, path)
+    assert.equal(response.status, 302, path)
+    assert.equal(response.headers.get('location'), '/chat')
+    assert.equal(await response.text(), '')
+  }
+  assert.equal((await get(route, '/messenger/app.mjs')).status, 404)
+})
+
+test('authenticated package assets revalidate against their actual bytes; personalised pages do not', async () => {
+  const {pages, data} = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, {pagesDir: pages, dataDir: data})
+  const route = ctx.routes.get(PAGE_PATH)
+  const path = '/shell/app.css'
+  const first = await get(route, path)
+  assert.equal(first.status, 200)
+  assert.equal(first.headers.get('cache-control'), 'private, no-cache')
+  assert.equal(await first.text(), 'body{}')
+  const etag = first.headers.get('etag')
+  assert.match(etag, /^"sha256-[0-9a-f]{64}"$/)
+  const unchanged = await get(route, path, {'If-None-Match': '"older", W/' + etag})
+  assert.equal(unchanged.status, 304)
+  assert.equal(unchanged.headers.get('etag'), etag)
+  assert.equal(await unchanged.text(), '')
+  writeFileSync(join(pages, path.slice(1)), 'body{margin:0}')
+  const changed = await get(route, path, {'If-None-Match': etag})
+  assert.equal(changed.status, 200)
+  assert.notEqual(changed.headers.get('etag'), etag)
+  assert.equal(await changed.text(), 'body{margin:0}')
+  const page = await get(route, '/chat', {'If-None-Match': '*'})
+  assert.equal(page.status, 200)
+  assert.equal(page.headers.get('cache-control'), 'no-store')
+  assert.equal(page.headers.has('etag'), false)
 })
 
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {

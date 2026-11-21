@@ -4,6 +4,7 @@
 // a browser path such as /chat/ or /shell/app.css onto this route for the
 // signed-in owner's runtime only.
 import { readFile, realpath, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { extname, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -27,6 +28,7 @@ const TYPES = {
 }
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_PATH = 256
+const REVALIDATE_ASSETS = new Set(['.css', '.mjs', '.js'])
 
 // Resolve a browser page path to a file inside pagesDir, or null. Only plain
 // segments are accepted: no dot segments, no encoded separators, no hidden files.
@@ -61,14 +63,21 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
   let root, localeModule, chatMessages
   return async (request) => {
     const url = new URL(request.url)
-    const parts = resolvePagePath(url.searchParams.get('path'))
+    const path = url.searchParams.get('path')
+    const parts = resolvePagePath(path)
     if (!parts) return notFound(identity)
+    if (path === '/messenger' || path === '/messenger/' || path === '/messenger/index.html') {
+      return new Response(null, { status: 302, headers: {
+        location: '/chat', 'cache-control': 'no-store', [SERVED_BY_HEADER]: `ds-bot; instance=${identity.instanceId}`,
+      } })
+    }
     try {
       const pageRoot = root ??= await realpath(pagesDir)
       const file = await realpath(join(pageRoot, ...parts))
       if (!file.startsWith(pageRoot + sep)) return notFound(identity)
       if (!(await stat(file)).isFile()) return notFound(identity)
-      const type = TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream'
+      const extension = extname(file).toLowerCase()
+      const type = TYPES[extension] ?? 'application/octet-stream'
       const headers = {
         'content-type': type,
         'cache-control': 'no-store',
@@ -102,7 +111,20 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
         }
         return new Response(markHtml(html, identity), { status: 200, headers })
       }
-      return new Response(await readFile(file), { status: 200, headers })
+      const data = await readFile(file)
+      if (REVALIDATE_ASSETS.has(extension)) {
+        const etag = `"sha256-${createHash('sha256').update(data).digest('hex')}"`
+        headers.etag = etag
+        // Package assets contain no account data. The browser still checks
+        // this authenticated runtime for access and release bytes on reuse.
+        headers['cache-control'] = 'private, no-cache'
+        const validators = request.headers.get('if-none-match')?.split(',') ?? []
+        if (validators.some(value => {
+          const tag = value.trim()
+          return tag === '*' || tag === etag || tag === 'W/' + etag
+        })) return new Response(null, { status: 304, headers })
+      }
+      return new Response(data, { status: 200, headers })
     } catch {
       root = undefined
       return notFound(identity)
