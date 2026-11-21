@@ -399,6 +399,36 @@
         </figure>
       </form>
     </dialog>
+    <dialog id="music-create-dialog" class="chat-save-dialog" aria-labelledby="music-create-title">
+      <form id="music-create-form">
+        <div class="media-create-head">
+          <h2 id="music-create-title">生成音乐</h2>
+          <button type="button" id="music-create-close">关闭</button>
+        </div>
+        <label>音乐描述<textarea name="prompt" maxlength="2000" rows="3" required placeholder="描述想要的曲风、乐器或氛围"></textarea></label>
+        <div class="media-create-controls">
+          <label>时长
+            <select name="duration">
+              <option value="15">15 秒</option>
+              <option value="30" selected>30 秒</option>
+              <option value="60">60 秒</option>
+            </select>
+          </label>
+          <label class="media-create-toggle"><input type="checkbox" name="instrumental" checked>纯音乐</label>
+          <button id="music-create-submit" type="submit" disabled>生成</button>
+        </div>
+        <p id="music-create-status" class="note" role="status"></p>
+        <a id="music-create-settings" href="/settings/model-api#music-api" hidden>配置音乐模型</a>
+        <figure id="music-create-result" hidden>
+          <audio id="music-create-preview" aria-label="生成的音乐" controls preload="metadata"></audio>
+          <figcaption class="media-create-links">
+            <a id="music-create-space">在资料空间打开</a>
+            <a id="music-create-download">下载音乐</a>
+            <button type="button" id="music-create-send" hidden>发送到会话</button>
+          </figcaption>
+        </figure>
+      </form>
+    </dialog>
     <dialog id="group-memory-dialog" class="chat-save-dialog" aria-labelledby="group-memory-title">
       <div class="group-memory-head">
         <h2 id="group-memory-title">群记忆</h2>
@@ -522,7 +552,7 @@
                   <a href="/space?new=spreadsheet" data-create-artifact="spreadsheet" data-tone="table" title="在当前工作区新建电子表格"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 9.5h16 M4 15h16 M10 4v16"/></svg><span>表格</span></a>
                   <button type="button" id="composer-image-create" disabled data-tone="image" title="根据描述生成图片" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 16l5-5 4 4 2-2 5 5 M15 8.5h.01"/></svg><span>图片</span></button>
                   <button type="button" id="composer-video-create" disabled data-tone="camera" title="根据描述生成视频" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span></button>
-                  <button type="button" disabled data-tone="music" title="未接通：还没有在输入区直接生成音乐的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" id="composer-music-create" disabled data-tone="music" title="根据描述生成音乐" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span></button>
                   <button type="button" disabled data-tone="cube" title="未接通：还没有在输入区直接生成 3D 的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span><span class="plus-tag">未接通</span></button>
                 </div>
               </section>

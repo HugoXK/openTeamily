@@ -402,6 +402,18 @@
         </div>
       </fieldset>
     </form>
+    <form id="music-api-form" method="post" action="/v1/model-api/music">
+      <fieldset id="music-api" class="settings-card" disabled>
+        <legend>音乐模型</legend>
+        <p class="note">使用 ElevenLabs Music 生成纯音乐或带人声的歌曲。此密钥仅用于当前账号的音乐任务。</p>
+        <label>音乐 API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password"></label>
+        <p id="music-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-music-api">保存音乐配置</button>
+          <button type="button" id="clear-music-api" hidden>移除音乐密钥</button>
+        </div>
+      </fieldset>
+    </form>
     </div>
     <div data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">

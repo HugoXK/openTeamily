@@ -14,14 +14,13 @@ import { sniffMime } from './render.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
 
-function generatedMedia(ctx, input, call, type, extension, limit) {
+function generatedMedia(ctx, input, call, type, mime, extension, limit) {
   if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
   const {workspace_id: workspace, job_id: id, data, title} = input ?? {}
   if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400, 'invalid', 'Invalid generation')
   const key = type + '-' + id
   const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
   if (saved || data === undefined) return saved
-  const mime = type + '/' + extension
   if (!Buffer.isBuffer(data) || !data.length || data.length > limit || sniffMime(data) !== mime) {
     refuse(400, 'invalid', 'Invalid generated media')
   }
@@ -49,10 +48,13 @@ export default defineFeature({
       return { artifact: result.body.artifact }
     },
     async generatedImage(input, call) {
-      return generatedMedia(ctx, input, call, 'image', 'png', MAX_MEDIA_BYTES)
+      return generatedMedia(ctx, input, call, 'image', 'image/png', 'png', MAX_MEDIA_BYTES)
     },
     async generatedVideo(input, call) {
-      return generatedMedia(ctx, input, call, 'video', 'mp4', MAX_GENERATED_VIDEO_BYTES)
+      return generatedMedia(ctx, input, call, 'video', 'video/mp4', 'mp4', MAX_GENERATED_VIDEO_BYTES)
+    },
+    async generatedMusic(input, call) {
+      return generatedMedia(ctx, input, call, 'music', 'audio/mpeg', 'mp3', MAX_MEDIA_BYTES)
     },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')

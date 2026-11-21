@@ -114,6 +114,7 @@ const HASH_VIEWS = {
   'model-api': 'model-api',
   'image-api': 'model-api',
   'video-api': 'model-api',
+  'music-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -432,6 +433,80 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function mountMediaApi(document, request, type, noun) {
+  const id = type + '-api';
+  const form = document.getElementById(id + '-form');
+  if (!form) return null;
+  const fields = document.getElementById(id);
+  const status = document.getElementById(id + '-status');
+  const remove = document.getElementById('clear-' + id);
+  const keyInput = form.elements.api_key;
+  const endpoint = '/v1/model-api/' + type;
+  const responseKey = type + '_api';
+  let config = null;
+
+  function fill(view, message) {
+    config.revision = view.revision;
+    remove.hidden = !view.has_api_key;
+    status.textContent = message || (view.has_api_key ? noun + '密钥已保存。' : '尚未配置' + noun + '密钥。');
+    fields.disabled = false;
+  }
+
+  async function load(message) {
+    const active = config;
+    if (!active || active.busy) return;
+    active.busy = fields.disabled = true;
+    status.textContent = '正在读取' + noun + '配置…';
+    const response = await request('GET', endpoint).catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = false;
+    if (response.status === 200 && response.body[responseKey]) fill(response.body[responseKey], message);
+    else status.textContent = '无法读取' + noun + '配置，请刷新后重试。';
+  }
+
+  async function save(api_key) {
+    const active = config;
+    if (!active || active.revision === null || active.busy) return;
+    active.busy = fields.disabled = true;
+    keyInput.value = '';
+    status.textContent = '正在保存…';
+    const response = await request('POST', endpoint, {revision: active.revision, api_key})
+      .catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = fields.disabled = false;
+    if (response.status === 200 && response.body[responseKey]) {
+      fill(response.body[responseKey], api_key === null ? '已移除' + noun + '密钥。' : noun + '配置已保存。');
+    } else if (response.status === 409) {
+      await load(noun + '配置已在其他窗口更新，请重新输入密钥。');
+    } else {
+      status.textContent = messageFor(response.body.error, '无法保存' + noun + '配置，请重试。');
+    }
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const secret = keyInput.value.trim();
+    if (secret) void save(secret);
+    else status.textContent = '请输入' + noun + ' API 密钥。';
+  });
+  remove.addEventListener('click', () => void save(null));
+
+  return {
+    setAccount(account) {
+      if (config?.account === account) return;
+      config = account === null ? null : {account, revision: null, busy: false};
+      keyInput.value = '';
+      fields.disabled = true;
+      remove.hidden = true;
+      status.textContent = '';
+    },
+    render(hash) {
+      if (config?.revision === null) void load();
+      if (hash === '#' + id) fields.scrollIntoView?.({block: 'start'});
+    },
+  };
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -443,11 +518,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
   const removeImageKey = document.getElementById('clear-image-api');
-  const videoForm = document.getElementById('video-api-form');
-  const videoFields = document.getElementById('video-api');
-  const videoStatus = document.getElementById('video-api-status');
-  const removeVideoKey = document.getElementById('clear-video-api');
-  let videoConfig = null;
+  const mediaApis = [
+    mountMediaApi(document, request, 'video', '视频'),
+    mountMediaApi(document, request, 'music', '音乐'),
+  ].filter(Boolean);
   let imageAccount = null;
   let imageRevision = null;
   let imageLoading = false;
@@ -513,8 +587,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (current) syncAppearanceExtras(document, current);
     if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
     if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
-    if (view === 'model-api' && current && videoConfig?.revision === null) void loadVideoApi();
-    if (view === 'model-api' && location.hash === '#video-api') videoFields?.scrollIntoView?.({block:'start'});
+    if (view === 'model-api') for (const api of mediaApis) api.render(location.hash);
   }
 
   function refreshAppearance() {
@@ -561,7 +634,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
       switchImageAccount(null);
-      switchVideoAccount(null);
+      for (const api of mediaApis) api.setAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -574,7 +647,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const account = session.body.user.id ?? session.body.user.username;
     switchImageAccount(account);
-    switchVideoAccount(account);
+    for (const api of mediaApis) api.setAccount(account);
     const settings = await request('GET', '/v1/settings');
     if (settings.status !== 200) {
       show('error', messageFor(settings.body.error, '无法读取设置。'));
@@ -841,61 +914,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
-  function switchVideoAccount(account) {
-    if (!videoForm || videoConfig?.account === account) return;
-    videoConfig = account === null ? null : {account, revision: null, busy: false};
-    videoForm.elements.api_key.value = '';
-    videoFields.disabled = true;
-    removeVideoKey.hidden = true;
-    videoStatus.textContent = '';
-  }
-
-  function fillVideoApi(config, message) {
-    videoConfig.revision = config.revision;
-    removeVideoKey.hidden = !config.has_api_key;
-    videoStatus.textContent = message || (config.has_api_key ? '视频密钥已保存。' : '尚未配置视频密钥。');
-    videoFields.disabled = false;
-  }
-
-  async function loadVideoApi(message) {
-    const config = videoConfig;
-    if (!config || config.busy) return;
-    config.busy = videoFields.disabled = true;
-    videoStatus.textContent = '正在读取视频配置…';
-    const response = await request('GET', '/v1/model-api/video').catch(() => ({status: 0, body: {}}));
-    if (config !== videoConfig) return;
-    config.busy = false;
-    if (response.status === 200 && response.body.video_api) fillVideoApi(response.body.video_api, message);
-    else videoStatus.textContent = '无法读取视频配置，请刷新后重试。';
-  }
-
-  async function saveVideoApi(api_key) {
-    const config = videoConfig;
-    if (!config || config.revision === null || config.busy) return;
-    config.busy = videoFields.disabled = true;
-    videoForm.elements.api_key.value = '';
-    videoStatus.textContent = '正在保存…';
-    const response = await request('POST', '/v1/model-api/video', {revision: config.revision, api_key})
-      .catch(() => ({status: 0, body: {}}));
-    if (config !== videoConfig) return;
-    config.busy = videoFields.disabled = false;
-    if (response.status === 200 && response.body.video_api) {
-      fillVideoApi(response.body.video_api, api_key === null ? '已移除视频密钥。' : '视频配置已保存。');
-    } else if (response.status === 409) {
-      await loadVideoApi('视频配置已在其他窗口更新，请重新输入密钥。');
-    } else {
-      videoStatus.textContent = messageFor(response.body.error, '无法保存视频配置，请重试。');
-    }
-  }
-
-  videoForm?.addEventListener('submit', event => {
-    event.preventDefault();
-    const secret = videoForm.elements.api_key.value.trim();
-    if (secret) void saveVideoApi(secret);
-    else videoStatus.textContent = '请输入视频 API 密钥。';
-  });
-  removeVideoKey?.addEventListener('click', () => void saveVideoApi(null));
-
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -930,6 +948,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     revision = 0;
     switchImageAccount(null);
+    for (const api of mediaApis) api.setAccount(null);
     await load();
   });
 

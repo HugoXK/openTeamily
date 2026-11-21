@@ -1528,7 +1528,9 @@ test('composer + creation grid deep-links real editors and labels the rest 未�
   for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
   assert.match(html, /id="composer-video-create"[^>]+aria-haspopup="dialog"/);
   assert.match(html, /<video id="video-create-preview"[^>]+controls/);
-  assert.ok((html.match(/未接通/g) || []).length >= 4);
+  assert.match(html, /id="composer-music-create"[^>]+aria-haspopup="dialog"/);
+  assert.match(html, /<audio id="music-create-preview"[^>]+controls/);
+  assert.match(html, /data-tone="cube" title="未接通/);
 });
 
 // Media shared in a chat is uploaded to the workspace library before the
