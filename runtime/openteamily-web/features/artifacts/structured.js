@@ -1,5 +1,6 @@
 // Whiteboard, slides and dashboard content (legacy artifacts.py
 // normalize_*/decode_*/*_json), validated inside the user's DS-Bot.
+import { decodeWorkbook } from './workbook.js'
 import { stableJson } from '../../featurekit/http.js'
 import {
   BOARD_JSON_MAX, BOARD_MAX, BOARD_MIN, COLOR, DASHBOARD_BARS_MAX, DASHBOARD_CELL_MAX, DASHBOARD_MAX_WIDGETS, DASHBOARD_SCHEMA,
@@ -200,6 +201,8 @@ export function decodeStructured(raw) {
   if (deck) return ['slides', deck]
   const dashboard = decodeDashboard(raw)
   if (dashboard) return ['dashboard', dashboard]
+  const workbook = decodeWorkbook(raw)
+  if (workbook) return ['spreadsheet',workbook]
   return [null, null]
 }
 

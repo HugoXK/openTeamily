@@ -5,6 +5,7 @@
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
+import {workbookText} from '../../features/artifacts/workbook.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -14,7 +15,7 @@ import { replyPrompt, selectGroupMemories } from './agent-replies.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const WORK_LABELS = {
-  document: '文档', website: '网页', whiteboard: '白板', media: '媒体',
+  document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
   image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板',
 }
 
@@ -1075,9 +1076,10 @@ function discoverRoutes(host) {
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
           const prior = await workListing(bs, match[2])
           const kind = ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const snapshot = artifact.kind === 'spreadsheet' && artifact.spreadsheet ? workbookText(artifact.spreadsheet) : String(artifact.body || '')
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary: String(artifact.body || '').slice(0, 300), work_kind: kind, snapshot: String(artifact.body || '').slice(0, 200000),
+            summary:snapshot.slice(0,300),work_kind:kind,snapshot:snapshot.slice(0,200000),
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
         })

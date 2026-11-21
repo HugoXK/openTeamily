@@ -4690,6 +4690,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncPlusState() {
     syncMemoryRecall();
     imageCreator.sync();
+    const spreadsheet = document.getElementById('composer-spreadsheet');
+    if (spreadsheet && workspaceId()) spreadsheet.href = '/space?new=spreadsheet#'+new URLSearchParams({workspace:workspaceId()});
     const social = currentSource === 'social' && Boolean(currentConversation);
     const agent = currentSource === 'agent' && Boolean(currentAgent);
     const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);

@@ -67,7 +67,7 @@ export default defineFeature({
       if (!row) refuse(404, 'not_found', '该版本已不可发送，请刷新作品列表。')
       let kind = fromVersion ? row.kind : publicKind(row)
       if (fromVersion && kind === 'document') kind = decodeStructured(row.body)[0] || kind
-      const officeFormat = {document:'docx', slides:'pptx', dashboard:'xlsx'}[kind]
+      const officeFormat = {document:'docx', slides:'pptx', dashboard:'xlsx', spreadsheet:'xlsx'}[kind]
       let file
       if (officeFormat) {
         const result = exportOffice(row, officeFormat, fromVersion)

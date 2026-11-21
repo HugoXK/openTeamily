@@ -10,6 +10,7 @@ export function artifactTargetFromSearch(search) {
 }
 
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
+import { mountSpreadsheet } from './spreadsheet.mjs';
 import {
   renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
@@ -18,7 +19,7 @@ import {
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
-const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', whiteboard: 'new-board'};
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board'};
 export function newKindFromSearch(search) {
   const value = new URLSearchParams(search || '').get('new') || '';
   return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
@@ -52,6 +53,7 @@ export function artifactMatchesType(item, type) {
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
   if (type === '白板') return item.kind === 'whiteboard';
+  if (type === '电子表格') return item.kind === 'spreadsheet';
   if (type === '幻灯片') return item.kind === 'slides';
   if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
   return false;
@@ -247,7 +249,7 @@ export function suggestedDiscoverSlug(title) {
 }
 
 export function kindBadge(kind) {
-  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
+  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', spreadsheet: 'XLSX', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
 }
 
 export function artifactTime(seconds, now = Date.now()) {
@@ -267,7 +269,7 @@ export function applyArtifactLayout(list, layout) {
 }
 
 export function canSendArtifactToChat(item) {
-  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard'].includes(item.kind));
+  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard','spreadsheet'].includes(item.kind));
 }
 
 export function conversationLabel(item) {
@@ -359,6 +361,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (kind === 'whiteboard') return '白板';
     if (kind === 'slides') return '幻灯片';
     if (kind === 'dashboard') return '看板';
+    if (kind === 'spreadsheet') return '电子表格';
     return '文档';
   }
 
@@ -584,6 +587,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const richDocument = bindDocumentEditor(document, form);
+  const spreadsheet = mountSpreadsheet(document, {
+    async onDraft(prompt) {
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
+      if (result.status !== 200 || !result.body.spreadsheet) {
+        throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
+      }
+      return result.body;
+    },
+    onTitle(title) {
+      if (!form.elements.title.value.trim()) form.elements.title.value = title;
+    },
+  });
+  const sendSpreadsheet = document.getElementById('send-saved-spreadsheet');
+  const downloadSpreadsheet = document.getElementById('download-spreadsheet');
 
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
@@ -591,7 +608,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const kind = (item && item.kind) || draftKind;
     richDocument.load(form.elements.body.value, kind === 'document');
     const meta = document.getElementById('editor-meta');
-    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', document: '新文档'};
+    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', spreadsheet: '新电子表格', document: '新文档'};
     if (item && item.id) {
       meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
@@ -602,6 +619,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
     document.getElementById('slides-editor').hidden = kind !== 'slides';
     document.getElementById('dashboard-editor').hidden = kind !== 'dashboard';
+    const spreadsheetEditor = document.getElementById('spreadsheet-editor');
+    if (spreadsheetEditor) spreadsheetEditor.hidden = kind !== 'spreadsheet';
+    for (const button of [sendSpreadsheet, downloadSpreadsheet]) {
+      if (button) button.hidden = kind !== 'spreadsheet' || !item?.id;
+    }
+    if (kind === 'spreadsheet') spreadsheet.load(item?.spreadsheet, item?.id, !item?.id);
     if (kind === 'slides') {
       slidesState = item && item.slides ? item.slides : {schema: 'openteamily.slides.v1', slides: []};
       if (!Array.isArray(slidesState.slides)) slidesState = {schema: 'openteamily.slides.v1', slides: []};
@@ -936,7 +959,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     sendDialog.hidden = false;
     sendConfirm.disabled = true;
     const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
-      slides:'PowerPoint 文件', dashboard:'Excel 文件', media:'媒体文件'};
+      slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
     sendLead.textContent = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。请选择接收会话。`;
     sendStatus();
     sendList.replaceChildren();
@@ -1428,7 +1451,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     whoami.textContent = currentUser.username;
     const requested = artifactTargetFromSearch(document.defaultView?.location?.search);
     const fragment = new URLSearchParams((document.defaultView?.location?.hash || '').slice(1));
-    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' ? fragment.get('workspace') : '');
+    const newKind = newKindFromSearch(document.defaultView?.location?.search);
+    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
     let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
@@ -1463,11 +1487,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderCatalog();
       return;
     }
+    if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
+      return;
+    }
     if(requested){
       if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
         await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
       }
       workspaceSelect.value=requested.workspace;
+    }
+    if (newKind && !requested) {
+      const view = document.defaultView;
+      const params = new URLSearchParams(view.location.search);
+      params.delete('new');
+      const rest = params.toString();
+      document.getElementById(newKindButtonId(newKind))?.click();
+      view.history?.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
+      return;
     }
     await loadList();
     if(requested)await openEditor({id:requested.artifact});
@@ -1525,6 +1563,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     dashboardState = {schema: 'openteamily.dashboard.v1', widgets: [widgetDefault('metric')]};
     closeNewMenu();
     openEditor({kind: 'dashboard'});
+  });
+
+  document.getElementById('new-spreadsheet')?.addEventListener('click', () => {
+    draftKind = 'spreadsheet';
+    closeNewMenu();
+    openEditor({kind: 'spreadsheet'});
+  });
+
+  sendSpreadsheet?.addEventListener('click', () => openSendDialog(current));
+  downloadSpreadsheet?.addEventListener('click', () => {
+    if (current?.kind === 'spreadsheet' && current.id) {
+      globalThis.location.assign(exportHref(current.revision));
+    }
+  });
+  document.getElementById('sheet-back')?.addEventListener('click', () => {
+    document.getElementById('cancel-editor').click();
   });
 
   document.getElementById('add-widget').addEventListener('click', () => {
@@ -1714,7 +1768,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     event.preventDefault();
     if (savingArtifact) return;
     savingArtifact = true;
-    const saveButtons = ['save-artifact', 'document-save'].map(id => document.getElementById(id)).filter(Boolean);
+    const saveButtons = ['save-artifact', 'document-save', 'sheet-save'].map(id => document.getElementById(id)).filter(Boolean);
     for (const button of saveButtons) button.disabled = true;
     try {
     if (!workspaceId()) {
@@ -1751,6 +1805,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
                                {title, kind: 'slides', slides},
                                {'Idempotency-Key': idempotencyKey()});
+      }
+    } else if (kind === 'spreadsheet') {
+      form.inert = true;
+      const workbook = spreadsheet.value();
+      if (current?.id) {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                               {revision: current.revision, changes: {title, spreadsheet: workbook}});
+      } else {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
+                               {title, kind, spreadsheet: workbook}, {'Idempotency-Key': idempotencyKey()});
       }
     } else if (kind === 'dashboard') {
       const value = dashboardValue();
@@ -1810,6 +1874,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
     fillEditor(current);
+    form.inert = false;
     document.getElementById('remove-artifact').hidden = false;
     document.getElementById('share-panel').hidden = false;
     const discoverPanel = document.getElementById('discover-panel');
@@ -1818,7 +1883,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadShares();
     await loadDiscover();
     } catch { show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。'); }
-    finally { savingArtifact = false; for (const button of saveButtons) button.disabled = false; }
+    finally {
+      form.inert = false;
+      savingArtifact = false;
+      for (const button of saveButtons) button.disabled = false;
+    }
   });
 
   function askDeleteConfirmation() {
@@ -2344,7 +2413,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const format=document.getElementById('export-format')?.value||'original';
-    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&current.kind!=='dashboard')||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
+    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&!['dashboard','spreadsheet'].includes(current.kind))||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
       show('error','此格式不支持当前作品类型；请按格式说明选择，或使用原格式。');return;
     }
     globalThis.location.assign(exportHref());
@@ -2371,18 +2440,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       void loadList();
     });
   }
-  return load().then(() => {
-    const kind = newKindFromSearch(view && view.location && view.location.search);
-    if (!kind || mainPanel.hidden || !workspaceId()) return;
-    const button = document.getElementById(newKindButtonId(kind));
-    if (button) button.click();
-    if (view && view.history && view.location) {
-      const params = new URLSearchParams(view.location.search);
-      params.delete('new');
-      const rest = params.toString();
-      view.history.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
-    }
-  });
+  return load();
+
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {
