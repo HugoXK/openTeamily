@@ -117,8 +117,22 @@ export function agentsV1({ endpoints, log }) {
         return {body:await call('setMemoryRecall', {workspace_id:workspaceId,id,conversation_id:conversationId,memory_recall:body.memory_recall,memory_scope:body.memory_scope})}
       }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
-      const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
-      return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: chatAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
+      for (const name of req.query.keys()) {
+        if (!['limit', 'before', 'around'].includes(name) || req.query.getAll(name).length !== 1) {
+          throw new FeatureError(400, 'invalid', 'Invalid history parameters')
+        }
+      }
+      let history
+      if (req.query.size) {
+        const limit = req.query.get('limit') ?? '50'
+        if (!/^(?:[1-9]\d?|100)$/.test(limit)) throw new FeatureError(400, 'invalid', 'Invalid history limit')
+        history = {limit: Number(limit), before: req.query.get('before') ?? undefined, around: req.query.get('around') ?? undefined}
+      }
+      const {agent, conversation, items, cursor, has_newer} = await call('openConversation', {
+        workspace_id: workspaceId, id, conversation_id: conversationId, history,
+      })
+      return {body: {conversation: publicConversation(conversation, workspaceId, id), agent: chatAgent(agent),
+        items: items.map(row => publicMessage(row, workspaceId, id)), ...(history ? {cursor, has_newer} : {})}}
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations$`), handle: wrap(async (req, workspaceId, id) => {
       if (req.method === 'GET') {

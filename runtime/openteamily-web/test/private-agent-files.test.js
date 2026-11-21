@@ -56,6 +56,89 @@ const createRuntime = () => {
   }
 }
 
+test('private history pages and anchors keep native message order and conversation scope', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const {endpoints} = createAgents({db,host:{runtime:async () => runtime}})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'History fixture',idempotency_key:'history-agent-1234'})
+  const {conversation} = await endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation:other} = await endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
+  const path = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(endpoints)
+  const history = async query => {
+    const response = await request(path,{},query)
+    assert.equal(response.status,200)
+    return response.json()
+  }
+  runtime.rt.eventsBackwards = () => assert.fail('An already mapped history must stay a fast read')
+  const insert = db.prepare('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)')
+  const ids = Array.from({length:128}, (_, i) => {
+    const id = (1000-i).toString(16).padStart(32,'0')
+    const role = i % 2 ? 'assistant' : 'user'
+    const created = i < 15 ? 1 : i < 125 ? 2 : 3
+    const meta = i === 60 ? {files:[{title:'reference.txt',mime:'text/plain',bytes:4,ref:{id:'private-ref'}}]} : {}
+    insert.run(id,conversation.id,role,String(i),'sent',created,JSON.stringify(meta))
+    return id
+  })
+  const foreign = 'b'.repeat(32)
+  insert.run(foreign,other.id,'user','foreign content','sent',2,'{}')
+  const messageIds = items => items.map(item => item.id)
+
+  const recent = await history('limit=50')
+  assert.equal(recent.conversation.native_session_id,conversation.native_session_id)
+  assert.deepEqual(messageIds(recent.items),ids.slice(78))
+  assert.equal(recent.cursor,ids[78])
+  assert.equal(recent.has_newer,false)
+  const older = await history(`limit=50&before=${recent.cursor}`)
+  assert.deepEqual(messageIds(older.items),ids.slice(28,78))
+  assert.equal(older.cursor,ids[28])
+  assert.equal(older.has_newer,true)
+  const first = await history(`before=${older.cursor}`)
+  assert.deepEqual(messageIds(first.items),ids.slice(0,28))
+  assert.equal(first.cursor,null)
+
+  const anchored = await history(`limit=50&around=${ids[60]}`)
+  assert.deepEqual(messageIds(anchored.items),ids.slice(36,86))
+  assert.equal(anchored.cursor,ids[36])
+  assert.equal(anchored.has_newer,true)
+  assert.deepEqual(anchored.items[24].attachments,[{
+    title:'reference.txt',mime:'text/plain',bytes:4,path:`${path}/messages/${ids[60]}/files/0`,
+  }])
+  assert.equal(anchored.items[24].position,undefined)
+  const nearStart = await history(`limit=50&around=${ids[2]}`)
+  assert.deepEqual(messageIds(nearStart.items),ids.slice(0,50))
+  assert.equal(nearStart.cursor,null)
+  assert.equal(nearStart.has_newer,true)
+  const nearEnd = await history(`limit=50&around=${ids.at(-2)}`)
+  assert.deepEqual(messageIds(nearEnd.items),ids.slice(-50))
+  assert.equal(nearEnd.cursor,ids[78])
+  assert.equal(nearEnd.has_newer,false)
+  const single = await history(`limit=1&around=${ids[60]}`)
+  assert.deepEqual(messageIds(single.items),[ids[60]])
+  assert.equal(single.cursor,ids[60])
+  assert.equal(single.has_newer,true)
+  const empty = await history(`limit=50&before=${ids[0]}`)
+  assert.deepEqual(empty.items,[])
+  assert.equal(empty.cursor,null)
+  assert.equal(empty.has_newer,true)
+
+  for (const query of ['limit=0','limit=101','limit=50&limit=50','around=','cursor=x',`before=${ids[1]}&around=${ids[1]}`]) {
+    assert.equal((await request(path,{},query)).status,400,query)
+  }
+  const missing = await request(path,{},`limit=50&around=${'c'.repeat(32)}`)
+  const foreignAnchor = await request(path,{},`limit=50&around=${foreign}`)
+  assert.equal(missing.status,404)
+  assert.equal(foreignAnchor.status,404)
+  assert.deepEqual(await missing.json(),await foreignAnchor.json())
+  assert.equal((await request(path,{},`limit=50&before=${foreign}`)).status,404)
+  assert.equal((await request(path.replace(workspace,'b'.repeat(32)),{},`limit=50&around=${ids[60]}`)).status,404)
+  const unpaged = await history('')
+  assert.deepEqual(messageIds(unpaged.items),ids)
+  assert.equal(Object.hasOwn(unpaged,'cursor'),false)
+  assert.equal(Object.hasOwn(unpaged,'has_newer'),false)
+})
+
 test('private chat applies the selected reply language to text and browser attachment uploads', async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
