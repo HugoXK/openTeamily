@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title data-ui-text="chat.page.title">聊天 · OpenTeamily</title>
-  <script type="module" src="/chat/startup.mjs" async></script>
+  <script type="module" src="/chat/startup.mjs" async fetchpriority="high"></script>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/chat/app.css">
   <link rel="stylesheet" href="/look/app.css">
@@ -616,7 +616,7 @@
       <textarea id="public-draft-recovery-text" rows="3" readonly aria-label="首页草稿" data-ui-label="chat.draft.homepage"></textarea>
       <button type="button" id="public-draft-recovery-clear" data-ui-text="chat.draft.clear_homepage">清除首页草稿</button>
     </details>
-    <form id="chat-form" method="post" action="/v1/workspaces">
+    <form id="chat-form" method="post" action="/v1/workspaces" novalidate>
       <div class="composer">
         <div id="chat-reply-preview" class="composer-reply" hidden>
           <div class="composer-reply-copy" aria-live="polite">

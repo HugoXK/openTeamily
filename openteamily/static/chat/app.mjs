@@ -902,6 +902,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let chatSettings = null;
   let attachmentSender;
   const pendingSends = new Map();
+  const privateReplyRetries = new Map();
   const agentReplyViews = new Map();
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
@@ -1027,8 +1028,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function sendClosed() {
-    return Boolean(sessionTransition?.pending) || currentSource === 'social'
-      && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false);
+    return Boolean(sessionTransition?.pending) || (currentSource === 'social'
+      ? currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false
+      : Boolean(currentAgent?.archived || currentAgent?.native_deleted || currentConversation?.archived || currentConversation?.open === false));
   }
 
   function setAgentStarterStatus(message) {
@@ -1106,7 +1108,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('message-list');
     const scope = sendScope();
     const queue = pendingSends.get(scope);
-    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
+    const closed = sendClosed();
+    document.getElementById('chat-body').disabled = closed;
+    document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
     syncMemoryRecall(scope);
     const replying = queue?.replying;
     if (replying && !replying.replyView) {
@@ -1210,10 +1214,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       for (const job of queue.jobs) removeSendJob(queue,job);
     }
     pendingSends.clear();
+    privateReplyRetries.clear();
   }
 
   function pendingMessageKeys() {
     return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
+  }
+
+  function uncertainPrivateWrite(result) {
+    const status = result?.status || 0;
+    return !status || status === 408 || status >= 500 ||
+      ([200, 201, 202].includes(status) && (!result?.body?.message?.id || !result?.body?.reply?.id));
+  }
+
+  function privateReplyPair(body, target, key) {
+    const {message, reply} = body || {};
+    const scoped = item => item?.id && item.client_key === key &&
+      (!item.workspace_id || item.workspace_id === target.wid) && (!item.agent_id || item.agent_id === target.agentId) &&
+      (!item.conversation_id || item.conversation_id === target.conversationId);
+    return message?.role === 'user' && reply?.role === 'assistant' && scoped(message) && scoped(reply) && message.id !== reply.id
+      ? {message, reply} : null;
+  }
+
+  async function privateSendReceipt(target, key, current, accept = () => true) {
+    const query = new URLSearchParams({key, receipt: '1'});
+    const path = `${target.base}/${target.conversationId}/reply-progress?${query}`;
+    for (const delay of [0, 350, 800]) {
+      if (delay) await new Promise(resolve => globalThis.setTimeout(resolve, delay));
+      if (!current()) return null;
+      const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(3000)).catch(() => null);
+      if (!current()) return null;
+      const pair = result?.status === 200 && privateReplyPair(result.body, target, key);
+      if (pair && accept(pair.reply)) return pair;
+      if (result && ![200, 404].includes(result.status) && !uncertainPrivateWrite(result)) return null;
+    }
+    return null;
+  }
+
+  function confirmPostedSend(queue, job) {
+    job.receipt ||= privateSendReceipt(queue, job.key, () => queue.owner === currentUser?.id &&
+      pendingSends.get(queue.scope) === queue && queue.jobs.includes(job)).finally(() => { job.receipt = null; });
+    return job.receipt;
   }
 
   async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
@@ -1678,6 +1719,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
   }
 
+  function addPrivateReplyRetry(bubble, item) {
+    if (!servedByDsbot || item.status !== 'failed' || item.can_retry !== true ||
+        !item.client_key || !Number.isSafeInteger(item.attempt) || item.attempt < 1 ||
+        !currentConversation?.id || !currentAgent?.id || !/^[a-f0-9]{32}$/.test(item.id || '')) return;
+    const scope = sendScope(), key = JSON.stringify([scope, item.id]);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.privateReplyRetry = item.id;
+    const actions = document.createElement('div');
+    actions.className = 'send-actions';
+    actions.append(button);
+    bubble.append(actions);
+    const sync = () => {
+      const operation = privateReplyRetries.get(key);
+      button.disabled = sendClosed() || Boolean(operation?.pending);
+      button.textContent = operation?.pending ? uiLabel('正在重试…', 'Retrying…')
+        : operation ? uiLabel('确认并重试回复', 'Check and retry reply') : uiLabel('重试回复', 'Retry reply');
+    };
+    sync();
+    button.addEventListener('click', async () => {
+      if (button.disabled || scope !== sendScope() || sendClosed() || privateReplyRetries.get(key)?.pending) return;
+      const opened = socialOpen;
+      const target = {owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent.id,
+        conversationId: currentConversation.id, base: `${agentBase()}/conversations`};
+      let operation = privateReplyRetries.get(key);
+      if (!operation || operation.attempt !== item.attempt) operation = {attempt: item.attempt, key: idempotencyKey('reply-')};
+      operation.pending = true;
+      privateReplyRetries.set(key, operation);
+      sync();
+      show('', '');
+      const path = `${target.base}/${target.conversationId}/messages/${item.id}/retry`;
+      const result = await request('POST', path, {attempt: operation.attempt}, {'Idempotency-Key': operation.key},
+        AbortSignal.timeout(15000)).catch(() => ({status: 0, body: {}}));
+      const ownsOperation = () => privateReplyRetries.get(key) === operation && currentUser?.id === target.owner;
+      if (!ownsOperation()) return;
+      const confirmed = reply => reply.id === item.id && Number.isSafeInteger(reply.attempt) && reply.attempt > operation.attempt;
+      const accepted = [200, 202].includes(result.status);
+      let pair = accepted && privateReplyPair(result.body, target, item.client_key);
+      if (!pair || !confirmed(pair.reply)) pair = null;
+      const uncertain = !pair && (accepted || uncertainPrivateWrite(result));
+      if (!pair && (uncertain || result.status === 409)) {
+        pair = await privateSendReceipt(target, item.client_key, ownsOperation, confirmed);
+      }
+      if (!ownsOperation()) return;
+      operation.pending = false;
+      if (pair || !uncertain) privateReplyRetries.delete(key);
+      if (scope !== sendScope()) return;
+      if (opened !== socialOpen) {
+        if (pair) void openAgentConversation(target.agentId, target.conversationId, {refresh: true});
+        else renderAgentMessages(lastAgentItems, {followLatest: false});
+        return;
+      }
+      if (!pair) {
+        sync();
+        show('error', uncertain ? uiLabel('暂时无法确认回复是否已重试。', 'Couldn’t verify that the reply was retried yet.')
+          : uiLabel('无法重试这条回复，请刷新后再试。', 'Couldn’t retry this reply. Refresh and try again.'));
+        if (result.status === 409) void openAgentConversation(target.agentId, target.conversationId, {refresh: true});
+        return;
+      }
+      privateRefresh += 1;
+      const list = document.getElementById('message-list');
+      const focused = document.activeElement === button;
+      const items = lastAgentItems.map(row => row.id === pair.reply.id ? pair.reply : row.id === pair.message.id ? pair.message : row);
+      if (renderAgentMessages(items, {followLatest: false})) schedulePoll();
+      if (focused) {
+        const updated = Array.from(list.children).find(row => row.dataset.messageId === item.id);
+        if (updated) {
+          updated.tabIndex = -1;
+          updated.focus({preventScroll: true});
+        }
+      }
+      const notice = sendNotice(pair.reply);
+      show(notice.kind, waitingAgentReply(pair.reply) ? uiLabel('已重新请求回复。', 'Retry requested.') : notice.text, notice);
+    });
+  }
+
   function makeAgentMessage(item) {
     const bubble = document.createElement('li');
     if (item.id) bubble.dataset.messageId = item.id;
@@ -1701,6 +1818,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       configure.href = '/settings#model-api';
       configure.textContent = uiLabel('查看模型设置', 'View model settings');
       body.append(configure);
+    } else if (item.role === 'assistant' && item.status === 'failed' && item.error_code !== 'session/attachment-invalid') {
+      body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
+        : uiLabel('回复未完成。', 'The reply didn’t finish.');
     } else {
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
       if (item.attachments?.length && !item.body) body.hidden = true;
@@ -1722,6 +1842,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (item.role === 'assistant' && saveableAgentMessage(item)) {
       bubble.append(saveMessageButton(item, currentAgent.id));
     }
+    if (failed) addPrivateReplyRetry(bubble, item);
     return {bubble, replyView};
   }
 
@@ -1734,6 +1855,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentReplyViews.clear();
     lastAgentItems = items || [];
     syncCaptureButton();
+    const queue = pendingSends.get(sendScope());
+    if (queue && !queue.social) {
+      const delivered = new Set(lastAgentItems.filter(item => item.role === 'user').map(item => item.client_key).filter(Boolean));
+      for (const job of queue.jobs) if (job.failed && delivered.has(job.key)) removeSendJob(queue, job);
+    }
     const pendingKeys = pendingMessageKeys();
     for (const item of lastAgentItems) {
       if (pendingKeys.has(item.client_key)) continue;
@@ -1804,7 +1930,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
-    if (terminal && watch.posting) return;
+    if (terminal && watch.posting) {
+      const queue = pendingSends.get(watch.scope);
+      const job = queue?.replying;
+      if (job?.key === watch.key && job.acceptReceipt) {
+        const pair = await confirmPostedSend(queue, job);
+        if (pair) job.acceptReceipt?.({status: 200, body: pair});
+        else scheduleReplyProgress(watch, 1200);
+      }
+      return;
+    }
     watch.failures += 1;
     if (terminal || (!watch.posting && watch.failures >= 4)) {
       await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
@@ -5753,13 +5888,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               currentConversation = conversation;
               if (servedByDsbot) setPrivateHistory({wid: queue.wid, aid: queue.agentId, cid: conversation.id,
                 owner: queue.owner, cursor: null, readingHistory: false});
-              publicDraft.move(previous, queue.scope);
               renderAgentQuickStarts(currentAgent);
               lastAgentItems = [];
               writeHash({workspace: queue.wid, agent: queue.agentId, conversation: conversation.id});
-              attachmentSender?.moveDraft(previous, queue.scope);
-              renderPendingSend();
             }
+            publicDraft.move(previous, queue.scope);
+            attachmentSender?.moveDraft(previous, queue.scope);
+            if (visible) renderPendingSend();
             void loadSessions();
           }
           const path = `${queue.base}/${queue.conversationId}/messages`;
@@ -5767,19 +5902,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
           let result;
           let anchor;
+          const nativePrivate = servedByDsbot && !queue.social;
+          const receipt = nativePrivate ? Promise.withResolvers() : null;
+          job.acceptReceipt = receipt?.resolve;
           try {
-            if (job.files.length) {
-              result = await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+            const response = job.files.length
+              ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
                 {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
                   feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
                   if (percent >= 100) beginReply();
-                });
-            } else {
-              const response = request('POST', path, job.message, headers);
-              beginReply();
-              result = await response;
+                }) : request('POST', path, job.message, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+            if (!job.files.length) beginReply();
+            result = receipt
+              ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
+              : await response;
+            if (nativePrivate && uncertainPrivateWrite(result)) {
+              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+              const pair = await confirmPostedSend(queue, job);
+              if (pair) result = {status: 200, body: pair};
             }
           } finally {
+            job.acceptReceipt = null;
             if (queue.replying === job) {
               if (isCurrent()) {
                 const scroller = document.getElementById('message-scroller');
@@ -5791,7 +5934,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               job.replyView = null;
             }
           }
-          if (![200, 201].includes(result.status) || !result.body.message?.id) {
+          const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);
+          if (!accepted || !result.body.message?.id) {
             const code = result.body.error?.code;
             if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
               currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};

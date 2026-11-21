@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { createAgents } from '../features/agents/index.js'
+import { digest } from '../featurekit/http.js'
 import { createLegacyDispatch } from '../src/dispatch.js'
 import { sendPrivateAttachmentMessage } from '../../../openteamily/static/chat/files.mjs'
 
 const workspace = 'a'.repeat(32)
 const root = `/v1/workspaces/${workspace}/agents`
+const jsonPost = (key, body) => ({method:'POST',
+  headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:JSON.stringify(body)})
 function legacyRequest(e) {
   const dispatch = createLegacyDispatch({endpoints:{'agents/v1':e.v1}})
   return (path, options, query = '') => {
@@ -354,6 +357,161 @@ test('private agent files survive reconnect, with one native turn and workspace-
   db.close()
 })
 
+test('private text replies retry the same durable pair, fence stale attempts and expose the exact receipt', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const calls = []
+  const started = Promise.withResolvers()
+  const pending = Promise.withResolvers()
+  runtime.nativeTurn = async (bot, session, prompt, requestId, {onProgress}) => {
+    calls.push({bot,session,prompt,requestId})
+    if (calls.length === 1) throw Object.assign(new Error('model unavailable'), {code:'agents/runtime-unavailable'})
+    if (calls.length === 2) {
+      started.resolve(onProgress)
+      await pending.promise
+    }
+    return {text:'Final reply',sessionId:session,turnId:9}
+  }
+  const host = {runtime:async () => runtime, currentRuntime:() => runtime, call:async () => null}
+  const {endpoints:e} = createAgents({db,host})
+  const {agent} = await e.create({workspace_id:workspace,name:'Retry reader',idempotency_key:'retry-agent-key-1234'})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation:neighbor} = await e['conversation-create']({workspace_id:workspace,id:agent.id,title:'Other'})
+  const convo = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(e)
+  const originalKey = 'private-message-key'
+  const send = () => request(convo+'/messages',jsonPost(originalKey,{body:'Please draft this',chat_language:'en'}))
+  const first = await (await send()).json()
+  assert.equal(first.reply.status,'failed')
+  assert.equal(first.reply.attempt,1)
+  assert.equal(first.reply.can_retry,true)
+  const progress = (query = `key=${originalKey}&receipt=1`) => request(convo+'/reply-progress',{},query)
+  assert.deepEqual(await (await progress()).json(),{state:'failed',...first})
+  assert.deepEqual(await (await progress(`key=${originalKey}`)).json(),{state:'failed'})
+  assert.equal((await progress(`key=${originalKey}&receipt=1&receipt=1`)).status,400)
+  const path = convo + '/messages/' + first.reply.id + '/retry'
+  const retry = (key = 'retry-attempt-one-key', attempt = 1) => request(path,jsonPost(key,{attempt}))
+  const wrongConvo = path.replace(conversation.id,neighbor.id)
+  assert.equal((await request(wrongConvo,jsonPost('retry-attempt-one-key',{attempt:1}))).status,404)
+  assert.equal((await request(path.replace(workspace,'b'.repeat(32)),jsonPost('retry-attempt-one-key',{attempt:1}))).status,404)
+  assert.equal((await request(path.replace(first.reply.id,first.message.id),jsonPost('retry-attempt-one-key',{attempt:1}))).status,404)
+
+  const accepted = await retry()
+  assert.equal(accepted.status,202)
+  const {message, reply} = await accepted.json()
+  assert.equal(message.id,first.message.id)
+  assert.deepEqual([reply.id,reply.client_key,reply.attempt,reply.status,reply.can_retry],
+    [first.reply.id,originalKey,2,'running',false])
+  const update = await started.promise
+  update('Partial retry')
+  const live = await (await progress()).json()
+  assert.equal(live.text,'Partial retry')
+  assert.deepEqual([live.state,live.reply.id,live.reply.attempt],['running',reply.id,2])
+  assert.equal((await retry()).status,200)
+  assert.equal((await retry('fresh-stale-attempt')).status,409)
+  assert.equal((await retry('retry-attempt-one-key',2)).status,409)
+
+  pending.reject(Object.assign(new Error('retry failed'), {code:'agents/runtime-unavailable'}))
+  const failedRetry = await (await send()).json()
+  assert.equal(failedRetry.reply.attempt,2)
+  assert.equal(failedRetry.reply.status,'failed')
+  assert.equal((await retry('fresh-stale-attempt')).status,409)
+  assert.equal((await retry()).status,200)
+  assert.equal(calls.length,2)
+  assert.equal((await retry('retry-attempt-two-key',2)).status,202)
+  const complete = await (await send()).json()
+  assert.equal(complete.reply.status,'succeeded')
+  assert.equal(complete.reply.body,'Final reply')
+  assert.equal(complete.reply.attempt,3)
+  assert.equal(complete.reply.can_retry,false)
+  assert.equal(calls.length,3)
+  assert.ok(calls.every(call => call.bot === 'agent' && call.session === 'native-session'
+    && call.prompt.includes('Reply in English.') && call.prompt.includes('Please draft this')))
+  assert.deepEqual(calls.map(call => call.requestId),
+    [`ot-agent:${message.id}`, `ot-agent:${message.id}:retry:2`, `ot-agent:${message.id}:retry:3`])
+  const history = await (await request(convo)).json()
+  assert.deepEqual(history.items.map(item => item.id),[message.id,reply.id])
+  assert.deepEqual(await (await progress()).json(),{state:'succeeded',...complete})
+})
+
+test('startup settles accepted retry receipts and releases interrupted unkeyed user messages', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  let turns = 0
+  runtime.nativeTurn = async () => { turns++; throw new Error('deliberate fixture failure') }
+  const host = {runtime:async () => runtime, currentRuntime:() => runtime, call:async () => null}
+  const {endpoints:e} = createAgents({db,host})
+  const {agent} = await e.create({workspace_id:workspace,name:'Restart reader',idempotency_key:'restart-agent-1234'})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id})
+  const convo = `${root}/${agent.id}/conversations/${conversation.id}`
+  const sendKey = 'restart-original-key', retryKey = 'restart-retry-key'
+  const original = await (await legacyRequest(e)(convo+'/messages',jsonPost(sendKey,{body:'Persistent text'}))).json()
+  const replyId = original.reply.id
+  const unkeyedUser = 'd'.repeat(32), unkeyedReply = 'e'.repeat(32)
+  const seed = db.prepare('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)')
+  seed.run(unkeyedUser,conversation.id,'user','Older unkeyed text','sent',10,'{"nativePending":true}')
+  seed.run(unkeyedReply,conversation.id,'assistant','','running',10,'{"nativePending":true}')
+  db.prepare("UPDATE agent_messages SET status='running',meta=? WHERE id=?")
+    .run(JSON.stringify({clientKey:sendKey,replyAttempt:2,nativePending:true}),replyId)
+  db.prepare("UPDATE agent_messages SET meta=json_set(meta,'$.nativePending',1) WHERE id=?").run(original.message.id)
+  db.prepare('INSERT INTO agent_reply_retries VALUES(?,?,1)').run(replyId,digest('private-reply-retry:' + retryKey))
+
+  const restarted = legacyRequest(createAgents({db,host}).endpoints)
+  const progress = await (await restarted(convo+'/reply-progress',{},`key=${sendKey}&receipt=1`)).json()
+  assert.equal(progress.state,'failed')
+  assert.deepEqual([progress.reply.error_code,progress.reply.attempt,progress.reply.can_retry],['interrupted',2,true])
+  const retry = await restarted(convo+'/messages/'+replyId+'/retry',jsonPost(retryKey,{attempt:1}))
+  assert.equal(retry.status,200)
+  assert.equal((await retry.json()).reply.attempt,2)
+  assert.equal(turns,1)
+  assert.equal(db.prepare('SELECT meta FROM agent_messages WHERE id=?').get(unkeyedUser).meta,'{}')
+  const oldReply = db.prepare('SELECT status,meta FROM agent_messages WHERE id=?').get(unkeyedReply)
+  assert.equal(oldReply.status,'failed')
+  assert.equal(JSON.parse(oldReply.meta).error,'agents/interrupted')
+})
+
+test('a private send key names one message across text and attachment requests', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  let turns = 0
+  runtime.nativeTurn = async (_bot, session, _prompt, _id, options) => {
+    turns++
+    if (options.files) options.onStaged(options.files.map(file => ({
+      title:file.title,mime:file.mime,bytes:file.data.length,ref:{id:'fixture'},
+    })))
+    return {text:'Fixture reply',sessionId:session,turnId:turns}
+  }
+  const {endpoints:e} = createAgents({db,host:{runtime:async () => runtime,call:async () => null}})
+  const {agent} = await e.create({workspace_id:workspace,name:'One message',idempotency_key:'send-mode-agent-key'})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation:attachmentThread} = await e['conversation-create']({workspace_id:workspace,id:agent.id,title:'Files'})
+  const convo = `${root}/${agent.id}/conversations/${conversation.id}`
+  const filesConvo = convo.replace(conversation.id,attachmentThread.id)
+  const request = legacyRequest(e)
+  const text = (path, key) => request(path+'/messages',jsonPost(key,{body:'Review this'}))
+  const upload = (path, key) => {
+    const form = new FormData()
+    form.set('body','Review this')
+    form.append('file',new Blob(['Contents'],{type:'text/plain'}),'attachment.txt')
+    return request(path+'/messages',{method:'POST',headers:{'Idempotency-Key':key},body:form})
+  }
+  const textKey = 'text-message-send-key', fileKey = 'file-message-send-key'
+  assert.equal((await text(convo,textKey)).status,201)
+  assert.equal((await upload(convo,textKey)).status,409)
+  const files = await upload(filesConvo,fileKey)
+  assert.equal(files.status,201)
+  const pair = await files.json()
+  assert.equal((await text(filesConvo,fileKey)).status,409)
+  assert.equal((await request(filesConvo+'/messages/'+pair.reply.id+'/retry',jsonPost('invalid-file-retry',{attempt:1}))).status,409)
+  assert.equal((await (await upload(filesConvo,fileKey)).json()).reply.id,pair.reply.id)
+  assert.deepEqual(await (await request(filesConvo+'/reply-progress',{},`key=${fileKey}&receipt=1`)).json(),{state:'succeeded',...pair})
+  assert.equal(turns,2)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_messages').get().n,4)
+})
+
 test('live replies reveal only the current native snapshot and keep the final response authoritative', {timeout:3000}, async () => {
   const db = new DatabaseSync(':memory:')
   const runtime = createRuntime()
@@ -493,6 +651,8 @@ test('a private saved-work share stages one revision, replies asynchronously and
   assert.equal(exports,0)
   const first = send()
   await uploaded.promise
+  const receipt = () => request(convo+'/reply-progress',{},`key=${key}&receipt=1`)
+  assert.deepEqual(await (await receipt()).json(),{state:'pending'})
   const retryBeforeStaging = send()
   allowStaging.resolve()
   const responses = await Promise.all([first,retryBeforeStaging])
@@ -500,6 +660,7 @@ test('a private saved-work share stages one revision, replies asynchronously and
   const [a,b] = await Promise.all(responses.map(response=>response.json()))
   assert.equal(a.message.id,b.message.id)
   assert.equal(a.reply.status,'running')
+  assert.deepEqual(await (await receipt()).json(),{state:'running',text:'',...a})
   assert.equal(exports,1)
   assert.equal(turns,1)
   const attachment = a.message.attachments[0]

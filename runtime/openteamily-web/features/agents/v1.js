@@ -1,8 +1,9 @@
 // Legacy /v1 routes for /agents/ once the core stream flips that page into
 // moved_pages. Homepage, discover and runtime-binding stay on the platform
 // (cross-user / provision) and are not matched here.
-import { FeatureError } from '../../featurekit/http.js'
+import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
 import { PRIVATE_FILE_BYTES, PRIVATE_FILE_COUNT } from './files.js'
+import { textReplyKey, textReplyAttempt } from './private-reply.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { CHAT_LANGUAGE_NAMES } from '../settings/settings.js'
 
@@ -33,16 +34,22 @@ const publicMessage = (row, workspaceId, agentId) => {
   let meta = row.meta
   if (typeof meta === 'string') try { meta = JSON.parse(meta) } catch { meta = {} }
   const attachments = (meta?.files || []).map((file, index) => publicFile(file, index, workspaceId, agentId, row.conversation_id, row.id))
+  const canRetryText = textReplyKey(row, meta)
   return {
     ...(attachments.length ? {attachments} : {}),
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
     ...(meta?.memory_refs?.length ? {memory_refs: meta.memory_refs} : {}),
     ...(meta?.memory_profile_workspace === workspaceId ? {memory_profile_workspace: workspaceId} : {}),
+    ...(canRetryText ? {attempt: textReplyAttempt(meta), can_retry: status === 'failed'} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,
   }
 }
+const publicPair = (result, workspaceId, agentId) => ({
+  message: publicMessage(result.message, workspaceId, agentId),
+  reply: publicMessage(result.reply, workspaceId, agentId),
+})
 
 export function agentsV1({ endpoints, chatDirectory, log }) {
   const call = (name, payload) => endpoints[name](payload)
@@ -51,10 +58,15 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
         const [key, extra] = req.query.getAll('key')
-        if (!key || extra !== undefined || [...req.query.keys()].length !== 1) {
+        const [receipt, repeated] = req.query.getAll('receipt')
+        if (!key || extra !== undefined || repeated !== undefined || (receipt !== undefined && receipt !== '1')
+            || [...req.query.keys()].some(name => name !== 'key' && name !== 'receipt')) {
           throw new FeatureError(400, 'invalid', 'Supply one message send key')
         }
-        return {body:await call('replyProgress', {workspace_id:workspaceId,id,conversation_id:conversationId,key})}
+        const {message, reply, ...progress} = await call('replyProgress', {
+          workspace_id:workspaceId,id,conversation_id:conversationId,key,receipt:receipt === '1',
+        })
+        return {body: message ? {...progress,...publicPair({message,reply}, workspaceId, id)} : progress}
       }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/attachments$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
@@ -86,6 +98,14 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         conversation_id: conversationId, message_id: messageId, title: body.title})
       return {status, body: {artifact}}
     }) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/retry$`), handle: wrap(async (req, workspaceId, id, conversationId, replyId) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      if (req.query.size) throw new FeatureError(400, 'invalid', 'Invalid reply retry query')
+      const body = requireBodyKeys(await req.json(1024), ['attempt'])
+      const result = await call('retryReply', {workspace_id:workspaceId,id,conversation_id:conversationId,reply_id:replyId,
+        attempt:body.attempt,idempotency_key:req.headers.get('idempotency-key')})
+      return {status:result.status, body:publicPair(result, workspaceId, id)}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/memory/capture$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
       const body = await req.json()
@@ -100,8 +120,7 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
       const payload = {workspace_id:workspaceId,id,agent_id:id,conversation_id:conversationId,
         text:body.body ?? body.text,reply_language:replyLanguage,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
-      const project = result => ({message:publicMessage(result.message, workspaceId, id),
-        reply:publicMessage(result.reply, workspaceId, id)})
+      const project = result => publicPair(result, workspaceId, id)
       if (body.artifact_id !== undefined) {
         const staged = Promise.withResolvers()
         const sending = call('send', {...payload,artifact_id:body.artifact_id,artifact_revision:body.artifact_revision,

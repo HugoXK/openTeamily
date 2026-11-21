@@ -13,6 +13,7 @@ import { openDatabase, newId } from '../../src/store.js'
 import { agentsV1 } from './v1.js'
 import { PRIVATE_FILE_COUNT, privateFiles, fingerprintAttachments } from './files.js'
 import { importOfficialBundle } from './migrate.js'
+import { sendId, textReplyKey, textReplyAttempt } from './private-reply.js'
 import { rank, noteBlock, personalizationBlock } from '../chat/recall.js'
 
 export const CATEGORIES = ['content-creation', 'customer-support', 'data-analysis', 'design', 'education', 'engineering',
@@ -22,7 +23,6 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
-const sendId = (kind, role, conversationId, key) => sha(`${kind}-${role}:${conversationId}:${key}`).slice(0,32)
 const now = () => Math.floor(Date.now() / 1000)
 const CONTEXT_LIMIT = 20_000
 
@@ -47,6 +47,10 @@ CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conv
 CREATE INDEX IF NOT EXISTS agent_messages_history ON agent_messages(conversation_id, created);
 CREATE INDEX IF NOT EXISTS agent_messages_with_files ON agent_messages(conversation_id, created)
   WHERE role='user' AND json_type(meta,'$.files')='array';
+CREATE TABLE IF NOT EXISTS agent_reply_retries (
+  reply_id TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
+  key_hash TEXT NOT NULL, previous_attempt INTEGER NOT NULL,
+  PRIMARY KEY(reply_id, key_hash));
 `
 
 export function fail(code, message, status) { throw Object.assign(new Error(message), { code: `agents/${code}`, status }) }
@@ -81,7 +85,7 @@ export function createAgents({ db, host }) {
     meta=json_remove(json_set(meta,'$.error','agents/interrupted'),'$.nativePending')
     WHERE role='assistant' AND status='running' AND json_extract(meta,'$.nativePending')=1;
     UPDATE agent_messages SET meta=json_remove(meta,'$.nativePending')
-    WHERE role='user' AND json_extract(meta,'$.requestHash') IS NOT NULL;`)
+    WHERE role='user' AND json_extract(meta,'$.nativePending')=1;`)
   const activeTurns = new Map()
   const liveReplies = new Map()
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
@@ -288,6 +292,13 @@ export function createAgents({ db, host }) {
     const row = one('SELECT * FROM agent_messages WHERE id=?', id)
     return {...row, meta:JSON.parse(row.meta)}
   }
+  const sentPair = (userId, replyId) => ({message:messageRow(userId),reply:messageRow(replyId)})
+  function verifySendMode(kind, conversationId, key) {
+    const other = kind === 'text' ? 'attachment' : 'text'
+    if (one('SELECT 1 FROM agent_messages WHERE id=?', sendId(other, 'user', conversationId, key))) {
+      fail('conflict', 'Send key was used for a different message', 409)
+    }
+  }
 
   async function trackSend(userId, replyId, perform, onAccepted) {
     const progress = {text: '', ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
@@ -302,6 +313,29 @@ export function createAgents({ db, host }) {
     }
   }
 
+  function runTextReply({agent, convo, userId, replyId, text, userMeta, replyMeta, attempt, extra, returnFailed}) {
+    return trackSend(userId, replyId, async onProgress => {
+      try {
+        const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, extra)
+        const requestId = attempt === 1 ? `ot-agent:${userId}` : `ot-agent:${userId}:retry:${attempt}`
+        const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:requestId,reply_language:userMeta.replyLanguage,context},
+          {onProgress})
+        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
+        run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
+          JSON.stringify({...replyMeta,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id,memory_refs:refs,memory_profile_workspace:personalWorkspace}), replyId)
+        enqueueCapture(agent, convo, userId, text, remember)
+      } catch (error) {
+        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify(userMeta), userId)
+        run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed',
+          JSON.stringify({...replyMeta,error:String(error?.code ?? 'agents/failed')}), replyId)
+        if (!returnFailed) throw error
+      } finally {
+        run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
+      }
+      return sentPair(userId, replyId)
+    })
+  }
+
   async function sendWithAttachments(p, agent, convo, text, work) {
     const key = p.idempotency_key
     if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Attachment send key required', 400)
@@ -310,11 +344,14 @@ export function createAgents({ db, host }) {
       : fingerprintAttachments(text, p.reply_language, files)
     const userId = sendId('attachment', 'user', convo.id, key)
     const replyId = sendId('attachment', 'reply', convo.id, key)
-    const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
+    const result = () => sentPair(userId, replyId)
     const accepted = work && typeof p.onAccepted === 'function' ? () => p.onAccepted(result()) : null
     function replay() {
       const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
-      if (!prior) return null
+      if (!prior) {
+        verifySendMode('attachment', convo.id, key)
+        return null
+      }
       const meta = JSON.parse(prior.meta)
       if (meta.requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
       const running = activeTurns.get(userId)
@@ -700,41 +737,68 @@ export function createAgents({ db, host }) {
       const hash = key && sha(JSON.stringify([text, p.reply_language || '']))
       const userId = key ? sendId('text', 'user', convo.id, key) : newId()
       const replyId = key ? sendId('text', 'reply', convo.id, key) : newId()
-      const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
       const prior = key && one('SELECT meta FROM agent_messages WHERE id=?', userId)
       if (prior) {
         if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Send key was used for a different message', 409)
-        return activeTurns.get(userId) || result()
+        return activeTurns.get(userId) || sentPair(userId, replyId)
       }
-      const keyed = key ? {clientKey:key} : {}
-      const userMeta = key ? {...keyed,requestHash:hash} : {}
+      if (key) verifySendMode('text', convo.id, key)
+      const replyMeta = key ? {clientKey:key,replyAttempt:1} : {}
+      const userMeta = {
+        ...(key ? {clientKey:key,requestHash:hash} : {}),
+        ...(p.reply_language ? {replyLanguage:p.reply_language} : {}),
+      }
       db.exec('BEGIN')
       try {
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({...userMeta,nativePending:true}))
-        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(), JSON.stringify({...keyed,nativePending:true}))
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(), JSON.stringify({...replyMeta,nativePending:true}))
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
 
-      return trackSend(userId, replyId, async onProgress => {
-        try {
-          const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, p.context)
-          const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:`ot-agent:${userId}`,reply_language:p.reply_language,context},
-            {onProgress})
-          run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
-          run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
-            JSON.stringify({...keyed,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id,memory_refs:refs,memory_profile_workspace:personalWorkspace}), replyId)
-          enqueueCapture(agent, convo, userId, text, remember)
-        } catch (error) {
-          run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify(userMeta), userId)
-          run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed',
-            JSON.stringify({...keyed,error:String(error?.code ?? 'agents/failed')}), replyId)
-          if (p.return_failed !== true) throw error
-        } finally {
+      return runTextReply({agent,convo,userId,replyId,text,userMeta,replyMeta,attempt:1,extra:p.context,returnFailed:p.return_failed === true})
+    },
+    async retryReply(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const replyId = p.reply_id, previousAttempt = p.attempt, key = p.idempotency_key
+      if (typeof replyId !== 'string' || !ID.test(replyId) || typeof key !== 'string' || !IDEM.test(key)
+          || !Number.isSafeInteger(previousAttempt) || previousAttempt < 1 || previousAttempt >= Number.MAX_SAFE_INTEGER) {
+        fail('invalid', 'Provide the last reply attempt and an idempotency key', 400)
+      }
+      const row = one("SELECT * FROM agent_messages WHERE id=? AND conversation_id=? AND role='assistant'", replyId, convo.id)
+      if (!row) fail('not-found', 'Reply not found', 404)
+      const sendKey = textReplyKey(row, JSON.parse(row.meta))
+      if (!sendKey) fail('retry_unavailable', '只能重试文字消息的回复。', 409)
+      const userId = sendId('text', 'user', convo.id, sendKey)
+      const source = one("SELECT * FROM agent_messages WHERE id=? AND conversation_id=? AND role='user'", userId, convo.id)
+      if (!source?.text.trim()) fail('retry_unavailable', '找不到本次回复对应的文字消息。', 409)
+      const keyHash = sha('private-reply-retry:' + key)
+      const attempt = previousAttempt + 1
+      const userMeta = JSON.parse(source.meta)
+      const replyMeta = {clientKey:sendKey,replyAttempt:attempt}
+      let reused = false
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const prior = one('SELECT previous_attempt FROM agent_reply_retries WHERE reply_id=? AND key_hash=?', replyId, keyHash)
+        if (prior) {
+          if (prior.previous_attempt !== previousAttempt) fail('conflict', 'Retry key was used for a different attempt', 409)
+          reused = true
+        } else {
+          const changed = run(`UPDATE agent_messages SET text='', status='running', meta=?
+            WHERE id=? AND conversation_id=? AND status='failed' AND COALESCE(json_extract(meta,'$.replyAttempt'),1)=?`,
+            JSON.stringify({...replyMeta,nativePending:true}), replyId, convo.id, previousAttempt)
+          if (!changed.changes || activeTurns.has(userId)) fail('conflict', '回复状态已更新，请刷新后重试。', 409)
+          run('INSERT INTO agent_reply_retries VALUES(?,?,?)', replyId, keyHash, previousAttempt)
+          run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,nativePending:true}), userId)
           run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
         }
-        return result()
-      })
+        db.exec('COMMIT')
+      } catch (error) { db.exec('ROLLBACK'); throw error }
+      if (reused) return {status:200,...sentPair(userId, replyId)}
+      void runTextReply({agent,convo,userId,replyId,text:source.text,userMeta,replyMeta,attempt,returnFailed:true})
+        .catch(error => host.log?.('private reply retry: ' + String(error?.code ?? error?.name ?? 'error')))
+      return {status:202,...sentPair(userId, replyId)}
     },
     async replyProgress(p) {
       const agent = load(ws(p), p.id)
@@ -745,8 +809,15 @@ export function createAgents({ db, host }) {
         WHERE conversation_id=? AND role='assistant' AND id IN (?,?) ORDER BY rowid DESC LIMIT 1`,
         convo.id, sendId('text', 'reply', convo.id, key), sendId('attachment', 'reply', convo.id, key))
       if (!reply) fail('not-found', 'Reply not found', 404)
-      if (reply.status === 'running') return {state: 'running', text: liveReplies.get(reply.id)?.text || ''}
-      return {state: reply.status}
+      const result = reply.status === 'running' ? {state: 'running', text: liveReplies.get(reply.id)?.text || ''} : {state: reply.status}
+      if (!p.receipt) return result
+      const kind = reply.id === sendId('text', 'reply', convo.id, key) ? 'text' : 'attachment'
+      const userId = sendId(kind, 'user', convo.id, key)
+      const pair = sentPair(userId, reply.id)
+      if (kind === 'attachment' && reply.status === 'running' && !pair.message.meta.files?.length) {
+        return {state:'pending'}
+      }
+      return {...result,...pair}
     },
     turn,
     async publicReply(p) {
