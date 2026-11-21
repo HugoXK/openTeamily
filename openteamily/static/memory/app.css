@@ -990,19 +990,31 @@ body.app-workspace #overview-panel .graph-stage,
    and right columns and scrolls on its own. */
 #list-panel[data-view="page"] > .memory-center,
 #list-panel[data-view="page"] > .memory-side { display: none; }
+.memory-citation { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .875rem; }
+.memory-citation a { color: var(--ot-accent-hover); font-size: .875rem; font-weight: 600; }
+.memory-citation .note { margin: 0; font-size: .8125rem; }
+.memory-citation .note:empty { display: none; }
+.memory-citation-preview-head { display: flex; flex-wrap: wrap; gap: .5rem .875rem; align-items: center; }
+.memory-citation-preview-head .note { flex-basis: 100%; margin: 0; }
+.memory-citation-preview-head h2 { flex: 1 1 13rem; margin: 0; overflow-wrap: anywhere; }
+.memory-citation-body { overflow-wrap: anywhere; line-height: 1.65; }
+.memory-citation-body pre { overflow-x: auto; }
 @media (min-width: 701px) {
-  #main-panel:has(> #list-panel[data-view="page"]:not([hidden])) > .memory-top { display: none; }
+  #main-panel:has(> #list-panel[data-view="page"]:not([hidden])) > .memory-top:not(:has(#memory-citation:not([hidden]))) { display: none; }
+  #main-panel:has(> #list-panel[data-view="page"]) > .memory-top:has(#memory-citation:not([hidden])) > :is(.memory-view-title, .workspace-picker, .memory-counts) { display: none; }
   #main-panel > #list-panel[data-view="page"] > #editor-form,
-  #main-panel > #list-panel[data-view="page"] > #action-editor-form {
+  #main-panel > #list-panel[data-view="page"] > #action-editor-form,
+  #main-panel > #list-panel[data-view="page"] > #memory-citation-preview {
     grid-column: 2 / 4; grid-row: 1 / -1; min-height: 0; overflow: auto;
     margin: 0; max-width: none; padding: 1.5rem 2.5rem 3rem;
     grid-template-columns: minmax(0, 50rem); justify-content: center; align-content: start;
   }
-  #main-panel > #list-panel[data-view="page"] > #action-editor-form { display: grid; gap: .75rem; }
-  #main-panel > #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form)[hidden] { display: none; }
+  #main-panel:has(> .memory-top #memory-citation:not([hidden])) > #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form, #memory-citation-preview) { grid-row: 2; }
+  #main-panel > #list-panel[data-view="page"] > :is(#action-editor-form, #memory-citation-preview) { display: grid; gap: .75rem; }
+  #main-panel > #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form, #memory-citation-preview)[hidden] { display: none; }
 }
 @media (max-width: 700px) {
-  #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form) { order: -1; padding: 1rem; }
+  #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form, #memory-citation-preview) { order: -1; padding: 1rem; }
 }
 #editor-form.memory-editor { gap: .625rem; }
 .editor-topbar { min-height: 2rem; }

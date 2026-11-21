@@ -1499,6 +1499,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function memorySources(item) {
     if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
     const wid = workspaceId();
+    const citationIds = [wid, currentAgent?.id, currentConversation?.id];
+    const validId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
+    const origin = citationIds.every(validId)
+      ? [...citationIds, ...(validId(item.id) ? [item.id] : [])].join('.') : '';
     const refs = Array.isArray(item.memory_refs) ? item.memory_refs : [];
     const links = [];
     for (const ref of refs) {
@@ -1527,6 +1531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const [params, title] of links) {
       const row = document.createElement('li');
       const link = document.createElement('a');
+      if (origin) params.set('from', origin);
       link.href = '/memory?' + params.toString();
       link.textContent = title;
       row.append(link);

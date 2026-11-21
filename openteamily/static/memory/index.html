@@ -74,6 +74,10 @@
         <select id="workspace"></select>
       </label>
       <p id="graph-counts" class="memory-counts"></p>
+      <div id="memory-citation" class="memory-citation" hidden>
+        <a id="memory-citation-return">返回原对话</a>
+        <p id="memory-citation-status" class="note" role="status"></p>
+      </div>
     </header>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
@@ -254,6 +258,15 @@
           <p id="preference-status" role="status"></p>
         </section>
       </section>
+    <section id="memory-citation-preview" class="memory-editor" aria-labelledby="memory-citation-title" hidden>
+      <header class="memory-citation-preview-head">
+        <p id="memory-citation-version" class="note"></p>
+        <h2 id="memory-citation-title" tabindex="-1">引用的记忆</h2>
+        <button type="button" id="memory-citation-edit" hidden>编辑当前版本</button>
+        <button type="button" id="memory-citation-retry" hidden>重试</button>
+      </header>
+      <div id="memory-citation-body" class="memory-citation-body"></div>
+    </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
       <div class="editor-topbar">
         <p id="editor-saved" class="editor-saved" hidden></p>

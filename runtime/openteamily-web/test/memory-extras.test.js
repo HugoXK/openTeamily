@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { attachRuntime, detachRuntime } from '../src/host.js'
-import { boot, key, WS } from './helpers.js'
+import { bootMemory as boot, key, WS } from './helpers.js'
 
 const base = (rest = '') => `/v1/workspaces/${WS}/memory${rest}`
 
@@ -51,7 +51,8 @@ test('links and the graph (topics, [[mentions]], manual links) are computed in D
 })
 
 test('profile and preferences belong to this DS-Bot owner and feed memory/personal', async () => {
-  const bot = await boot()
+  const otherWorkspace = 'e'.repeat(32)
+  const bot = await boot(undefined, {teams:[otherWorkspace]})
   const call = (...args) => bot.call('memory', ...args)
   assert.equal((await call('GET', base('/profile'))).body.profile.revision, 0)
   const saved = await call('POST', base('/profile'), { revision: 0, professional: '产品经理', work_style: '早起', communication: '简洁' })
@@ -61,7 +62,6 @@ test('profile and preferences belong to this DS-Bot owner and feed memory/person
   assert.equal(pref.status, 201)
   assert.equal((await call('POST', base('/preferences'), { text: '回复用中文 ' }, key())).status, 200, 'same text is not duplicated')
   assert.equal((await call('GET', base('/preferences'))).body.items.length, 1)
-  const otherWorkspace = 'e'.repeat(32)
   const outside = `/v1/workspaces/${otherWorkspace}/memory`
   await call('POST', outside + '/profile', { revision: 0, professional: '另一工作区', work_style: '', communication: '' })
   await call('POST', outside + '/preferences', { text: '回复用德语' }, key())
@@ -82,7 +82,7 @@ test('profile and preferences belong to this DS-Bot owner and feed memory/person
 })
 
 test('profile organization uses only this workspace and stays a draft during a concurrent edit', async () => {
-  const bot = await boot()
+  const bot = await boot(undefined, {teams:['e'.repeat(32)]})
   const call = (...args) => bot.call('memory', ...args)
   const profile = {revision:0,professional:'我做产品设计。',work_style:'',communication:'写短段落。'}
   const dream = (body = profile) => call('POST', base('/profile/dream'), body)
@@ -138,6 +138,7 @@ test('workspace capture waits for opt-in, proposes asynchronously and saves one 
   const memory = memoryFeature({
     dataDir:dir, featureDir:()=>dir,
     async call(endpoint,payload) {
+      if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(endpoint,'agents/captureSource')
       assert.deepEqual(payload,source)
       return {title:'日常偏好',text:'以后给我的周报用三条要点。'}
@@ -166,7 +167,7 @@ test('workspace capture waits for opt-in, proposes asynchronously and saves one 
     assert.equal(list.items.length,1)
     assert.equal(calls,1)
     assert.equal(list.items[0].source.message_id,source.message_id)
-    assert.equal((await route('GET',`/v1/workspaces/${'e'.repeat(32)}/memory/candidates`)).body.items.length,0)
+    assert.equal((await route('GET',`/v1/workspaces/${'e'.repeat(32)}/memory/candidates`)).status,404)
     const decision = {action:'save',title:'我的周报格式',body:'每份周报包含三条要点。'}
     const saved = await route('POST',path+'/'+source.message_id,decision)
     assert.equal(saved.status,201)
@@ -193,6 +194,7 @@ test('selected history combines explicit context and remains separate from autom
   let calls = 0
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
+      if (name === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(name,'agents/captureSource')
       assert.equal(payload.selected,true)
       assert.equal(payload.workspace_id,WS)
@@ -243,6 +245,7 @@ test('group drafts recheck the full batch on save and hide when group access is 
   let accessible = true
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
+      if (name === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(name,'messenger/captureSources')
       assert.equal(payload.workspace_id,WS)
       assert.equal(payload.conversation_id,scope.conversation_id)
@@ -303,6 +306,7 @@ test('automatic group capture has its own cursor and can be paused during extrac
   const release = new Promise(resolve => { finish = resolve })
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(endpoint,payload) {
+      if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(endpoint,'messenger/captureSources')
       assert.equal(payload.conversation_id,scope.conversation_id)
       if (payload.after !== undefined) {
@@ -348,7 +352,7 @@ test('cross-workspace recall searches approved pages and actions using live memb
   const {join} = await import('node:path')
   const dir = mkdtempSync(join(tmpdir(),'memory-authorized-recall-'))
   const team = 'b'.repeat(32), revoked = 'f'.repeat(32)
-  let memberships = [{id:team,name:'Project team'}]
+  let memberships = [{id:team,name:'Project team'},{id:revoked,name:'Revoked team'}]
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,async call(endpoint) {
     if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
     assert.equal(endpoint,'teams/activeWorkspaces')
@@ -363,6 +367,7 @@ test('cross-workspace recall searches approved pages and actions using live memb
     const personal = await create(WS,'',{title:'Launch overview',body:'Personal notes'},'cross-recall-personal')
     const accessible = await create(team,'/actions',{title:'Launch handoff',notes:'Confirm the scope.',due_at:1803945600},'cross-recall-action')
     await create(revoked,'',{title:'Launch action item',body:'Unshared memo'},'cross-recall-revoked')
+    memberships = [{id:team,name:'Project team'}]
     assert.equal(personal.status,201)
     assert.equal(accessible.status,201)
     await assert.rejects(memory.endpoints.recallAcrossWorkspaces(params))

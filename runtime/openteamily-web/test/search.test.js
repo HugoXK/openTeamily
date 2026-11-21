@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { boot, key, WS } from './helpers.js'
+import { boot, bootMemory, key, WS } from './helpers.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 // The search path should read the native agent ledger without starting a model turn.
@@ -164,7 +164,7 @@ test('saving an authorized chat message creates one private versioned document w
 })
 
 test('search/all spans memory and meetings in this DS-Bot', async () => {
-  const bot = await boot()
+  const bot = await bootMemory()
   await bot.call('memory', 'POST', `/v1/workspaces/${WS}/memory`, { title: '季度目标', body: '增长 20%' }, key())
   await bot.call('meetings', 'POST', `/v1/workspaces/${WS}/meetings`, { title: '季度复盘', summary: '回顾目标' }, key())
   const all = await bot.endpoint('search/all', { q: '季度' })

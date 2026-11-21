@@ -249,7 +249,17 @@ class SettingsPage:
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
-            return query in ('page=profile', 'page=todos')
+            # The memory directory and reply citations open exact records. Only
+            # accept the URL shapes produced by those pages. Each read still
+            # goes through the user's authenticated runtime.
+            identifier = r'[0-9a-f]{32}'
+            workspace = rf'workspace={identifier}'
+            views = r'page=(?:profile|todos|candidates)'
+            if re.fullmatch(rf'{views}(?:&{workspace})?|{workspace}(?:&{views})?', query):
+                return True
+            origin = rf'(?:&from={identifier}(?:\.{identifier}){{2,3}})?'
+            citation = rf'(?:page=profile|page=todos&action={identifier}|page={identifier}(?:&revision=[1-9][0-9]{{0,7}})?)'
+            return bool(re.fullmatch(rf'{workspace}&{citation}{origin}', query))
         if path == '/guide':
             # Deep links: one non-empty q, one non-empty category, or both, each
             # named at most once. An unknown category id is served anyway and the

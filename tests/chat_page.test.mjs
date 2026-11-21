@@ -2913,6 +2913,31 @@ function settledNativeSnapshot(fixture) {
     items: fixture.nativeRows.map(row => ({...row, workspace_id: linkWork, agent_id: linkAgent, conversation_id: linkThread}))};
 }
 
+test('private reply memory citations carry the exact invoking chat and message', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const refId = 'd'.repeat(32);
+  const source = {...fixture.nativeRows[1], memory_refs: [{id: refId, workspace_id: linkWork, title: 'Saved note', revision: 2}]};
+  fixture.routes.set(linkBase(linkWork) + linkNativeLatest, () =>
+    json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items: [source]}));
+  function linkWithText(node, text) {
+    if (node.tagName === 'A' && node.textContent === text) return node;
+    for (const child of node.children) {
+      const link = linkWithText(child, text);
+      if (link) return link;
+    }
+  }
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    const link = linkWithText(fixture.el('message-list'), 'Saved note');
+    assert.equal(link.href, '/memory?' + new URLSearchParams({
+      workspace: linkWork, page: refId, revision: '2',
+      from: [linkWork, linkAgent, linkThread, linkAgentLatest].join('.'),
+    }));
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('desktop startup reads one bounded private candidate alongside Social, then opens and acknowledges only the winner', async () => {
   const scope = linkBase(linkWork);
   const fixture = linkedChatFixture('');

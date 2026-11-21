@@ -47,7 +47,9 @@ test('only the explicitly selected current workspace notes reach the native mode
   const second = await page(runtime, PERSONAL, 'Launch', 'Write the promotion checklist.')
   const ignored = await page(runtime, PERSONAL, 'Unselected', 'Do not include this other note.')
   const outside = await page(runtime, TEAM, 'Team', 'Separate team note.')
+  runtime.teams.add(OTHER)
   const shared = await page(runtime, OTHER, 'Another workspace', 'An unavailable personal note.')
+  runtime.teams.delete(OTHER)
   const before = runtime.store.get('SELECT COUNT(*) AS n FROM memory_actions').n
   const draft = (workspace, sources, idempotency = key()) => runtime.request('POST', workspace, '/actions/draft',
     {sources}, idempotency)
@@ -108,7 +110,8 @@ test('generation rejects model-invented references and drops suggestions if sour
     return '{"suggestions":[{"title":"Coordinate with the team","source":1}]}'
   })
   assert.equal((await draft(edit.body.page)).status, 404)
-  assert.equal((await runtime.request('GET', TEAM, '/actions')).body.items.length, 0)
+  assert.equal((await runtime.request('GET', TEAM, '/actions')).status, 404)
+  assert.equal(runtime.store.get('SELECT COUNT(*) AS n FROM memory_actions').n, 0)
 })
 
 test('only chosen action drafts are atomically saved and retries cannot duplicate a saved or removed action', async t => {
