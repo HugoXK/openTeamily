@@ -75,6 +75,20 @@ test('serves pages from this runtime, marked with this runtime identity', async 
   assert.match(css.headers.get('content-type'), /text\/css/)
 })
 
+test('legacy Messenger entry resolves to the native Chat inbox', async () => {
+  const { pages, data } = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, { pagesDir: pages, dataDir: data })
+  const route = ctx.routes.get(PAGE_PATH)
+  for (const path of ['/messenger', '/messenger/', '/messenger/index.html']) {
+    const response = await get(route, path)
+    assert.equal(response.status, 302, path)
+    assert.equal(response.headers.get('location'), '/chat')
+    assert.equal(await response.text(), '')
+  }
+  assert.equal((await get(route, '/messenger/app.mjs')).status, 404)
+})
+
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {
   const { pages, data } = fixture()
   const ctx = fakeCtx()

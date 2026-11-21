@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS agent_conversation_memory (
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
+CREATE INDEX IF NOT EXISTS agent_messages_history ON agent_messages(conversation_id, created);
 CREATE INDEX IF NOT EXISTS agent_messages_with_files ON agent_messages(conversation_id, created)
   WHERE role='user' AND json_type(meta,'$.files')='array';
 `
@@ -103,13 +104,94 @@ export function createAgents({ db, host }) {
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
   }
+  const readMessage = message => ({ ...message, meta: JSON.parse(message.meta) })
   const conversationMessages = id => all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, rowid', id)
-    .map(message => ({ ...message, meta: JSON.parse(message.meta) }))
+    .map(readMessage)
+
+  function adjacentMessages(id, anchor, count, newer) {
+    const comparison = newer ? '>' : '<'
+    const order = newer ? 'ASC' : 'DESC'
+    // The history index ends with SQLite's rowid. Seek within a timestamp
+    // before seeking other timestamps so even a large tie stays bounded.
+    const sameTime = all(`SELECT * FROM agent_messages WHERE conversation_id=? AND created=? AND rowid ${comparison} ?
+      ORDER BY rowid ${order} LIMIT ?`, id, anchor.created, anchor.position, count)
+    if (sameTime.length === count) return sameTime
+    return sameTime.concat(all(`SELECT * FROM agent_messages WHERE conversation_id=? AND created ${comparison} ?
+      ORDER BY created ${order}, rowid ${order} LIMIT ?`, id, anchor.created, count - sameTime.length))
+  }
+
+  function conversationHistory(id, {limit, before, around}) {
+    const target = before ?? around
+    const anchor = target === undefined ? null : one(
+      'SELECT rowid AS position, * FROM agent_messages WHERE id=? AND conversation_id=?', target, id)
+    if (target !== undefined && !anchor) fail('not-found', 'Message not found', 404)
+    if (around === undefined) {
+      const rows = anchor ? adjacentMessages(id, anchor, limit + 1, false) : all(
+        'SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created DESC, rowid DESC LIMIT ?', id, limit + 1)
+      const items = rows.slice(0, limit).reverse().map(readMessage)
+      return {items, cursor: rows.length > limit ? items[0].id : null, has_newer: Boolean(anchor)}
+    }
+
+    const olderLimit = Math.floor((limit - 1) / 2)
+    let older = adjacentMessages(id, anchor, olderLimit + 1, false)
+    const newerLimit = limit - 1 - Math.min(olderLimit, older.length)
+    const newer = adjacentMessages(id, anchor, newerLimit + 1, true)
+    const newerCount = Math.min(newerLimit, newer.length)
+    const olderCount = limit - 1 - newerCount
+    if (olderCount > olderLimit && older.length > olderLimit) {
+      older = adjacentMessages(id, anchor, olderCount + 1, false)
+    }
+    const {position, ...message} = anchor
+    const items = [...older.slice(0, olderCount).reverse(), message, ...newer.slice(0, newerCount)].map(readMessage)
+    return {items, cursor: older.length > olderCount ? items[0].id : null, has_newer: newer.length > newerCount}
+  }
 
   async function privateProfile(agent) {
     const binding = one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1')
     if (binding?.agent_id !== agent.id || binding.workspace_id !== agent.workspace_id) return null
     try { return (await host.call('personal/get', {})) || {recall:'off'} } catch { return {recall:'off'} }
+  }
+
+  function observeAgent(row, bot, rosterAttached) {
+    if (bot) return {...row,
+      name: row.native_name && bot.name !== row.native_name ? bot.name : row.name,
+      instructions: bot.instructions || '', archived: Number(Boolean(bot.hidden)),
+      native_bot_id: bot.id, native_name: bot.name}
+    if (rosterAttached && row.native_bot_id) return {...row, archived: 1, native_name: null, native_deleted: true}
+    return row
+  }
+
+  async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
+    const rows = all(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
+      FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id
+      WHERE a.workspace_id=? AND a.id>? ORDER BY a.id`, workspaceId, cursor)
+    // Native writes own reconciliation. Listing still works before the roster
+    // attaches and can reflect live edits without queueing behind a model turn.
+    const rt = host.currentRuntime?.()?.rt
+    const rosterAttached = typeof rt?.botOf === 'function'
+    const unmapped = new Map()
+    if (rosterAttached && rows.some(row => !row.native_bot_id)) {
+      for (const bot of Object.values(rt.state?.bots ?? {})) {
+        const link = bot.openteamily
+        if (link?.workspace_id === workspaceId && !unmapped.has(link.agent_id)) unmapped.set(link.agent_id, bot)
+      }
+    }
+    const page = []
+    for (const row of rows) {
+      const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped.get(row.id)
+      const observed = observeAgent(row, bot, rosterAttached)
+      if (!includeArchived && observed.archived) continue
+      page.push(observed)
+      if (page.length > limit) break
+    }
+    const items = page.slice(0, limit).map(view)
+    const binding = one('SELECT agent_id FROM native_personal_binding WHERE singleton=1 AND workspace_id=?', workspaceId)
+    const personal = binding && items.find(agent => agent.id === binding.agent_id)
+    if (personal) {
+      const profile = await privateProfile(personal)
+      if (profile) personal.memory_recall_default = profile.recall !== 'off'
+    }
+    return {items, cursor: page.length > limit ? items.at(-1)?.id ?? null : null}
   }
 
   function memoryMode(convo, profile) {
@@ -182,7 +264,7 @@ export function createAgents({ db, host }) {
     const services = await host.runtime()
     if (typeof services?.chatTurn !== 'function') fail('runtime-unavailable', 'DS-Bot chat service unavailable', 503)
     const sessionKey = `agent:${agent.id}:${typeof key === 'string' && /^[A-Za-z0-9:_-]{1,96}$/.test(key) ? key : 'default'}`
-    await host.call('skills/materialForScope', { scope: agent.workspace_id + ':' + agent.id })
+    await host.call('skills/materialForScope', { scope: agent.workspace_id + ':' + agent.id, bot_id: agent.native_bot_id })
     const mapping = await native.session(agent, sessionKey, agent.name)
     if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
     const prompt = [typeof context === 'string' ? context.slice(0, CONTEXT_LIMIT) : '', lang ? `Reply in ${lang}.\n\n${text}` : text].filter(Boolean).join('\n\n')
@@ -463,16 +545,22 @@ export function createAgents({ db, host }) {
     async openConversation(p) {
       const agent = load(ws(p), p.id)
       const row = conversation(agent, p.conversation_id)
+      const history = p.history
+      if (history !== undefined) {
+        if (!history || !Number.isInteger(history.limit) || history.limit < 1 || history.limit > 100 ||
+          (history.before !== undefined && (typeof history.before !== 'string' || !ID.test(history.before))) ||
+          (history.around !== undefined && (typeof history.around !== 'string' || !ID.test(history.around))) ||
+          (history.before !== undefined && history.around !== undefined)) fail('invalid', 'Invalid history parameters', 400)
+      }
       const {native_name, ...mapping} = await native.readSession(agent, `agent:${agent.id}:${row.id}`, row.title)
       const current = load(agent.workspace_id, agent.id)
-      // An already-bound Session stays readable while a turn holds the native lock.
-      // Honour a recent roster archive without taking that lock to reconcile it.
-      const rosterBot = host.currentRuntime?.()?.rt?.botOf(mapping.native_bot_id)
+      const rt = host.currentRuntime?.()?.rt
+      const observed = observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
+        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function')
       return {
-        agent: view({...current, archived: current.archived || Number(Boolean(rosterBot?.hidden)),
-          native_bot_id: mapping.native_bot_id, native_name}),
+        agent: view(observed),
         conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
-        items: conversationMessages(row.id),
+        ...(history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
       }
     },
     async captureSource(p) {
@@ -714,7 +802,7 @@ export function createAgents({ db, host }) {
       return { imported }
     },
   }
-  endpoints.v1 = agentsV1({ endpoints, log: host?.log })
+  endpoints.v1 = agentsV1({ endpoints, chatDirectory, log: host?.log })
   const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(endpoints, bundle) : endpoints.import(bundle))
   return { endpoints, migrate }
 }

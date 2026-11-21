@@ -159,8 +159,8 @@ function syncAccountSlot(doc) {
 
 
 export const ONBOARDING_MENU_HREF = '/onboarding';
-export const ONBOARDING_MENU_LABEL = '工作背景';
-export const ONBOARDING_MENU_TITLE = '打开已有的工作背景页。对照账户菜单写的是「新手引导」，因为第 2 至 4 步尚未接通，入口名称与落点保持一致。';
+export const ONBOARDING_MENU_LABEL = '新手引导';
+export const ONBOARDING_MENU_TITLE = '打开新手引导';
 
 export const CHANNELS_MENU_HREF = '/settings/channels';
 export const CHANNELS_MENU_LABEL = 'Agent 渠道';
@@ -168,7 +168,7 @@ export const CHANNELS_MENU_TITLE = '打开已有的 Agent 渠道设置页。对�
 
 export const CONNECTORS_MENU_HREF = '/settings/connectors';
 export const CONNECTORS_MENU_LABEL = '应用连接器';
-export const CONNECTORS_MENU_TITLE = '打开已有的应用连接器设置页。连接第三方账号仍未接通，本入口只负责导航。';
+export const CONNECTORS_MENU_TITLE = '管理应用连接器';
 
 function menuChildByHref(menu, href) {
   const children = menu && menu.children ? Array.from(menu.children) : [];
@@ -206,9 +206,6 @@ function placeMenuLink(menu, link, reference) {
   return link;
 }
 
-/* Recorded Teamily account menu has「新手引导」after 创建团队 and before 帮助.
-   Only step 1 exists, so the item uses the destination name 工作背景 and opens /onboarding.
-   The function is also used to move an already-present link into that slot. */
 export function ensureOnboardingMenuItem(doc) {
   const menu = doc.getElementById('account-menu');
   if (!menu) return null;

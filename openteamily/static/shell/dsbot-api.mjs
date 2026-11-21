@@ -24,7 +24,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/memory\/capture$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/(?:attachments|reply-progress|messages(?:\/[0-9a-f]{32}\/(?:artifact|files\/[0-3]))?))?)?))?)?$/, 'agents'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe|share-recipients|shared(?:\/[0-9a-f]{32}(?:\/revoke)?)?|[0-9a-f]{32}(?:\/(?:remove|export|shares))?))?$/, 'meetings'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe|share-recipients|shared(?:\/[0-9a-f]{32}(?:\/revoke)?)?|[0-9a-f]{32}(?:\/(?:remove|export|shares|action|artifact))?))?$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/draft(?:\/save)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:candidates(?:\/[0-9a-f]{32})?|profile(?:\/dream)?|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
@@ -35,7 +35,7 @@ export const MOVED = [
   // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],
   [/^\/v1\/notification-prefs$/, 'settings'],
-  [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
+  [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look|progress))?$/, 'settings'],
   [/^\/v1\/model-api(?:\/(?:image|video|music|model3d))?$/, 'model-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/images(?:\/[0-9a-f]{32})?$/, 'images'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/videos(?:\/[0-9a-f]{32})?$/, 'videos'],
@@ -84,10 +84,11 @@ export function movedTarget(input, origin, table = MOVED) {
   return row ? { feature: row[1], path: url.pathname + url.search } : null;
 }
 
-export async function readWorkspaceChoices(request, sharedPath) {
+export async function readWorkspaceChoices(request, sharedPath, personalRequest) {
   const unavailable = {status: 0, body: {}};
   const shared = request('GET', sharedPath).catch(() => unavailable);
-  const initial = await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
+  const initial = await personalRequest ??
+    await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
   const local = initial.status === 200 ? (initial.body.items || []) : [];
   if (!local.length) return {initial: await shared, supplemental: null};
   const supplemental = shared.then(result => {

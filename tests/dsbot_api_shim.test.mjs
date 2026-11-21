@@ -10,6 +10,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.deepEqual(movedTarget(`/v1/workspaces/${WS}/meetings?limit=20`, ORIGIN),
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/artifact`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/action?index=0&revision=1`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/share-recipients?conversation_id=otc_1`, ORIGIN).feature, 'meetings');
@@ -51,6 +53,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/settings', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/notification-prefs', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/onboarding/progress', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/recommendations', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/model-api', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/image', ORIGIN).feature, 'model-api');

@@ -10,6 +10,8 @@ import { loadBotSocialConfig } from '../bot-social-config.js'
 import { startBridge, runTurn } from '../ds-bot-bridge.mjs'
 import { normalizeImportedSession } from '../../openteamily-web/features/agents/history.js'
 import { attachRuntime } from '../../openteamily-web/src/host.js'
+import { boundName } from '../../openteamily-web/features/skills/index.js'
+import { nativeSkillFilter, reconcileStartupSkills } from '../../openteamily-web/features/skills/library.js'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -20,7 +22,13 @@ export function apply(ctx, config = {}) {
   // Prepare is detached/read-only: no Session is entered, persisted or announced.
   // Install before core agent restoration, whose projections read old imports.
   normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))
-  const rt = createRuntime(ctx, config)
+  const dataDir = process.env.DSH_HOME ?? '/data'
+  const filterNativeCapabilities = nativeSkillFilter(dataDir, boundName)
+  const rt = createRuntime(ctx, { ...config, filterNativeCapabilities })
+  ctx.effect(() => {
+    void reconcileStartupSkills(rt, dataDir, boundName)
+      .catch(error => rt.warn('openteamily: could not reconcile startup skills: %s', error.name))
+  }, 'openteamily: startup skill consent')
   // Publish once, after the complete bridge services exist. Early pending imports
   // must not capture a permanently incomplete frozen runtime handle.
   const collaboration = loadBotSocialConfig()

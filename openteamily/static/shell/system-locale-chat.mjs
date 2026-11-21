@@ -62,7 +62,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.onboarding.complete": ["完善", "Update your "],
   "chat.onboarding.background": ["工作背景", "work background"],
   "chat.onboarding.why": ["，让自动化推荐更贴合你。", " for more relevant automation suggestions. "],
-  "chat.settings.open": ["去设置", "Open settings"],
+  "chat.onboarding.open": ["打开新手引导", "Open setup guide"],
   "chat.inbox.mark_all_read": ["全部已读", "Mark all as read"],
   "chat.kind": ["类型", "Type"],
   "chat.inbox.all": ["所有通知", "All notifications"],

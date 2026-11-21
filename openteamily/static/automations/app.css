@@ -281,6 +281,36 @@ body.app-workspace #main-panel {
   display: none;
 }
 
+#meeting-action-source {
+  padding: .8rem 1rem;
+  margin-bottom: .8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .8rem;
+  background: var(--ot-surface);
+  overflow-wrap: anywhere;
+}
+
+#meeting-action-source h2,
+#meeting-action-source p {
+  margin: 0 0 .35rem;
+}
+
+#meeting-action-source h2 {
+  font-size: .85rem;
+}
+
+#meeting-action-source-title {
+  font-weight: 650;
+}
+
+#meeting-action-source a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  text-decoration: underline;
+  text-underline-offset: .15em;
+}
+
 .editor-head {
   display: flex;
   flex-direction: column;
@@ -363,6 +393,10 @@ body.app-workspace #main-panel {
   gap: 0.5rem;
   align-items: center;
 }
+
+#manual-run-note { margin: 0 0 .75rem; }
+#manual-run-status:empty { display: none; }
+#automation-link-retry { margin: 0 1rem .75rem; min-height: 2.75rem; }
 
 #tick-automation,
 #remove-automation {

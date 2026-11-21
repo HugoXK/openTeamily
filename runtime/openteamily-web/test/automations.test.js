@@ -289,18 +289,34 @@ test('official import bundle marks the current slot skipped and does not re-impo
   assert.equal((await feature.migrate(bundle)).imported, 0)
 })
 
-test('onboarding creates a paused automation in DS-Bot and skips retries', async () => {
-  const { e } = fixture()
+test('onboarding creates a paused automation for the verified owner and returns its exact ID on replay', async () => {
+  const {calls, e, feature} = fixture()
   const request = {method: 'POST', path: '/v1/onboarding/automations',
-    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'alice'}}
-  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}})
+    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'forged-account'}}
+  const call = {request: new Request('https://example.test', {headers: {'x-ot-owner-username': 'alice'}})}
+  assert.equal((await e['automations/v1'](request, {request: new Request('https://example.test', {headers: {'x-ot-owner-username': ''}})})).status, 403)
+  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}}, call)
   assert.equal(denied.status, 403)
-  const result = await e['automations/v1'](request)
+  const result = await e['automations/v1'](request, call)
   assert.equal(result.status, 201)
   const id = result.body.created[0].id
-  assert.equal(e['automations/get']({workspace_id: W, id}).automation.enabled, false)
-  const retry = await e['automations/v1'](request)
+  const path = `/v1/workspaces/${W}/automations/${id}`
+  const current = () => e['automations/get']({workspace_id: W, id}).automation
+  assert.equal(current().enabled, false)
+  assert.deepEqual(current().participants, [{username: 'alice'}])
+  assert.equal(calls.length, 0)
+  assert.equal((await e['automations/v1']({method: 'GET', path: path + '/remove'}, call)).status, 405)
+  assert.equal((await e['automations/v1']({method: 'GET', path: `/v1/workspaces/${W}/automations/tick`}, call)).status, 405)
+  e['automations/update']({workspace_id: W, id, revision: 1, changes: {title: '改名的简报'}})
+  const retry = await e['automations/v1'](request, call)
   assert.equal(retry.status, 200)
   assert.deepEqual(retry.body.created, [])
-  assert.equal(retry.body.skipped[0].template_id, 'daily_brief')
+  assert.deepEqual(retry.body.skipped, [{id, template_id: 'daily_brief', title: '改名的简报'}])
+  assert.equal(e['automations/list']({workspace_id: W}).items.length, 1)
+  const run = await e['automations/v1']({method: 'POST', path: path + '/run', idempotency_key: 'onboarding-manual-1'}, call)
+  assert.equal(run.status, 202)
+  await feature.inflight.get(run.body.run.id)
+  assert.equal(e['automations/run']({workspace_id: W, id, run_id: run.body.run.id}).run.result.text, 'DS-Bot did it')
+  assert.equal(calls.length, 1)
+  assert.equal(current().enabled, false)
 })

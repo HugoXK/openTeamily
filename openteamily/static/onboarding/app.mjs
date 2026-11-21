@@ -1,3 +1,5 @@
+import {servedByDsBot} from '../shell/dsbot-api.mjs';
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -28,8 +30,11 @@ export function mountAutomationCreation(doc, send = request) {
   const button = doc.getElementById('create-onboarding-automations');
   const list = doc.getElementById('onboarding-automation-templates');
   const status = doc.getElementById('onboarding-automation-status');
+  const links = doc.getElementById('onboarding-automation-links');
   let busy = false;
   let choices = [];
+  let personalWorkspace = '';
+  const savedId = /^[0-9a-f]{32}$/;
   if (!button || !list || !status) return {render() {}};
   button.addEventListener('click', async () => {
     if (busy) return;
@@ -40,24 +45,38 @@ export function mountAutomationCreation(doc, send = request) {
     }
     busy = true;
     button.disabled = true;
-    status.textContent = '正在创建暂停的自动化…';
+    status.textContent = '正在创建自动化…';
     try {
-      const [personal, session] = await Promise.all([
-        send('POST', '/v1/personal-agent', {}),
-        send('GET', '/v1/auth/session'),
-      ]);
-      const workspaceId = personal.body?.personal_agent?.workspace?.id;
-      const username = session.body?.user?.username;
-      if (![200, 201].includes(personal.status) || session.status !== 200 || !workspaceId || !username) {
-        status.textContent = '无法加载个人工作区，请重试。';
-        return;
+      let workspaceId = personalWorkspace;
+      if (!savedId.test(workspaceId)) {
+        const personal = await send('POST', '/v1/personal-agent', {});
+        workspaceId = personal.body?.personal_agent?.workspace?.id;
+        if (![200, 201].includes(personal.status) || !savedId.test(workspaceId || '')) {
+          status.textContent = '无法加载个人工作区，请重试。';
+          return;
+        }
       }
-      const result = await send('POST', '/v1/onboarding/automations', {workspace_id: workspaceId, template_ids: selected, username});
+      const result = await send('POST', '/v1/onboarding/automations', {workspace_id: workspaceId, template_ids: selected});
       if (result.status !== 200 && result.status !== 201) {
         status.textContent = messageFor(result.body.error, '创建失败，请重试。');
         return;
       }
-      status.textContent = `已创建 ${result.body.created.length} 个（全部暂停），已存在 ${result.body.skipped.length} 个未重复创建。请到自动化页检查后手动启用。`;
+      const {created = [], skipped = []} = result.body;
+      status.textContent = created.length ? `已创建 ${created.length} 条暂停的自动化。` : '';
+      if (skipped.length) status.textContent += `已有 ${skipped.length} 条相同模板或重名的自动化。`;
+      if (links) {
+        links.textContent = '';
+        for (const item of [...created, ...skipped]) {
+          if (!savedId.test(item.id || '')) continue;
+          const row = doc.createElement('li');
+          const link = doc.createElement('a');
+          link.href = `/automations?workspace=${workspaceId}&automation=${item.id}`;
+          link.textContent = '打开「' + item.title + '」';
+          row.append(link);
+          links.append(row);
+        }
+        links.hidden = links.children.length === 0;
+      }
     } catch {
       status.textContent = '连接中断，结果尚不确定。可重试，已创建的模板不会重复创建。';
     } finally {
@@ -65,7 +84,9 @@ export function mountAutomationCreation(doc, send = request) {
       button.disabled = false;
     }
   });
-  return {render(items = []) {
+  return {setPersonalWorkspace(workspaceId) {
+    personalWorkspace = savedId.test(workspaceId || '') ? workspaceId : '';
+  }, render(items = []) {
     list.textContent = '';
     choices = [];
     for (const item of items) {
@@ -109,7 +130,7 @@ const TOOLKITS = {
 export function appConnectionState(app, {connections = [], readable = true, sync = 'ok'} = {}) {
   if (!readable) {
     return {state: 'unknown', label: '未接入', connected: false,
-            title: '还没有配置你自己的 Composio key，读不到这个应用的连接状态'};
+            title: '暂时无法读取你的 Composio 连接状态'};
   }
   if (sync === 'failed') {
     return {state: 'unknown', label: '状态未知', connected: false,
@@ -132,17 +153,6 @@ export function appConnectionState(app, {connections = [], readable = true, sync
   return {state: 'unconnected', label: '未连接', connected: false, title: '还没有这个应用的连接'};
 }
 
-// What the workspace already has, said in one line instead of "everything is
-// unconnected". Empty string when the reads returned nothing to report.
-export function realitySummary({agents = 0, runtimes = 0, online = 0} = {}) {
-  const parts = [];
-  if (agents > 0) parts.push(`${agents} 个智能体`);
-  if (runtimes > 0) parts.push(online > 0 ? `${online} 个运行时连接在线` : `${runtimes} 个运行时连接（都不在线）`);
-  if (!parts.length) return '';
-  return '你的工作区已经有 ' + parts.join('，') + '。';
-}
-
-
 const TILE_TONES = 6;
 
 export function tileTone(text) {
@@ -160,7 +170,31 @@ export function lookSummary(look) {
   return Object.keys(LOOK_LABELS).map(name => `${LOOK_LABELS[name]}：${look[name]}`).join(' · ');
 }
 
-function mount() {
+const NATIVE_ID = /^[a-f0-9]{32}$/;
+
+export function personalChatPath(personal) {
+  const workspace = personal?.workspace?.id;
+  const agent = personal?.agent?.id;
+  return NATIVE_ID.test(workspace || '') && NATIVE_ID.test(agent || '')
+    ? '/chat#workspace=' + workspace + '&agent=' + agent : '';
+}
+
+function savedProgress(data) {
+  const progress = data?.progress;
+  if (Number.isInteger(progress?.step) && progress.step >= 1 && progress.step <= 4) {
+    return {step: progress.step, completed: progress.completed === true};
+  }
+  const profile = data?.onboarding;
+  if (data?.steps?.look || (profile?.completed && !profile.industry && !profile.role)) {
+    return {step: 4, completed: true};
+  }
+  return {step: profile ? 2 : 1, completed: false};
+}
+
+export function mountOnboarding(document, {
+  send = request,
+  navigate = path => document.defaultView.location.assign(path),
+} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -173,9 +207,19 @@ function mount() {
   const customRoleLabel = document.getElementById('custom-role-label');
   const customRole = document.getElementById('custom-role');
   if (!status || !loginPanel || !mainPanel || !form) return;
+  const automationCreation = mountAutomationCreation(document, send);
   let industries = [];
   let current = null;
-  const automationCreation = mountAutomationCreation(document);
+  let data = null;
+  let user = null;
+  let generation = 0;
+  let writing = null;
+  let step = 1;
+  let progress = {step: 1, completed: false};
+  let connections = null;
+  let loadingConnections = null;
+
+  const read = path => send('GET', path).catch(() => null);
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -231,8 +275,7 @@ function mount() {
     }
   }
 
-  let step = 1;
-  function goStep(next) {
+  function goStep(next, {focus = false} = {}) {
     step = next;
     form.hidden = next !== 1;
     const section = document.getElementById('onboarding-steps');
@@ -245,9 +288,15 @@ function mount() {
     for (const bar of document.querySelectorAll('.onboarding-progress li')) {
       bar.dataset.done = String(Number(bar.dataset.bar) <= next);
     }
-  }
-  for (const button of document.querySelectorAll('#onboarding-steps [data-go]')) {
-    button.addEventListener('click', () => goStep(Number(button.dataset.go)));
+    if (focus) {
+      document.getElementById('main')?.scrollTo?.(0, 0);
+      document.querySelector('[data-step="' + next + '"] h2')?.focus();
+    }
+    if (next === 2) {
+      renderConnections();
+      void loadConnections();
+    }
+    if (next === 4) paintLook();
   }
 
   function renderRoles() {
@@ -322,236 +371,10 @@ function mount() {
     }
   }
 
-  function renderChecklist(steps) {
-    const list = document.getElementById('onboarding-checklist');
-    if (!list) return;
-    list.replaceChildren();
-    for (const [index, step] of steps.entries()) {
-      const row = document.createElement('li');
-      row.dataset.state = step.state;
-      row.className = step.state === 'done' ? 'note' : '';
-      const mark = document.createElement('span');
-      mark.setAttribute('aria-hidden', 'true');
-      mark.textContent = step.state === 'done' ? '✓ ' : (index + 1) + '. ';
-      const label = document.createElement('strong');
-      label.textContent = step.title;
-      row.append(mark, label, document.createTextNode(' — ' + step.detail));
-      list.append(row);
-    }
-    const ready = document.getElementById('onboarding-ready');
-    if (!ready) return;
-    const done = steps.every(step => step.state === 'done');
-    ready.hidden = !done;
-    if (!done) {
-      ready.replaceChildren();
-      return;
-    }
-    const link = document.createElement('a');
-    link.setAttribute('href', '/chat');
-    link.setAttribute('role', 'button');
-    link.textContent = '去聊天';
-    ready.replaceChildren(document.createTextNode('可以开始了：'), link);
-  }
-
-  async function judgeAgents(step, spaces) {
-    let total = 0;
-    let firstName = '';
-    let failed = false;
-    for (const space of spaces) {
-      const agents = await request('GET', '/v1/workspaces/' + space.id + '/agents?limit=100');
-      if (agents.status !== 200) {
-        failed = true;
-        continue;
-      }
-      const items = agents.body.items || [];
-      total += items.length;
-      if (!firstName && items.length && items[0].name) firstName = items[0].name;
-    }
-    if (total) {
-      step.state = 'done';
-      step.detail = '已有 ' + total + ' 个智能体' + (firstName ? '，其中「' + firstName + '」' : '') + '。';
-    } else if (failed) {
-      step.state = 'unknown';
-      step.detail = '读取智能体失败，暂时无法判断。';
-    } else {
-      step.state = 'pending';
-      step.detail = '还没有智能体：到智能体页创建一个。';
-    }
-  }
-
-  async function judgeAutomations(step, spaces) {
-    let automations = 0;
-    let runsKnown = false;
-    let ran = false;
-    let listFailed = false;
-    let runFailed = false;
-    for (const space of spaces) {
-      const listed = await request('GET', '/v1/workspaces/' + space.id + '/automations');
-      if (listed.status !== 200) {
-        listFailed = true;
-        continue;
-      }
-      const items = listed.body.items || [];
-      automations += items.length;
-      for (const item of items) {
-        const runs = await request('GET', '/v1/workspaces/' + space.id + '/automations/' + item.id + '/runs?limit=20');
-        if (runs.status !== 200) {
-          runFailed = true;
-          continue;
-        }
-        runsKnown = true;
-        if ((runs.body.items || []).some(run => run.status === 'succeeded' || run.status === 'failed')) {
-          ran = true;
-        }
-      }
-      if (ran) break;
-    }
-    if (ran) {
-      step.state = 'done';
-      step.detail = '已经有自动化执行记录。';
-    } else if (!automations) {
-      if (listFailed) {
-        step.state = 'unknown';
-        step.detail = '读取自动化失败，暂时无法判断。';
-      } else {
-        step.state = 'pending';
-        step.detail = '还没有自动化：到自动化页创建一条。';
-      }
-    } else if (!runsKnown && runFailed) {
-      step.state = 'unknown';
-      step.detail = '读取运行记录失败，暂时无法判断。';
-    } else {
-      step.state = 'pending';
-      step.detail = '自动化还没有执行过：到自动化页跑一次。';
-    }
-  }
-
-  async function judgeRuntime(step) {
-    const runtimes = await request('GET', '/v1/runtime/connections');
-    if (runtimes.status !== 200) {
-      step.detail = '读取运行时失败，暂时无法判断。';
-      return;
-    }
-    const items = runtimes.body.items || [];
-    const online = items.filter(item => item.status === 'online').length;
-    if (online) {
-      step.state = 'done';
-      step.detail = '已有 ' + online + ' 个运行时在线。';
-    } else if (items.length) {
-      step.state = 'pending';
-      step.detail = '运行时当前离线：重新启动它就能继续。';
-    } else {
-      step.state = 'pending';
-      step.detail = '还没有连接运行时：到运行时页按提示连接。';
-    }
-  }
-
-  async function judgeChecklist(steps) {
-    const listed = await request('GET', '/v1/workspaces?limit=100');
-    const spaces = listed.status === 200 ? (listed.body.items || []) : [];
-    if (listed.status !== 200) {
-      steps[0].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
-      steps[2].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
-    } else if (!spaces.length) {
-      steps[0].detail = '需要你先创建工作区才能判断。';
-      steps[2].detail = '需要你先创建工作区才能判断。';
-    } else {
-      // Every workspace counts: a second workspace may hold the agent and the
-      // finished run, so judging only the first one would report "还没有" for a
-      // user who already has them.
-      await judgeAgents(steps[0], spaces);
-      await judgeAutomations(steps[2], spaces);
-    }
-    await judgeRuntime(steps[1]);
-  }
-
-  async function loadChecklist() {
-    const steps = [
-      {title: '建智能体', state: 'unknown', detail: ''},
-      {title: '连运行时', state: 'unknown', detail: ''},
-      {title: '跑一次自动化', state: 'unknown', detail: ''},
-    ];
-    try {
-      await judgeChecklist(steps);
-    } catch {
-      // A thrown request must not leave the block blank: keep the three rows,
-      // say why they are unknown, and never tick them. A transport failure also
-      // means later requests cannot be trusted, so nothing else is judged here.
-      for (const step of steps) {
-        if (step.state === 'done') continue;
-        step.state = 'unknown';
-        if (!step.detail) step.detail = '读取时出错，暂时无法判断。';
-      }
-    }
-    renderChecklist(steps);
-  }
-
-  async function load() {
-    const session = await request('GET', '/v1/auth/session');
-    if (session.status === 401) {
-      loginPanel.hidden = false;
-      mainPanel.hidden = true;
-      show('', '');
-      return;
-    }
-    if (session.status !== 200 || !session.body.user) {
-      show('error', messageFor(session.body && session.body.error, '无法读取会话。'));
-      return;
-    }
-    loginPanel.hidden = true;
-    mainPanel.hidden = false;
-    document.getElementById('whoami').textContent = session.body.user.username;
-    document.getElementById('whoami').dataset.username = session.body.user.username;
-    await loadChecklist();
-    const result = await request('GET', '/v1/onboarding');
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法读取工作背景。'));
-      return;
-    }
-    industries = result.body.industries || [];
-    populateIndustries();
-    fill(result.body.onboarding);
-    await renderSteps(result.body.steps, result.body.onboarding);
-    automationCreation.render(result.body.automation_templates || []);
-    const ready = document.getElementById('onboarding-ready-name');
-    if (ready) ready.textContent = session.body.user.username + '，';
-    goStep(step);
-  }
-
-  async function readReality() {
-    const out = {agents: 0, runtimes: 0, online: 0, connections: [], readable: true, sync: 'ok'};
-    const spaces = await request('GET', '/v1/workspaces?limit=100');
-    const workspace = spaces.status === 200 ? (spaces.body.items || [])[0] : null;
-    if (workspace) {
-      const listed = await request('GET', `/v1/workspaces/${workspace.id}/agents?limit=100`);
-      if (listed.status === 200) out.agents = (listed.body.items || []).length;
-    }
-    const runtimes = await request('GET', '/v1/runtime/connections');
-    if (runtimes.status === 200) {
-      const items = runtimes.body.items || [];
-      out.runtimes = items.length;
-      out.online = items.filter(item => item && item.status === 'online').length;
-    }
-    const listed = await request('GET', '/v1/composio/connections');
-    if (listed.status === 200) {
-      out.connections = listed.body.items || [];
-      out.sync = listed.body.sync === 'failed' ? 'failed' : 'ok';
-    } else {
-      out.readable = false;
-    }
-    return out;
-  }
-
-  async function renderSteps(steps, state) {
-    const section = document.getElementById('onboarding-steps');
-    if (!section) return;
-    if (!steps) return;
+  function renderConnections() {
     const apps = document.getElementById('onboarding-apps');
-    apps.textContent = '';
-    const reality = await readReality();
-    const summary = document.getElementById('onboarding-reality');
-    if (summary) summary.textContent = realitySummary(reality);
-    for (const app of steps.apps || []) {
+    apps.replaceChildren();
+    for (const app of data?.steps?.apps || []) {
       const li = document.createElement('li');
       const tile = document.createElement('span');
       tile.className = 'choice-tile';
@@ -564,21 +387,43 @@ function mount() {
       name.textContent = app.name;
       const state = document.createElement('span');
       state.className = 'app-state';
-      const info = appConnectionState(app, reality);
+      const info = connections ? appConnectionState(app, connections)
+        : {state: 'loading', label: '读取中', title: '正在读取连接状态'};
       state.dataset.state = info.state;
       state.textContent = ' · ' + info.label;
       state.title = info.title;
       copy.append(name, state);
-      const connect = document.createElement('button');
-      connect.type = 'button';
-      connect.disabled = true;
-      connect.className = 'app-connect';
-      connect.textContent = info.connected ? '已连接' : '+ 连接';
-      connect.title = info.connected ? info.title : info.title + '；连接在 设置 → 应用连接器 里做';
-      connect.setAttribute('aria-label', app.name + '：' + info.label);
-      li.append(tile, copy, connect);
+      li.append(tile, copy);
+      if (!info.connected) {
+        const connect = document.createElement('a');
+        connect.href = '/settings/connectors';
+        connect.className = 'app-connect';
+        connect.textContent = '前往设置';
+        connect.setAttribute('aria-label', '在设置中管理 ' + app.name);
+        li.append(connect);
+      }
       apps.appendChild(li);
     }
+  }
+
+  async function loadConnections({refresh = false} = {}) {
+    if (!data || loadingConnections || (connections && !refresh)) return;
+    const own = Symbol();
+    loadingConnections = own;
+    const result = await read('/v1/composio/connections');
+    if (loadingConnections !== own) return;
+    loadingConnections = null;
+    connections = {
+      readable: result?.status === 200,
+      connections: result?.body?.items || [],
+      sync: result?.body?.sync,
+    };
+    if (step === 2) renderConnections();
+  }
+
+  function renderSteps(steps) {
+    if (!steps) return;
+    if (step === 2) renderConnections();
     const picks = document.getElementById('onboarding-picks');
     picks.textContent = '';
     const groups = {task: ['一次性任务'], routine: ['例行任务']};
@@ -636,45 +481,192 @@ function mount() {
       look.appendChild(label);
     }
     paintLook();
-    document.getElementById('onboarding-look-preview').textContent = lookSummary(steps.look);
     document.getElementById('onboarding-steps-meta').textContent =
-      `已选 ${(steps.picks || []).length} 项 · ` + (steps.look ? '形象已保存' : '形象未保存');
+      '已选 ' + (steps.picks || []).length + ' 项';
   }
 
+  function chosenLook() {
+    return Object.fromEntries([...document.querySelectorAll('#onboarding-look select')]
+      .map(choice => [choice.name, choice.value]));
+  }
+
+  let lookRenderer;
   function paintLook() {
-    const avatar = document.getElementById('look-avatar');
-    if (!avatar) return;
-    for (const choice of document.querySelectorAll('#onboarding-look select')) {
-      avatar.dataset[choice.name] = choice.value;
+    const look = chosenLook();
+    document.getElementById('onboarding-look-preview').textContent =
+      Object.keys(look).length ? lookSummary(look) : '';
+    if (step !== 4) return;
+    if (!lookRenderer) {
+      const style = document.createElement('link');
+      style.rel = 'stylesheet';
+      style.href = '/look/app.css';
+      document.head?.appendChild(style);
+      lookRenderer = import('../look/app.mjs');
     }
+    const own = generation;
+    void lookRenderer.then(({createLookAvatar}) => {
+      if (generation !== own || step !== 4) return;
+      const graphic = createLookAvatar(chosenLook(), document);
+      if (graphic) document.getElementById('look-avatar').replaceChildren(graphic);
+    }).catch(() => {});
   }
 
-  async function saveStep(path, body, okText, next) {
-    const result = await request('POST', path, body);
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '保存失败。'));
+  function applyState(next, {full = false} = {}) {
+    data = {...data, ...next};
+    if (full) {
+      industries = data.industries || [];
+      populateIndustries();
+      fill(data.onboarding);
+      automationCreation.render(data.automation_templates || []);
+    }
+    if (full || next.steps) renderSteps(data.steps);
+    progress = savedProgress(data);
+    document.getElementById('onboarding-enter').textContent =
+      progress.completed ? '保存并打开聊天' : '完成并开始聊天';
+  }
+
+  async function load() {
+    const own = ++generation;
+    if (writing) finishWriting(writing);
+    user = null;
+    data = null;
+    connections = null;
+    loadingConnections = null;
+    mainPanel.hidden = true;
+    show('loading', '正在读取引导进度…');
+    const sessionRequest = read('/v1/auth/session');
+    const early = servedByDsBot(document) ? read('/v1/onboarding') : null;
+    const session = await sessionRequest;
+    if (generation !== own) return;
+    if (session?.status === 401) {
+      loginPanel.hidden = false;
+      show('', '');
       return;
     }
-    renderSteps(result.body.steps, current || {completed: true});
-    show('ok', okText);
-    if (next) goStep(next);
+    if (session?.status !== 200 || !session.body?.user?.username) {
+      show('error', '暂时无法读取账号信息，请刷新重试。');
+      return;
+    }
+    loginPanel.hidden = true;
+    user = session.body.user;
+    let result = await early;
+    if (result?.status !== 200 || result.body?.viewer_username !== user.username) {
+      result = await read('/v1/onboarding');
+    }
+    if (generation !== own) return;
+    if (result?.status !== 200 || !result.body || (result.body.viewer_username && result.body.viewer_username !== user.username)) {
+      show('error', messageFor(result?.body?.error, '暂时无法读取引导进度，请刷新重试。'));
+      return;
+    }
+    const identity = document.getElementById('whoami');
+    identity.textContent = user.username;
+    identity.dataset.username = user.username;
+    document.getElementById('onboarding-ready-name').textContent = user.username + '，';
+    applyState(result.body, {full: true});
+    show('', '');
+    goStep(progress.step);
+    mainPanel.hidden = false;
   }
 
-  const picksForm = document.getElementById('onboarding-picks-form');
-  if (picksForm) picksForm.addEventListener('submit', event => {
+  async function perform(message, action) {
+    if (writing || !user || !data) return;
+    const own = generation;
+    const live = () => generation === own;
+    const controls = [...document.querySelectorAll(
+      '#onboarding-save,#onboarding-skip,#onboarding-steps [data-go],#onboarding-picks-form button[type="submit"],#onboarding-look-form button[type="submit"],#onboarding-enter',
+    )];
+    const before = controls.map(button => button.disabled);
+    const task = {controls, before};
+    writing = task;
+    for (const button of controls) button.disabled = true;
+    show('loading', message);
+    try { await action(live); }
+    catch { if (live()) show('error', '连接中断，请重试。'); }
+    finally { finishWriting(task); }
+  }
+
+  function finishWriting(task) {
+    if (writing !== task) return;
+    writing = null;
+    task.controls.forEach((button, index) => { button.disabled = task.before[index]; });
+  }
+
+  async function save(path, body, live) {
+    const result = await send('POST', path, body);
+    if (!live()) return null;
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body?.error, '保存失败，请重试。'));
+      return null;
+    }
+    return result.body;
+  }
+
+  async function openPersonal(live) {
+    show('loading', '正在打开你的私人聊天…');
+    let personal = (await read('/v1/personal-agent'))?.body?.personal_agent;
+    let href = personalChatPath(personal);
+    if (!live()) return;
+    if (!href || personal.runtime_provisioning?.readiness === 'setup') {
+      const result = await send('POST', '/v1/personal-agent', {});
+      if (!live()) return;
+      personal = [200, 201].includes(result.status) ? result.body?.personal_agent : null;
+      href = personalChatPath(personal);
+    }
+    if (href) navigate(href);
+    else show('error', '引导已保存，暂时无法打开私人聊天。请重试。');
+  }
+
+  for (const button of document.querySelectorAll('#onboarding-steps [data-go]')) {
+    button.addEventListener('click', () => {
+      if (writing) return;
+      const next = Number(button.dataset.go);
+      if (step === 2 && next === 3) {
+        void perform('正在保存进度…', async live => {
+          const result = await save('/v1/onboarding/progress', {step: 3}, live);
+          if (!result) return;
+          applyState(result);
+          show('', '');
+          goStep(next, {focus: true});
+        });
+      } else {
+        show('', '');
+        goStep(next, {focus: true});
+      }
+    });
+  }
+
+  document.getElementById('onboarding-picks-form').addEventListener('submit', event => {
     event.preventDefault();
-    const chosen = [...document.getElementById('onboarding-picks').querySelectorAll('input[name="pick"]')]
-      .filter(box => box.checked).map(box => box.value);
-    saveStep('/v1/onboarding/picks', {picks: chosen}, '已保存选择（不会自动创建例行任务）。', 4);
+    const picks = [...document.querySelectorAll('#onboarding-picks input[name="pick"]:checked')].map(box => box.value);
+    if (picks.length > 6) {
+      show('error', '最多选择 6 项。');
+      return;
+    }
+    void perform('正在保存选择…', async live => {
+      const result = await save('/v1/onboarding/picks', {picks}, live);
+      if (!result) return;
+      applyState(result);
+      show('', '');
+      goStep(4, {focus: true});
+    });
   });
 
-  const lookForm = document.getElementById('onboarding-look-form');
-  if (lookForm) lookForm.addEventListener('submit', event => {
+  function saveLook(finish) {
+    void perform('正在保存形象…', async live => {
+      const look = chosenLook();
+      const result = await save('/v1/onboarding/look', finish ? {look, finish: true} : {look}, live);
+      if (!result) return;
+      applyState(result);
+      if (finish) await openPersonal(live);
+      else show('ok', '已保存个人智能体形象。');
+    });
+  }
+
+  document.getElementById('onboarding-look-form').addEventListener('submit', event => {
     event.preventDefault();
-    const look = {};
-    for (const choice of document.getElementById('onboarding-look').querySelectorAll('select')) look[choice.name] = choice.value;
-    saveStep('/v1/onboarding/look', {look}, '已保存 Agent 形象。');
+    saveLook(false);
   });
+  document.getElementById('onboarding-enter').addEventListener('click', () => saveLook(true));
 
   select.addEventListener('change', () => {
     current = null;
@@ -682,42 +674,45 @@ function mount() {
     renderRoles();
   });
 
-  form.addEventListener('submit', async event => {
+  form.addEventListener('submit', event => {
     event.preventDefault();
     let industry = select.value;
     if (industry === '其他') industry = customIndustry.value.trim();
     const role = chosenRole();
     if (!industry) {
       show('error', '请选择或填写行业。');
+      (select.value === '其他' ? customIndustry : select).focus();
       return;
     }
     if (!role) {
       show('error', '请选择或填写角色。');
+      if (!customRoleLabel.hidden) customRole.focus();
+      else roleChoices.querySelector('input[name="role"]')?.focus();
       return;
     }
-    const result = await request('POST', '/v1/onboarding', {industry, role, completed: true});
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '保存失败。'));
-      return;
-    }
-    step = 2;
-    await load();
+    void perform('正在保存工作背景…', async live => {
+      const result = await save('/v1/onboarding', {industry, role, completed: progress.completed}, live);
+      if (!result) return;
+      applyState(result, {full: true});
+      show('', '');
+      goStep(2, {focus: true});
+    });
   });
 
-  document.getElementById('onboarding-skip').addEventListener('click', async () => {
-    const result = await request('POST', '/v1/onboarding', {industry: '', role: '', completed: true});
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '暂时跳过失败。'));
-      return;
-    }
-    globalThis.location.assign('/chat');
+  document.getElementById('onboarding-skip').addEventListener('click', () => {
+    void perform('正在保存进度…', async live => {
+      const result = await save('/v1/onboarding/progress', {completed: true}, live);
+      if (!result) return;
+      applyState(result);
+      await openPersonal(live);
+    });
   });
 
   const login = document.getElementById('login-form');
   if (login) {
     login.addEventListener('submit', async event => {
       event.preventDefault();
-      const result = await request('POST', '/v1/auth/login', {
+      const result = await send('POST', '/v1/auth/login', {
         username: login.elements.username.value,
         password: login.elements.password.value,
       });
@@ -734,15 +729,19 @@ function mount() {
   if (logout) {
     logout.addEventListener('submit', async event => {
       event.preventDefault();
-      await request('POST', '/v1/auth/logout', {});
+      await send('POST', '/v1/auth/logout', {});
       await load();
     });
   }
 
-  load();
+  document.defaultView?.addEventListener('pageshow', event => {
+    if (event.persisted && step === 2) void loadConnections({refresh: true});
+  });
+  return {ready: load()};
 }
 
 if (typeof document !== 'undefined') {
+  const mount = () => mountOnboarding(document);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
 }

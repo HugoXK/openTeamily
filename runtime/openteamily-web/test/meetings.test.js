@@ -60,6 +60,112 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
   assert.equal((await call('GET', base(meeting.id))).status, 404)
 })
 
+test('meeting list filters all saved metadata before paging in start-time order', async () => {
+  const bot = await boot()
+  const otherWorkspace = 'b'.repeat(32)
+  const add = async (index, props = {}, workspace = WS) => {
+    const saved = await bot.call('meetings', 'POST', base('', workspace), {
+      title: '会议 ' + index, started_at: 1000 + index, transcript: '仅正文出现的词',
+      action_items: [{text:'行动', done:true}], ...props,
+    }, key())
+    assert.equal(saved.status, 201)
+    return saved.body.meeting.id
+  }
+  const old = await add(1, {summary:'含有 ÄPFEL % 总结', action_items:[{text:'旧行动项',owner:'Ravi'}]})
+  const tie = await add(1, {title:'同时间项目'})
+  const other = await add(2, {summary:'Äpfel'}, otherWorkspace)
+  const newer = await Promise.all(Array.from({length:23}, (_, i) => add(i + 3)))
+  const list = query => bot.call('meetings', 'GET', base() + '?' + query)
+  const ids = result => result.body.items.map(item => item.id)
+  const first = await list('limit=20&order=recent')
+  assert.deepEqual(ids(first), newer.toReversed().slice(0,20))
+  assert.equal(first.body.cursor, ids(first).at(-1))
+  const rest = await list('limit=20&order=recent&cursor=' + first.body.cursor)
+  assert.deepEqual(ids(rest), [...newer.slice(0,3).reverse(), ...[tie,old].sort()])
+  assert.equal(rest.body.cursor, null)
+  assert.equal(rest.body.activity_version, first.body.activity_version)
+  assert.ok([...first.body.items,...rest.body.items].every(item => !('summary' in item) && !('transcript' in item)))
+  assert.deepEqual(ids(await list('order=recent&open=1')), [old])
+  assert.deepEqual(ids(await list('order=recent&open=1&q=' + encodeURIComponent('äpfel %'))), [old])
+  assert.deepEqual(ids(await list('q=ravi')), [old])
+  assert.deepEqual(ids(await list('q=' + encodeURIComponent('仅正文出现的词'))), [])
+  assert.deepEqual(ids(await list('order=recent&cursor=' + other)), [])
+  for (const query of ['order=wrong','open=0','open=1&open=1','q=' + 'a'.repeat(81)]) {
+    assert.equal((await list(query)).status, 400)
+  }
+  assert.equal((await bot.call('meetings', 'POST', base(old), {
+    revision:1, changes:{started_at:10100},
+  })).status, 200)
+  const changed = await list('order=recent&limit=1')
+  assert.deepEqual(ids(changed), [old])
+  assert.notEqual(changed.body.activity_version, first.body.activity_version)
+})
+
+test('saved meeting actions and Space copies validate scope and revision without returning transcript', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('meetings', ...args)
+  const created = await call('POST', base(), body, key())
+  const meeting = created.body.meeting
+  const path = base(meeting.id)
+  const actionPath = path + '/action?index=0&revision=1'
+  const artifactsPath = `/v1/workspaces/${WS}/artifacts`
+  const action = await call('GET', actionPath)
+  assert.equal(action.status, 200)
+  assert.deepEqual(action.body, {
+    meeting: {id:meeting.id,workspace_id:WS,title:body.title,revision:1},
+    action:{text:'订会议室',owner:'bob',done:false},
+  })
+  assert.equal((await call('GET', path + '/action?index=1&revision=1')).status, 404)
+  assert.equal((await call('GET', path + '/action?index=0&revision=1&revision=2')).status, 400)
+  assert.equal((await call('POST', path + '/action', {})).status, 405)
+  assert.equal((await call('GET', base(meeting.id,'b'.repeat(32)) + '/action?index=0&revision=1')).status, 404)
+  assert.equal((await call('POST', base(meeting.id,'b'.repeat(32)) + '/artifact', {revision:1})).status, 404)
+  assert.equal((await call('POST', path + '/artifact', {revision:2})).status, 409)
+  assert.equal((await call('POST', path + '/artifact', {revision:1,body:'unexpected text'})).status, 400)
+  assert.equal((await call('GET', path + '/artifact')).status, 405)
+  const outside = await bot.endpoint('artifacts/saveMeetingNote', {workspace_id:WS,meeting_id:meeting.id,revision:1,title:'不应创建',body:'not a note'})
+  assert.equal(outside.ok, false)
+  assert.equal((await bot.call('artifacts','GET',artifactsPath)).body.items.length, 0)
+
+  // Existing content with the preferred title must remain independent.
+  const preexisting = await bot.call('artifacts','POST',artifactsPath,{title:'周会 · 纪要 v1',body:'其他文档'},key())
+  assert.equal(preexisting.status, 201)
+  const archived = await call('POST', path + '/artifact', {revision:1})
+  assert.equal(archived.status, 201)
+  const saved = archived.body.artifact
+  assert.notEqual(saved.id, preexisting.body.artifact.id)
+  assert.equal(saved.workspace_id, WS)
+  assert.match(saved.body,/同步进度。/)
+  assert.match(saved.body,/- \[ \] 订会议室（bob）/)
+  assert.doesNotMatch(saved.body,/讨论排期。/)
+  const edit = await bot.call('artifacts','POST', artifactsPath + '/' + saved.id, {
+    revision:1,changes:{title:'我重命名的纪要',body:'我已经编辑了这一份。'},
+  })
+  assert.equal(edit.status, 200)
+  const replay = await call('POST', path + '/artifact', {revision:1})
+  assert.equal(replay.status, 200)
+  assert.equal(replay.body.artifact.id, saved.id)
+  assert.equal(replay.body.artifact.body, '我已经编辑了这一份。')
+  const changed = await call('POST', path, {revision:1, changes:{action_items:[{text:'订会议室',owner:'bob',done:true}]}})
+  assert.equal(changed.status, 200)
+  assert.equal((await call('GET', actionPath)).status, 409)
+  assert.equal((await call('GET', path + '/action?index=0&revision=2')).status, 409)
+  assert.equal((await call('POST', path + '/artifact', {revision:1})).status, 409)
+  const second = await call('POST', path + '/artifact', {revision:2})
+  assert.equal(second.status, 201)
+  assert.notEqual(second.body.artifact.id, saved.id)
+  assert.match(second.body.artifact.body,/- \[x\] 订会议室（bob）/)
+  const long = await call('POST', base(), {title:'长纪要',summary:'字'.repeat(8000)}, key())
+  assert.equal(long.status, 201)
+  const rejected = await call('POST', base(long.body.meeting.id) + '/artifact', {revision:1})
+  assert.equal(rejected.status, 413)
+  assert.match(rejected.body.error.message,/导出 Markdown/)
+  assert.equal((await bot.call('artifacts','GET',artifactsPath)).body.items.length, 3)
+  const foreign = await boot()
+  assert.equal((await foreign.call('meetings','GET',actionPath)).status, 404)
+  assert.equal((await foreign.call('artifacts','GET',artifactsPath)).body.items.length, 0)
+})
+
 test('meeting shares publish only the saved summary and action items through the selected workspace', async t => {
   const bot = await boot()
   const call = (method, path, payload, sendKey) => bot.call('meetings',method,base(path),payload,sendKey)

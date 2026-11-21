@@ -28,9 +28,11 @@ function ownerRuntime(testContext) {
       save: async () => {},
     },
   }
-  const { endpoints } = createAgents({ db, host: { runtime: async () => runtime, currentRuntime: () => runtime } })
+  const host = { runtime: async () => runtime, currentRuntime: () => runtime }
+  const { endpoints } = createAgents({ db, host })
   return {
-    bots,
+    bots, db, host, runtime,
+    importAgents: agents => endpoints.import({agents}),
     sessions: () => sessions,
     request: (method, path, body, idempotency_key) => endpoints.v1({ method, path, body, idempotency_key }),
   }
@@ -134,4 +136,95 @@ test('private agent starters remain local to the account and workspace even for 
   assert.equal((await other.request('GET', agentPath)).status, 404)
   assert.deepEqual((await other.request('GET', directory(WORKSPACE))).body.conversations, [])
   assert.equal(other.sessions(), 0)
+})
+
+test('the native Chat directory pages durable data before the runtime attaches', async t => {
+  const owner = ownerRuntime(t)
+  const [personal, archived, second, foreign, thread] = ['a','b','c','d','e'].map(id => id.repeat(32))
+  await owner.importAgents([
+    {id: personal, workspace_id: WORKSPACE, name: 'Personal agent', quick_starts: ['Start an outline']},
+    {id: archived, workspace_id: WORKSPACE, name: 'Archived draft', archived: true, quick_starts: ['Hidden starter']},
+    {id: second, workspace_id: WORKSPACE, name: 'Second agent'},
+    {id: foreign, workspace_id: OTHER_WORKSPACE, name: 'Other workspace'},
+  ])
+  owner.db.prepare('INSERT INTO agent_conversations VALUES (?, ?, ?, 1, 1)').run(thread, personal, 'Retained conversation')
+  owner.db.prepare('INSERT INTO agent_conversations VALUES (?, ?, ?, 1, 1)').run(foreign, foreign, 'Other thread')
+  owner.db.prepare('INSERT INTO native_personal_binding VALUES (1, ?, ?)').run(WORKSPACE, personal)
+  owner.db.prepare('INSERT INTO native_agent_objects VALUES (?, ?, ?)').run(personal, 'saved-bot-id', 'Personal agent')
+  owner.db.exec('PRAGMA query_only=ON')
+  owner.host.currentRuntime = () => null
+  let runtimeRequests = 0
+  owner.host.runtime = async () => {
+    runtimeRequests += 1
+    throw new Error('Runtime has not attached')
+  }
+  const reads = []
+  owner.host.call = async name => {
+    reads.push(name)
+    return {recall: 'off'}
+  }
+  const url = agentBase(WORKSPACE) + '?limit=1&include=conversations'
+  const first = await owner.request('GET', url)
+  assert.equal(first.status, 200)
+  assert.deepEqual(first.body.items.map(row => [row.id, row.native_bot_id, row.quick_starts, row.memory_recall_default]),
+    [[personal, 'saved-bot-id', ['Start an outline'], false]])
+  assert.equal(first.body.cursor, personal)
+  assert.deepEqual(first.body.conversations.map(row => ({...row})),
+    [{id: thread, agent_id: personal, title: 'Retained conversation', updated: 1}])
+
+  const next = await owner.request('GET', url + '&cursor=' + first.body.cursor)
+  assert.equal(next.status, 200)
+  assert.deepEqual(next.body.items.map(row => [row.id, row.native_bot_id]), [[second, null]])
+  assert.equal(next.body.cursor, null)
+  assert.deepEqual(next.body.conversations, [])
+
+  const withArchived = await owner.request('GET', url + '&cursor=' + personal + '&include_archived=1')
+  assert.equal(withArchived.status, 200)
+  assert.deepEqual(withArchived.body.items.map(row => [row.id, row.archived, row.quick_starts]), [[archived, 1, []]])
+  assert.equal(withArchived.body.cursor, archived)
+  assert.deepEqual(reads, ['personal/get'])
+  assert.equal(runtimeRequests, 0)
+  assert.equal(owner.sessions(), 0)
+})
+
+test('the native Chat directory and thread observe live roster edits without a model or database writes', async t => {
+  const owner = ownerRuntime(t)
+  const longName = 'An agent with a saved name that exceeds the native bot alias limit'
+  const created = await owner.request('POST', agentBase(WORKSPACE),
+    {name: longName, quick_starts: ['Outline this brief']}, 'fixture-agent-long-name')
+  assert.equal(created.status, 201)
+  const agent = created.body.agent
+  const agentPath = agentBase(WORKSPACE) + '/' + agent.id
+  const thread = await openThread(owner, agentPath)
+  const bot = owner.bots[agent.native_bot_id]
+  assert.notEqual(bot.name, longName)
+  owner.db.exec('PRAGMA query_only=ON')
+  let startups = 0
+  owner.runtime.mainBot = async () => {
+    startups += 1
+    throw new Error('Model is unavailable')
+  }
+
+  const initial = await owner.request('GET', directory(WORKSPACE))
+  assert.equal(initial.status, 200)
+  assert.equal(initial.body.items[0].name, longName)
+  bot.name = 'Native renamed agent'
+  const renamed = await owner.request('GET', directory(WORKSPACE))
+  assert.equal(renamed.status, 200)
+  assert.equal(renamed.body.items[0].name, bot.name)
+  assert.equal((await owner.request('GET', thread)).body.agent.name, bot.name)
+  assert.equal(owner.db.prepare('SELECT name FROM agents WHERE id=?').get(agent.id).name, longName)
+
+  bot.hidden = true
+  assert.deepEqual((await owner.request('GET', directory(WORKSPACE))).body.items, [])
+  const hidden = await owner.request('GET', directory(WORKSPACE, true))
+  assert.equal(hidden.body.items[0].archived, 1)
+  assert.deepEqual(hidden.body.items[0].quick_starts, [])
+  delete owner.bots[agent.native_bot_id]
+  const deleted = await owner.request('GET', directory(WORKSPACE, true))
+  assert.equal(deleted.body.items[0].native_deleted, true)
+  assert.equal(deleted.body.items[0].native_bot_id, agent.native_bot_id)
+  assert.equal(startups, 0)
+  assert.equal((await owner.request('GET', agentBase(WORKSPACE))).status, 500)
+  assert.equal(startups, 1)
 })

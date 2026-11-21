@@ -72,6 +72,7 @@ class SettingsPage:
         '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
@@ -80,7 +81,6 @@ class SettingsPage:
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
-        '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
@@ -91,9 +91,6 @@ class SettingsPage:
         '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
-        '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),
-        '/messenger/app.mjs': ('messenger', 'app.mjs', 'text/javascript; charset=utf-8'),
-        '/messenger/app.css': ('messenger', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
@@ -249,7 +246,8 @@ class SettingsPage:
 
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')
-        if path not in self.ASSETS:
+        messenger_alias = path in ('/messenger', '/messenger/')
+        if path not in self.ASSETS and not messenger_alias:
             if self._unknown_page(path):
                 start_response('404 Not Found', [('Content-Type', 'text/plain; charset=utf-8'),
                                                  ('Cache-Control', 'no-store'),
@@ -277,7 +275,7 @@ class SettingsPage:
             headers.append(('Allow', 'GET, HEAD'))
         elif not self._query_allowed(path, env.get('QUERY_STRING', '')):
             status, data = '400 Bad Request', b'Queries not supported'
-        elif path == '/messenger':
+        elif messenger_alias:
             status, data = '302 Found', b''
             headers.append(('Location', '/chat'))
             content_type = 'text/plain; charset=utf-8'

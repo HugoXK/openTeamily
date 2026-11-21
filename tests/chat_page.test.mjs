@@ -675,7 +675,7 @@ test('private agent starters stage safe text, preserve drafts, and follow the la
     if (url.endsWith('/agents?limit=100&include=conversations')) {
       return json(200, {items:[agentA, agentB], conversations:[thread]});
     }
-    if (url.endsWith('/agents/agent-b/conversations/thread-b')) {
+    if (url.endsWith('/agents/agent-b/conversations/thread-b?limit=50')) {
       return json(200, {agent:latest, conversation:thread, items:[{role:'user', body:'已有历史'}]});
     }
     if (url.endsWith('/agents/agent-b')) return deferredAgent || json(200, {agent:latest});
@@ -728,7 +728,7 @@ test('private agent starters stage safe text, preserve drafts, and follow the la
     await settle();
     assert.deepEqual(list.children.map(button => button.textContent), ['编辑后的开场']);
     assert.equal(input.value, '既有会话的新开场');
-    assert.equal(calls.filter(call => call.url.endsWith('/agents/agent-b/conversations/thread-b')).length, 1);
+    assert.equal(calls.filter(call => call.url.endsWith('/agents/agent-b/conversations/thread-b?limit=50')).length, 1);
     latest = {...latest, archived:1};
     const stale = list.children[0];
     await fire(doc, 'visibilitychange');
@@ -751,7 +751,7 @@ test('private agent starters stage safe text, preserve drafts, and follow the la
 
 test('private quick starts are suppressed for an agent returned outside the current workspace', async () => {
   const {doc, el, restore, fetcher} = nativeReplyChat((path, options, scope) => {
-    assert.equal(path, '');
+    assert.equal(path, '?limit=50');
     return json(200, {...scope, agent:{...scope.agent, workspace_id:'another-workspace', served_by:'ds-bot', quick_starts:['私密开场']}, items:[]});
   });
   try {
@@ -770,7 +770,7 @@ test('a native reply streams as plain text without rebuilding history or changin
   let finishPost;
   let requestKey;
   const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
-    if (!path) {
+    if (path === '?limit=50') {
       historyReads += 1;
       return json(200, {...scope, items: [previous]});
     }
@@ -844,7 +844,7 @@ test('an already running native reply resumes in its existing bubble and loads t
   let historyReads = 0;
   let polls = 0;
   const {doc, el, restore, fetcher} = nativeReplyChat((path, _opts, scope) => {
-    if (!path) {
+    if (path === '?limit=50') {
       historyReads += 1;
       const current = polls < 2 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
       return json(200, {...scope, items: [user, current]});
@@ -2819,6 +2819,7 @@ const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
 const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
+const linkNativeLatest = linkNativePath + '?limit=50';
 const linkSocialPath = '/social/conversations/' + linkSocial;
 const linkMember = {user_id: alice, username: 'alice'};
 
@@ -2879,7 +2880,7 @@ function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
         return json(200, {items: []});
       }
     }
-    if (path === linkBase(linkWork) + linkNativePath) return json(200, {agent, conversation: nativeThread, items: nativeRows});
+    if (path === linkBase(linkWork) + linkNativeLatest) return json(200, {agent, conversation: nativeThread, items: nativeRows, cursor: null});
     if (path === linkBase(linkWork) + linkNativePath + '/read') return json(200, {unread_count: 0});
     return json(404, {error: {code: 'not_found'}});
   };
@@ -2911,7 +2912,7 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
     await settle();
     assert.equal(workspaceReads, 1);
     assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), true);
-    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath), false);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest), false);
     initialized.resolve(json(201, {personal_agent: {workspace: {id:linkWork}, agent:fixture.agent}}));
     await mountPromise;
     assert.equal(workspaceReads, 2);
@@ -2926,17 +2927,20 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
   }
 });
 
-test('a linked native history and its message jump render before the unrelated Social directory returns', async t => {
+test('a linked native history and message jump render while settings and the Social directory load', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const scope = linkBase(linkWork);
   const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
   const fixture = linkedChatFixture(hash);
   const directory = Promise.withResolvers();
-  const receipt = Promise.withResolvers();
   const onboarding = Promise.withResolvers();
   const settings = Promise.withResolvers();
+  const around = `${scope}${linkNativePath}?around=${linkAgentOlder}&limit=50`;
   fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
-  fixture.routes.set(scope + linkNativePath + '/read', () => receipt.promise);
+  fixture.routes.set(scope + linkNativeLatest, () => json(200, {agent: fixture.agent, conversation: fixture.nativeThread,
+    items: [fixture.nativeRows[1]], cursor: linkAgentLatest}));
+  fixture.routes.set(around, () => json(200, {agent: fixture.agent, conversation: fixture.nativeThread,
+    items: [fixture.nativeRows[0]], cursor: null, has_newer: true}));
   fixture.routes.set('/v1/onboarding', () => onboarding.promise);
   fixture.routes.set('/v1/settings', () => settings.promise);
   try {
@@ -2944,40 +2948,246 @@ test('a linked native history and its message jump render before the unrelated S
     await settle();
     assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
     assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
-    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath), false, 'settings still load before detail');
-    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
-    await settle();
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
     const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
-    const detail = fixture.calls.findIndex(call => call.path === scope + linkNativePath);
+    const detail = fixture.calls.findIndex(call => call.path === scope + linkNativeLatest);
     assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
     assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), false,
       'a running DS-Bot with an existing personal binding does not need to provision again');
-    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
-    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder]);
     assert.equal(fixture.el('chat-title').textContent, fixture.agent.name);
     assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
     assert.deepEqual(fixture.scrolls.map(row => row.id), [linkAgentOlder]);
     assert.equal(globalThis.location.hash, hash);
-    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('/read')).map(call => call.body),
-      [{message_id: linkAgentLatest}], 'the native read receipt stops at the last rendered assistant reply');
-    receipt.resolve(json(200, {unread_count: 0}));
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    assert.equal(fixture.calls.filter(call => call.path === around).length, 1);
+    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
+    await settle();
+    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
     directory.resolve(json(200, {items: []}));
     await loading;
     await settle();
     assert.equal(fixture.selected(), linkThread);
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
-    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder]);
     assert.equal(fixture.el('onboarding-banner').hidden, true);
     onboarding.resolve(json(200, {onboarding: {completed: false}}));
     await settle();
     assert.equal(fixture.el('onboarding-banner').hidden, false);
+    await fire(fixture.el('chat-back-to-latest'), 'click');
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentLatest]);
+    assert.equal(fixture.el('chat-back-to-latest').hidden, true);
+    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('/read')).map(call => call.body),
+      [{message_id: linkAgentLatest}]);
   } finally {
     settings.resolve(json(200, {settings: {values: {}}}));
     onboarding.resolve(json(200, {onboarding: {completed: true}}));
-    receipt.resolve(json(200, {unread_count: 0}));
     directory.resolve(json(200, {items: []}));
+    fixture.restore();
+  }
+});
+
+test('a quick native send clears the draft and applies the saved reply language after settings reach the queue', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const settings = Promise.withResolvers();
+  const sendPath = scope + linkNativePath + '/messages';
+  fixture.routes.set('/v1/settings', () => settings.promise);
+  fixture.routes.set(sendPath, () => json(201, {
+    message:{id:'sent',role:'user',body:'hola',status:'succeeded'},
+    reply:{id:'answer',role:'assistant',body:'hola',status:'succeeded'},
+  }));
+  try {
+    await mount(fixture.doc, {fetcher:fixture.fetcher});
+    assert.deepEqual(fixture.messages(), [linkAgentOlder,linkAgentLatest]);
+    const field = fixture.el('chat-body');
+    field.value = 'hola';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    assert.match(fixture.el('message-list').children.at(-1).children[1].textContent, /加载聊天偏好/);
+    assert.equal(fixture.calls.some(call => call.path === sendPath), false);
+    field.value = 'next draft';
+    settings.resolve(json(200, {settings:{values:{chat_language:'es',send_shortcut:'mod_enter'}}}));
+    await settle();
+    assert.deepEqual(fixture.calls.filter(call => call.path === sendPath).map(call => call.body), [{body:'hola',chat_language:'es'}]);
+    assert.equal(field.value, 'next draft');
+    assert.equal(field.dataset.sendShortcut, 'mod_enter');
+    assert.deepEqual(fixture.messages().slice(-2), ['sent','answer']);
+  } finally {
+    settings.resolve(json(500, {}));
+    fixture.restore();
+  }
+});
+
+test('an unavailable session keeps the prior draft and a superseded retry cannot change its destination', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const unavailable = Promise.withResolvers();
+  const retry = Promise.withResolvers();
+  let attempts = 0;
+  fixture.routes.set(scope + linkSocialPath, () => (++attempts === 1 ? unavailable.promise : retry.promise));
+  const click = cid => fire(fixture.el('conversation-list'), 'click', {
+    target:sessionRows(fixture.el).find(row => row.dataset.conversation === cid),
+  });
+  try {
+    await mount(fixture.doc, {fetcher:fixture.fetcher});
+    const field = fixture.el('chat-body');
+    field.value = 'keep this private draft';
+    await fire(field, 'input');
+    const opening = click(linkSocial);
+    await settle();
+    assert.equal(sessionRows(fixture.el).find(row => row.dataset.conversation === linkSocial).getAttribute('aria-busy'), 'true');
+    assert.equal(fixture.el('main-panel').inert, true);
+    assert.equal(fixture.el('chat-send').disabled, true);
+    assert.equal(fixture.selected(), linkThread);
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(fixture.calls.some(call => call.method === 'POST' && call.path.endsWith('/messages')), false);
+    unavailable.resolve(json(503, {}));
+    await opening;
+    assert.equal(fixture.el('session-transition-retry').hidden, false);
+    assert.equal(fixture.el('chat-send').disabled, false);
+    assert.equal(field.value, 'keep this private draft');
+    await fire(fixture.el('session-transition-retry'), 'click');
+    await settle();
+    assert.equal(attempts, 2);
+    await click(linkThread);
+    retry.resolve(json(200, {conversation:{id:linkSocial,kind:'group',title:'Late group'},items:[]}));
+    await settle();
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.el('session-transition').hidden, true);
+    assert.equal(fixture.el('main-panel').inert, false);
+    assert.equal(field.value, 'keep this private draft');
+  } finally {
+    unavailable.resolve(json(503, {}));
+    retry.resolve(json(503, {}));
+    fixture.restore();
+  }
+});
+
+test('a pending native older page cannot replace the latest view after the user returns', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentLatest}`;
+  const fixture = linkedChatFixture(hash);
+  const pending = Promise.withResolvers();
+  const before = `${path}?before=${linkAgentLatest}&limit=50`;
+  const page = items => json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items, cursor: linkAgentLatest});
+  fixture.routes.set(path + '?limit=50', () => page([fixture.nativeRows[1]]));
+  fixture.routes.set(before, () => pending.promise);
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    const older = fixture.el('chat-load-older');
+    const latest = fixture.el('chat-back-to-latest');
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    const paging = fire(older, 'click');
+    await settle();
+    assert.equal(older.disabled, true);
+    await fire(latest, 'click');
+    await settle();
+    pending.resolve(page([fixture.nativeRows[0]]));
+    await paging;
+    assert.deepEqual(fixture.messages(), [linkAgentLatest]);
+    assert.equal(latest.hidden, true);
+    assert.equal(older.disabled, false);
+    assert.equal(fixture.calls.filter(call => call.path === before).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path.endsWith('/read')).length, 1);
+  } finally {
+    pending.resolve(page([]));
+    fixture.restore();
+  }
+});
+
+test('sending supersedes a pending native older page while keeping the current transcript', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const pending = Promise.withResolvers();
+  const sent = Promise.withResolvers();
+  const scope = {agent: fixture.agent, conversation: fixture.nativeThread};
+  const page = items => json(200, {...scope, items, cursor: linkAgentLatest});
+  fixture.routes.set(path + '?limit=50', () => page([fixture.nativeRows[1]]));
+  fixture.routes.set(`${path}?before=${linkAgentLatest}&limit=50`, () => pending.promise);
+  fixture.routes.set(path + '/messages', () => sent.promise);
+  const element = fixture.doc.createElement;
+  fixture.doc.createElement = tag => {
+    const node = element(tag);
+    node.getBoundingClientRect = () => ({top: 0, bottom: 1});
+    return node;
+  };
+  fixture.el('message-scroller').getBoundingClientRect = () => ({top: 0});
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    const older = fixture.el('chat-load-older');
+    const paging = fire(older, 'click');
+    await settle();
+    assert.equal(older.disabled, true);
+    const field = fixture.el('chat-body');
+    field.value = 'Send while a page loads';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    pending.resolve(page([fixture.nativeRows[0]]));
+    await paging;
+    assert.equal(fixture.el('chat-back-to-latest').hidden, true);
+    const message = {id: 'new-sent', role: 'user', body: 'Send while a page loads'};
+    const reply = {id: 'new-reply', role: 'assistant', status: 'succeeded', body: 'Reply'};
+    sent.resolve(json(201, {message, reply}));
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentLatest, message.id, reply.id]);
+    assert.equal(fixture.calls.filter(call => call.path === path + '?limit=50').length, 1);
+  } finally {
+    pending.resolve(page([]));
+    sent.resolve(json(404, {}));
+    fixture.restore();
+  }
+});
+
+test('sending from native history clears drafts immediately and keeps sending while the latest page loads', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const latest = Promise.withResolvers();
+  const sent = Promise.withResolvers();
+  const sentAgain = Promise.withResolvers();
+  const scope = {agent: fixture.agent, conversation: fixture.nativeThread};
+  let latestCalls = 0;
+  fixture.routes.set(path + '?limit=50', () => ++latestCalls === 1
+    ? json(200, {...scope, items: [fixture.nativeRows[1]], cursor: linkAgentLatest}) : latest.promise);
+  fixture.routes.set(`${path}?around=${linkAgentOlder}&limit=50`, () => json(200, {...scope, items: [fixture.nativeRows[0]]}));
+  fixture.routes.set(path + '/messages', call => call.body.body === 'Send while reading' ? sent.promise : sentAgain.promise);
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    assert.deepEqual(fixture.messages(), [linkAgentOlder]);
+    const field = fixture.el('chat-body');
+    field.value = 'Send while reading';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    assert.ok(fixture.el('message-list').children.some(node => node.dataset.sendPending === 'pending'));
+    field.value = 'Send again before latest';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    field.value = 'Next draft';
+    const message = {id: 'new-sent', role: 'user', body: 'Send while reading'};
+    const reply = {id: 'new-reply', role: 'assistant', status: 'succeeded', body: 'Reply'};
+    sent.resolve(json(201, {message, reply}));
+    await settle();
+    assert.equal(fixture.calls.filter(call => call.path === path + '/messages').length, 2);
+    const second = {id: 'second-sent', role: 'user', body: 'Send again before latest'};
+    const secondReply = {id: 'second-reply', role: 'assistant', status: 'succeeded', body: 'Another reply'};
+    sentAgain.resolve(json(201, {message: second, reply: secondReply}));
+    await settle();
+    assert.ok(fixture.el('message-list').children.some(node => node.dataset.sendPending === 'pending'));
+    latest.resolve(json(200, {...scope, items: [fixture.nativeRows[1]]}));
+    await settle();
+    assert.equal(field.value, 'Next draft');
+    assert.deepEqual(fixture.messages(), [linkAgentLatest, message.id, reply.id, second.id, secondReply.id]);
+    assert.equal(fixture.el('chat-back-to-latest').hidden, true);
+    assert.equal(latestCalls, 2);
+    assert.equal(fixture.calls.filter(call => call.path === path + '/messages').length, 2);
+  } finally {
+    sent.resolve(json(404, {}));
+    sentAgain.resolve(json(404, {}));
+    latest.resolve(json(404, {}));
     fixture.restore();
   }
 });
@@ -3043,7 +3253,7 @@ for (const newer of [false, true]) {
 }
 
 test('a late exact native history cannot overwrite a different workspace and Social target selected by hashchange', async () => {
-  const old = linkBase(linkWork) + linkNativePath;
+  const old = linkBase(linkWork) + linkNativeLatest;
   const current = linkBase(linkTeam) + linkSocialPath;
   const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
   const wait = Promise.withResolvers();
@@ -3073,7 +3283,7 @@ test('a late exact native history cannot overwrite a different workspace and Soc
     assert.deepEqual(fixture.messages(), [linkSocialLatest]);
     assert.equal(fixture.selected(), linkSocial);
     assert.equal(fixture.el('onboarding-banner').hidden, true);
-    assert.equal(fixture.calls.some(call => call.path === old + '/read'), false);
+    assert.equal(fixture.calls.some(call => call.path === linkBase(linkWork) + linkNativePath + '/read'), false);
   } finally {
     oldOnboarding.resolve(json(200, {onboarding: {completed: false}}));
     wait.resolve(json(404, {error: {code: 'not_found'}}));
@@ -3092,12 +3302,12 @@ for (const target of ['bare agent', 'default']) {
       const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
       await settle();
       assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory));
-      assert.equal(fixture.calls.some(call => [scope + linkNativePath, scope + linkSocialPath].includes(call.path)), false);
+      assert.equal(fixture.calls.some(call => [scope + linkNativeLatest, scope + linkSocialPath].includes(call.path)), false);
       directory.resolve(json(200, {items: [fixture.agent], conversations: [fixture.nativeThread]}));
       await loading;
       await settle();
       assert.equal(fixture.selected(), target === 'bare agent' ? linkThread : linkSocial);
-      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, target === 'bare agent' ? 1 : 0);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, target === 'bare agent' ? 1 : 0);
       assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, target === 'default' ? 1 : 0);
     } finally {
       directory.resolve(json(200, {items: [], conversations: []}));
@@ -3124,11 +3334,11 @@ test('a failed Social directory does not hide a successful native deep link in a
 test('an unavailable direct target keeps its own error and the directory without opening another thread', async () => {
   const scope = linkBase(linkWork);
   const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
-  fixture.routes.set(scope + linkNativePath, () => json(404, {error: {code: 'not_found', message: '原会话已移除'}}));
+  fixture.routes.set(scope + linkNativeLatest, () => json(404, {error: {code: 'not_found', message: '原会话已移除'}}));
   try {
     await mount(fixture.doc, {fetcher: fixture.fetcher});
     await settle();
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
     assert.equal(fixture.calls.some(call => call.path === scope + linkSocialPath), false);
     assert.deepEqual(fixture.messages(), []);
     assert.ok(sessionRows(fixture.el).some(row => row?.dataset.conversation === linkSocial));
@@ -3143,7 +3353,7 @@ for (const path of [linkNativePath, linkSocialPath]) {
     try {
       await mount(fixture.doc, {fetcher: fixture.fetcher});
       await settle();
-      assert.equal(fixture.calls.some(call => call.path.endsWith(path)), false,
+      assert.equal(fixture.calls.some(call => call.path.split('?')[0].endsWith(path)), false,
         'the inactive link cannot be opened, including against an active workspace picked as fallback');
       assert.equal(fixture.calls.some(call => call.path.startsWith(linkBase(linkUnavailable) + '/')), false);
       assert.deepEqual(fixture.messages(), []);
