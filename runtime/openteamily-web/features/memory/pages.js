@@ -207,42 +207,40 @@ function suggestionView(row) {
 }
 
 async function dream(req, workspaceId, pageId, suggestionId) {
-  const row = loadPage(req.store, workspaceId, pageId)
-  if (!row) refuse(404, 'not_found', 'Memory page not found')
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
-  const load = (id) => req.store.get('SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?', id, workspaceId, pageId)
-  if (!suggestionId) {
-    requireBodyKeys(await req.json(), [])
-    const [kept, dropped] = duplicateParagraph(row.body)
-    if (kept === null) return { body: { suggestion: null, message: '这一页现在没有可以合并的重复段落，原文未改动。' } }
-    const id = newId()
-    req.store.run('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)', id, workspaceId, pageId, 'merge_paragraphs',
-      '这一页有 2 段重复的正文，可以合并成 1 段。', stableJson({ dropped: dropped.slice(0, 4000), kept: kept.slice(0, 4000) }), 'open', req.now, null, null)
-    return { body: { suggestion: suggestionView(load(id)) } }
-  }
-  const body = requireBodyKeys(await req.json(), ['action'])
-  if (!['accept', 'ignore'].includes(body.action)) refuse(400, 'invalid', 'Provide accept or ignore')
-  const suggestion = load(suggestionId)
-  if (!suggestion) refuse(404, 'not_found', 'Memory suggestion not found')
-  let applied = null
-  if (suggestion.status === 'open') {
-    applied = req.store.transaction((store) => {
-      let result = null
+  const body = requireBodyKeys(await req.json(), suggestionId ? ['action'] : [])
+  if (suggestionId && !['accept', 'ignore'].includes(body.action)) refuse(400, 'invalid', 'Provide accept or ignore')
+  return req.store.transaction(store => {
+    const row = loadPage(store, workspaceId, pageId)
+    if (!row) refuse(404, 'not_found', 'Memory page not found')
+    const load = id => store.get('SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?', id, workspaceId, pageId)
+    if (!suggestionId) {
+      const [kept, dropped] = duplicateParagraph(row.body)
+      if (kept === null) return { body: { suggestion: null, message: '这一页现在没有可以合并的重复段落，原文未改动。' } }
+      const id = newId()
+      store.run('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)', id, workspaceId, pageId, 'merge_paragraphs',
+        '这一页有 2 段重复的正文，可以合并成 1 段。', stableJson({ dropped, kept, revision:row.revision }), 'open', req.now, null, null)
+      return { body: { suggestion: suggestionView(load(id)) } }
+    }
+    let suggestion = suggestionView(load(suggestionId))
+    if (!suggestion) refuse(404, 'not_found', 'Memory suggestion not found')
+    if (suggestion.status === 'open') {
+      let applied = null
       if (body.action === 'accept') {
-        let payload = {}
-        try { payload = JSON.parse(suggestion.payload) } catch { payload = {} }
-        const after = mergedBody(row.body, payload?.dropped ?? '')
-        if (after === row.body) result = { removed: null, note: '接受时这一页已经没有重复段落，正文未改动。' }
-        else {
-          store.run('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?', after, req.now, actor(req), row.id)
-          result = { after_length: after.length, before_length: row.body.length, removed: payload.dropped }
-        }
+        if (suggestion.detail.revision !== row.revision) refuse(409, 'conflict', '记忆页已更新，请重新生成整理建议。')
+        const after = mergedBody(row.body, suggestion.detail.dropped)
+        const user = actor(req)
+        recordVersion(store, workspaceId, row.id, row.revision, row.title, row.body, row.updated, row.updated_by)
+        store.run('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?', after, req.now, user, row.id)
+        recordVersion(store, workspaceId, row.id, row.revision + 1, row.title, after, req.now, user)
+        applied = { after_length: after.length, before_length: row.body.length, removed: suggestion.detail.dropped }
       }
-      store.run('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?', body.action === 'accept' ? 'accepted' : 'ignored', req.now, result ? stableJson(result) : null, suggestion.id)
-      return result
-    })
-  }
-  return { body: { suggestion: suggestionView(load(suggestionId)), page: pageView(req.store, loadPage(req.store, workspaceId, pageId)), applied } }
+      store.run('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?',
+        body.action === 'accept' ? 'accepted' : 'ignored', req.now, applied ? stableJson(applied) : null, suggestionId)
+      suggestion = suggestionView(load(suggestionId))
+    }
+    return { body: { suggestion, page: pageView(store, loadPage(store, workspaceId, pageId)), applied:suggestion.applied } }
+  })
 }
 
 export const routes = [

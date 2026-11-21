@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { attachRuntime, detachRuntime } from '../src/host.js'
 import { boot, key, WS } from './helpers.js'
 
 const base = (rest = '') => `/v1/workspaces/${WS}/memory${rest}`
@@ -72,4 +73,49 @@ test('profile and preferences belong to this DS-Bot owner and feed memory/person
   assert.equal((await bot.endpoint('memory/personal', {})).ok,false)
   const other = await boot()
   assert.deepEqual((await other.endpoint('memory/personal', {workspace_id:WS})).value.preferences, [])
+})
+
+test('profile organization uses only this workspace and stays a draft during a concurrent edit', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('memory', ...args)
+  const profile = {revision:0,professional:'我做产品设计。',work_style:'',communication:'写短段落。'}
+  const dream = (body = profile) => call('POST', base('/profile/dream'), body)
+  assert.equal((await dream()).status,503)
+  assert.equal((await dream({...profile,professional:'',communication:''})).body.error.code,'empty_profile')
+  await call('POST', base('/preferences'), {text:'用中文回复'}, key())
+  await call('POST', `/v1/workspaces/${'e'.repeat(32)}/memory/preferences`, {text:'另一工作区的秘密'}, key())
+
+  let finish
+  let active
+  const started = new Promise(resolve => {active = resolve})
+  const firstOutput = {professional:'产品设计。',work_style:'',communication:'用中文写短段落。'}
+  let mode = 'invalid'
+  attachRuntime({rt:{},ctx:{},async textOnly(prompt) {
+    assert.match(prompt,/用中文回复/)
+    assert.match(prompt,/我做产品设计/)
+    assert.doesNotMatch(prompt,/另一工作区的秘密/)
+    if (mode === 'invalid') return '{ "professional": "", "work_style": "", "communication": "" }'
+    if (mode === 'race') {
+      active()
+      await new Promise(resolve => {finish = resolve})
+    }
+    return JSON.stringify(firstOutput)
+  }})
+  try {
+    assert.equal((await dream()).body.error.code,'invalid_suggestion')
+    mode = 'suggest'
+    assert.deepEqual((await dream()).body.changes,[
+      {field:'professional',text:'产品设计。'},
+      {field:'communication',text:'用中文写短段落。'},
+    ])
+    assert.equal((await call('GET', base('/profile'))).body.profile.revision,0)
+    mode = 'race'
+    const stale = dream()
+    await started
+    const saved = await call('POST', base('/profile'), {...profile,professional:'保留用户更新。'})
+    assert.equal(saved.status,200)
+    finish()
+    assert.equal((await stale).status,409)
+    assert.equal((await call('GET', base('/profile'))).body.profile.professional,'保留用户更新。')
+  } finally { detachRuntime() }
 })

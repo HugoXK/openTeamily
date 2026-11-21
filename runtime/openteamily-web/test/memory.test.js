@@ -52,6 +52,17 @@ test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes 
   assert.equal(accepted.body.suggestion.status, 'accepted')
   assert.equal(accepted.body.page.body, '第一段。\n\n第二段。\n')
   assert.equal(accepted.body.page.revision, 2)
+  const readVersion = revision => call('GET', base(`/${page.id}/versions/${revision}`))
+  assert.equal((await readVersion(1)).body.version.body,page.body)
+  assert.equal((await readVersion(2)).body.version.body,accepted.body.page.body)
+  const replay = await call('POST', base(`/${page.id}/dream/${proposed.body.suggestion.id}`), {action:'accept'})
+  assert.deepEqual(replay.body.applied,accepted.body.applied)
+  assert.equal(replay.body.page.revision,2)
+  await call('POST',base('/'+page.id),{revision:2,changes:{body:page.body}})
+  const stale = await call('POST',base(`/${page.id}/dream`),{})
+  await call('POST',base('/'+page.id),{revision:3,changes:{body:'新内容。'}})
+  assert.equal((await call('POST',base(`/${page.id}/dream/${stale.body.suggestion.id}`),{action:'accept'})).status,409)
+  assert.equal((await call('GET',base('/'+page.id))).body.page.body,'新内容。')
 })
 
 test('memory/pages gives chat recall pages only from the selected workspace in this DS-Bot', async () => {

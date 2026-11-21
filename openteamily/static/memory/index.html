@@ -170,9 +170,10 @@
       <section id="profile-panel" hidden>
         <header class="memory-page-head">
           <h2>我的资料</h2>
-          <button type="button" id="dream-profile" disabled title="个人资料整理暂不可用">做梦</button>
+          <button type="button" id="dream-profile" disabled aria-haspopup="dialog" title="根据当前资料和偏好生成整理建议">做梦</button>
         </header>
-        <p class="note">在当前工作区的智能体私聊中开启记忆后，回复会参考这里保存的资料和偏好。</p><form id="memory-profile-form">
+        <p class="note">在当前工作区的智能体私聊中开启记忆后，回复会参考这里保存的资料和偏好。</p>
+        <form id="memory-profile-form">
         <article class="memory-profile-section">
           <h3>Professional Profile</h3>
           <label>编辑正文<textarea id="profile-professional" maxlength="10000" rows="5"></textarea></label>
@@ -186,6 +187,15 @@
           <label>编辑正文<textarea id="profile-communication" maxlength="10000" rows="5"></textarea></label>
         </article>
         <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
+        <dialog id="profile-dream-dialog" class="profile-dream-dialog" aria-labelledby="profile-dream-title">
+          <h2 id="profile-dream-title" tabindex="-1">整理建议</h2>
+          <p class="note">选择要应用的栏目，检查编辑框后再保存。</p>
+          <div id="profile-dream-changes"></div>
+          <footer class="profile-dream-actions">
+            <button type="button" id="profile-dream-cancel">取消</button>
+            <button type="button" id="profile-dream-apply" class="primary">应用到编辑框</button>
+          </footer>
+        </dialog>
         <section id="preference-panel" aria-labelledby="preference-title">
           <h3 id="preference-title">偏好</h3>
           <ul id="preference-list"></ul>

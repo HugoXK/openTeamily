@@ -562,15 +562,120 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let profileRevision = null;
   let profileRequest = 0;
+  const profileFields = {professional:'职业背景', work_style:'工作方式', communication:'沟通与写作'};
+  const profileInputs = Object.fromEntries(Object.keys(profileFields).map(field => [field, document.getElementById('profile-' + field)]));
+  const profileForm = document.getElementById('memory-profile-form');
+  const profileSave = document.getElementById('save-memory-profile');
+  const profileStatus = document.getElementById('memory-profile-status');
+  const profileDream = document.getElementById('dream-profile');
+  const profilePreview = document.getElementById('profile-dream-dialog');
+  const profileApply = document.getElementById('profile-dream-apply');
+  let profileSuggestion = null;
+
+  const profileDraft = () => ({revision:profileRevision,
+    ...Object.fromEntries(Object.entries(profileInputs).map(([field, input]) => [field, input?.value || '']))});
+
+  function closeProfilePreview() {
+    profileSuggestion = null;
+    if (profilePreview?.open) profilePreview.close();
+    if (profileDream) profileDream.disabled = profileRevision === null || Boolean(profileSave?.disabled);
+  }
+
+  function showProfilePreview(operation, changes) {
+    const list = document.getElementById('profile-dream-changes');
+    list.replaceChildren();
+    for (const {field, text} of changes) {
+      const section = document.createElement('section');
+      section.className = 'profile-dream-change';
+      const label = document.createElement('label');
+      const choice = document.createElement('input');
+      choice.type = 'checkbox';
+      choice.checked = true;
+      label.append(choice, document.createTextNode(profileFields[field]));
+      const comparison = document.createElement('div');
+      comparison.className = 'profile-dream-comparison';
+      for (const [heading, value] of [['当前内容', operation.draft[field]], ['建议内容', text]]) {
+        const block = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = heading;
+        const paragraph = document.createElement('p');
+        paragraph.textContent = value || '（空）';
+        block.append(title, paragraph);
+        comparison.append(block);
+      }
+      operation.choices.push({field, text, choice});
+      choice.addEventListener('change', () => {
+        profileApply.disabled = !operation.choices.some(entry => entry.choice.checked);
+      });
+      section.append(label, comparison);
+      list.append(section);
+    }
+    profileApply.disabled = false;
+    profilePreview.showModal();
+    document.getElementById('profile-dream-title').focus();
+  }
+
+  profileDream?.addEventListener('click', async () => {
+    if (profileRevision === null || profileDream.disabled || !profilePreview) return;
+    const wid = workspaceId();
+    const owner = currentUser?.id;
+    const operation = {draft:profileDraft(), choices:[]};
+    const isCurrent = () => profileSuggestion === operation && currentUser?.id === owner && workspaceId() === wid;
+    profileSuggestion = operation;
+    profileDream.disabled = true;
+    profileStatus.textContent = '正在整理资料…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/memory/profile/dream`, operation.draft);
+      if (!isCurrent()) return;
+      if (result.status !== 200) {
+        profileStatus.textContent = messageFor(result.body.error, '资料整理失败，请重试。');
+        return;
+      }
+      const changes = result.body.changes || [];
+      if (!changes.length) {
+        profileStatus.textContent = '当前资料已整理妥当。';
+        return;
+      }
+      profileStatus.textContent = '';
+      showProfilePreview(operation, changes);
+    } catch {
+      if (isCurrent()) profileStatus.textContent = '资料整理失败，请重试。';
+    } finally {
+      if (profileSuggestion === operation && !profilePreview.open) closeProfilePreview();
+    }
+  });
+
+  function cancelProfilePreview() {
+    closeProfilePreview();
+    profileDream?.focus();
+  }
+  document.getElementById('profile-dream-cancel')?.addEventListener('click', cancelProfilePreview);
+  profilePreview?.addEventListener('cancel', event => {
+    event.preventDefault();
+    cancelProfilePreview();
+  });
+  profileApply?.addEventListener('click', () => {
+    if (!profileSuggestion || profileApply.disabled) return;
+    for (const {field, text, choice} of profileSuggestion.choices) {
+      if (choice.checked) profileInputs[field].value = text;
+    }
+    closeProfilePreview();
+    profileStatus.textContent = '已应用到编辑框，保存后生效。';
+    profileSave?.focus();
+  });
+  profileForm?.addEventListener('input', () => {
+    if (profileSuggestion && !profilePreview?.open) {
+      closeProfilePreview();
+      profileStatus.textContent = '';
+    }
+  });
+
   async function loadMemoryProfile() {
     profileRevision = null;
     const token = ++profileRequest, wid = workspaceId();
-    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
-    const fields = ['professional', 'work_style', 'communication'];
-    for (const field of fields) {
-      const input = document.getElementById('profile-' + field);
-      if (input) input.value = '';
-    }
+    if (profileSave) profileSave.disabled = true;
+    closeProfilePreview();
+    for (const input of Object.values(profileInputs)) if (input) input.value = '';
     if (!wid) return;
     const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`).catch(() => ({status:0, body:{}}));
     if (token !== profileRequest || workspaceId() !== wid) return;
@@ -581,14 +686,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const profile = result.body.profile;
     profileRevision = profile.revision;
-    if (save) save.disabled = false;
-    for (const field of fields) {
-      const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
-    }
+    if (profileSave) profileSave.disabled = false;
+    if (profileDream) profileDream.disabled = false;
+    for (const [field, input] of Object.entries(profileInputs)) if (input) input.value = profile[field];
     if (status) status.textContent = '';
   }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    closeProfilePreview();
     if (editor) editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     const workspace = document.getElementById('list-panel');
@@ -1010,6 +1115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
   function showPageMode() {
+    closeProfilePreview();
     listPanel.hidden = false;
     listPanel.dataset.view = 'page';
     for (const id of ['overview-panel', 'memory-side', 'actions-panel', 'profile-panel']) {
@@ -1170,8 +1276,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const dreamStatus = document.getElementById('dream-status');
   let dreamSuggestion = null;
 
-  // Only the wording lives here: the suggestion itself must survive the update so
-  // 接受 / 忽略 still knows which row they are talking about.
   function resetDream(summary = '', status = '') {
     if (dreamSummary) dreamSummary.textContent = summary;
     if (dreamStatus) dreamStatus.textContent = status;
@@ -1181,20 +1285,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pageId = currentPage && currentPage.id;
     const wid = workspaceId();
     if (!pageId || !wid || !dreamSuggestion) return;
-    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream/${dreamSuggestion.id}`, {action});
+    const suggestion = dreamSuggestion;
+    const originalBody = editor.elements.body.value;
+    if (action === 'accept' && originalBody !== (currentPage.body || '')) {
+      resetDream(suggestion.summary, '请先保存编辑中的正文，然后重新生成建议。');
+      return;
+    }
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream/${suggestion.id}`, {action});
+    if (workspaceId() !== wid || currentPage?.id !== pageId || dreamSuggestion !== suggestion) return;
     if (result.status !== 200) {
       if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '整理建议没有保存成功。');
       return;
     }
-    if (action === 'accept' && result.body.page) {
-      currentPage = result.body.page;
-      editor.elements.body.value = currentPage.body || '';
-      loadRichBody(currentPage.body || '');
-      document.getElementById('editor-meta').textContent =
-        `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-      const applied = result.body.applied || {};
-      resetDream(applied.removed ? '已合并：删掉了一段重复正文。' : '接受时这一页已经没有重复段落，正文未改动。',
-                 '这次整理留在这一页的历史里。');
+    dreamSuggestion = null;
+    if (result.body.suggestion?.status === 'accepted' && result.body.page) {
+      const title = editor.elements.title.value;
+      const topics = editor.elements.topics.value;
+      const editedBody = editor.elements.body.value !== originalBody ? editor.elements.body.value : null;
+      applyPageToEditor(result.body.page);
+      editor.elements.title.value = title;
+      editor.elements.topics.value = topics;
+      if (editedBody !== null) {
+        editor.elements.body.value = editedBody;
+        loadRichBody(editedBody);
+      }
+      rememberPage(currentPage);
+      syncPageUrl();
+      if (historyPanel && !historyPanel.hidden) void loadPageHistory();
+      resetDream('已合并重复段落。', editedBody === null ? '原文可在历史中查看。' : '已保留编辑框中尚未保存的内容。');
       return;
     }
     resetDream('', '已忽略，原文没有改动。');
@@ -1206,6 +1324,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!pageId || !wid) return;
     if (dreamPanel) dreamPanel.hidden = false;
     const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream`, {});
+    if (workspaceId() !== wid || currentPage?.id !== pageId) return;
     if (result.status !== 200) {
       if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '这一页暂时不能整理。');
       return;
@@ -1216,8 +1335,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     dreamSuggestion = result.body.suggestion;
-    resetDream(dreamSuggestion.summary, '接受会真的合并；忽略不会改动原文。');
-    dreamSuggestion = result.body.suggestion;
+    resetDream(dreamSuggestion.summary, '接受后会保存一份合并后的新版本。');
   });
   for (const [id, action] of [['dream-accept', 'accept'], ['dream-ignore', 'ignore']]) {
     const button = document.getElementById(id);
@@ -1468,12 +1586,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = null;
     currentPage = null;
     currentAction = null;
+    closeProfilePreview();
     syncExportButton();
     show('ok', '已退出登录。');
     await loadSession();
   });
 
-  const profileForm = document.getElementById('memory-profile-form');
   if (profileForm) profileForm.addEventListener('submit', async event => {
     event.preventDefault();
     const save = document.getElementById('save-memory-profile');
@@ -1481,10 +1599,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const wid = workspaceId();
     const token = profileRequest;
     const isCurrent = () => wid === workspaceId() && token === profileRequest;
-    const payload = {revision: profileRevision};
-    for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
-    const status = document.getElementById('memory-profile-status');
+    const payload = profileDraft();
+    const status = profileStatus;
     if (save) save.disabled = true;
+    closeProfilePreview();
     status.textContent = '正在保存…';
     try {
       const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
@@ -1498,7 +1616,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } catch {
       if (isCurrent()) status.textContent = '画像未保存，请重试。';
     } finally {
-      if (save && isCurrent()) save.disabled = false;
+      if (isCurrent()) {
+        if (save) save.disabled = false;
+        if (profileDream) profileDream.disabled = false;
+      }
     }
   });
   // 「偏好」 lives in the 我的资料 view. Rows come from and go back to the
