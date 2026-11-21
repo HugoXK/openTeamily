@@ -788,8 +788,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       restore.disabled = true;
       const result = await request(
         'POST',
-        `/v1/workspaces/${id}/agents/${restore.dataset.restore}/restore`,
-        {revision: Number(restore.dataset.revision || 0)},
+        `/v1/workspaces/${id}/agents/${restore.dataset.restore}/archive`,
+        {revision: Number(restore.dataset.revision || 0), archived: false},
       );
       if (result.status !== 200) {
         restore.disabled = false;
