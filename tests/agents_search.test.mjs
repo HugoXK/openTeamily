@@ -147,6 +147,33 @@ function openFirstAgent(el) {
   return el('agent-list').handlers.click({target: button});
 }
 
+test('workspace reads start together and the personal avatar cannot delay the directory', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  const personal = Promise.withResolvers();
+  const members = Promise.withResolvers();
+  const fetch = directoryFetcher(requests);
+  const ready = mount(doc, {fetcher: (path, options) => {
+    const response = fetch(path, options);
+    if (path === '/v1/personal-agent') return personal.promise.then(() => response);
+    if (path === '/v1/workspaces/ws-1/members') return members.promise.then(() => response);
+    return response;
+  }});
+  try {
+    await tick();
+    for (const path of ['/v1/workspaces/ws-1', '/v1/workspaces/ws-1/members', '/v1/workspaces/ws-1/agents?limit=100']) {
+      assert.equal(requests.some(request => request.path === path), true, path);
+    }
+    members.resolve();
+    await ready;
+    assert.equal(el('agent-list').children.length, 3);
+  } finally {
+    members.resolve();
+    personal.resolve();
+    await ready;
+  }
+});
+
 test('typing in the directory search filters in place and keeps an open conversation', async () => {
   const requests = [];
   const {doc, el} = fakeDocument();
@@ -167,6 +194,8 @@ test('typing in the directory search filters in place and keeps an open conversa
     await tick();
     assert.equal(el('chat-panel').hidden, false);
     assert.match(el('chat-title').textContent, /写作助手/);
+    assert.equal(el('open-in-chat').href, '/chat#workspace=ws-1&agent=ag-writer');
+    assert.equal(requests.some(({path}) => path.includes('/conversations')), false);
     const afterOpen = requests.length;
     const clearedBefore = cleared.size;
     assert.ok(afterOpen > 0);

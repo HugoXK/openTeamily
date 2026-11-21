@@ -512,6 +512,76 @@ test('a private send key names one message across text and attachment requests',
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_messages').get().n,4)
 })
 
+test('archiving lets accepted private turns settle while fencing new writes and retries', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const started = Promise.withResolvers()
+  const completion = Promise.withResolvers()
+  let turns = 0
+  runtime.nativeTurn = async (_bot,sessionId) => {
+    turns++
+    if (turns === 1) {
+      started.resolve()
+      return completion.promise
+    }
+    return {text:'Replied after restore',sessionId,turnId:2}
+  }
+  const {endpoints} = createAgents({db,host:{runtime:async () => runtime,currentRuntime:() => runtime,call:async () => null}})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Organized inbox',idempotency_key:'organize-agent-key'})
+  const {conversation} = await endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
+  const path = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(endpoints)
+  const sendKey = 'accepted-message-key'
+  const send = (key = sendKey) => request(path+'/messages',jsonPost(key,{body:'One outstanding reply'}))
+  const original = send()
+  await started.promise
+  assert.equal((await request(path,jsonPost('archive-state-key',{action:'archive'}))).status,200)
+  const newSend = await send('archived-send-blocked')
+  assert.equal(newSend.status,409)
+  assert.equal((await newSend.json()).error.code,'conversation_archived')
+  completion.reject(new Error('Deliberate interrupted reply'))
+  const pair = await (await original).json()
+  assert.equal(pair.reply.status,'failed')
+  assert.deepEqual(await (await send()).json(),pair)
+  const retry = () => request(`${path}/messages/${pair.reply.id}/retry`,jsonPost('archive-retry-key',{attempt:1}))
+  const blocked = await retry()
+  assert.equal(blocked.status,409)
+  assert.equal((await blocked.json()).error.code,'conversation_archived')
+  assert.equal(turns,1)
+  assert.equal((await request(path,jsonPost('restore-state-key',{action:'restore'}))).status,200)
+  assert.equal((await retry()).status,202)
+  const replay = await (await send()).json()
+  assert.equal(replay.reply.id,pair.reply.id)
+  assert.equal(replay.reply.status,'succeeded')
+  assert.equal(turns,2)
+})
+
+test('archiving during saved work preparation prevents a late private send', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const exporting = Promise.withResolvers(), snapshot = Promise.withResolvers()
+  const {endpoints} = createAgents({db,host:{runtime:async () => runtime,call:async name => {
+    if (name !== 'artifacts/chatAttachment') return null
+    exporting.resolve()
+    return snapshot.promise
+  }}})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Saved work inbox',idempotency_key:'organize-agent-key'})
+  const {conversation} = await endpoints['conversation-create']({workspace_id:workspace,id:agent.id})
+  const path = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(endpoints)
+  const send = request(path+'/messages',jsonPost('late-saved-work-key',{artifact_id:'e'.repeat(32),artifact_revision:1}))
+  await exporting.promise
+  assert.equal((await request(path,jsonPost('archive-state-key',{action:'archive'}))).status,200)
+  snapshot.resolve({body:'Snapshot',attachment:{title:'draft.txt',mime:'text/plain',data:'YWJj',resource:{kind:'document',title:'Draft',revision:1}}})
+  const blocked = await send
+  assert.equal(blocked.status,409)
+  assert.equal((await blocked.json()).error.code,'conversation_archived')
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_messages').get().n,0)
+  assert.equal(runtime.count,0)
+})
+
 test('live replies reveal only the current native snapshot and keep the final response authoritative', {timeout:3000}, async () => {
   const db = new DatabaseSync(':memory:')
   const runtime = createRuntime()

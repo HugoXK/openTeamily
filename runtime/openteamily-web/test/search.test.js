@@ -14,7 +14,7 @@ function seedChat(bot, workspace = WS, prefix = 'a') {
   try {
     db.prepare(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, revision, created,
       updated, key_hash, request_hash) VALUES (?, ?, '周报助手', ?, '', '', 1, 1, 1, ?, ?)`).run(agent, workspace, agent, agent, agent)
-    db.prepare('INSERT INTO agent_conversations VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
+    db.prepare('INSERT INTO agent_conversations (id,agent_id,title,created,updated) VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
     const insert = db.prepare(`INSERT INTO agent_messages (id, conversation_id, role, text, status, created)
       VALUES (?, ?, ?, ?, 'succeeded', ?)`)
     for (const [i, text] of ['帮我写周报', '好的，周报草稿见 https://example.com/report。', '谢谢'].entries()) {
@@ -34,7 +34,9 @@ test('the session directory lists only the selected workspace conversations with
     workspace_id: WS, agent_ids: [local.agent, other.agent, local.agent],
   })
   assert.equal(result.ok, true, JSON.stringify(result))
-  assert.deepEqual(result.value.items, [{id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1}])
+  assert.deepEqual(result.value.items, [{
+    id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1, archived_at:null, archived:false, title_edited:false,
+  }])
 })
 
 test('message search runs in DS-Bot over this owner\'s own conversations', async () => {

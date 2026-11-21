@@ -34,17 +34,28 @@ export function sessionPreview(row, fallback) {
   return text || fallback || '';
 }
 
+const PRIVATE_THREAD_ID = /^[a-f0-9]{32}$/;
+
+function privateThreadTitle(conversation, agent) {
+  return (conversation?.title_edited === true && conversation.title) || agent?.name || conversation?.title || '对话';
+}
+
 export function mergeSessions(agentRows, socialRows, currentUserId) {
   const sessions = [];
   for (const row of agentRows || []) {
+    if (row.archived === true) continue;
+    const title = privateThreadTitle(row, row.agent);
+    const renamed = row.title_edited === true;
+    const agentName = row.agent?.name !== title ? row.agent?.name : '';
+    const preview = sessionPreview(row, renamed ? agentName : row.title || '');
     sessions.push({
       source: 'agent',
       id: row.id,
       agent_id: row.agent_id || (row.agent && row.agent.id),
       agent: row.agent,
       kind: 'agent',
-      title: (row.agent && row.agent.name) || row.title || '对话',
-      preview: sessionPreview(row, row.title || ''),
+      title,
+      preview: renamed && preview === title ? agentName || '' : preview,
       unread_count: Number(row.unread_count) || 0,
       updated: row.updated || 0,
     });
@@ -928,6 +939,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let attachmentSender;
   const pendingSends = new Map();
   const privateReplyRetries = new Map();
+  const privateThreadWrites = new Map();
+  const privateThreadReceipts = new Map();
+  let privateThreadReceipt = 0;
   const agentReplyViews = new Map();
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
@@ -1134,8 +1148,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     const queue = pendingSends.get(scope);
     const closed = sendClosed();
+    document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncPrivateThreadControls();
     syncMemoryRecall(scope);
     const replying = queue?.replying;
     if (replying && !replying.replyView) {
@@ -1161,7 +1177,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentSource === 'agent' && currentAgent) {
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
-      setChatSubtitle(pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot'), pending);
+      const label = pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
+      setChatSubtitle(currentConversation?.title_edited ? `${currentAgent.name} · ${pending ? label : 'DS-Bot'}` : label, pending);
     }
     const empty = document.getElementById('chat-empty');
     empty.dataset.agent = String(currentSource === 'agent' && Boolean(currentAgent));
@@ -1240,6 +1257,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pendingSends.clear();
     privateReplyRetries.clear();
+    privateThreadWrites.clear();
+    privateThreadReceipts.clear();
+    closePrivateThreadDialogs();
   }
 
   function pendingMessageKeys() {
@@ -1434,6 +1454,266 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let markingConversationsRead = false;
 
+  const privateRename = document.getElementById('private-thread-rename');
+  const privateArchive = document.getElementById('private-thread-archive');
+  const privateRestore = document.getElementById('private-thread-restore');
+  const privateArchivedState = document.getElementById('private-thread-archived-state');
+  const privateArchiveOpen = document.getElementById('private-archive-open');
+  const privateNameDialog = document.getElementById('private-thread-dialog');
+  const privateNameInput = document.getElementById('private-thread-name');
+  const privateNameStatus = document.getElementById('private-thread-name-status');
+  const privateNameSave = document.getElementById('private-thread-save-name');
+  const privateArchiveDialog = document.getElementById('private-archive-dialog');
+  const privateArchiveList = document.getElementById('private-archive-list');
+  const privateArchiveStatus = document.getElementById('private-archive-status');
+  const privateArchiveMore = document.getElementById('private-archive-more');
+  let renameTarget = null;
+  let archiveView = null;
+
+  const privateThreadKey = ({owner, wid, aid, cid}) => JSON.stringify([owner, wid, aid, cid]);
+  const currentThreadWorkspace = () => servedByDsbot && currentUser?.id && PRIVATE_THREAD_ID.test(workspaceId());
+  const threadWorkspaceMatches = target => target.owner === currentUser?.id && target.wid === workspaceId();
+  const threadMatches = target => threadWorkspaceMatches(target) && currentSource === 'agent' &&
+    target.aid === currentAgent?.id && target.cid === currentConversation?.id;
+
+  function currentPrivateThread() {
+    const wid = workspaceId(), aid = currentAgent?.id, cid = currentConversation?.id;
+    if (!currentThreadWorkspace() || currentSource !== 'agent' || !PRIVATE_THREAD_ID.test(aid || '') ||
+        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.workspace_id !== wid || currentConversation.agent_id !== aid ||
+        typeof currentConversation.archived !== 'boolean') return null;
+    return {owner: currentUser.id, wid, aid, cid, agent: currentAgent, conversation: currentConversation};
+  }
+
+  function syncPrivateThreadControls() {
+    if (!privateRename) return;
+    const target = currentPrivateThread();
+    const archived = target?.conversation.archived === true;
+    const writing = Boolean(target && privateThreadWrites.has(privateThreadKey(target)));
+    privateRename.hidden = !target || archived;
+    privateArchive.hidden = !target || archived;
+    privateArchivedState.hidden = !archived;
+    privateRename.disabled = privateArchive.disabled = privateRestore.disabled = writing;
+    if (target?.conversation.title_edited) {
+      document.getElementById('chat-title').textContent = privateThreadTitle(target.conversation, target.agent);
+    }
+  }
+
+  function threadAfterRead(conversation, target, since) {
+    if (!conversation) return conversation;
+    const receipt = privateThreadReceipts.get(privateThreadKey(target));
+    if (receipt && receipt.seq > since) return {...conversation, ...receipt.metadata};
+    return conversation;
+  }
+
+  function closePrivateThreadDialogs() {
+    renameTarget = archiveView = null;
+    if (privateNameDialog?.open) privateNameDialog.close();
+    if (privateArchiveDialog?.open) privateArchiveDialog.close();
+  }
+
+  async function organizePrivateThread(target, action, title) {
+    const key = privateThreadKey(target);
+    if (!threadWorkspaceMatches(target) || privateThreadWrites.has(key)) return null;
+    const operation = {target, action};
+    privateThreadWrites.set(key, operation);
+    syncPrivateThreadControls();
+    const result = await request('POST', agentConversationPath(target.wid, target.aid, target.cid),
+      {action, ...(action === 'rename' ? {title} : {})}, undefined, AbortSignal.timeout(10000)).catch(() => ({status: 0, body: {}}));
+    if (privateThreadWrites.get(key) !== operation) return null;
+    privateThreadWrites.delete(key);
+    if (!threadWorkspaceMatches(target)) return null;
+    const row = result.body.conversation;
+    if (result.status !== 200 || row?.id !== target.cid || row.workspace_id !== target.wid || row.agent_id !== target.aid ||
+        typeof row.archived !== 'boolean' || typeof row.title !== 'string') {
+      syncPrivateThreadControls();
+      return false;
+    }
+    const metadata = {title: row.title, title_edited: row.title_edited, archived: row.archived, archived_at: row.archived_at};
+    privateThreadReceipts.set(key, {seq: ++privateThreadReceipt, metadata, restored: action === 'restore'});
+    const previous = sessions.find(item => item.source === 'agent' && item.id === row.id);
+    sessions = sessions.filter(item => item !== previous);
+    if (!row.archived && !target.agent?.archived && !target.agent?.native_deleted) {
+      const preview = previous?.preview === target.conversation.title ? undefined : previous?.preview;
+      const activeRow = mergeSessions([{...row, agent: target.agent, preview, unread_count: previous?.unread_count}], [], target.owner)[0];
+      if (activeRow) sessions = sortSessions([...sessions, activeRow]);
+    }
+    if (threadMatches(target)) {
+      Object.assign(currentConversation, metadata);
+      renderPendingSend();
+      renderAgentQuickStarts(currentAgent);
+    }
+    renderSessions();
+    if (archiveView && threadWorkspaceMatches(archiveView.scope)) {
+      if (row.archived) archiveView.rows.set(row.id, {...row, agent: target.agent});
+      else archiveView.rows.delete(row.id);
+      renderPrivateArchive(archiveView);
+    }
+    return true;
+  }
+
+  function renderPrivateArchive(state) {
+    const rows = [...state.rows.values()].sort((a, b) => (b.archived_at || b.updated) - (a.archived_at || a.updated));
+    privateArchiveList.replaceChildren();
+    for (const row of rows) {
+      const target = {...state.scope, cid: row.id, aid: row.agent_id, conversation: row, agent: row.agent};
+      const item = document.createElement('li');
+      item.dataset.archivedConversation = row.id;
+      const copy = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = privateThreadTitle(row, row.agent);
+      copy.append(name);
+      if (row.agent?.name && row.agent.name !== name.textContent) {
+        const identity = document.createElement('span');
+        identity.textContent = row.agent.name;
+        copy.append(identity);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'private-thread-actions';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.textContent = uiLabel('查看', 'Open');
+      open.dataset.archiveAction = 'open';
+      open.setAttribute('aria-label', uiLabel(`查看「${name.textContent}」`, `Open “${name.textContent}”`));
+      open.addEventListener('click', async () => {
+        if (archiveView !== state || !threadWorkspaceMatches(target)) return;
+        privateArchiveDialog.close();
+        if (await openSessionTarget({source: 'agent', cid: row.id, agent: row.agent_id, title: name.textContent})) {
+          document.getElementById('chat-title').focus({preventScroll: true});
+        }
+      });
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.textContent = uiLabel('恢复', 'Restore');
+      restore.dataset.archiveAction = 'restore';
+      restore.setAttribute('aria-label', uiLabel(`恢复「${name.textContent}」`, `Restore “${name.textContent}”`));
+      restore.disabled = privateThreadWrites.has(privateThreadKey(target));
+      restore.addEventListener('click', async () => {
+        if (archiveView !== state || restore.disabled) return;
+        restore.disabled = true;
+        const result = await organizePrivateThread(target, 'restore');
+        if (archiveView !== state || result === null) return;
+        restore.disabled = false;
+        privateArchiveStatus.textContent = result ? uiLabel('已恢复到会话列表。', 'Restored to conversations.')
+          : uiLabel('无法确认恢复结果，请重试。', 'Couldn’t verify the restore. Try again.');
+        if (result) document.getElementById('private-archive-heading').focus({preventScroll: true});
+      });
+      actions.append(open, restore);
+      item.append(copy, actions);
+      privateArchiveList.append(item);
+    }
+    privateArchiveMore.hidden = !state.cursor && !state.failed;
+    privateArchiveMore.disabled = state.loading;
+    privateArchiveMore.textContent = state.failed ? uiLabel('重试', 'Retry') : uiLabel('加载更多', 'Load more');
+  }
+
+  async function loadPrivateArchive(state) {
+    if (archiveView !== state || state.loading || !threadWorkspaceMatches(state.scope)) return;
+    state.loading = true;
+    privateArchiveMore.disabled = true;
+    privateArchiveStatus.textContent = uiLabel('正在读取归档…', 'Loading archived conversations…');
+    const {owner, wid} = state.scope;
+    const since = privateThreadReceipt;
+    const params = new URLSearchParams({include: 'conversations', conversation_status: 'archived', include_archived: '1', limit: '100'});
+    if (state.cursor) params.set('cursor', state.cursor);
+    const result = await request('GET', `/v1/workspaces/${wid}/agents?${params}`, undefined, undefined,
+      AbortSignal.timeout(10000)).catch(() => ({status: 0, body: {}}));
+    if (archiveView !== state || !threadWorkspaceMatches(state.scope)) return;
+    state.loading = false;
+    state.failed = result.status !== 200 || !Array.isArray(result.body.items) || !Array.isArray(result.body.conversations);
+    if (state.failed) {
+      privateArchiveStatus.textContent = uiLabel('无法读取归档，请重试。', 'Couldn’t load archived conversations.');
+      renderPrivateArchive(state);
+      return;
+    }
+    const byAgent = new Map(result.body.items.map(agent => [agent.id, agent]));
+    for (const listed of result.body.conversations) {
+      const agent = byAgent.get(listed?.agent_id);
+      if (!agent || !PRIVATE_THREAD_ID.test(agent.id) || !PRIVATE_THREAD_ID.test(listed.id) ||
+          (listed.workspace_id && listed.workspace_id !== wid) || (agent.workspace_id && agent.workspace_id !== wid)) continue;
+      const row = threadAfterRead(listed, {owner, wid, aid: agent.id, cid: listed.id}, since);
+      if (row.archived === true) state.rows.set(row.id, {...row, agent});
+    }
+    const next = result.body.cursor;
+    state.cursor = /^\d{1,15}\.[a-f0-9]{32}$/.test(next || '') && next !== state.cursor ? next : '';
+    privateArchiveStatus.textContent = state.rows.size ? '' : state.cursor
+      ? uiLabel('当前没有结果，可以继续加载。', 'No results on this page. You can load more.')
+      : uiLabel('没有已归档的私聊。', 'No archived conversations.');
+    renderPrivateArchive(state);
+  }
+
+  privateRename?.addEventListener('click', () => {
+    const target = currentPrivateThread();
+    if (!target || target.conversation.archived || privateRename.disabled) return;
+    renameTarget = target;
+    privateNameInput.value = target.conversation.title_edited ? target.conversation.title : privateThreadTitle(target.conversation, target.agent);
+    privateNameInput.disabled = privateNameSave.disabled = false;
+    privateNameStatus.textContent = '';
+    privateNameDialog.showModal();
+    privateNameInput.focus();
+    privateNameInput.select();
+  });
+  document.getElementById('private-thread-cancel-name')?.addEventListener('click', () => privateNameDialog.close());
+  privateNameDialog?.addEventListener('close', () => {
+    const target = renameTarget;
+    renameTarget = null;
+    if (target && threadMatches(target)) (narrowScreen() ? document.getElementById('chat-more') : privateRename).focus();
+  });
+  document.getElementById('private-thread-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = renameTarget;
+    if (!target || !threadMatches(target) || privateNameSave.disabled) return;
+    const title = privateNameInput.value.trim();
+    if (!title || title.length > 120) {
+      privateNameStatus.textContent = uiLabel('请输入 1–120 个字符的对话名称。', 'Enter a conversation name of 1–120 characters.');
+      return;
+    }
+    privateNameSave.disabled = privateNameInput.disabled = true;
+    privateNameStatus.textContent = uiLabel('正在保存名称…', 'Saving name…');
+    const result = await organizePrivateThread(target, 'rename', title);
+    if (renameTarget !== target || !privateNameDialog.open || !threadMatches(target)) return;
+    if (result) {
+      privateNameDialog.close();
+      show('ok', uiLabel('对话名称已保存。', 'Conversation renamed.'), {announceOnly: true});
+    } else {
+      privateNameInput.disabled = privateNameSave.disabled = false;
+      privateNameStatus.textContent = uiLabel('无法确认名称是否已保存，请重试。', 'Couldn’t verify the new name. Try again.');
+    }
+  });
+  privateArchive?.addEventListener('click', async () => {
+    const target = currentPrivateThread();
+    if (!target || target.conversation.archived || privateArchive.disabled) return;
+    const opened = socialOpen;
+    const result = await organizePrivateThread(target, 'archive');
+    if (opened !== socialOpen || !threadMatches(target) || result === null) return;
+    if (result) {
+      show('ok', uiLabel('对话已归档。', 'Conversation archived.'), {announceOnly: true});
+      privateRestore.focus({preventScroll: true});
+    } else show('error', uiLabel('无法确认归档结果，请重试。', 'Couldn’t verify the archive. Try again.'));
+  });
+  privateRestore?.addEventListener('click', async () => {
+    const target = currentPrivateThread();
+    if (!target?.conversation.archived || privateRestore.disabled) return;
+    const opened = socialOpen;
+    const result = await organizePrivateThread(target, 'restore');
+    if (opened !== socialOpen || !threadMatches(target) || result === null) return;
+    if (result) {
+      show('ok', uiLabel('已恢复到会话列表。', 'Restored to conversations.'), {announceOnly: true});
+      document.getElementById('chat-title').focus({preventScroll: true});
+    } else show('error', uiLabel('无法确认恢复结果，请重试。', 'Couldn’t verify the restore. Try again.'));
+  });
+  privateArchiveOpen?.addEventListener('click', () => {
+    if (!currentThreadWorkspace()) return;
+    const scope = {owner: currentUser.id, wid: workspaceId()};
+    archiveView = {scope, rows: new Map(), cursor: '', loading: false, failed: false};
+    renderPrivateArchive(archiveView);
+    privateArchiveDialog.showModal();
+    document.getElementById('private-archive-heading').focus();
+    return loadPrivateArchive(archiveView);
+  });
+  privateArchiveMore?.addEventListener('click', () => { if (archiveView) return loadPrivateArchive(archiveView); });
+  document.getElementById('private-archive-close')?.addEventListener('click', () => privateArchiveDialog.close());
+  privateArchiveDialog?.addEventListener('close', () => { archiveView = null; });
+
   function sessionTargetMatches(target, row) {
     return target?.cid === row.dataset.conversation && target.source === row.dataset.source;
   }
@@ -1493,6 +1773,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderSessions() {
     const list = document.getElementById('conversation-list');
+    if (privateArchiveOpen) privateArchiveOpen.hidden = !currentThreadWorkspace();
     list.replaceChildren();
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
@@ -3275,6 +3556,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!id) return;
     const isLocalPersonal = inPersonalWorkspace();
+    const readThreadReceipt = nativeDirectory ? 0 : privateThreadReceipt;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const path = `/v1/workspaces/${id}`;
     const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
@@ -3327,17 +3609,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
     }
     const agentById = new Map(agents.map(agent => [agent.id, agent]));
-    const privateRows = rows.flatMap(row => {
-      const agent = agentById.get(row.agent_id);
-      return agent ? [{...row, agent}] : [];
-    });
-    if (isLocalPersonal && privateRows.length) {
-      applyReceipt('agent', privateRows);
-      sessions = mergeSessions(privateRows, socialConversations, user.id);
+    const privateRows = () => {
+      const included = new Set(rows.map(row => row.id));
+      const directory = [...rows];
+      // An active-only read can omit a thread restored after the request began.
+      for (const row of sessions) {
+        if (row.source !== 'agent' || included.has(row.id)) continue;
+        const receipt = privateThreadReceipts.get(privateThreadKey({owner: user.id, wid: id, aid: row.agent_id, cid: row.id}));
+        if (receipt?.restored && receipt.seq > readThreadReceipt) directory.push(row);
+      }
+      return directory.flatMap(row => {
+        const agent = agentById.get(row.agent_id);
+        if (!agent) return [];
+        const currentRow = threadAfterRead(row, {owner: user.id, wid: id, aid: agent.id, cid: row.id}, readThreadReceipt);
+        return currentRow.archived === true ? [] : [{...currentRow, agent}];
+      });
+    };
+    const localRows = isLocalPersonal ? privateRows() : [];
+    if (localRows.length) {
+      applyReceipt('agent', localRows);
+      sessions = mergeSessions(localRows, socialConversations, user.id);
       renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(privateRows.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(localRows.length ? sessions.find(row => row.source === 'agent') : null);
     }
     const social = await socialRequest;
     if (!current()) return;
@@ -3346,8 +3641,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? (social.body.items || []).map(row => mergePinRead(row, user.id, id, readPinReceipt))
       : [];
     applyReceipt('social', socialConversations);
-    applyReceipt('agent', privateRows);
-    sessions = mergeSessions(privateRows, socialConversations, user.id);
+    const finalPrivateRows = privateRows();
+    applyReceipt('agent', finalPrivateRows);
+    sessions = mergeSessions(finalPrivateRows, socialConversations, user.id);
     setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
     if (currentSource === 'social') syncConversationPin(currentConversation);
@@ -3718,6 +4014,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const open = nativeRefresh ? socialOpen : ++socialOpen;
     const refreshId = nativeRefresh ? ++privateRefresh : null;
+    const readThreadReceipt = startupSnapshot ? 0 : privateThreadReceipt;
     const wid = workspaceId();
     const owner = currentUser;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
@@ -3747,7 +4044,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const listedAgent = agents.find(item => item.id === agentId);
     const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
-    const conversation = result.body.conversation;
+    const conversation = threadAfterRead(result.body.conversation, {owner: owner?.id, wid, aid: agentId, cid: conversationId}, readThreadReceipt);
     if (!agent || conversation?.id !== conversationId || (link && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
@@ -5079,6 +5376,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    closePrivateThreadDialogs();
     clearSessionTransition();
     cancelStartupLink();
     stopReplyProgress();
@@ -5872,6 +6170,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           job.state = state;
           if (isCurrent()) paintSendJob(job);
         };
+        if (!queue.social && privateThreadReceipts.get(privateThreadKey({owner: queue.owner, wid: queue.wid,
+          aid: queue.agentId, cid: queue.conversationId}))?.metadata.archived) {
+          job.failed = true;
+          feedback(uiLabel('对话已归档，恢复后可以重试。', 'Conversation archived. Restore it to retry.'));
+          continue;
+        }
         const beginReply = () => {
           if (!servedByDsbot || queue.social || queue.replying === job) return;
           queue.replying = job;
@@ -5970,6 +6274,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               void openSocialConversation(queue.conversationId, {refresh:true});
             }
             throw new Error(result.status === 413 ? '附件合计不能超过 8 MB。'
+              : code === 'conversation_archived' ? uiLabel('对话已归档，恢复后可以重试。', 'Conversation archived. Restore it to retry.')
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
           }

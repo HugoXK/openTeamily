@@ -94,6 +94,21 @@ test('mergeSessions prefers a last-message preview from the listing', () => {
   ]);
 });
 
+test('mergeSessions keeps archived private threads out of the inbox and named threads distinct from their previews', () => {
+  const agent = {id: 'ag', name: 'Helper'};
+  const sessions = mergeSessions([
+    {id: 'archived', agent, title: 'Archived', title_edited: true, archived: true},
+    {id: 'renamed', agent, title: 'Quarterly review', title_edited: true, preview: 'Latest assistant reply', updated: 30},
+    {id: 'duplicated', agent, title: 'Project notes', title_edited: true, preview: 'Project notes', updated: 20},
+    {id: 'legacy', agent, title: 'Old thread', title_edited: false, updated: 10},
+  ], [], alice);
+  assert.deepEqual(sessions.map(row => [row.id, row.title, row.preview]), [
+    ['renamed', 'Quarterly review', 'Latest assistant reply'],
+    ['duplicated', 'Project notes', 'Helper'],
+    ['legacy', 'Helper', 'Old thread'],
+  ]);
+});
+
 
 test('messageSearchQuery adds only an explicit conversation scope and encodes keywords', async () => {
   const {messageSearchQuery} = await import('../openteamily/static/chat/app.mjs');

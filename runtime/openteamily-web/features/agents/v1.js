@@ -23,6 +23,7 @@ const publicAgent = (agent) => ({ ...agent, archived: agent.archived ? 1 : 0, ho
 const chatAgent = (agent) => publicAgent(agent.archived || agent.native_deleted ? {...agent, quick_starts: []} : agent)
 const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
+  archived: row.archived_at != null, archived_at: row.archived_at ?? null, title_edited: row.initial_title != null,
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
 const publicFile = ({title,mime,bytes,resource}, index, workspaceId, agentId, conversationId, messageId) => ({
@@ -133,6 +134,11 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method === 'POST') {
         const body = await req.json()
+        if (body?.action !== undefined) {
+          const {action, title} = requireBodyKeys(body, body.action === 'rename' ? ['action', 'title'] : ['action'])
+          const {conversation} = await call('organizeConversation', {workspace_id:workspaceId,id,conversation_id:conversationId,action,title})
+          return {body:{conversation:publicConversation(conversation,workspaceId,id)}}
+        }
         return {body:await call('setMemoryRecall', {workspace_id:workspaceId,id,conversation_id:conversationId,memory_recall:body.memory_recall,memory_scope:body.memory_scope})}
       }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
@@ -157,8 +163,15 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations$`), handle: wrap(async (req, workspaceId, id) => {
       if (req.method === 'GET') {
-        const { items } = await call('conversations', { workspace_id: workspaceId, id })
-        return { status: 200, body: { items: items.map((row) => publicConversation(row, workspaceId, id)), cursor: null } }
+        const archived = req.query.get('archived')
+        if (archived !== null && (archived !== '1' || req.query.getAll('archived').length !== 1)) {
+          throw new FeatureError(400, 'invalid', 'Invalid archived conversation filter')
+        }
+        const {items,cursor} = await call('conversations', {
+          workspace_id:workspaceId,id,archived:archived === '1',
+          cursor:req.query.get('cursor') ?? '',limit:Number(req.query.get('limit') ?? 50),
+        })
+        return { status: 200, body: { items: items.map((row) => publicConversation(row, workspaceId, id)), cursor: cursor ?? null } }
       }
       if (req.method === 'POST') {
         const body = await req.json()
@@ -181,6 +194,13 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         const cursor = req.query.get('cursor') || ''
         const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         if (req.query.get('include') === 'conversations') {
+          const conversationStatus = req.query.get('conversation_status')
+          if (conversationStatus !== null && (conversationStatus !== 'archived' || req.query.getAll('conversation_status').length !== 1)) {
+            throw new FeatureError(400, 'invalid', 'Invalid conversation status filter')
+          }
+          if (conversationStatus === 'archived') return {body:await call('archivedConversationDirectory', {
+            workspace_id:workspaceId,cursor,limit:Number(req.query.get('limit') ?? 50),
+          })}
           const page = await chatDirectory(workspaceId, {includeArchived, cursor, limit: Math.floor(limit) || 0})
           const {items: conversations} = await call('conversationSummaries', {
             workspace_id: workspaceId, agent_ids: page.items.map(item => item.id),

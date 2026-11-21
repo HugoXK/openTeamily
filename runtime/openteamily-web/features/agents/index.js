@@ -81,6 +81,15 @@ export function createAgents({ db, host }) {
   if (!db.prepare('PRAGMA table_info(agent_conversation_memory)').all().some(column => column.name === 'scope')) {
     db.exec("ALTER TABLE agent_conversation_memory ADD COLUMN scope TEXT NOT NULL DEFAULT 'workspace' CHECK(scope IN ('workspace','workspaces'))")
   }
+  const conversationColumns = new Set(db.prepare('PRAGMA table_info(agent_conversations)').all().map(column => column.name))
+  if (!conversationColumns.has('archived_at')) db.exec('ALTER TABLE agent_conversations ADD COLUMN archived_at INTEGER')
+  if (!conversationColumns.has('initial_title')) db.exec('ALTER TABLE agent_conversations ADD COLUMN initial_title TEXT')
+  db.exec(`CREATE INDEX IF NOT EXISTS active_agent_conversations ON agent_conversations(agent_id, updated DESC, id)
+    WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS archived_agent_conversations ON agent_conversations(agent_id, archived_at DESC, id DESC)
+    WHERE archived_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS archived_conversations_by_time ON agent_conversations(archived_at DESC, id DESC)
+    WHERE archived_at IS NOT NULL;`)
   db.exec(`UPDATE agent_messages SET status='failed',
     meta=json_remove(json_set(meta,'$.error','agents/interrupted'),'$.nativePending')
     WHERE role='assistant' AND status='running' AND json_extract(meta,'$.nativePending')=1;
@@ -108,6 +117,9 @@ export function createAgents({ db, host }) {
     const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agent_conversations WHERE id=? AND agent_id=?', id, agent.id) : undefined
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
+  }
+  const requireOpenConversation = (agent, id) => {
+    if (conversation(agent, id).archived_at !== null) fail('conversation_archived', '请恢复此对话后再发送消息。', 409)
   }
   const readMessage = message => ({ ...message, meta: JSON.parse(message.meta) })
   const conversationMessages = id => all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, rowid', id)
@@ -168,6 +180,25 @@ export function createAgents({ db, host }) {
       native_bot_id: bot.id, native_name: bot.name}
     if (rosterAttached && row.native_bot_id) return {...row, archived: 1, native_name: null, native_deleted: true}
     return row
+  }
+
+  function archivedConversationPage(workspaceId, {agentId, cursor = '', limit = 50}) {
+    const position = cursor ? /^(\d{1,15})\.([0-9a-f]{32})$/.exec(cursor) : null
+    if ((cursor && !position) || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+      fail('invalid', 'Invalid archived conversation page', 400)
+    }
+    const page = all(`SELECT c.*, a.name AS agent_name, a.archived AS agent_archived,
+        o.bot_id AS native_bot_id, o.last_name AS native_name
+      FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
+      LEFT JOIN native_agent_objects o ON o.agent_id=c.agent_id
+      WHERE a.workspace_id=? AND c.archived_at IS NOT NULL
+      ${agentId ? 'AND c.agent_id=?' : ''}
+      ${position ? 'AND (c.archived_at,c.id)<(?,?)' : ''}
+      ORDER BY c.archived_at DESC,c.id DESC LIMIT ?`,
+    workspaceId, ...(agentId ? [agentId] : []), ...(position ? [Number(position[1]),position[2]] : []), limit + 1)
+    const rows = page.slice(0,limit)
+    const last = rows.at(-1)
+    return {rows,cursor:page.length > limit ? `${last.archived_at}.${last.id}` : null}
   }
 
   async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
@@ -368,6 +399,7 @@ export function createAgents({ db, host }) {
     const previous = replay()
     if (previous) return previous
     if (work) {
+      requireOpenConversation(agent, convo.id)
       const snapshot = await host.call('artifacts/chatAttachment', {workspace_id:agent.workspace_id,...work})
       const concurrent = replay()
       if (concurrent) return concurrent
@@ -377,6 +409,7 @@ export function createAgents({ db, host }) {
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
     try {
+      requireOpenConversation(agent, convo.id)
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify(userMeta))
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(),
         JSON.stringify({clientKey:key,nativePending:true}))
@@ -450,7 +483,8 @@ export function createAgents({ db, host }) {
           const existing = one('SELECT agent_id FROM agent_conversations WHERE id=?', c.id)
           if (existing && existing.agent_id !== agent.id) fail('personal-binding-conflict', 'Private conversation belongs to another agent', 409)
           const stamp = v => Number(v) > 1e12 ? Math.floor(Number(v) / 1000) : Number(v) || now()
-          run('INSERT OR IGNORE INTO agent_conversations VALUES(?,?,?,?,?)', c.id, agent.id, String(c.title || 'Personal chat').slice(0,120), stamp(c.created), stamp(c.updated))
+          run('INSERT OR IGNORE INTO agent_conversations (id,agent_id,title,created,updated) VALUES(?,?,?,?,?)',
+            c.id, agent.id, String(c.title || 'Personal chat').slice(0,120), stamp(c.created), stamp(c.updated))
           for (const m of c.messages || []) {
             if (!ID.test(m?.id || '') || !['user','assistant'].includes(m.role)) fail('invalid', 'Invalid private message', 400)
             const present = one('SELECT conversation_id FROM agent_messages WHERE id=?', m.id)
@@ -462,7 +496,10 @@ export function createAgents({ db, host }) {
       } catch (e) { db.exec('ROLLBACK'); throw e }
       // Boot import persists history before the runtime is attached. Reconciliation materializes it.
       if (!materialize) return { workspace_id: agent.workspace_id, agent_id: agent.id }
-      for (const c of list) await native.session(agent, `agent:${agent.id}:${c.id}`, c.title)
+      for (const c of list) {
+        const row = conversation(agent, c.id)
+        if (row.archived_at === null) await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
+      }
       return { workspace_id: agent.workspace_id, agent_id:agent.id, native_bot_id:(await native.ensure(agent)).native_bot_id }
     },
     async reconcile() {
@@ -470,7 +507,7 @@ export function createAgents({ db, host }) {
       for (const row of all('SELECT * FROM agents ORDER BY id')) {
         const a = await native.ensure(row)
         const sessions = []
-        if (!a.native_deleted) for (const c of all('SELECT * FROM agent_conversations WHERE agent_id=?', row.id)) sessions.push(await native.session(a, `agent:${a.id}:${c.id}`, c.title))
+        if (!a.native_deleted) for (const c of all('SELECT * FROM agent_conversations WHERE agent_id=? AND archived_at IS NULL', row.id)) sessions.push(await native.session(a, `agent:${a.id}:${c.id}`, c.title))
         items.push({ agent_id: row.id, native_bot_id: a.native_bot_id, native_deleted: !!a.native_deleted, sessions })
       }
       return { items }
@@ -552,7 +589,12 @@ export function createAgents({ db, host }) {
     },
     async conversations(p) {
       const agent = load(ws(p), p.id)
-      const rows = all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id)
+      if (p.archived === true) {
+        const {rows,cursor} = archivedConversationPage(agent.workspace_id,{agentId:agent.id,cursor:p.cursor,limit:p.limit})
+        return {items:rows.map(({agent_name,agent_archived,native_bot_id,native_name,...row}) => row),cursor}
+      }
+      const rows = all(`SELECT * FROM agent_conversations WHERE agent_id=? AND archived_at IS NULL
+        ORDER BY updated DESC, id LIMIT 200`, agent.id)
       return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.readSession(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
     },
     async conversationSummaries(p) {
@@ -562,11 +604,32 @@ export function createAgents({ db, host }) {
         fail('invalid', 'Provide at most 100 agent IDs', 400)
       }
       // Listing a conversation must not hydrate its native Session or import its history.
-      const list = db.prepare(`SELECT c.id, c.agent_id, c.title, c.updated
+      const list = db.prepare(`SELECT c.id, c.agent_id, c.title, c.updated, c.archived_at,
+          c.initial_title IS NOT NULL AS title_edited
         FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
-        WHERE c.agent_id=? AND a.workspace_id=?
+        WHERE c.agent_id=? AND a.workspace_id=? AND c.archived_at IS NULL
         ORDER BY c.updated DESC, c.id LIMIT 200`)
-      return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)) }
+      return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)).map(row => ({
+        ...row, archived: false, title_edited: !!row.title_edited,
+      })) }
+    },
+    async archivedConversationDirectory(p) {
+      const workspaceId = ws(p)
+      const {rows,cursor} = archivedConversationPage(workspaceId,p)
+      const items = new Map()
+      const rt = host.currentRuntime?.()?.rt
+      const attached = typeof rt?.botOf === 'function'
+      const conversations = rows.map(row => {
+        if (!items.has(row.agent_id)) {
+          const agent = observeAgent({name:row.agent_name,archived:row.agent_archived,
+            native_bot_id:row.native_bot_id,native_name:row.native_name}, row.native_bot_id && rt?.botOf?.(row.native_bot_id), attached)
+          items.set(row.agent_id,{id:row.agent_id,workspace_id:workspaceId,name:agent.name,
+            archived:agent.archived ? 1 : 0,native_deleted:!!agent.native_deleted,served_by:'ds-bot'})
+        }
+        return {id:row.id,agent_id:row.agent_id,workspace_id:workspaceId,title:row.title,
+          created:row.created,updated:row.updated,archived:true,archived_at:row.archived_at,title_edited:row.initial_title !== null}
+      })
+      return {items:[...items.values()],conversations,cursor}
     },
     async startupEntry(p, call) {
       if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
@@ -577,7 +640,7 @@ export function createAgents({ db, host }) {
       }
       const id = p.conversation_id ?? one(`SELECT c.id
         FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
-        WHERE a.workspace_id=? AND c.agent_id=? ORDER BY c.updated DESC, c.id LIMIT 1`, workspaceId, p.agent_id)?.id
+        WHERE a.workspace_id=? AND c.agent_id=? AND c.archived_at IS NULL ORDER BY c.updated DESC, c.id LIMIT 1`, workspaceId, p.agent_id)?.id
       if (!id) return null
       const result = await endpoints.v1({
         method: 'GET', path: `/v1/workspaces/${workspaceId}/agents/${p.agent_id}/conversations/${id}?limit=50&snapshot=1`,
@@ -594,14 +657,41 @@ export function createAgents({ db, host }) {
       const stamp = now()
       db.exec('BEGIN')
       try {
-        const inserted = run('INSERT OR IGNORE INTO agent_conversations VALUES(?,?,?,?,?)', id, agent.id, title, stamp, stamp)
+        const inserted = run('INSERT OR IGNORE INTO agent_conversations (id,agent_id,title,created,updated) VALUES(?,?,?,?,?)',
+          id, agent.id, title, stamp, stamp)
         if (inserted.changes && memoryModeChoice !== undefined) setMemoryMode(id,memoryModeChoice)
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
       const row = conversation(agent, id)
-      if (row.title !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
-      const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
-      return { status: 201, conversation: { ...row, ...mapping, ...memorySetting(await conversationMemoryMode(row, agent)) } }
+      if ((row.initial_title ?? row.title) !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
+      const keyForSession = `agent:${agent.id}:${row.id}`
+      const mapping = row.archived_at === null ? await native.session(agent, keyForSession, row.title) : native.mappedSession(agent, keyForSession)
+      const memory = memorySetting(await conversationMemoryMode(row, agent))
+      return { status: 201, conversation: { ...conversation(agent, id), ...mapping, ...memory } }
+    },
+    async organizeConversation(p) {
+      const agent = load(ws(p), p.id)
+      const row = conversation(agent, p.conversation_id)
+      const key = `agent:${agent.id}:${row.id}`
+      if (p.action === 'rename') {
+        const title = typeof p.title === 'string' ? p.title.trim() : ''
+        if (!title || title.length > 120 || /[\u0000-\u001f\u007f]/.test(title)) fail('invalid', '对话标题须为 1 到 120 个字符。', 400)
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          const changed = run(`UPDATE agent_conversations SET initial_title=COALESCE(initial_title,title), title=?
+            WHERE id=? AND agent_id=? AND (initial_title IS NULL OR title<>?)`, title, row.id, agent.id, title)
+          if (changed.changes) native.markSessionTitle(row.id, title)
+          db.exec('COMMIT')
+        } catch (error) { db.exec('ROLLBACK'); throw error }
+        void native.renameSession(agent, key)
+      } else if (p.action === 'archive') {
+        run('UPDATE agent_conversations SET archived_at=? WHERE id=? AND agent_id=? AND archived_at IS NULL', now(), row.id, agent.id)
+      } else if (p.action === 'restore') {
+        run('UPDATE agent_conversations SET archived_at=NULL WHERE id=? AND agent_id=? AND archived_at IS NOT NULL', row.id, agent.id)
+      } else {
+        fail('invalid', 'Invalid conversation action', 400)
+      }
+      return {conversation: {...conversation(agent, row.id), ...native.mappedSession(agent, key)}}
     },
     async openConversation(p) {
       const agent = load(ws(p), p.id)
@@ -622,20 +712,21 @@ export function createAgents({ db, host }) {
       // Only the selected thread can materialize missing native state.
       let mapped = native.mappedSession(agent, key)
       let current = agent
-      if (!mapped) {
+      if (!mapped && row.archived_at === null) {
         if (snapshot) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
         mapped = await native.session(agent, key, row.title)
         // Native setup can reconcile the stored agent while binding the session.
         current = load(agent.workspace_id, agent.id)
       }
-      const {native_name, ...mapping} = mapped
+      const {native_name, ...mapping} = mapped ?? {}
       const rt = host.currentRuntime?.()?.rt
-      const observed = observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
-        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function')
+      const observed = mapped ? observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
+        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
+      const memory = memorySetting(await conversationMemoryMode(row, agent))
       return {
         agent: view(observed),
-        conversation: {...row, ...mapping, ...memorySetting(await conversationMemoryMode(row, agent))},
+        conversation: {...conversation(agent, row.id), ...mapping, ...memory},
         ...(history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
       }
     },
@@ -680,8 +771,8 @@ export function createAgents({ db, host }) {
       }
       const scope = `FROM agents a JOIN agent_conversations c ON c.agent_id=a.id
         JOIN agent_messages m ON m.conversation_id=c.id
-        WHERE a.workspace_id=? AND (? IS NULL OR c.id=?)`
-      const bindings = [workspaceId, conversationId, conversationId]
+        WHERE a.workspace_id=? ${conversationId === null ? 'AND c.archived_at IS NULL' : 'AND c.id=?'}`
+      const bindings = conversationId === null ? [workspaceId] : [workspaceId, conversationId]
       let [created, id] = position || [null, null]
       if (cursor) {
         const row = one(`SELECT m.created ${scope} AND m.id=?`, ...bindings, cursor)
@@ -700,7 +791,7 @@ export function createAgents({ db, host }) {
     async messages(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
-      await native.readSession(agent, `agent:${agent.id}:${convo.id}`, convo.title)
+      if (convo.archived_at === null) await native.readSession(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: conversationMessages(convo.id) }
     },
     async saveMessage(p) {
@@ -750,6 +841,7 @@ export function createAgents({ db, host }) {
       }
       db.exec('BEGIN')
       try {
+        requireOpenConversation(agent, convo.id)
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({...userMeta,nativePending:true}))
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(), JSON.stringify({...replyMeta,nativePending:true}))
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
@@ -785,6 +877,7 @@ export function createAgents({ db, host }) {
           if (prior.previous_attempt !== previousAttempt) fail('conflict', 'Retry key was used for a different attempt', 409)
           reused = true
         } else {
+          requireOpenConversation(agent, convo.id)
           const changed = run(`UPDATE agent_messages SET text='', status='running', meta=?
             WHERE id=? AND conversation_id=? AND status='failed' AND COALESCE(json_extract(meta,'$.replyAttempt'),1)=?`,
             JSON.stringify({...replyMeta,nativePending:true}), replyId, convo.id, previousAttempt)
@@ -879,7 +972,8 @@ export function createAgents({ db, host }) {
       for (const row of bundle?.conversations ?? []) {
         if (!row?.id || !row.agent_id || one('SELECT id FROM agent_conversations WHERE id=?', row.id)) continue
         if (!one('SELECT id FROM agents WHERE id=?', row.agent_id)) continue
-        run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, String(row.title || '新对话').slice(0, 120), Number(row.created) || now(), Number(row.updated) || now())
+        run('INSERT INTO agent_conversations (id,agent_id,title,created,updated) VALUES(?,?,?,?,?)',
+          row.id, row.agent_id, String(row.title || '新对话').slice(0, 120), Number(row.created) || now(), Number(row.updated) || now())
         conversations += 1
       }
       for (const row of bundle?.messages ?? []) {
