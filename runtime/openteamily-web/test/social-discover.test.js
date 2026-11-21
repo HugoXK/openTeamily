@@ -197,8 +197,9 @@ test('native work detail and comment routes forward the personal connector and r
   const fetch = async (url, init) => {
     assert.equal(init.headers.authorization, 'Bearer commenter-fixture')
     const path = url.slice(SERVER.length)
-    if (path === upstream) return Response.json({
-      kind: 'work', listed: true, slug: 'writer-demo', title: '参考作品', comment_count: 1, snapshot: 'private instruction',
+    if (path === upstream + '/detail?tab=collected&q=design&work_kind=model3d') return Response.json({
+      work: {kind: 'work', listed: true, slug: 'writer-demo', title: '参考作品', comment_count: 1, snapshot: 'private instruction'},
+      previous: null, next: {slug: 'other-work', title: '另一件作品', owner_id: 'private'},
     })
     if (path === upstream + '/comments?parent_id=' + id + '&cursor=100.' + id + '&limit=12') {
       return Response.json({items: [comment], cursor: null, comment_count: 1})
@@ -219,9 +220,13 @@ test('native work detail and comment routes forward the personal connector and r
   const call = (method, path, body, idempotency_key) =>
     discover({dataDir: dir}).endpoints.v1({method, path, body, idempotency_key})
 
-  const work = (await call('GET', root)).body.work
-  assert.equal(work.comment_count, 1)
-  assert.ok(!Object.hasOwn(work, 'snapshot'))
+  const detail = (await call('GET', root + '?tab=collected&q=design&kind=model3d')).body
+  assert.equal(detail.work.comment_count, 1)
+  assert.ok(!Object.hasOwn(detail.work, 'snapshot'))
+  assert.equal(detail.previous, null)
+  assert.deepEqual(detail.next, {slug: 'other-work', title: '另一件作品'})
+  assert.equal((await call('GET', root + '?cursor=12')).status, 400)
+  assert.equal((await call('GET', root + '?sort=popular&sort=latest')).status, 400)
   const page = await call('GET', root + '/comments?parent_id=' + id + '&cursor=100.' + id + '&limit=12')
   assert.equal(page.status, 200)
   assert.deepEqual(page.body.items[0].author, {handle: 'writer.home', name: '作者'})

@@ -363,7 +363,7 @@ test('the activity feed renders opted-in work cards from the public API', async 
   assert.equal(cell.className, 'feed-entry');
   const card = cell.children[0];
   assert.equal(String(card.tagName).toLowerCase(), 'a');
-  assert.equal(card.href, '/w/ci-fixture-doc');
+  assert.equal(card.href, '/discover?work=ci-fixture-doc');
   assert.equal(card.children[0].className, 'work-cover');
   assert.equal(card.children[0].dataset.kind, 'document');
   assert.equal(card.children[1].textContent, '文档');
@@ -813,8 +813,7 @@ test('document thumbnails preserve only bounded semantic text blocks', () => {
   assert.equal(model.blocks[1].text,'item');
 });
 
-// A work card's detail is read in place: the feed keeps its tab, filter and
-// scroll position, and the work page stays one click away.
+// A work detail retains the originating feed and links out to the public work.
 function classHits(node, wanted, hits = []) {
   if (String(node.className || '').split(/\s+/).includes(wanted)) hits.push(node);
   for (const child of node.children || []) classHits(child, wanted, hits);
@@ -845,6 +844,7 @@ function detailFetcher(item, previewResult) {
     if (path.startsWith('/v1/discover/works')) {
       return {status: 200, json: async () => ({items: [item], cursor: null})};
     }
+    if (path === '/w/' + item.slug) return {status: 200, json: async () => item};
     if (path === '/w/' + item.slug + '/preview') return previewResult(path);
     throw new Error('unexpected ' + path);
   };
@@ -864,14 +864,15 @@ test('the 3D detail exposes an explicit preview and direct download without pref
   assert.equal(grid.children[0].children[0].children[1].textContent, '3D 作品');
   const [detail] = classHits(grid, 'feed-detail-toggle');
   await detail.handlers.click();
-  const [preview] = classHits(grid, 'feed-model3d-preview-toggle');
-  const [download] = classHits(grid, 'feed-model3d-download');
+  const surface = doc.getElementById('work-detail-preview');
+  const [preview] = classHits(surface, 'feed-model3d-preview-toggle');
+  const [download] = classHits(surface, 'feed-model3d-download');
   assert.equal(preview.textContent, '预览 3D 模型');
   assert.equal(preview.disabled, false);
   assert.equal(download.href, '/social/w/ci-fixture-doc/file');
   assert.equal(download.download, '');
-  assert.equal(requests.some(path => path.startsWith('/w/')), false);
-  await detail.handlers.click();
+  assert.equal(requests.some(path => path.endsWith('/preview') || path.endsWith('/file')), false);
+  await doc.getElementById('work-detail-back').handlers.click();
   assert.equal(preview.disabled, true);
 });
 
@@ -883,53 +884,120 @@ test('3D card URLs fall back to the matching same-origin work route', () => {
   }
 });
 
-test('a work card opens a read-only detail in place without leaving the feed', async () => {
+test('a work card opens a shareable detail and returns to the originating feed and focus', async () => {
   const app = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
   const {fetcher, requests} = detailFetcher(detailFixture(), () => ({status: 200, json: async () => ({preview: {
     type: 'document', heading: '季报摘要', lines: ['第一行正文', '第二行正文', '第三行正文', '第四行不该出现'],
   }})}));
-  const visited = [];
-  const location = {search: '', pathname: '/discover', assign: url => visited.push(url)};
-  await app.mount(doc, {fetcher, location});
+  const visits = [];
+  const location = {search: '?q=季报', pathname: '/discover'};
+  const history = {
+    pushState(_state, _title, url) { visits.push(url); },
+    replaceState(_state, _title, url) { visits.push(url); },
+  };
+  await app.mount(doc, {fetcher, location, history});
 
-  const cell = doc.getElementById('feed-grid').children[0];
+  const grid = doc.getElementById('feed-grid');
+  const cell = grid.children[0];
   const toggles = classHits(cell, 'feed-detail-toggle');
-  assert.equal(toggles.length, 1, 'a feed card offers exactly one detail toggle');
+  assert.equal(toggles.length, 1);
   const toggle = toggles[0];
-  assert.equal(toggle.tagName, 'button');
+  let focused = false;
+  toggle.isConnected = true;
+  toggle.focus = () => { focused = true; };
   assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
-  assert.equal(toggle.attributes['aria-expanded'], 'false');
-  const panel = classHits(cell, 'feed-detail')[0];
-  assert.ok(panel, 'the detail region exists before it is opened');
-  assert.equal(panel.hidden, true);
-  assert.equal(toggle.attributes['aria-controls'], panel.id);
-  const listCallsBefore = requests.filter(path => path.startsWith('/v1/discover/works')).length;
+  assert.equal(toggle.attributes['aria-controls'], 'work-detail');
+  assert.equal(doc.getElementById('work-detail').hidden, true);
+  doc.getElementById('main').scrollTop = 184;
 
   await toggle.handlers.click();
-  await flush();
 
-  assert.equal(toggle.attributes['aria-expanded'], 'true');
-  assert.equal(toggle.textContent, app.FEED_DETAIL_LESS);
-  assert.equal(panel.hidden, false);
-  const text = JSON.stringify(panel);
-  assert.match(text, /文档/);
-  assert.match(text, /alice/);
-  assert.match(text, /2027/);
-  assert.match(text, /季报摘要/);
-  assert.match(text, /第三行正文/);
-  assert.equal(text.includes('第四行不该出现'), false, 'the excerpt stays bounded');
-  const open = classHits(panel, 'feed-detail-open')[0];
-  assert.equal(open.href, '/w/ci-fixture-doc');
-  assert.equal(open.textContent, app.FEED_DETAIL_OPEN);
-  assert.deepEqual(visited, [], 'reading the detail never navigates');
-  assert.equal(requests.filter(path => path.startsWith('/v1/discover/works')).length, listCallsBefore,
-    'reading the detail never reloads the listing');
+  assert.deepEqual(visits, ['/discover?q=%E5%AD%A3%E6%8A%A5&work=ci-fixture-doc']);
+  assert.equal(doc.getElementById('work-detail').hidden, false);
+  assert.equal(doc.getElementById('feed-panel').hidden, true);
+  assert.match(doc.getElementById('work-detail-meta').textContent, /文档 · alice · 2027/);
+  assert.deepEqual(classHits(doc.getElementById('work-detail-preview'), 'feed-detail-lines')[0]
+    .children.map(row => row.textContent), ['季报摘要', '第一行正文', '第二行正文', '第三行正文']);
+  assert.equal(doc.getElementById('work-detail-open').href, '/w/ci-fixture-doc');
+  assert.equal(doc.getElementById('work-detail-previous').disabled, true);
 
-  await toggle.handlers.click();
-  assert.equal(toggle.attributes['aria-expanded'], 'false');
-  assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
-  assert.equal(panel.hidden, true);
+  await doc.getElementById('work-detail-back').handlers.click();
+  assert.equal(visits[1], '/discover?q=%E5%AD%A3%E6%8A%A5');
+  assert.equal(doc.getElementById('work-detail').hidden, true);
+  assert.equal(doc.getElementById('feed-panel').hidden, false);
+  assert.equal(doc.getElementById('main').scrollTop, 184);
+  assert.equal(focused, true);
+  assert.equal(grid.children[0], cell);
+  assert.equal(requests.filter(path => path.startsWith('/v1/discover/works?')).length, 1);
+});
+
+test('work navigation keeps the signed-in feed context and sharing copies the canonical public URL', async () => {
+  const {mount, workDetailFromSearch} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const first = detailFixture({slug: 'first-work'});
+  const second = detailFixture({slug: 'second-work', title: '首篇之后', path: '/social/w/second-work'});
+  const requests = [];
+  const visits = [];
+  const copies = [];
+  const location = {
+    search: '?feed=following&kind=slides&q=设计&work=first-work',
+    origin: 'https://management.test',
+  };
+  const history = {replaceState(_state, _title, url) { visits.push(url); }};
+  const window = {navigator: {clipboard: {writeText(value) { copies.push(value); }}}};
+  const fetcher = async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({user: {id: 'viewer', username: 'viewer'}});
+    if (path.startsWith('/v1/discover/me/works?')) return commentResponse({items: [first]});
+    if (path.startsWith('/v1/discover/works/first-work?')) return commentResponse({work: first, next: second});
+    if (path.startsWith('/v1/discover/works/second-work?')) return commentResponse({work: second, previous: first});
+    if (path.endsWith('/preview')) return commentResponse({preview: null});
+    throw new Error('Unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location, history, window});
+  assert.equal(doc.getElementById('work-detail-next').disabled, false);
+  assert.equal(doc.getElementById('work-detail-previous').disabled, true);
+  await doc.getElementById('work-detail-next').handlers.click();
+  const context = new URL(requests.find(path => path.startsWith('/v1/discover/works/second-work?')),
+    'https://management.test').searchParams;
+  assert.deepEqual(Object.fromEntries(context), {kind: 'slides', q: '设计', tab: 'following'});
+  assert.equal(visits[0], '/discover?feed=following&kind=slides&q=%E8%AE%BE%E8%AE%A1&work=second-work');
+  assert.equal(doc.getElementById('work-detail-title').textContent, '首篇之后');
+  assert.equal(doc.getElementById('work-detail-open').href, '/social/w/second-work');
+  assert.equal(doc.getElementById('work-detail-next').disabled, true);
+  assert.equal(doc.getElementById('work-detail-previous').disabled, false);
+  assert.equal(workDetailFromSearch('?work=../../secret&share=1'), null);
+  assert.equal(workDetailFromSearch('?work=first-work&work=second-work'), null);
+  doc.getElementById('work-detail-share').handlers.click();
+  assert.equal(doc.getElementById('work-share-dialog').open, true);
+  await doc.getElementById('work-share-copy').handlers.click();
+  assert.deepEqual(copies, ['https://management.test/w/second-work']);
+  assert.equal(doc.getElementById('work-share-status').textContent, '已复制链接。');
+});
+
+test('an older detail response cannot overwrite a newer work', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const first = detailFixture({slug: 'slow-work'});
+  const second = detailFixture({slug: 'new-work', title: '当前作品'});
+  let finish;
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return commentResponse({}, 401);
+    if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [first, second]});
+    if (path === '/w/slow-work') return new Promise(resolve => { finish = resolve; });
+    if (path === '/w/new-work') return commentResponse(second);
+    if (path.endsWith('/preview')) return commentResponse({preview: null});
+    throw new Error('Unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const [slow, fast] = classHits(doc.getElementById('feed-grid'), 'feed-detail-toggle');
+  const opening = slow.handlers.click();
+  doc.getElementById('work-detail-back').handlers.click();
+  await fast.handlers.click();
+  finish(commentResponse(first));
+  await opening;
+  assert.equal(doc.getElementById('work-detail-title').textContent, '当前作品');
 });
 
 test('a detail whose preview cannot be read says so instead of faking an empty summary', async () => {
@@ -938,30 +1006,36 @@ test('a detail whose preview cannot be read says so instead of faking an empty s
   const {fetcher} = detailFetcher(detailFixture(), () => ({status: 500, json: async () => ({})}));
   await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
   const cell = doc.getElementById('feed-grid').children[0];
-  const toggle = classHits(cell, 'feed-detail-toggle')[0];
-  await toggle.handlers.click();
-  await flush();
-  const panel = classHits(cell, 'feed-detail')[0];
-  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_UNREADABLE));
-  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_EMPTY), false);
-  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+  await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
+  assert.equal(doc.getElementById('work-detail-preview').textContent, app.FEED_DETAIL_UNREADABLE);
+  assert.equal(doc.getElementById('work-detail-open').href, '/w/ci-fixture-doc');
 });
 
-test('an image work says it has no text summary instead of reading a preview it does not have', async () => {
+test('an image work uses the public media file without reading a text preview', async () => {
   const app = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
   const {fetcher, requests} = detailFetcher(detailFixture({kind: 'image', kind_label: '图片'}), () => {
-    throw new Error('an image work must not request a text preview');
+    assert.fail('an image work must not request a text preview');
   });
   await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
   const cell = doc.getElementById('feed-grid').children[0];
-  const toggle = classHits(cell, 'feed-detail-toggle')[0];
-  await toggle.handlers.click();
-  await flush();
-  const panel = classHits(cell, 'feed-detail')[0];
-  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_NO_TEXT));
+  await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
+  const [image] = classHits(doc.getElementById('work-detail-preview'), 'work-detail-image');
+  assert.equal(image.src, '/w/ci-fixture-doc/file');
   assert.equal(requests.some(path => path.endsWith('/preview')), false);
-  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+});
+
+test('a native plain-text snapshot appears verbatim and is bounded in the work detail', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const preview = '<img src="not-public">\n可公开阅读的示例内容。\n' + '长'.repeat(500) + '\n第四行\n第五行';
+  const {fetcher} = detailFetcher(detailFixture(), () => commentResponse({preview}));
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  await classHits(doc.getElementById('feed-grid'), 'feed-detail-toggle')[0].handlers.click();
+  const [list] = classHits(doc.getElementById('work-detail-preview'), 'feed-detail-lines');
+  assert.deepEqual(list.children.map(row => row.textContent),
+    ['<img src="not-public">', '可公开阅读的示例内容。', '长'.repeat(90), '第四行']);
+  assert.ok(list.children.every(row => row.childElementCount === 0));
 });
 
 test('a work with an empty preview says it has no content yet', async () => {
@@ -973,10 +1047,7 @@ test('a work with an empty preview says it has no content yet', async () => {
   await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
   const cell = doc.getElementById('feed-grid').children[0];
   await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
-  await flush();
-  const panel = classHits(cell, 'feed-detail')[0];
-  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_EMPTY));
-  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_UNREADABLE), false);
+  assert.equal(doc.getElementById('work-detail-preview').textContent, app.FEED_DETAIL_EMPTY);
 });
 
 const commentResponse = (body, status = 200) => ({status, json: async () => body});
@@ -1056,8 +1127,8 @@ test('posting a comment clears the editor and exposes pending text before the re
 });
 
 test('comment permalinks open a published work missing from the feed without waiting for the feed', async () => {
-  const {mount, workCommentsFromSearch} = await import('../openteamily/static/discover/app.mjs');
-  assert.equal(workCommentsFromSearch('?work=../private&comments=1'), '');
+  const {mount, workDetailFromSearch} = await import('../openteamily/static/discover/app.mjs');
+  assert.equal(workDetailFromSearch('?work=../private&comments=1'), null);
   const doc = feedDocument();
   const requests = [];
   let finishFeed;

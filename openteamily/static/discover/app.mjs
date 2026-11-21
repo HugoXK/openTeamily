@@ -107,10 +107,31 @@ export function feedSearchText(state) {
   return text ? '?' + text : '';
 }
 
-export function workCommentsFromSearch(search) {
+export function workDetailFromSearch(search) {
   const params = new URLSearchParams(search || '');
   const slug = params.get('work');
-  return params.get('comments') === '1' && validSlug(slug) ? slug : '';
+  if (params.getAll('work').length !== 1 || !validSlug(slug)) return null;
+  return {slug, comments: params.get('comments') === '1', share: params.get('share') === '1'};
+}
+
+export function workDetailSearchText(state, {slug, comments = false, share = false}) {
+  const params = new URLSearchParams(feedSearchText(state));
+  if (validSlug(slug)) {
+    params.set('work', slug);
+    if (comments) params.set('comments', '1');
+    if (share) params.set('share', '1');
+  }
+  return params.size ? '?' + params : '';
+}
+
+function workDetailQuery(state) {
+  const params = new URLSearchParams(feedSearchText(state));
+  const tab = params.get('feed');
+  if (tab) {
+    params.delete('feed');
+    params.set('tab', tab);
+  }
+  return params.size ? '?' + params : '';
 }
 
 export function formatFeedTime(value) {
@@ -130,11 +151,18 @@ export function coverPattern(title) {
 
 const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',model3d:'3D 作品',whiteboard:'白板',dashboard:'看板',media:'媒体'};
 
-// Covers come from /w/<slug>/preview (same exposure as the public work page),
-// so the feed listing itself stays a body-free projection.
+// Native public works expose plain text. Other public previews can include a
+// structured thumbnail. Normalize both while keeping the listing body-free.
+function normalizeFeedPreview(preview) {
+  if (typeof preview !== 'string') return preview;
+  const lines = preview.slice(0, 2000).split(/\r?\n/)
+    .map(line => line.trim()).filter(Boolean).slice(0, 4);
+  return {type: 'document', lines};
+}
+
 export function attachFeedThumb(document, cover, preview) {
   if (!cover || !preview || cover.classList.contains('has-thumb')) return false;
-  const thumb = renderThumb(document, preview);
+  const thumb = renderThumb(document, normalizeFeedPreview(preview));
   if (!thumb) return false;
   cover.classList.add('has-thumb');
   cover.append(thumb);
@@ -147,20 +175,18 @@ export function feedPreviewPath(item) {
 }
 
 export const FEED_DETAIL_MORE = '详情';
-export const FEED_DETAIL_LESS = '收起';
 export const FEED_DETAIL_LOADING = '正在读取作品摘要…';
 // A refused preview is not an empty work: the detail says which one it is.
 export const FEED_DETAIL_UNREADABLE = '读不到作品摘要。';
 export const FEED_DETAIL_NO_TEXT = '这件作品没有文字摘要，打开原作品看内容。';
 export const FEED_DETAIL_EMPTY = '这件作品还没有内容。';
-export const FEED_DETAIL_OPEN = '打开原作品';
 
 // The detail repeats what the listing already knows plus the bounded, text-only
 // preview the public work page exposes. No body is read and stored HTML is
 // never interpreted: thumbModel normalises it and every line goes through
 // textContent.
 export function detailExcerpt(preview) {
-  const model = thumbModel(preview);
+  const model = thumbModel(normalizeFeedPreview(preview));
   if (!model || model.empty) return [];
   const lines = [];
   if (model.type === 'document' || model.type === 'website') {
@@ -190,8 +216,8 @@ export function detailMetaText(item) {
   ].filter(Boolean).join(' · ');
 }
 
-function publicModelPath(item) {
-  if (item.kind !== 'model3d' || !validSlug(item.slug)) return '';
+function publicWorkPath(item) {
+  if (!validSlug(item.slug)) return '';
   const path = '/w/' + item.slug;
   return item.path === '/social' + path ? item.path : path;
 }
@@ -199,7 +225,7 @@ function publicModelPath(item) {
 export function renderFeedCard(document, item) {
   const card = document.createElement('a');
   card.className = 'feed-card';
-  card.href = publicModelPath(item) || item.path || ('/w/' + (item.slug || ''));
+  card.href = publicWorkPath(item) || '/discover';
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
@@ -475,8 +501,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
-  let commentLinkRequest = 0;
   const commentButtons = new Map();
+  const workTriggers = new Map();
+  const detail = Object.fromEntries([
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open',
+    'like', 'collect', 'follow', 'comments', 'share', 'previous', 'next',
+  ].map(name => [name, document.getElementById('work-detail-' + name)]));
+  const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
+    .map(name => [name, document.getElementById('work-share-' + name)]));
+  const detailPanel = document.getElementById('work-detail');
+  const initialView = document.getElementById('main');
+  const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
+  let activeWork;
+  let feedReturn;
+
   const workComments = mountWorkComments(document, {
     request,
     onCount(slug, count) {
@@ -484,30 +522,223 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (item) item.comment_count = count;
       const button = commentButtons.get(slug);
       if (button) button.textContent = commentsLabel(count);
+      if (activeWork?.item?.slug === slug) {
+        activeWork.item.comment_count = count;
+        detail.comments.textContent = commentsLabel(count);
+      }
     },
   });
 
-  async function openCommentLink() {
-    const seq = ++commentLinkRequest;
-    const slug = workCommentsFromSearch(location?.search);
-    if (!slug) {
-      workComments.close();
-      return;
-    }
-    const signedIn = Boolean(currentUser);
-    const result = await request('GET', (signedIn ? '/v1/discover/works/' : '/w/') + slug)
-      .catch(() => ({status: 0}));
-    if (seq !== commentLinkRequest) return;
-    const work = signedIn ? result.body?.work : result.body;
-    if (result.status !== 200 || work?.slug !== slug) {
-      show('error', result.status === 404 ? '这件作品已下架或不可访问。' : '无法打开作品评论，请刷新后重试。');
-      return;
-    }
-    return workComments.open(work);
+  function setWorkView(open) {
+    detailPanel.hidden = !open;
+    document.getElementById('feed-panel').hidden = open;
+    document.getElementById('discover-title').hidden = open;
+    document.getElementById('discover-tabs').hidden = open;
   }
 
-  function loadFeedWithCommentLink() {
-    return Promise.all([loadFeed(), openCommentLink()]);
+  function disposeWorkPreview() {
+    activeWork?.model?.setSource('');
+    detail.preview.replaceChildren();
+  }
+
+  function closeWorkDetail({restore = true} = {}) {
+    if (!activeWork) return;
+    disposeWorkPreview();
+    workComments.close();
+    if (share.dialog.open) share.dialog.close();
+    activeWork = null;
+    setWorkView(false);
+    if (restore && feedReturn) {
+      const target = feedReturn.trigger?.isConnected
+        ? feedReturn.trigger : workTriggers.get(feedReturn.slug) || document.getElementById('discover-title');
+      initialView.scrollTop = feedReturn.scroll;
+      target?.focus?.({preventScroll: true});
+    } else {
+      initialView.scrollTop = 0;
+      document.getElementById('discover-title')?.focus?.({preventScroll: true});
+    }
+    feedReturn = null;
+  }
+
+  function setAdjacent(entry, name, neighbor) {
+    const slug = validSlug(neighbor?.slug) && neighbor.slug !== entry.slug ? neighbor.slug : '';
+    entry[name] = slug;
+    const button = detail[name];
+    button.disabled = !slug;
+    button.title = slug ? String(neighbor.title || '') : '';
+  }
+
+  function workUrl(intent) {
+    return '/discover' + workDetailSearchText(feedState, intent);
+  }
+
+  async function openWorkDetail(intent, {item, trigger, navigate = false} = {}) {
+    if (!intent || !validSlug(intent.slug)) return;
+    const existing = activeWork;
+    if (!existing) {
+      feedReturn = {scroll: initialView.scrollTop || 0, trigger, slug: intent.slug};
+    }
+    if (navigate) {
+      const url = workUrl(intent);
+      if (existing) history?.replaceState?.(history.state, '', url);
+      else history?.pushState?.({discoverWork: true}, '', url);
+    }
+
+    disposeWorkPreview();
+    workComments.close();
+    if (share.dialog.open) share.dialog.close();
+    const entry = {slug: intent.slug, item: null, intent};
+    activeWork = entry;
+    setWorkView(true);
+    initialView.scrollTop = 0;
+    detail.title.textContent = item?.title || '作品详情';
+    detail.meta.textContent = item ? detailMetaText(item) : '';
+    detail.status.textContent = '正在加载作品…';
+    detail.retry.hidden = true;
+    detail.actions.hidden = true;
+    detail.paper.setAttribute('aria-busy', 'true');
+    setAdjacent(entry, 'previous');
+    setAdjacent(entry, 'next');
+    detail.title.focus?.({preventScroll: true});
+
+    const signedIn = Boolean(currentUser);
+    const path = signedIn
+      ? '/v1/discover/works/' + intent.slug + workDetailQuery(feedState)
+      : '/w/' + intent.slug;
+    const result = await request('GET', path).catch(() => ({status: 0}));
+    if (activeWork !== entry) return;
+    detail.paper.setAttribute('aria-busy', 'false');
+    const work = signedIn ? result.body?.work : result.body;
+    if (result.status !== 200 || work?.slug !== intent.slug) {
+      detail.status.textContent = result.status === 404 ? '这件作品已下架或不可访问。' : '无法打开作品，请重试。';
+      detail.retry.hidden = result.status === 404;
+      return;
+    }
+
+    entry.item = work;
+    detail.title.textContent = work.title || work.slug;
+    detail.meta.textContent = detailMetaText(work);
+    detail.status.textContent = '';
+    detail.open.href = publicWorkPath(work);
+    detail.comments.textContent = commentsLabel(work.comment_count);
+    detail.actions.hidden = false;
+    renderWorkEngagement(entry);
+    setAdjacent(entry, 'previous', result.body?.previous);
+    setAdjacent(entry, 'next', result.body?.next);
+    const preview = renderWorkPreview(entry);
+    if (intent.comments) return Promise.all([preview, workComments.open(work, detail.comments)]);
+    if (intent.share) openWorkShare();
+    await preview;
+  }
+
+  function renderWorkEngagement(entry) {
+    for (const [action, flag, label] of engagement) {
+      const button = detail[action];
+      button.hidden = !currentUser || (action === 'follow' && entry.item.own_work);
+      button.disabled = Boolean(entry.saving);
+      button.textContent = engagementLabel(entry.item, action, flag, label);
+      button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
+    }
+  }
+
+  async function updateWorkEngagement(action, flag) {
+    const entry = activeWork;
+    if (!entry?.item || entry.saving || !currentUser) return;
+    const me = currentUser;
+    const enabled = !entry.item[flag];
+    entry.saving = action;
+    detail.status.textContent = '';
+    renderWorkEngagement(entry);
+    const result = await request('POST', '/v1/discover/works/' + entry.slug + '/engagement', {action, enabled})
+      .catch(() => ({status: 0}));
+    if (currentUser !== me) return;
+    entry.saving = '';
+    if (result.status === 200) {
+      const changes = result.body?.engagement || result.body || {};
+      entry.item[flag] = changes[flag] ?? enabled;
+      if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
+      for (const item of feedState.items) {
+        if (item.slug === entry.slug || (action === 'follow' && entry.item.author && item.author === entry.item.author)) {
+          item[flag] = entry.item[flag];
+          if (action === 'like') item.likes = entry.item.likes;
+        }
+      }
+      if (action === 'collect' && !enabled && feedState.tab === 'collected') {
+        feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
+      }
+      if (action === 'follow' && !enabled && feedState.tab === 'following') {
+        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && (!entry.item.author || item.author !== entry.item.author));
+      }
+      renderFeed();
+    }
+    if (activeWork !== entry) return;
+    if (result.status !== 200) detail.status.textContent = '操作未保存，请重试。';
+    renderWorkEngagement(entry);
+  }
+
+  function openWorkShare() {
+    if (!activeWork?.item) return;
+    const slug = activeWork.slug;
+    const origin = location?.origin || window?.location?.origin;
+    share.url.value = origin ? new URL('/w/' + slug, origin).href : '/w/' + slug;
+    share.status.textContent = '';
+    const navigator = window?.navigator;
+    share.native.hidden = !navigator?.share || (navigator.canShare && !navigator.canShare({url: share.url.value}));
+    if (!share.dialog.open) share.dialog.showModal();
+  }
+
+  async function copyWorkShare() {
+    const value = share.url.value;
+    try {
+      const clipboard = window?.navigator?.clipboard;
+      if (!clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await clipboard.writeText(value);
+      if (share.dialog.open && share.url.value === value) share.status.textContent = '已复制链接。';
+    } catch {
+      if (!share.dialog.open || share.url.value !== value) return;
+      share.url.focus?.();
+      share.url.select?.();
+      share.status.textContent = '可手动复制已选中的链接。';
+    }
+  }
+
+  detail.back.addEventListener('click', () => {
+    if (history?.state?.discoverWork && typeof history.back === 'function') {
+      history.back();
+      return;
+    }
+    history?.replaceState?.(null, '', feedUrl());
+    closeWorkDetail();
+  });
+  for (const name of ['previous', 'next']) {
+    detail[name].addEventListener('click', () => {
+      const slug = activeWork?.[name];
+      if (slug) return openWorkDetail({slug}, {navigate: true});
+    });
+  }
+  detail.retry.addEventListener('click', () => activeWork && openWorkDetail(activeWork.intent));
+  detail.comments.addEventListener('click', () => activeWork?.item && workComments.open(activeWork.item, detail.comments));
+  detail.share.addEventListener('click', openWorkShare);
+  for (const [action, flag] of engagement) {
+    detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
+  }
+  share.close.addEventListener('click', () => share.dialog.close());
+  share.copy.addEventListener('click', copyWorkShare);
+  share.native.addEventListener('click', async () => {
+    const url = share.url.value;
+    try { await window.navigator.share({title: activeWork.item.title, url}); }
+    catch (error) {
+      if (error?.name !== 'AbortError' && share.dialog.open && share.url.value === url) {
+        share.status.textContent = '无法打开系统分享，可复制链接。';
+      }
+    }
+  });
+
+  function loadDiscoverRoute() {
+    const intent = workDetailFromSearch(location?.search);
+    if (intent) return Promise.all([loadFeed(), openWorkDetail(intent)]);
+    closeWorkDetail();
+    return loadFeed();
   }
 
   function applyFeedChrome({restoreQuery = false} = {}) {
@@ -543,9 +774,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
     window.addEventListener('popstate', () => {
-      Object.assign(feedState, feedStateFromSearch(location?.search));
+      const next = feedStateFromSearch(location?.search);
+      const feedChanged = feedSearchText(next) !== feedSearchText(feedState);
+      Object.assign(feedState, next);
       applyFeedChrome({restoreQuery: true});
-      return loadFeedWithCommentLink();
+      const intent = workDetailFromSearch(location?.search);
+      if (!intent) {
+        workComments.close();
+        closeWorkDetail({restore: !feedChanged});
+      }
+      if (feedChanged) {
+        feedReturn = null;
+        return loadDiscoverRoute();
+      }
+      if (intent) return openWorkDetail(intent);
     });
   }
 
@@ -618,7 +860,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function attachModel3dDetail(panel, link, slug, url) {
+  function attachModel3dDetail(panel, slug, url) {
     const actions = document.createElement('div');
     actions.className = 'feed-model3d-actions';
     const preview = document.createElement('div');
@@ -636,7 +878,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const status = document.createElement('p');
     status.className = 'feed-model3d-status';
     status.setAttribute('role', 'status');
-    actions.append(toggle, download, link);
+    actions.append(toggle, download);
     panel.append(actions, status, preview);
     return bindModel3dPreview(toggle, preview, status, {onReady() {
       if (!window?.matchMedia?.('(max-width: 700px)')?.matches) return;
@@ -652,75 +894,64 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }});
   }
 
-  // The detail is opened in place: the card keeps its own link to the work
-  // page, and reading the summary never reloads the feed or the page.
-  function attachFeedDetail(entry, item) {
-    const panel = document.createElement('section');
-    panel.className = 'feed-detail';
-    panel.hidden = true;
-    if (item.slug) {
-      panel.id = 'feed-detail-' + item.slug;
-      panel.setAttribute('aria-label', (item.title || item.slug) + ' 的作品详情');
+  function engagementLabel(item, action, flag, label) {
+    return (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
+  }
+
+  async function renderWorkPreview(entry) {
+    const item = entry.item;
+    if (item.kind === 'model3d') {
+      const file = publicWorkPath(item) + '/file';
+      entry.model = attachModel3dDetail(detail.preview, item.slug, file);
+      entry.model.setSource(file);
+      return;
     }
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'feed-detail-toggle';
-    toggle.textContent = FEED_DETAIL_MORE;
-    toggle.setAttribute('aria-expanded', 'false');
-    if (panel.id) toggle.setAttribute('aria-controls', panel.id);
-    let open = false;
-    let filled = false;
-    let modelPreview;
-    const modelPath = publicModelPath(item);
-    const modelFile = modelPath ? modelPath + '/file' : '';
-    toggle.addEventListener('click', async () => {
-      open = !open;
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      toggle.textContent = open ? FEED_DETAIL_LESS : FEED_DETAIL_MORE;
-      panel.hidden = !open;
-      if (modelPreview) {
-        modelPreview.setSource(open ? modelFile : '');
-        return;
-      }
-      if (!open || filled) return;
-      filled = true;
-      const meta = document.createElement('p');
-      meta.className = 'feed-detail-meta';
-      meta.textContent = detailMetaText(item);
-      const summary = document.createElement('div');
-      summary.className = 'feed-detail-summary';
-      summary.textContent = FEED_DETAIL_LOADING;
-      const link = document.createElement('a');
-      link.className = 'feed-detail-open';
-      link.href = modelPath || item.path || ('/w/' + (item.slug || ''));
-      link.textContent = FEED_DETAIL_OPEN;
-      if (modelFile) {
-        panel.append(meta);
-        modelPreview = attachModel3dDetail(panel, link, item.slug, modelFile);
-        modelPreview.setSource(modelFile);
-        return;
-      }
-      panel.append(meta, summary, link);
-      if (!feedPreviewPath(item)) {
-        summary.textContent = FEED_DETAIL_NO_TEXT;
-        return;
-      }
-      const result = await cachedPreview(item);
-      if (!result.ok) { summary.textContent = FEED_DETAIL_UNREADABLE; return; }
-      if (!result.preview) { summary.textContent = FEED_DETAIL_NO_TEXT; return; }
-      const lines = detailExcerpt(result.preview);
-      if (!lines.length) { summary.textContent = FEED_DETAIL_EMPTY; return; }
-      summary.textContent = '';
-      const list = document.createElement('ul');
-      list.className = 'feed-detail-lines';
-      for (const line of lines) {
-        const row = document.createElement('li');
-        row.textContent = line;
-        list.append(row);
-      }
-      summary.append(list);
+    if (item.kind === 'image') {
+      const image = document.createElement('img');
+      image.src = '/w/' + item.slug + '/file';
+      image.alt = item.title || '公开作品图片';
+      image.className = 'work-detail-image';
+      image.addEventListener('error', () => {
+        if (activeWork === entry) detail.preview.textContent = '暂时无法显示图片。';
+      });
+      detail.preview.append(image);
+      return;
+    }
+    detail.preview.textContent = FEED_DETAIL_LOADING;
+    const result = await cachedPreview(item);
+    if (activeWork !== entry) return;
+    if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }
+    if (!result.preview) { detail.preview.textContent = FEED_DETAIL_NO_TEXT; return; }
+    const lines = detailExcerpt(result.preview);
+    if (!lines.length) { detail.preview.textContent = FEED_DETAIL_EMPTY; return; }
+    const list = document.createElement('ul');
+    list.className = 'feed-detail-lines';
+    for (const line of lines) {
+      const row = document.createElement('li');
+      row.textContent = line;
+      list.append(row);
+    }
+    detail.preview.replaceChildren(list);
+  }
+
+  function bindWorkDetail(entry, card, item) {
+    if (!validSlug(item.slug)) return;
+    const options = {item, navigate: true};
+    const intent = {slug: item.slug};
+    card.href = workUrl(intent);
+    card.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      return openWorkDetail(intent, {...options, trigger: card});
     });
-    entry.append(toggle, panel);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'feed-detail-toggle';
+    button.textContent = FEED_DETAIL_MORE;
+    button.setAttribute('aria-controls', 'work-detail');
+    button.addEventListener('click', () => openWorkDetail(intent, {...options, trigger: button}));
+    entry.append(button);
+    workTriggers.set(item.slug, card);
   }
 
   function renderFeed(start = 0) {
@@ -730,6 +961,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       coverObserver?.disconnect();
       pendingCovers.clear();
       commentButtons.clear();
+      workTriggers.clear();
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
@@ -740,11 +972,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.className = 'feed-entry';
       entry.append(card);
       const actions = document.createElement('div');
-      const engagement = currentUser ? [['like','liked','点赞'], ['collect','collected','收录'], ['follow','following','关注作者']] : [];
-      for (const [action, flag, label] of engagement) {
+      for (const [action, flag, label] of currentUser ? engagement : []) {
         if (action === 'follow' && item.own_work) continue;
         const button = document.createElement('button'); button.type = 'button';
-        button.textContent = (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
+        button.textContent = engagementLabel(item, action, flag, label);
         button.setAttribute('aria-pressed', item[flag] ? 'true' : 'false');
         button.addEventListener('click', async () => {
           button.disabled = true;
@@ -767,14 +998,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-haspopup', 'dialog');
         button.setAttribute('aria-controls', 'feed-comments-dialog');
         button.addEventListener('click', () => {
-          commentLinkRequest += 1;
           return workComments.open(item, button);
         });
         actions.append(button);
         commentButtons.set(item.slug, button);
       }
       if (actions.childElementCount) entry.append(actions);
-      attachFeedDetail(entry, item);
+      bindWorkDetail(entry, card, item);
       grid.append(entry);
     }
     grid.dataset.empty = feedState.items.length ? 'false' : 'true';
@@ -1264,7 +1494,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       mainPanel.hidden = false;
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
-      if (!catalogView) return loadFeedWithCommentLink();
+      if (!catalogView) return loadDiscoverRoute();
       if (teamsView) await loadTeams();
       await directoryLoad;
       return;
@@ -1293,7 +1523,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     show('', '');
-    if (!catalogView) return loadFeedWithCommentLink();
+    if (!catalogView) return loadDiscoverRoute();
     if (teamsView) await loadTeams();
     await directoryLoad;
   }

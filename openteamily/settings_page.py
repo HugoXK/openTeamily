@@ -67,7 +67,7 @@ class SettingsPage:
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
-        '/shell/work-comments-link.mjs': ('shell', 'work-comments-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
@@ -191,16 +191,16 @@ class SettingsPage:
         if path == '/discover':
             if query in ('tab=agents', 'tab=agents&section=groups'):
                 return True
-            if re.fullmatch(r'work=[a-z0-9][a-z0-9-]{1,28}[a-z0-9]&comments=1|comments=1&work=[a-z0-9][a-z0-9-]{1,28}[a-z0-9]', query):
-                return True
-            # The feed tab, category and search are shareable deep links. The
-            # router only serves the screen; the page reads these itself, so the
-            # allowlist is limited to the keys and values it can produce.
+            # Feed filters and work detail links use the same management page.
             seen = set()
             for key, value in parse_qsl(query, keep_blank_values=True):
                 if key in seen or not value:
                     return False
                 seen.add(key)
+                if key == 'work' and not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]', value):
+                    return False
+                if key in ('comments', 'share') and value != '1':
+                    return False
                 if key == 'feed' and value not in ('following', 'collected'):
                     return False
                 if key == 'sort' and value != 'popular':
@@ -210,9 +210,13 @@ class SettingsPage:
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind', 'sort'):
+                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
                     return False
-            return bool(seen) and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+            panels = seen.intersection({'comments', 'share'})
+            return (bool(seen)
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and len(panels) <= 1
+                    and (not panels or 'work' in seen))
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS

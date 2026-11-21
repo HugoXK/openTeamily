@@ -69,6 +69,9 @@ function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
   return `${prefix}${l.kind === "agent" ? "/a/" : "/w/"}${l.slug}`;
 }
 
+const LISTING_CARD_COLUMNS = `l.id, l.owner_id, l.kind, l.slug, l.title, l.summary, l.category, l.work_kind,
+  l.listed, l.chat_enabled, l.updated_at, l.created_at`;
+
 const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
@@ -106,6 +109,11 @@ function publicPage(ot: OtContext, l: any, view: any) {
       ? '<li><span class="meta">评论已移除</span></li>'
       : `<li><p class="meta">${escapeHtml(item.author?.name || item.author?.handle || "")}</p><pre>${escapeHtml(item.body)}</pre></li>`).join("");
     const detail = `/login#work-comments=${encodeURIComponent(l.slug)}`;
+    const share = `/login#work-detail=${encodeURIComponent(l.slug)}`;
+    const {previous, next} = chronologicalWorkNeighbors(ot, l, PUBLIC_WORK_SCOPE);
+    const adjacent = (work: WorkNeighbor | null, rel: "prev" | "next", label: string) => work
+      ? `<a rel="${rel}" href="/w/${encodeURIComponent(work.slug)}" title="${escapeHtml(work.title)}">${label}</a>`
+      : `<span aria-disabled="true">${label}</span>`;
     const content = l.snapshot && !String(l.snapshot).startsWith("{")
       ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
       : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
@@ -118,12 +126,24 @@ function publicPage(ot: OtContext, l: any, view: any) {
 <style>
 body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}
 .meta{color:#555;font-size:.9rem}
+a{color:#24594b;text-underline-offset:.18em}
+a:focus-visible{outline:2px solid #176750;outline-offset:3px}
+h1{overflow-wrap:anywhere}
+.work-nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
+.work-nav>*{display:inline-flex;align-items:center;min-height:2.75rem;padding:.35rem .85rem;border:1px solid #cbdad3;border-radius:.6rem}
+.work-nav a{background:#edf6ee}
+.work-nav [aria-disabled]{color:#60716b;background:#f5f7f6}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;border-radius:8px}
 .comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
 </head><body>
 <p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
 <h1>${escapeHtml(title)}</h1>
+<nav class="work-nav" aria-label="浏览公开作品">
+${adjacent(previous, "prev", "上一件")}
+${adjacent(next, "next", "下一件")}
+<a href="${share}">分享作品</a>
+</nav>
 ${content}
 ${download}
 <section class="comments" aria-labelledby="comments-title">
@@ -216,36 +236,95 @@ function listedBySlug(ot: OtContext, slug: string) {
   return l;
 }
 
+type FeedScope = { where: string; args: unknown[] };
+type WorkAnchor = { id: string; updated_at: number };
+type WorkNeighbor = { slug: string; title: string };
+const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
+
+function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
+  const kind = one(input.kind, "kind");
+  const tab = one(input.tab, "tab") ?? "all";
+  const sort = one(input.sort, "sort") ?? "latest";
+  const category = one(input.category, "category");
+  const workKind = one(input.work_kind, "work_kind");
+  const creator = one(input.creator, "creator");
+  const search = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+  assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
+  assert(sort !== "popular" || (kind === "work" && tab === "all"), 400, "invalid_request", "popularity sorting applies to the all works feed");
+
+  const conditions = ["l.listed = 1"];
+  const args: unknown[] = [];
+  if (kind) {
+    assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work");
+    conditions.push("l.kind = ?");
+    args.push(kind);
+  }
+  if (category) { conditions.push("l.category = ?"); args.push(category); }
+  if (workKind) {
+    assert(WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
+    conditions.push("l.work_kind = ?");
+    args.push(workKind);
+  }
+  if (creator) { conditions.push("l.owner_id = ?"); args.push(ot.ownerByHandle(creator)); }
+  if (tab === "following") {
+    conditions.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)");
+    args.push(viewer);
+  } else if (tab === "collected") {
+    conditions.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)");
+    args.push(viewer);
+  } else {
+    assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
+  }
+  if (search) {
+    conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
+    args.push(search, search, search, search);
+  }
+  return {sort, where: conditions.join(" AND "), args};
+}
+
+function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
+  const neighbor = (previous: boolean) => {
+    const comparison = previous ? ">" : "<";
+    const direction = previous ? "ASC" : "DESC";
+    return ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l
+      LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE ${scope.where} AND (l.updated_at, l.id) ${comparison} (?, ?)
+      ORDER BY l.updated_at ${direction}, l.id ${direction} LIMIT 1`,
+    ...scope.args, work.updated_at, work.id) ?? null;
+  };
+  return {previous: neighbor(true), next: neighbor(false)};
+}
+
 const RANKING_WINDOW = 500;
 const RANKING_TTL = 10 * 60_000;
 const RANKING_SESSIONS = 128;
 const RANKED_CURSOR = /^([A-Za-z0-9_-]{32})\.([1-9][0-9]{0,2})$/;
 const WEEK = 7 * 86_400_000;
 
+function rankedWorkIds(ot: OtContext, {where, args}: FeedScope) {
+  const now = ot.now();
+  const minimumEngagementTime = now - 8 * WEEK;
+  // Weight recent distinct likes and collections on opted-in works, without
+  // counting an author's own engagement.
+  const rows = ot.all<{id: string}>(`WITH recent AS MATERIALIZED (
+    SELECT l.id, l.owner_id, l.updated_at FROM ot_listings l
+    LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.listed = 1 AND l.kind = 'work' AND ${where}
+    ORDER BY l.updated_at DESC, l.id DESC LIMIT ${RANKING_WINDOW}
+  )
+  SELECT l.id FROM recent l ORDER BY (
+    2 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12))
+    + 3 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8))
+    - MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER)))
+  ) DESC, l.updated_at DESC, l.id DESC`, ...args, minimumEngagementTime, minimumEngagementTime, now);
+  return rows.map(row => row.id);
+}
+
 function popularWorks(ot: OtContext) {
   type Ranking = { context: string; keys: string; expires: number };
   const rankings = new Map<string, Ranking>();
-
-  function rank(where: string, args: unknown[]) {
-    const now = ot.now();
-    const minimumEngagementTime = now - 8 * WEEK;
-    // Weight recent distinct likes and collections on opted-in works, without
-    // counting an author's own engagement.
-    const rows = ot.all<{id: string}>(`WITH recent AS MATERIALIZED (
-      SELECT l.id, l.owner_id, l.updated_at FROM ot_listings l
-      LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE l.listed = 1 AND l.kind = 'work' AND ${where}
-      ORDER BY l.updated_at DESC, l.id DESC LIMIT ${RANKING_WINDOW}
-    )
-    SELECT l.id FROM recent l ORDER BY (
-      2 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
-        WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12))
-      + 3 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
-        WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8))
-      - MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER)))
-    ) DESC, l.updated_at DESC, l.id DESC`, ...args, minimumEngagementTime, minimumEngagementTime, now);
-    return JSON.stringify(rows.map(row => row.id));
-  }
 
   return (where: string, args: unknown[], viewer: string, limit: number, cursor: string | undefined) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
@@ -264,14 +343,13 @@ function popularWorks(ot: OtContext) {
       ranking = previous;
     } else {
       token = randomBytes(24).toString("base64url");
-      ranking = {context, keys: rank(where, args), expires: now + RANKING_TTL};
+      ranking = {context, keys: JSON.stringify(rankedWorkIds(ot, {where, args})), expires: now + RANKING_TTL};
     }
 
     // Use the captured order for pagination, but verify current publication
     // and filter membership before returning a card. Revocation takes effect
     // immediately and engagement changes cannot make a work repeat on a later page.
-    const rows = ot.all<any>(`SELECT l.id, l.owner_id, l.kind, l.slug, l.title, l.summary, l.category, l.work_kind,
-      l.listed, l.chat_enabled, l.updated_at, l.created_at, r.key AS position FROM json_each(?) r
+    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS}, r.key AS position FROM json_each(?) r
       JOIN ot_listings l ON l.id = r.value LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE r.key >= ? AND l.listed = 1 AND l.kind = 'work' AND ${where}
       ORDER BY r.key LIMIT ?`, ranking.keys, offset, ...args, limit + 1);
@@ -368,39 +446,44 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
     const q = query(req);
-    const kind = one(q.kind, "kind");
-    const tab = one(q.tab, "tab") ?? "all";
-    const sort = one(q.sort, "sort") ?? "latest";
+    const {sort, where, args} = discoverScope(ot, q, me.ownerId);
     const cursor = one(q.cursor, "cursor");
-    assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
-    if (sort === "popular") {
-      assert(kind === "work" && tab === "all" && q.before === undefined, 400, "invalid_request",
-        "popularity sorting applies to the all works feed and uses a popularity cursor");
-    } else {
-      assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
-    }
-    const category = one(q.category, "category");
-    const workKind = one(q.work_kind, "work_kind");
-    const creator = one(q.creator, "creator");
-    const search = (one(q.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
-    const before = intParam(q.before, "before", 0);
     const limit = intParam(q.limit, "limit", 30, 100);
-    const where = ["l.listed = 1"]; const args: unknown[] = [];
-    if (kind) { assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work"); where.push("l.kind = ?"); args.push(kind); }
-    if (category) { where.push("l.category = ?"); args.push(category); }
-    if (workKind) {
-      assert(WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
-      where.push("l.work_kind = ?"); args.push(workKind);
+    if (sort === "popular") {
+      assert(q.before === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
+      return popular(where, args, me.ownerId, Math.max(1, limit), cursor);
     }
-    if (creator) { where.push("l.owner_id = ?"); args.push(ot.ownerByHandle(creator)); }
-    if (tab === "following") { where.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)"); args.push(me.ownerId); }
-    else if (tab === "collected") { where.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)"); args.push(me.ownerId); }
-    else assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
-    if (search) { where.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)"); args.push(search, search, search, search); }
-    if (sort === "popular") return popular(where.join(" AND "), args, me.ownerId, Math.max(1, limit), cursor);
-    if (before) { where.push("l.updated_at < ?"); args.push(before); }
-    const rows = ot.all<any>(`SELECT l.* FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id WHERE ${where.join(" AND ")} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, limit);
+    assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
+    const before = intParam(q.before, "before", 0);
+    const boundary = before ? " AND l.updated_at < ?" : "";
+    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE ${where}${boundary} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...(before ? [before] : []), limit);
     return { items: rows.map((l) => listingView(ot, l, me.ownerId)), next_before: rows.length === limit ? rows[rows.length - 1].updated_at : null };
+  });
+  app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
+    const me = ot.me(req);
+    const q = query(req);
+    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q"].includes(key)),
+      400, "invalid_request", "unknown work detail filter");
+    const scope = discoverScope(ot, {...q, kind: "work"}, me.ownerId);
+    const slug = params(req).slug;
+    assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
+    const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
+    assert(work, 404, "listing_not_found", "no such work");
+    reply.header("Cache-Control", "no-store");
+    const detail = {work: listingView(ot, work, me.ownerId), previous: null, next: null};
+    if (scope.sort === "popular") {
+      const ids = rankedWorkIds(ot, scope);
+      const position = ids.indexOf(work.id);
+      if (position === -1) return detail;
+      const neighbor = (id: string | undefined) => id
+        ? ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l WHERE l.id = ? AND ${PUBLIC_WORK_SCOPE.where}`, id) ?? null
+        : null;
+      return {...detail, previous: neighbor(ids[position - 1]), next: neighbor(ids[position + 1])};
+    }
+    const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
+    return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
   });
   app.get("/v1/ot/discover/:slug", async (req) => {
     const me = ot.me(req);

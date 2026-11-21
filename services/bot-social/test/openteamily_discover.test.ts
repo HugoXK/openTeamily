@@ -318,3 +318,100 @@ test("public GLB downloads appear only after an explicit publish and disappear o
   assert.equal((await fetch(publicPage)).status, 404);
   assert.equal((await fetch(publicFile)).status, 404);
 });
+
+test("work detail follows the filtered feed across page boundaries and timestamp ties", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "work-nav-author");
+  const outsider = await home(server.base, "work-nav-outsider");
+  const viewer = await home(server.base, "work-nav-viewer");
+  const publish = (owner: typeof author, slug: string, title: string, workKind = "document") =>
+    owner.ok("PUT", "/v1/ot/listings", {
+      kind: "work", ref: slug, slug, title, work_kind: workKind, snapshot: "Public snapshot",
+    });
+
+  const oldest = await publish(author, "nav-oldest", "Trail sketch oldest");
+  now += 1_000;
+  const draft = await publish(author, "nav-hidden", "Trail sketch hidden");
+  await publish(author, "nav-middle", "Trail sketch middle");
+  await publish(author, "nav-same-time", "Trail sketch tied");
+  await publish(outsider, "nav-unfollowed", "Trail sketch outside");
+  await publish(author, "nav-other-kind", "Trail sketch website", "website");
+  await publish(author, "nav-other-search", "Unrelated plans");
+  await author.ok("PUT", "/v1/ot/listings", {
+    kind: "agent", ref: "nav-agent", slug: "nav-agent", title: "Trail sketch helper",
+  });
+  await author.ok("DELETE", "/v1/ot/listings/" + draft.id);
+  await viewer.ok("POST", "/v1/ot/follows", {handle: author.handle});
+
+  const base = "/v1/ot/discover";
+  const detailPath = (slug: string, q = "") => `${base}/${slug}/detail${q}`;
+  const filters = "tab=following&work_kind=document&q=trail%20sketch";
+  const page = await viewer.ok("GET", `${base}?kind=work&${filters}`);
+  const slim = ({slug, title}: {slug: string; title: string}) => ({slug, title});
+  const visible = page.items.map(slim);
+  assert.deepEqual(new Set(visible.map((item: {slug: string}) => item.slug)),
+    new Set(["nav-oldest", "nav-middle", "nav-same-time"]));
+  assert.equal((await viewer.ok("GET", `${base}?kind=work&${filters}&limit=1`)).items.length, 1);
+  for (const [index, item] of visible.entries()) {
+    const data = await viewer.ok("GET", detailPath(item.slug, "?" + filters));
+    assert.deepEqual(slim(data.work), item);
+    assert.equal(data.work.following, true);
+    assert.ok(!("snapshot" in data.work) && !("ref" in data.work));
+    assert.deepEqual(data.previous, visible[index - 1] ?? null);
+    assert.deepEqual(data.next, visible[index + 1] ?? null);
+  }
+  const unmatched = await viewer.ok("GET", detailPath("nav-unfollowed", "?" + filters));
+  assert.equal(unmatched.work.slug, "nav-unfollowed");
+  assert.equal(unmatched.previous, null);
+  assert.equal(unmatched.next, null);
+  await viewer.ok("POST", `/v1/ot/listings/${oldest.id}/collect`, {});
+  const collected = await viewer.ok("GET", detailPath(oldest.slug, "?tab=collected"));
+  assert.equal(collected.work.collected, true);
+  assert.equal(collected.previous, null);
+  assert.equal(collected.next, null);
+
+  // The previously older work takes the first rank after a visitor collects it.
+  const hotFilter = "sort=popular&work_kind=document&q=trail%20sketch";
+  const ranked = (await viewer.ok("GET", `${base}?kind=work&${hotFilter}`)).items.map(slim);
+  assert.equal(ranked[0].slug, oldest.slug);
+  const popular = await viewer.ok("GET", detailPath(oldest.slug, "?" + hotFilter));
+  assert.equal(popular.previous, null);
+  assert.deepEqual(popular.next, ranked[1]);
+  assert.equal((await viewer.call("GET", detailPath("nav-hidden"))).status, 404);
+  assert.equal((await author.call("GET", detailPath("nav-hidden"))).status, 404, "the public viewer hides revoked works from their author");
+  assert.equal((await viewer.call("GET", detailPath("nav-agent"))).status, 404);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?sort=popular&tab=following"))).status, 400);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?work_kind=unknown"))).status, 400);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?q=trail&q=sketch"))).status, 400);
+  assert.equal((await fetch(server.base + detailPath(oldest.slug))).status, 401);
+});
+
+test("guest work pages navigate directly between public works and keep the share entry", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "guest-work-nav");
+  const publish = (slug: string, title: string, kind = "work") => {
+    now += 1_000;
+    return author.ok("PUT", "/v1/ot/listings", {kind, ref: slug, slug, title, snapshot: "Public preview"});
+  };
+  const older = await publish("guest-nav-older", "Older <work>");
+  await publish("guest-nav-agent", "An agent", "agent");
+  const withdrawn = await publish("guest-nav-withdrawn", "Withdrawn");
+  const newer = await publish("guest-nav-newer", "Newer work");
+  await author.ok("DELETE", "/v1/ot/listings/" + withdrawn.id);
+  const opened = await fetch(server.base + newer.path);
+  assert.equal(opened.status, 200);
+  assert.equal(opened.headers.get("cache-control"), "no-store");
+  const html = await opened.text();
+  assert.match(html, /<span aria-disabled="true">上一件<\/span>/);
+  assert.match(html, /<a rel="next" href="\/w\/guest-nav-older" title="Older &lt;work&gt;">下一件<\/a>/);
+  assert.match(html, /href="\/login#work-detail=guest-nav-newer">分享作品/);
+  assert.match(html, /href="\/login#work-comments=guest-nav-newer">查看评论/);
+  assert.doesNotMatch(html, /guest-nav-withdrawn|guest-nav-agent/);
+  const previous = await (await fetch(server.base + older.path)).text();
+  assert.match(previous, /<a rel="prev" href="\/w\/guest-nav-newer"[^>]*>上一件<\/a>/);
+  assert.match(previous, /<span aria-disabled="true">下一件<\/span>/);
+});

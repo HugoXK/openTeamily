@@ -1,6 +1,6 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
-import { workCommentsFromHash } from '../shell/work-comments-link.mjs';
+import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
@@ -310,8 +310,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         mainPanel.hidden = true;
         const hash = view.location?.pathname === '/login' ? view.location.hash : '';
         const intent = publicAgentIntentFromHash(hash);
-        const work = workCommentsFromHash(hash);
-        const continuation = intent ? publicAgentContinuation(intent) : (work ? '#work-comments=' + work : '');
+        const work = publicWorkIntentFromHash(hash);
+        const continuation = intent ? publicAgentContinuation(intent) : work?.continuation;
         const register = loginPanel.querySelector?.('.login-register-button');
         if (register && continuation) register.href = '/register' + continuation;
         show(document, '', '');
@@ -334,7 +334,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       if (view.location?.pathname === '/login') {
         const hash = view.location.hash;
         const intent = publicAgentIntentFromHash(hash);
-        const work = workCommentsFromHash(hash);
+        const work = publicWorkIntentFromHash(hash);
         if (intent) {
           await continuePublicActivity({
             target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
@@ -342,8 +342,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
           });
         } else if (work) {
           await continuePublicActivity({
-            target: '/discover?' + new URLSearchParams({work, comments: '1'}), backPath: '/w/' + work,
-            loadingText: '正在打开作品评论…', errorText: '暂时无法打开评论。', retryId: 'work-comments-login-retry',
+            target: work.target, backPath: '/w/' + work.slug,
+            loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
+            errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
           });
         } else {
           view.location.replace('/');

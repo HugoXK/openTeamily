@@ -1197,10 +1197,15 @@ function discoverRoutes(host) {
       method: 'GET', path: new RegExp(`^${DISCOVER_WORK}$`),
       async handle({ match, query }) {
         return wrap(async () => {
-          if (query) throw new Fault(400, 'invalid', '无效的作品请求。')
-          const row = await client(host).get(`/v1/ot/discover/${match[1]}`)
-          if (row?.kind !== 'work' || row.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
-          return [200, {work: workItem(row)}]
+          const q = parseQuery(query)
+          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort'].includes(key) || q.getAll(key).length !== 1)) {
+            throw new Fault(400, 'invalid', '无效的作品浏览请求。')
+          }
+          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort')}
+          const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
+          if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
+          const adjacent = row => row ? {slug: row.slug, title: row.title} : null
+          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next)}]
         })
       },
     },
