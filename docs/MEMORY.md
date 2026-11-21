@@ -13,10 +13,6 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
 | POST | `/v1/workspaces/{id}/memory/{id}/remove` | Delete the page |
-| GET | `/v1/workspaces/{id}/memory/{id}/share` | Current read-only share state for one page (`active`, `prefix`, timestamps; never the token). Members may read |
-| POST | `/v1/workspaces/{id}/memory/{id}/share` | Mint a read-only share link. Editor, owner or admin only. Revokes the previous active link and returns `{token, path}` once |
-| DELETE | `/v1/workspaces/{id}/memory/{id}/share` | Revoke the active link for that page, effective on the next request |
-| GET | `/s/{token}` | Without a session: one page, read-only (title, topics, updated date, Markdown body as text) |
 | GET | `/v1/workspaces/{id}/memory/preferences` | Lists the caller's saved preferences in this workspace (`id`, `text`, `created`) |
 | POST | `/v1/workspaces/{id}/memory/preferences` | Save `{text}` (1–120 characters). Requires an Idempotency-Key; the same text is never duplicated for one account, and the cap is 50 rows per user per workspace |
 | POST | `/v1/workspaces/{id}/memory/preferences/{id}/remove` | Delete one of the caller's preferences |
@@ -24,6 +20,9 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}/versions` | The page's previous versions (newest first: `revision`, `title`, bounded `summary`, `created`, `created_by`) and the `current` revision. The live revision is not listed |
 | GET | `/v1/workspaces/{id}/memory/{id}/versions/{revision}` | One earlier version with its full `body`, for preview |
 | POST | `/v1/workspaces/{id}/memory/{id}/versions/{revision}/restore` | Revision-guarded `{revision}`: writes that version's title and body as a new revision; older versions stay |
+| GET | `/v1/workspaces/{id}/memory/{id}/share` | Current read-only share state for one page (`active`, `revoked`, `prefix`, `created`; never the token or its hash) |
+| POST | `/v1/workspaces/{id}/memory/{id}/share` | Mint a read-only link for that page: returns `{token, path}` once, replaces any earlier link |
+| POST | `/v1/workspaces/{id}/memory/{id}/share/revoke` | Revoke the page's link; repeating it is idempotent |
 | GET | `/v1/workspaces/{id}/memory/graph` | Nodes (pages), edges, topics and counts for this workspace |
 | POST | `/v1/workspaces/{id}/memory/links` | Create an undirected manual link `{source, target}` between two pages. Requires an Idempotency-Key |
 | POST | `/v1/workspaces/{id}/memory/links/{id}/remove` | Delete a manual link |
@@ -40,10 +39,6 @@ The `/memory` left directory now follows the recorded chrome: the heading is「�
 `[[Title]]` mentions in a page body create graph edges to an existing same-workspace page with that title. Missing titles and self-mentions are ignored. A manual link and a mention between the same pair appear as one edge (`manual` if a stored link exists). Deleting a page removes its topics and manual links, and mention edges disappear with the body.
 
 `due_at` is an optional Unix timestamp in seconds. `memory_page_id` must refer to a page in the same workspace; deleting that page clears the link and keeps the action.
-
-## Share links
-
-A share link belongs to exactly one page of one workspace. Only the author, an owner or an admin of that workspace can mint or revoke it; members can read the current state, and people outside the workspace get `404`. The 43-character token is returned once, on `POST`, and only `sha256('share:' + token)` is stored, so the state response and the database carry no usable token. Minting again revokes the previous link first; `DELETE` revokes immediately and a revoked or replaced link answers `404` on `/s/{token}`. The public page renders the title, the topics, the UTC updated date and the stored Markdown body as escaped text — no session, no editor, no other page, no action list, no profile, no links into the workspace. It is served with `default-src 'none'` CSP, `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Deleting the page cascades its share rows. This is a share link, not a public index or a website export, and it is not Teamily share parity.
 
 ## Permissions
 
@@ -96,3 +91,17 @@ pruned once a page exceeds that many edits. Creating or restoring a title that a
 taken meanwhile returns 409. The `/memory` editor's 历史 button opens this list, a preview and the
 restore control; a restore reloads the editor and the graph. Deleting the page deletes its
 snapshots (foreign-key cascade).
+
+## Share links
+
+A share link belongs to exactly one page of one workspace. Minting returns one 43-character token
+once and stores only `sha256('share:' + token)`, so neither the state read nor the database carries a
+usable token. Minting again replaces the earlier link; revoking — or deleting the page — takes the
+public snapshot down, and a revoked or replaced link answers `404` on the next request.
+
+The public page is `/share/<token>`, rendered by Bot Social from a read-only snapshot this DS-Bot
+publishes on mint and refreshes when the page is edited. It needs no session and shows that one page
+only (its title and body as escaped text — no editor, no other page, no action list, no profile, no
+links into the workspace). Bot Social serves it with `Content-Security-Policy: default-src 'none'`,
+`X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. This is a
+share link, not a public index or a website export, and it is not Teamily share parity.

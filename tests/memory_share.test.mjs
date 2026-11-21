@@ -11,8 +11,8 @@ test('memorySharePath addresses one memory page of one workspace', () => {
 });
 
 test('shareUrl turns the shown link into an absolute one', () => {
-  assert.equal(shareUrl('/s/token', 'https://example.test'), 'https://example.test/s/token');
-  assert.equal(shareUrl('/s/token', 'https://example.test/'), 'https://example.test/s/token');
+  assert.equal(shareUrl('/share/token', 'https://example.test'), 'https://example.test/share/token');
+  assert.equal(shareUrl('/share/token', 'https://example.test/'), 'https://example.test/share/token');
   assert.equal(shareUrl('', 'https://example.test'), '');
 });
 
@@ -22,9 +22,9 @@ test('shareRowState stays hidden while the page was never shared', () => {
 });
 
 test('shareRowState shows the copy-once link right after creating it', () => {
-  const state = shareRowState({active: true, revoked: false, path: '/s/abcdefghijk', prefix: 'abcdefgh'});
+  const state = shareRowState({active: true, revoked: false, path: '/share/abcdefghijk', prefix: 'abcdefgh'});
   assert.equal(state.visible, true);
-  assert.equal(state.link, '/s/abcdefghijk');
+  assert.equal(state.link, '/share/abcdefghijk');
   assert.equal(state.canRevoke, true);
   assert.match(state.note, /只读/);
 });
@@ -52,5 +52,5 @@ test('shareRowState explains a revoked or expired link and offers sharing again'
 test('share writes carry a JSON body so the server never answers 415', () => {
   const source = readFileSync(new URL('../openteamily/static/memory/app.mjs', import.meta.url), 'utf8');
   assert.match(source, /request\('POST', memorySharePath\([^)]*\), \{\}\)/);
-  assert.match(source, /request\('DELETE', memorySharePath\([^)]*\), \{\}\)/);
+  assert.match(source, /request\('POST', memorySharePath\([^)]*\) \+ '\/revoke', \{\}\)/);
 });
