@@ -316,12 +316,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -416,20 +416,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let slidesState = {schema: 'openteamily.slides.v1', slides: []};
+  let slideEditCount = 0;
+  let pendingSlideDraft = null;
+  const slideDraft = document.getElementById('slide-draft');
+  const slidePrompt = document.getElementById('slide-prompt');
+  const slideDraftStatus = document.getElementById('slide-draft-status');
+  const slideDraftSubmit = document.getElementById('slide-draft-submit');
+  const slideContext = document.getElementById('slide-context');
+  const slideContextOption = document.getElementById('slide-context-option');
+  const slideContextTitle = document.getElementById('slide-context-title');
+  const sendSlides = document.getElementById('send-saved-slides');
+  const downloadSlides = document.getElementById('download-slides');
 
   function slidesDeck() {
     return {
       schema: 'openteamily.slides.v1',
       slides: slidesState.slides.map(slide => ({
         title: String(slide.title || '').trim(),
-        bullets: (slide.bullets || []).map(value => String(value).trim()).filter(Boolean).slice(0, 10),
+        bullets: (slide.bullets || []).map(value => String(value).trim()).filter(Boolean),
       })),
     };
   }
 
-  function renderSlidesEditor() {
+  function renderSlidesEditor(focusIndex) {
     const list = document.getElementById('slide-list');
     if (!list) return;
+    let focusTarget;
     list.replaceChildren();
     slidesState.slides.forEach((slide, index) => {
       const li = document.createElement('li');
@@ -439,33 +451,121 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const label = document.createElement('span');
       label.className = 'slide-index';
       label.textContent = '第 ' + (index + 1) + ' 页';
+      const actions = document.createElement('div');
+      actions.className = 'slide-card-actions';
+      for (const [offset, text, name] of [[-1, '↑', '上移'], [1, '↓', '下移']]) {
+        const move = document.createElement('button');
+        const to = index + offset;
+        move.type = 'button';
+        move.textContent = text;
+        move.setAttribute('aria-label', name + label.textContent);
+        move.disabled = to < 0 || to >= slidesState.slides.length;
+        move.addEventListener('click', () => {
+          slidesState.slides[index] = slidesState.slides[to];
+          slidesState.slides[to] = slide;
+          slideEditCount++;
+          renderSlidesEditor(to);
+        });
+        actions.append(move);
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
+      remove.setAttribute('aria-label', '删除' + label.textContent);
       remove.addEventListener('click', () => {
         slidesState.slides.splice(index, 1);
-        renderSlidesEditor();
+        slideEditCount++;
+        renderSlidesEditor(Math.min(index, slidesState.slides.length - 1));
       });
-      head.append(label, remove);
+      actions.append(remove);
+      head.append(label, actions);
       const title = document.createElement('input');
       title.type = 'text';
       title.maxLength = 120;
       title.placeholder = '页标题';
+      title.setAttribute('aria-label', label.textContent + '标题');
       title.value = slide.title || '';
-      title.addEventListener('input', () => { slide.title = title.value; });
+      title.addEventListener('input', () => {
+        slide.title = title.value;
+        slideEditCount++;
+      });
       const bullets = document.createElement('textarea');
       bullets.rows = 4;
       bullets.maxLength = 4000;
       bullets.placeholder = '每行一条要点（最多 10 条）';
+      bullets.setAttribute('aria-label', label.textContent + '要点');
       bullets.value = (slide.bullets || []).join('\n');
       bullets.addEventListener('input', () => {
-        slide.bullets = bullets.value.split('\n').map(value => value.trim()).filter(Boolean).slice(0, 10);
+        slide.bullets = bullets.value.split('\n');
+        slideEditCount++;
       });
       li.append(head, title, bullets);
       list.append(li);
+      if (index === focusIndex) focusTarget = title;
     });
+    const count = document.getElementById('slides-count');
+    if (count) count.textContent = slidesState.slides.length + ' / 30 页';
     const add = document.getElementById('add-slide');
     if (add) add.disabled = slidesState.slides.length >= 30;
+    if (focusIndex !== undefined) (focusTarget || add)?.focus();
+  }
+
+  if (slideDraftSubmit && slidePrompt && slideDraftStatus) {
+    form.elements.title.addEventListener?.('input', () => {
+      if (current?.kind === 'slides') slideEditCount++;
+    });
+    slideDraftSubmit.addEventListener('click', async () => {
+      const prompt = slidePrompt.value.trim();
+      if (pendingSlideDraft || current?.kind !== 'slides' || current.id || !workspaceId()) return;
+      if (!prompt) {
+        slideDraftStatus.textContent = '请填写幻灯片主题或素材。';
+        slidePrompt.focus();
+        return;
+      }
+      if (slidesDeck().slides.some(slide => slide.title || slide.bullets.length)) {
+        slideDraftStatus.textContent = '已有幻灯片内容。请新建一份空白幻灯片后起草。';
+        return;
+      }
+      const artifact = current;
+      const wid = workspaceId();
+      const edits = slideEditCount;
+      const token = pendingSlideDraft = {};
+      const active = () => pendingSlideDraft === token && !form.hidden && current === artifact && workspaceId() === wid;
+      const origin = artifactSendOrigin;
+      const body = {prompt};
+      if (slideContext?.checked && origin?.allowed && origin.item === artifact && origin.wid === wid) {
+        body.conversation_id = origin.conversation;
+      }
+      slideDraftSubmit.disabled = true;
+      slideDraftSubmit.textContent = '正在生成…';
+      slideDraftStatus.textContent = '智能体正在起草幻灯片。';
+      try {
+        const result = await request('POST', `/v1/workspaces/${wid}/artifacts/slides/draft`, body);
+        if (!active()) return;
+        if (slideEditCount !== edits || form.inert) {
+          slideDraftStatus.textContent = '已保留你的编辑。需要起草时请重新生成。';
+          return;
+        }
+        if (result.status !== 200 || !result.body.slides?.slides?.length) {
+          slideDraftStatus.textContent = messageFor(result.body.error, '无法生成幻灯片草稿，请重试。');
+          return;
+        }
+        slidesState = result.body.slides;
+        if (!form.elements.title.value.trim()) form.elements.title.value = result.body.title || '';
+        slideDraft.open = false;
+        slideDraft.querySelector?.('summary')?.focus();
+        renderSlidesEditor();
+        slideDraftStatus.textContent = '草稿已生成。可编辑后保存。';
+      } catch {
+        if (active()) slideDraftStatus.textContent = '无法生成幻灯片草稿，请重试。';
+      } finally {
+        if (pendingSlideDraft === token) {
+          pendingSlideDraft = null;
+          slideDraftSubmit.disabled = false;
+          slideDraftSubmit.textContent = '生成草稿';
+        }
+      }
+    });
   }
 
   let dashboardState = {schema: 'openteamily.dashboard.v1', widgets: []};
@@ -625,7 +725,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (button) button.hidden = kind !== 'spreadsheet' || !item?.id;
     }
     if (kind === 'spreadsheet') spreadsheet.load(item?.spreadsheet, item?.id, !item?.id);
+    for (const button of [sendSlides, downloadSlides]) {
+      if (button) button.hidden = kind !== 'slides' || !item?.id;
+    }
+    pendingSlideDraft = null;
     if (kind === 'slides') {
+      if (slideDraft) {
+        slideDraft.hidden = Boolean(item?.id);
+        slideDraft.open = false;
+      }
+      if (slidePrompt) slidePrompt.value = '';
+      if (slideContext) slideContext.checked = false;
+      if (slideContextOption) slideContextOption.hidden = true;
+      if (slideContextTitle) slideContextTitle.hidden = true;
+      if (slideDraftStatus) slideDraftStatus.textContent = '';
+      if (slideDraftSubmit) {
+        slideDraftSubmit.disabled = false;
+        slideDraftSubmit.textContent = '生成草稿';
+      }
       slidesState = item && item.slides ? item.slides : {schema: 'openteamily.slides.v1', slides: []};
       if (!Array.isArray(slidesState.slides)) slidesState = {schema: 'openteamily.slides.v1', slides: []};
       if (!slidesState.slides.length) slidesState.slides.push({title: '', bullets: []});
@@ -938,6 +1055,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendConfirm = document.getElementById('send-to-chat-confirm');
   const sendCancel = document.getElementById('send-to-chat-cancel');
   let sendingArtifact = null;
+  let artifactSendOrigin = null;
+
+  async function revealSlideContext(origin) {
+    if (!slideContext || !slideContextOption || !slideContextTitle || !slideDraftSubmit) return;
+    const {wid, conversation, item} = origin;
+    const path = `/v1/workspaces/${wid}/social/conversations/${encodeURIComponent(conversation)}`;
+    slideDraftSubmit.disabled = true;
+    slideContextTitle.textContent = '正在确认原会话…';
+    slideContextTitle.hidden = false;
+    const data = await request('GET', path, undefined, undefined, AbortSignal.timeout(5000)).catch(() => null);
+    if (artifactSendOrigin !== origin || current !== item || workspaceId() !== wid || form.hidden) return;
+    slideDraftSubmit.disabled = false;
+    const source = data?.body.conversation;
+    if (data?.status !== 200 || source?.id !== conversation || source.public_agent || source.direct?.open === false) {
+      slideContextTitle.textContent = '无法读取原会话。仍可根据主题或素材起草。';
+      return;
+    }
+    origin.allowed = true;
+    slideContext.checked = true;
+    slideContextOption.hidden = false;
+    slideContextTitle.textContent = '会话：' + conversationLabel(source);
+  }
 
   function sendStatus(message = '') {
     if (!sendError) return;
@@ -974,6 +1113,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const items = (listed.body.items || []).filter(item => !item.public_agent && item.direct?.open !== false);
+    if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
+      state.destination = items.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
+      sendConfirm.disabled = !state.destination;
+    }
     sendEmpty.hidden = items.length > 0;
     sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
     for (const conversation of items) {
@@ -981,7 +1124,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = conversationLabel(conversation);
-      button.setAttribute('aria-pressed', 'false');
+      button.setAttribute('aria-pressed', String(state.destination === conversation));
       button.addEventListener('click', () => {
         if (state.pending) return;
         state.destination = conversation;
@@ -1504,6 +1647,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       params.delete('new');
       const rest = params.toString();
       document.getElementById(newKindButtonId(newKind))?.click();
+      const conversation = fragment.get('conversation');
+      if (current?.kind === newKind && linkedWorkspace && workspaceId() === linkedWorkspace && /^[A-Za-z0-9_-]{1,128}$/.test(conversation || '')) {
+        artifactSendOrigin = {wid: linkedWorkspace, conversation, item: current, allowed: false};
+        if (newKind === 'slides') void revealSlideContext(artifactSendOrigin);
+      }
       view.history?.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
       return;
     }
@@ -1553,7 +1701,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('new-slides').addEventListener('click', () => {
     draftKind = 'slides';
-    slidesState = {schema: 'openteamily.slides.v1', slides: [{title: '', bullets: []}]};
     closeNewMenu();
     openEditor({kind: 'slides'});
   });
@@ -1572,14 +1719,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   sendSpreadsheet?.addEventListener('click', () => openSendDialog(current));
+  sendSlides?.addEventListener('click', () => openSendDialog(current));
   downloadSpreadsheet?.addEventListener('click', () => {
     if (current?.kind === 'spreadsheet' && current.id) {
       globalThis.location.assign(exportHref(current.revision));
     }
   });
-  document.getElementById('sheet-back')?.addEventListener('click', () => {
-    document.getElementById('cancel-editor').click();
+  downloadSlides?.addEventListener('click', () => {
+    if (current?.kind === 'slides' && current.id) {
+      globalThis.location.assign(exportHref(current.revision) + '?format=pptx');
+    }
   });
+  for (const backId of ['sheet-back', 'slides-back']) {
+    document.getElementById(backId)?.addEventListener('click', () => {
+      document.getElementById('cancel-editor').click();
+    });
+  }
 
   document.getElementById('add-widget').addEventListener('click', () => {
     if (dashboardState.widgets.length >= 20) return;
@@ -1590,7 +1745,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('add-slide').addEventListener('click', () => {
     if (slidesState.slides.length >= 30) return;
     slidesState.slides.push({title: '', bullets: []});
-    renderSlidesEditor();
+    slideEditCount++;
+    renderSlidesEditor(slidesState.slides.length - 1);
   });
 
   document.getElementById('new-media').addEventListener('click', () => {
@@ -1768,7 +1924,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     event.preventDefault();
     if (savingArtifact) return;
     savingArtifact = true;
-    const saveButtons = ['save-artifact', 'document-save', 'sheet-save'].map(id => document.getElementById(id)).filter(Boolean);
+    const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save'].map(id => document.getElementById(id)).filter(Boolean);
     for (const button of saveButtons) button.disabled = true;
     try {
     if (!workspaceId()) {
@@ -1798,6 +1954,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '至少添加一页幻灯片。');
         return;
       }
+      for (const [index, slide] of slides.slides.entries()) {
+        if (!slide.title && !slide.bullets.length) {
+          show('error', '请填写第 ' + (index + 1) + ' 页的标题或要点。');
+          return;
+        }
+        if (slide.bullets.length > 10 || slide.bullets.some(bullet => bullet.length > 200)) {
+          show('error', '第 ' + (index + 1) + ' 页最多 10 条要点，每条最多 200 字。');
+          return;
+        }
+      }
+      form.inert = true;
       if (current && current.id) {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                                {revision: current.revision, changes: {title, slides}});
@@ -1871,6 +2038,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
+    if (artifactSendOrigin?.item === current) artifactSendOrigin.item = result.body.artifact;
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
     fillEditor(current);

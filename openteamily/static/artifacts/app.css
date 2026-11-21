@@ -1244,10 +1244,10 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #sheet-grid input:focus { outline: 2px solid var(--ot-accent); outline-offset: -2px; position: relative; z-index: 1; }
 #sheet-status:empty { display: none; }
 
-#main-panel:has(> #editor-form:not([hidden]) #spreadsheet-editor:not([hidden])) > .artifacts-top {
+#main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
   display: none;
 }
-body #main-panel > #editor-form:not([hidden]):has(#spreadsheet-editor:not([hidden])) {
+body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
   grid-row: 1 / -1;
   grid-template-columns: minmax(0,1fr);
   max-width: min(66rem, 100%);
@@ -1255,14 +1255,14 @@ body #main-panel > #editor-form:not([hidden]):has(#spreadsheet-editor:not([hidde
   margin: 0;
   box-sizing: border-box;
 }
-#editor-form:has(#spreadsheet-editor:not([hidden])) > :is(#save-artifact,#cancel-editor) { display: none; }
-.sheet-actions {
+#editor-form:has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) > :is(#save-artifact,#cancel-editor) { display: none; }
+.artifact-editor-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: .5rem;
 }
-.sheet-actions #sheet-save {
+.artifact-editor-actions :is(#sheet-save, #slides-save) {
   margin-inline-start: auto;
   background: var(--ot-accent);
   color: var(--ot-on-accent);
@@ -1285,7 +1285,45 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
 #sheet-grid thead th:first-child { inset-inline-start: 0; z-index: 3; }
 #sheet-grid tbody th { z-index: 2; }
 @media (max-width: 700px) {
-  body #main-panel > #editor-form:not([hidden]):has(#spreadsheet-editor:not([hidden])) { padding: .75rem 0 1.25rem; }
-  .sheet-toolbar button, .sheet-actions button { min-height: 2.375rem; }
+  body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) { padding: .75rem 0 1.25rem; }
+  .sheet-toolbar button, .artifact-editor-actions button { min-height: 2.375rem; }
   #sheet-grid input { width: 6.75rem; font-size: 1rem; }
+}
+
+#slides-editor {
+  display: grid;
+  gap: .8rem;
+}
+#slides-editor .slides-toolbar { margin-block-end: 0; }
+#slide-draft {
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  padding: .7rem .85rem;
+}
+#slide-draft summary { cursor: pointer; font-weight: 600; }
+#slide-draft label { display: block; margin-block: .65rem .3rem; }
+#slide-draft-submit { margin-block-start: .5rem; }
+#slide-draft-status { margin: 0; overflow-wrap: anywhere; }
+#slide-draft-status:empty { display: none; }
+#editor-form :is(#slide-prompt, #slide-list textarea) {
+  min-height: 0;
+  box-sizing: border-box;
+}
+#slide-list .slide-card { min-width: 0; scroll-margin-block: 1rem; }
+#slide-list :is(input, textarea) { box-sizing: border-box; }
+#slide-list .slide-head { gap: .4rem; flex-wrap: wrap; }
+.slide-card-actions { display: flex; flex-wrap: wrap; gap: .3rem; }
+@media (max-width: 700px) {
+  #slides-editor button { min-height: 2.375rem; }
+  #slide-list :is(input, textarea), #slide-prompt { font-size: 1rem; }
+}
+#slide-context-title { margin: .25rem 0 0 1.3rem; overflow-wrap: anywhere; }
+#slide-context { width: auto; }
+#slides-editor > .artifact-editor-actions {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: .25rem;
+  background: var(--ot-surface);
 }

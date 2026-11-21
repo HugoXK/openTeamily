@@ -114,6 +114,7 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/file`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/spreadsheet/draft`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/slides/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
