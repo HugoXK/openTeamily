@@ -48,6 +48,8 @@ a.catalog-create[hidden] { display: none; }
 .catalog-avatar { flex: 0 0 2rem; height: 2rem; display: grid; place-items: center; border-radius: 50%; background: var(--ot-accent-soft); color: var(--ot-ink); font-weight: 650; }
 .catalog-copy { min-width: 0; flex: 1; }
 .catalog h3 { margin: 0 0 .25rem; font-size: .9rem; overflow-wrap: anywhere; }
+.catalog-profile { color: inherit; text-decoration: underline; text-decoration-color: var(--ot-muted); text-underline-offset: .2em; }
+.catalog-profile:hover { color: var(--ot-accent); }
 .catalog .summary { margin: 0; color: var(--ot-muted); font-size: .82rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .catalog article button { flex: 0 0 auto; padding: .2rem .55rem; border-radius: 999px; font-size: .8rem; }
 #catalog-more { display: block; margin: 1rem auto; }

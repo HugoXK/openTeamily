@@ -192,6 +192,10 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
   assert.equal(el('catalog-manage').hidden, true);
   assert.equal(el('catalog-more').hidden, false);
   const card = el('discover-list').children[0].children[0];
+  const profile = card.children[1].children[0].children[0];
+  assert.equal(profile.tagName, 'a');
+  assert.equal(profile.href, '/a/fixture-one');
+  assert.equal(profile.textContent, 'Fixture');
   assert.equal(card.children[1].children[1].textContent, '<script>not HTML</script>');
   assert.equal(card.children[2].textContent, '复制');
   await el('catalog-more').handlers.click();
@@ -224,18 +228,18 @@ test('catalog failure displays an error and leaves loading state', async () => {
   assert.equal(doc.getElementById('discover-empty').hidden, true);
 });
 
-test('catalog cards do not promise a /d/ detail route the server does not serve', async () => {
+test('catalog cards only link to profiles with a valid public slug', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
   const fetcher = async path => {
     if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    return {status: 200, json: async () => ({items: [{name: 'Fixture', slug: 'fixture-one', summary: '简介'}], cursor: null})};
+    return {status: 200, json: async () => ({items: [{name: 'Fixture', slug: '../fixture-one'}], cursor: null})};
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents'}});
   const card = doc.getElementById('discover-list').children[0].children[0];
-  const title = card.title || '';
-  assert.equal(title.includes('/d/'), false, 'hover text must not name /d/<slug>: no public detail route exists');
-  assert.equal(title.includes('fixture-one'), false);
+  const title = card.children[1].children[0];
+  assert.equal(title.textContent, 'Fixture');
+  assert.equal(title.childElementCount, 0);
 });
 
 test('default discover view loads works; private tabs require sign-in and does not load the catalog API', async () => {

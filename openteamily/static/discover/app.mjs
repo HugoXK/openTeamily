@@ -1254,7 +1254,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const copy = document.createElement('div');
       copy.className = 'catalog-copy';
       const name = document.createElement('h3');
-      name.textContent = item.name || item.slug;
+      const label = item.name || item.slug;
+      if (validSlug(item.slug)) {
+        const profile = document.createElement('a');
+        profile.className = 'catalog-profile';
+        profile.href = '/a/' + item.slug;
+        profile.textContent = label;
+        name.append(profile);
+      } else {
+        name.textContent = label;
+      }
       const summary = document.createElement('p');
       summary.className = 'summary';
       summary.textContent = item.summary || '没有简介。';

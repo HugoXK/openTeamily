@@ -97,6 +97,7 @@ test("public listing pages need no token and hide unlisted works", async () => {
   assert.match(page, /Public essay/);
   assert.equal(page.includes("<script>"), false, "snapshot is escaped");
   assert.match(page, /hello &lt;script&gt; world/);
+  assert.doesNotMatch(page, /public-agent-(composer|share)|script-src 'self'/);
 
   const preview = await fetch(`${S.base}/w/essay-${tag}/preview`);
   assert.equal((await preview.json() as any).preview, "hello <script> world");
@@ -260,6 +261,101 @@ test("public quick-start opens one private thread and drafts the current publish
   assert.equal(unpublished.status, 404);
   assert.equal(unpublished.headers.get("cache-control"), "no-store");
   assert.equal((await visitor.call("POST", path, request)).status, 404);
+});
+
+test("the public composer is gated by chat availability and a drafted start is bound to its listing ID", async () => {
+  const [publisher, replacement, visitor] = await Promise.all([
+    home(S.base, "composer-publisher"), home(S.base, "composer-replacement"), home(S.base, "composer-visitor"),
+  ]);
+  const listing = { kind: "agent", slug: "public-draft-agent", ref: "draft_agent", title: 'Draft <writer>',
+    snapshot: JSON.stringify({ quick_starts: ["A safe quick-start"] }) };
+  const start = "/v1/ot/discover/" + listing.slug + "/start";
+  const original = await publisher.ok("PUT", "/v1/ot/listings", listing);
+  const page = async () => {
+    const response = await fetch(S.base + "/a/" + listing.slug);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    return response.text();
+  };
+  assert.doesNotMatch(await page(), /<form id="public-agent-composer"|src="\/shell\/public-agent-composer/);
+  assert.equal((await visitor.call("POST", start, { listing_id: original.id })).data.error.code, "public_chat_closed");
+
+  await publisher.ok("PUT", "/v1/ot/listings", { ...listing, chat_enabled: true });
+  const html = await page();
+  assert.match(html, /Draft &lt;writer&gt;/);
+  assert.match(html, /form-action 'none';[^"]*script-src 'self';/);
+  assert.match(html, /<script type="module" src="\/shell\/public-agent-composer\.mjs"><\/script>/);
+  assert.ok(html.includes(`<form id="public-agent-composer" method="post" data-slug="${listing.slug}" data-listing-id="${original.id}">`));
+  assert.match(html, /<textarea[^>]+name="message"[^>]+maxlength="4000"[^>]+disabled/);
+  assert.match(html, /<button[^>]+type="submit" disabled>/);
+  assert.match(html, /href="\/login#public-agent=public-draft-agent"/);
+  assert.match(html, /quick-start-version=[a-f0-9]{64}/);
+
+  const selection = { listing_id: original.id };
+  assert.equal((await fetch(S.base + start, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(selection) })).status, 401);
+  assert.equal((await visitor.call("POST", start, { listing_id: "otl_fake" })).status, 400);
+  assert.equal((await visitor.call("POST", start, { ...selection, message: "Private draft" })).status, 400);
+  assert.equal((await visitor.call("POST", start, {
+    ...selection, quick_start: 0, quick_start_version: "a".repeat(64),
+  })).status, 400);
+  assert.deepEqual((await visitor.ok("GET", "/v1/ot/conversations?scope=public")).conversations, []);
+
+  const opened = await visitor.ok("POST", start, selection);
+  assert.equal(opened.created, true);
+  assert.equal(opened.draft_text, undefined);
+  assert.equal((await visitor.ok("POST", start, selection)).conversation_id, opened.conversation_id);
+  const messages = "/v1/ot/conversations/" + opened.conversation_id + "/messages";
+  assert.deepEqual((await visitor.ok("GET", messages)).messages, []);
+  assert.deepEqual((await publisher.ok("GET", "/v1/ot/agent-inbox")).items, []);
+  assert.equal((await publisher.ok("GET", "/v1/ot/notifications")).notifications
+    .some((item: { kind: string }) => item.kind === "discover.conversation_started"), false);
+
+  await publisher.ok("PUT", "/v1/ot/listings", { ...listing, slug: "draft-agent-moved", chat_enabled: true });
+  const alternative = await replacement.ok("PUT", "/v1/ot/listings", { ...listing, chat_enabled: true });
+  assert.notEqual(alternative.id, original.id);
+  const conflict = await visitor.call("POST", start, selection);
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.data.error.code, "public_agent_changed");
+  assert.deepEqual((await visitor.ok("GET", "/v1/ot/conversations?scope=public")).conversations
+    .map((row: { id: string }) => row.id), [opened.conversation_id]);
+  assert.deepEqual((await replacement.ok("GET", "/v1/ot/conversations?scope=public")).conversations, []);
+  const sent = await visitor.ok("POST", messages, { body: "The confirmed message" });
+  assert.ok((await publisher.ok("GET", "/v1/ot/agent-inbox")).items.some((item: { message: { id: string } }) =>
+    item.message.id === sent.id));
+  assert.deepEqual((await replacement.ok("GET", "/v1/ot/agent-inbox")).items, []);
+});
+
+test("listed agent profiles expose a canonical share path even when visitor chat is disabled", async () => {
+  const publisher = await home(S.base, "profile-share-publisher");
+  await publisher.ok("PUT", "/v1/ot/profile", { display_name: 'Name <img src=x onerror="alert(1)">' });
+  const slug = "profile-share-agent";
+  const malicious = '<script src="https://fixture.invalid/injected.js"></script>';
+  const listing = { kind: "agent", ref: "shareable_agent", slug, title: malicious, summary: malicious,
+    snapshot: JSON.stringify({ quick_starts: ["Open this example"] }) };
+  const path = "/a/" + slug;
+  for (const chat_enabled of [false, true]) {
+    await publisher.ok("PUT", "/v1/ot/listings", { ...listing, chat_enabled });
+    const response = await fetch(S.base + path);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const html = await response.text();
+    assert.match(html, /form-action 'none';[^"]*script-src 'self';/);
+    assert.equal(html.includes(malicious), false);
+    assert.match(html, /Name &lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+    assert.match(html, /&lt;script src=&quot;https:\/\/fixture\.invalid\/injected\.js&quot;&gt;/);
+    assert.match(html, /<script type="module" src="\/shell\/public-agent-share\.mjs"><\/script>/);
+    assert.ok(html.includes(`id="public-agent-share" class="profile-share" data-profile-path="${path}"`));
+    assert.ok(html.includes(`value="${path}" data-copy-profile-url readonly`));
+    assert.ok(html.includes(`href="${path}">打开公开主页`));
+    assert.match(html, /<button type="button" data-copy-profile disabled hidden>/);
+    assert.match(html, /<details data-copy-profile-fallback>\s*<summary>主页链接<\/summary>/);
+    assert.match(html, /data-copy-profile-status role="status" aria-live="polite"/);
+    assert.equal(html.includes('<form id="public-agent-composer"'), chat_enabled);
+    assert.doesNotMatch(html, /(?:data-profile-path|href)="\/social\/a\//);
+  }
+  const publicData = await (await fetch(S.base + path, { headers: { accept: "application/json" } })).json() as Record<string, unknown>;
+  assert.equal(publicData.kind, "agent");
+  assert.equal(Object.hasOwn(publicData, "profile_share_token"), false);
 });
 
 test("popular works use recent public engagement, with stable account-scoped cursors", async (t) => {
@@ -496,7 +592,7 @@ test("public website HTML lives only in an isolated frame and is deleted on revo
   assert.match(host, /title="计数器 &lt;demo&gt; 的互动预览"/);
   assert.match(host, /frame-src 'self'/);
   assert.match(host, /评论/);
-  assert.doesNotMatch(host, /site-counter-data/);
+  assert.doesNotMatch(host, /site-counter-data|public-agent-share|script-src 'self'/);
   assert.deepEqual(await (await fetch(page + "/preview")).json(), {preview: summary});
 
   const frame = await fetch(page + "/site");

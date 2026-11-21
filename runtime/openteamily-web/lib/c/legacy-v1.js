@@ -16,6 +16,7 @@ import { sharedBotSocial, seg, qs } from './bot-social.js'
 import { GLB_MIME } from '../glb.js'
 
 const HEX = /^[0-9a-f]{32}$/
+const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
@@ -210,6 +211,7 @@ function rethrow(error) {
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
     public_chat_closed: 'public_chat_closed',
+    public_agent_changed: 'public_agent_changed',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
     comment_not_found: 'not_found',
@@ -1191,15 +1193,21 @@ function discoverRoutes(host) {
         return wrap(async () => {
           const input = body === undefined ? {} : body
           if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Fault(400, 'invalid', '无效的访客聊天请求。')
-          const quick = Object.keys(input).length > 0
-          if (quick && (Object.keys(input).length !== 2 || !Number.isInteger(input.quick_start)
+          const fields = Object.keys(input)
+          const selected = Object.hasOwn(input, 'listing_id')
+          const quick = fields.length > 0 && !selected
+          if (selected && (fields.length !== 1 || typeof input.listing_id !== 'string' || !PUBLIC_LISTING_ID.test(input.listing_id))) {
+            throw new Fault(400, 'invalid', '无效的公开智能体。')
+          }
+          if (quick && (fields.length !== 2 || !Number.isInteger(input.quick_start)
             || input.quick_start < 0 || input.quick_start > 4
             || typeof input.quick_start_version !== 'string' || !/^[a-f0-9]{64}$/.test(input.quick_start_version))) {
             throw new Fault(400, 'invalid', '请选择有效的快捷开场。')
           }
           const binding = await host.call('agents/personal-binding', {})
           if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409, 'no_personal_workspace', '请先打开个人工作区。')
-          const request = quick ? {quick_start: input.quick_start, quick_start_version: input.quick_start_version} : {}
+          const request = selected ? {listing_id: input.listing_id}
+            : quick ? {quick_start: input.quick_start, quick_start_version: input.quick_start_version} : {}
           const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`, request)
           return [200, { ...result, workspace_id: binding.workspace_id }]
         })

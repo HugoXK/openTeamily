@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import {webcrypto} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, wrapBold, inlineBold, dueReminders, reminderDueLabel } from '../openteamily/static/chat/app.mjs';
 
-import {publicAgentIntentFromHash, publicAgentContinuation} from '../openteamily/static/shell/public-agent-link.mjs';
+import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening, stagePublicAgentOpening} from '../openteamily/static/shell/public-agent-link.mjs';
+import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 
 const alice = 'a'.repeat(32);
@@ -261,6 +263,13 @@ class FakeElement {
     this.children.splice(this.children.indexOf(before), 0, node);
     return node;
   }
+  after(...nodes) {
+    const parent = this.parent;
+    if (!parent) return;
+    const next = parent.children[parent.children.indexOf(this) + 1];
+    if (next) for (const node of nodes) parent.insertBefore(node, next);
+    else parent.append(...nodes);
+  }
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
@@ -270,6 +279,10 @@ class FakeElement {
   getAttribute(name) { return this.attributes[name]; }
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  dispatchEvent(event) {
+    for (const listener of this.handlers[event.type] || []) listener(event);
+    return true;
+  }
   removeEventListener(type, handler) {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
@@ -645,6 +658,108 @@ function nativeReplyChat(transport) {
     : url.startsWith(path) ? transport(url.slice(path.length), opts, {agent, conversation}) : fallback(url);
   return {doc, el, restore, fetcher};
 }
+
+test('private agent starters stage safe text, preserve drafts, and follow the latest native scope', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const {fetcher: fallback} = sessionFetcher();
+  const agentA = {id:'agent-a', workspace_id:'ws-1', served_by:'ds-bot', name:'甲',
+    quick_starts:['核对 <原文>', '测试开场', 'x'.repeat(81), null]};
+  const agentB = {...agentA, id:'agent-b', name:'乙', quick_starts:['旧目录开场']};
+  const thread = {id:'thread-b', agent_id:agentB.id, title:'既有对话', updated:50};
+  let latest = {...agentB, quick_starts:['既有会话的新开场']};
+  let deferredAgent;
+  const calls = [];
+  const fetcher = (url, options = {}) => {
+    calls.push({url, method:options.method || 'GET'});
+    if (url.endsWith('/agents?limit=100&include=conversations')) {
+      return json(200, {items:[agentA, agentB], conversations:[thread]});
+    }
+    if (url.endsWith('/agents/agent-b/conversations/thread-b')) {
+      return json(200, {agent:latest, conversation:thread, items:[{role:'user', body:'已有历史'}]});
+    }
+    if (url.endsWith('/agents/agent-b')) return deferredAgent || json(200, {agent:latest});
+    return fallback(url, options);
+  };
+  const restore = installChatGlobals({narrow:true});
+  globalThis.location.hash = '#workspace=ws-1&agent=agent-a';
+  try {
+    await mount(doc, {fetcher});
+    const input = el('chat-body');
+    const list = el('agent-quick-starts-list');
+    const panel = el('agent-quick-starts');
+    const notice = el('agent-quick-starts-status');
+    const buttons = [...list.children];
+    assert.equal(panel.hidden, false);
+    assert.deepEqual(buttons.map(button => [button.type,button.textContent]), [['button','核对 <原文>'],['button','测试开场']]);
+    let changes = 0;
+    input.addEventListener('input', () => { changes += 1; });
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, '核对 <原文>');
+    await fire(buttons[1], 'click');
+    assert.equal(input.value, '核对 <原文>\n\n测试开场');
+    assert.equal(input.focused, true);
+    assert.equal(changes, 2);
+    const oversized = '草'.repeat(3999);
+    input.value = oversized;
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, oversized);
+    assert.equal(changes, 2);
+    assert.equal(notice.hidden, false);
+    assert.match(notice.textContent, /草稿已保留/);
+    input.value = '改过的甲草稿';
+    await fire(input, 'input');
+    assert.equal(notice.hidden, true);
+    assert.equal(calls.filter(call => call.method === 'POST' && /conversations|messages/.test(call.url)).length, 0);
+
+    const row = sessionRows(el).find(button => button.dataset.conversation === thread.id);
+    await fire(el('conversation-list'), 'click', {target:row});
+    assert.equal(input.value, '');
+    assert.deepEqual(list.children.map(button => button.textContent), ['既有会话的新开场']);
+    await fire(buttons[0], 'click');
+    assert.equal(input.value, '', 'detached controls from another native agent cannot edit this draft');
+    await fire(list.children[0], 'click');
+    assert.equal(input.value, '既有会话的新开场');
+    assert.equal(el('message-list').children.length, 1, 'staging does not change the existing transcript');
+
+    latest = {...agentB, quick_starts:['编辑后的开场']};
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    await settle();
+    assert.deepEqual(list.children.map(button => button.textContent), ['编辑后的开场']);
+    assert.equal(input.value, '既有会话的新开场');
+    assert.equal(calls.filter(call => call.url.endsWith('/agents/agent-b/conversations/thread-b')).length, 1);
+    latest = {...latest, archived:1};
+    const stale = list.children[0];
+    await fire(doc, 'visibilitychange');
+    await settle();
+    assert.equal(panel.hidden, true);
+    await fire(stale, 'click');
+    assert.equal(input.value, '既有会话的新开场');
+
+    let finishAgent;
+    deferredAgent = new Promise(resolve => { finishAgent = resolve; });
+    await fire(doc, 'visibilitychange');
+    const direct = sessionRows(el).find(button => button.dataset.conversation === 'conv-1');
+    await fire(el('conversation-list'), 'click', {target:direct});
+    finishAgent(json(200, {agent:agentB}));
+    await settle();
+    assert.equal(panel.hidden, true);
+    assert.equal(input.value, '');
+  } finally { restore(); }
+});
+
+test('private quick starts are suppressed for an agent returned outside the current workspace', async () => {
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, options, scope) => {
+    assert.equal(path, '');
+    return json(200, {...scope, agent:{...scope.agent, workspace_id:'another-workspace', served_by:'ds-bot', quick_starts:['私密开场']}, items:[]});
+  });
+  try {
+    await mount(doc, {fetcher});
+    assert.equal(el('agent-quick-starts').hidden, true);
+    assert.equal(el('agent-quick-starts-list').children.length, 0);
+  } finally { restore(); }
+});
 
 test('a native reply streams as plain text without rebuilding history or changing an unsent draft', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -1142,18 +1257,92 @@ test('a wide chat leaves the grid classes alone when search opens and closes', a
 });
 
 const openingVersion = 'a'.repeat(64);
+const publicListingId = 'otl_' + 'A'.repeat(26);
+const openingToken = 'c'.repeat(32);
 
-test('public agent continuation only allows a slug and an exact versioned starter', () => {
+test('public agent continuation only allows a slug, with an optional exclusive starter or opaque token', () => {
   const intent = {slug:'writing-demo', quickStart:0, version:openingVersion};
   const hash = '#public-agent=writing-demo&quick-start=0&quick-start-version=' + openingVersion;
   assert.equal(publicAgentContinuation(intent), hash);
   assert.deepEqual(publicAgentIntentFromHash(hash), intent);
   assert.deepEqual(publicAgentIntentFromHash('#public-agent=writing-demo'), {slug:'writing-demo'});
+  const staged = '#public-agent=writing-demo&draft=' + openingToken;
+  assert.equal(publicAgentContinuation({slug:'writing-demo', draft:openingToken}), staged);
+  assert.deepEqual(publicAgentIntentFromHash(staged), {slug:'writing-demo', draft:openingToken});
+  assert.equal(publicAgentContinuation({...intent, draft:openingToken}), '');
   for (const bad of [
     '#public-agent=writing-demo&quick-start=0', '#public-agent=writing-demo&quick-start-version=' + openingVersion,
     '#public-agent=%2F%2Fevil.test', '?start=1', hash + '&next=https://evil.test',
     hash + '&quick-start=2', hash.replace('=0', '=5'), hash.replace(openingVersion,'x'),
+    hash + '&draft=' + openingToken, staged + '&draft=' + openingToken,
+    staged.replace(openingToken, 'private%20draft'),
   ]) assert.equal(publicAgentIntentFromHash(bad), null, bad);
+});
+
+function publicOpeningView() {
+  const saved = new Map();
+  return {saved, view: {crypto:webcrypto, sessionStorage: {
+    get length() { return saved.size; },
+    key: index => [...saved.keys()][index],
+    getItem: key => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value),
+    removeItem: key => saved.delete(key),
+  }}};
+}
+
+test('public homepage drafts expire, stay in the original tab and are consumed once', () => {
+  const {saved, view} = publicOpeningView();
+  const params = {slug:'writing-demo', listingId:publicListingId, text:'首页草稿 & <draft>？'};
+  const hash = stagePublicAgentOpening(view, params);
+  const intent = publicAgentIntentFromHash(hash);
+  assert.match(hash, /^#public-agent=writing-demo&draft=[a-f0-9]{32}$/);
+  assert.equal(publicAgentOpening(publicOpeningView().view, intent), null);
+  assert.equal(publicAgentOpening(view, {...intent, slug:'other-agent'}), null);
+  assert.equal(publicAgentOpening(view, intent).text, params.text);
+  assert.equal(publicAgentOpening(view, intent).listingId, publicListingId);
+  consumePublicAgentOpening(view, intent);
+  assert.equal(publicAgentOpening(view, intent), null);
+  const expired = publicAgentIntentFromHash(stagePublicAgentOpening(view, params));
+  const key = [...saved.keys()][0];
+  saved.set(key, JSON.stringify({...JSON.parse(saved.get(key)), expiresAt:Date.now() - 1}));
+  assert.equal(publicAgentOpening(view, expired), null);
+  assert.equal(saved.size, 0);
+  assert.equal(stagePublicAgentOpening(view, {...params, text:'a'.repeat(4001)}), '');
+});
+
+test('homepage composer only navigates with an opaque fragment and reports storage failure inline', async () => {
+  const {view} = publicOpeningView();
+  const {doc, el} = fakeChatDocument('<form id="public-agent-composer"></form><p id="public-agent-composer-status" hidden></p>');
+  const form = el('public-agent-composer');
+  const textarea = new FakeElement('textarea');
+  const button = new FakeElement('button');
+  const pageEvents = [];
+  const destinations = [];
+  form.dataset = {slug:'writing-demo', listingId:publicListingId};
+  form.querySelector = selector => selector === 'textarea[name="message"]' ? textarea : button;
+  view.addEventListener = (_name, handler) => pageEvents.push(handler);
+  view.location = {assign: path => destinations.push(path)};
+  doc.defaultView = view;
+  mountPublicAgentComposer(doc);
+  assert.equal(button.disabled, true);
+  textarea.value = '你好，整理一下这份资料';
+  await fire(textarea, 'input');
+  assert.equal(button.disabled, false);
+  let prevented = false;
+  const event = {preventDefault: () => { prevented = true; }};
+  const storage = view.sessionStorage;
+  view.sessionStorage = null;
+  await fire(form, 'submit', event);
+  assert.equal(prevented, true);
+  assert.equal(el('public-agent-composer-status').hidden, false);
+  assert.equal(destinations.length, 0);
+  view.sessionStorage = storage;
+  await fire(form, 'submit', event);
+  assert.match(destinations[0], /^\/login#public-agent=writing-demo&draft=[a-f0-9]{32}$/);
+  assert.equal(button.disabled, true);
+  pageEvents[0]({persisted:true});
+  assert.equal(button.disabled, false);
+  assert.equal(el('public-agent-composer-status').hidden, true);
 });
 
 test('a versioned public quick start opens a conversation and stages the composer without sending', async () => {
@@ -1194,6 +1383,61 @@ test('a versioned public quick start opens a conversation and stages the compose
   } finally { restore(); }
 });
 
+test('homepage draft survives start and conversation retry, then attaches once to the verified thread', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {view} = publicOpeningView();
+  doc.defaultView = view;
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const typed = '我的首页草稿\n两行都要保留。';
+  const hash = stagePublicAgentOpening(view, {slug:'writing-demo', listingId:publicListingId, text:typed});
+  const intent = publicAgentIntentFromHash(hash);
+  const conversation = {id:'otc_home_open', kind:'group', title:'文档助手', public_agent:{open:true}, members:[]};
+  const calls = [];
+  let starts = 0;
+  let details = 0;
+  const {fetcher: fallback} = chatFetcher();
+  const fetcher = async (path, options = {}) => {
+    calls.push({path, method:options.method || 'GET', body:options.body});
+    if (path === '/v1/discover/agents/writing-demo/start') {
+      assert.deepEqual(JSON.parse(options.body), {listing_id:publicListingId});
+      return ++starts === 1 ? json(503, {}) : json(200, {workspace_id:'ws-1', conversation_id:conversation.id});
+    }
+    if (path === '/v1/workspaces/ws-1/social/conversations/' + conversation.id) {
+      return ++details === 1 ? json(503, {}) : json(200, {conversation, items:[]});
+    }
+    return fallback(path);
+  };
+  const restore = installChatGlobals({narrow:true});
+  globalThis.location.hash = hash;
+  globalThis.history.replaceState = (_state, _title, href) => {
+    globalThis.location.hash = href.includes('#') ? '#' + href.split('#').pop() : '';
+  };
+  try {
+    view.sessionStorage.setItem(
+      'openteamily.public-agent-draft:' + JSON.stringify(['user-1','ws-1','social',undefined,conversation.id]),
+      '已有对话草稿',
+    );
+    await mount(doc, {fetcher});
+    assert.equal(starts, 1);
+    assert.equal(details, 0);
+    assert.equal(publicAgentOpening(view, intent).text, typed);
+    let retry = el('status').children.findLast(node => node.id === 'public-agent-retry');
+    await fire(retry, 'click');
+    assert.equal(details, 1);
+    assert.equal(publicAgentOpening(view, intent).text, typed);
+    retry = el('status').children.findLast(node => node.id === 'public-agent-retry');
+    await fire(retry, 'click');
+    await settle();
+    assert.equal(starts, 3);
+    assert.equal(details, 2);
+    assert.equal(el('chat-body').value, '已有对话草稿\n\n' + typed);
+    assert.equal(el('chat-body').focused, true);
+    assert.equal(publicAgentOpening(view, intent), null);
+    assert.equal(globalThis.location.hash, '#workspace=ws-1&social=' + conversation.id);
+    assert.ok(calls.every(({method,path,body}) => !(method === 'POST' && path.endsWith('/messages')) && !String(body).includes('首页草稿')));
+  } finally { restore(); }
+});
+
 test('public draft preserves the edited text for its owner and thread, clearing when sent', async () => {
   const saved = new Map();
   const defaultView = {sessionStorage:{getItem:key => saved.get(key) || null,
@@ -1216,6 +1460,47 @@ test('public draft preserves the edited text for its owner and thread, clearing 
   field('chat-body').value = '';
   restored.persist();
   assert.equal(saved.size,0);
+});
+
+test('draft typing during native conversation creation follows the committed thread', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const draft = mountPublicDraft(doc);
+  const input = el('chat-body');
+  draft.enter('alice/agent/new');
+  input.value = '第一条正在发送时的下一份草稿';
+  await fire(input, 'input');
+  draft.move('alice/agent/new', 'alice/agent/thread');
+  draft.enter('alice/agent/new');
+  assert.equal(input.value, '');
+  draft.enter('alice/agent/thread');
+  assert.equal(input.value, '第一条正在发送时的下一份草稿');
+});
+
+test('an over-limit homepage draft stays recoverable without changing the owner and thread composer', async () => {
+  const {view} = publicOpeningView();
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = view;
+  const draft = mountPublicDraft(doc);
+  draft.enter('alice/thread', true);
+  const existing = '旧'.repeat(4000);
+  const typed = '新草稿';
+  assert.equal(draft.fill(existing), true);
+  assert.equal(draft.fillOpening(typed), 'saved');
+  assert.equal(el('chat-body').value, existing);
+  assert.equal(el('public-draft-recovery').hidden, false);
+  assert.equal(el('public-draft-recovery-text').value, typed);
+  draft.enter('bob/thread', true);
+  assert.equal(el('public-draft-recovery').hidden, true);
+  assert.equal(el('public-draft-recovery-text').value, '');
+  const {doc: reloaded, el: field} = fakeChatDocument(chatHtml());
+  reloaded.defaultView = view;
+  const restored = mountPublicDraft(reloaded);
+  restored.enter('alice/thread', true);
+  assert.equal(field('chat-body').value, existing);
+  assert.equal(field('public-draft-recovery-text').value, typed);
+  await fire(field('public-draft-recovery-clear'), 'click');
+  assert.equal(field('public-draft-recovery').hidden, true);
+  assert.equal(field('chat-body').value, existing);
 });
 
 test('message search tab switches await the in-flight query and newer queries win', async () => {
@@ -2500,6 +2785,317 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
   await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
  }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
 });
+
+const linkWork = '1'.repeat(32);
+const linkTeam = '2'.repeat(32);
+const linkUnavailable = '3'.repeat(32);
+const linkAgent = '4'.repeat(32);
+const linkThread = '5'.repeat(32);
+const linkAgentOlder = '6'.repeat(32);
+const linkAgentLatest = '7'.repeat(32);
+const linkSocial = 'otc_' + '8'.repeat(26);
+const linkSocialOlder = 'otm_' + '9'.repeat(26);
+const linkSocialLatest = 'otm_' + 'A'.repeat(26);
+const linkNativeDirectory = '/agents?limit=100&include=conversations';
+const linkSocialDirectory = '/social/conversations?limit=100';
+const linkBase = workspace => '/v1/workspaces/' + workspace;
+const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
+const linkSocialPath = '/social/conversations/' + linkSocial;
+const linkMember = {user_id: alice, username: 'alice'};
+
+function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  doc.visibilityState = visibility;
+  const restore = installChatGlobals();
+  const browser = {handlers: {}};
+  globalThis.addEventListener = (type, handler) => (browser.handlers[type] ||= []).push(handler);
+  globalThis.location.hash = hash;
+  globalThis.history.replaceState = (_state, _unused, url) => {
+    globalThis.location.hash = new URL(url, 'https://fixture.invalid').hash;
+  };
+  const scrolls = [];
+  const element = doc.createElement;
+  doc.createElement = (tag) => {
+    const node = element(tag);
+    node.scrollIntoView = (options) => scrolls.push({id: node.dataset.messageId, options});
+    return node;
+  };
+  const calls = [];
+  const routes = new Map();
+  const agent = {id: linkAgent, name: 'Linked native agent', workspace_id: linkWork, served_by: 'ds-bot'};
+  const nativeThread = {id: linkThread, agent_id: linkAgent, workspace_id: linkWork, title: 'Native history',
+    unread_count: 2, updated: 5};
+  const nativeRows = [
+    {id: linkAgentOlder, role: 'user', body: 'Earlier native message', status: 'succeeded', created: 5},
+    {id: linkAgentLatest, role: 'assistant', body: 'Latest visible native reply', status: 'succeeded', created: 10},
+  ];
+  const socialThread = (workspace) => ({id: linkSocial, workspace_id: workspace, kind: 'group', title: 'Linked group',
+    unread_count: 3, updated: 30, last_seq: 8, members: [linkMember]});
+  const socialRows = [{id: linkSocialLatest, conversation_id: linkSocial, user_id: bob, body: 'Latest group reply', seq: 8, created: 10}];
+  const socialOlder = {id: linkSocialOlder, conversation_id: linkSocial, user_id: bob, body: 'Earlier group reply', seq: 2, created: 5};
+  const fetcher = async (path, options = {}) => {
+    const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
+    calls.push(call);
+    const override = routes.get(path);
+    if (override) return override(call);
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [
+      {id: linkWork, name: 'Personal', kind: 'personal'}, {id: linkTeam, name: 'Team', kind: 'team'},
+    ]});
+    for (const workspace of [linkWork, linkTeam]) {
+      const base = linkBase(workspace);
+      if (path === base + linkNativeDirectory) return json(200,
+        workspace === linkWork ? {items: [agent], conversations: [nativeThread]} : {items: [], conversations: []});
+      if (path === base + linkSocialDirectory) return json(200, {items: [socialThread(workspace)]});
+      if (path === base + linkSocialPath) return json(200, {conversation: socialThread(workspace), items: socialRows, cursor: 8});
+      if (path.startsWith(base + linkSocialPath + '/messages?around=')) {
+        return json(200, {items: [socialOlder], cursor: null, has_newer: true});
+      }
+      if (path === base + linkSocialPath + '/read') return json(200, {unread_count: 0});
+      if (path.startsWith(base + '/notifications') || path === base + '/members' || path.startsWith(base + '/artifacts?')) {
+        return json(200, {items: []});
+      }
+    }
+    if (path === linkBase(linkWork) + linkNativePath) return json(200, {agent, conversation: nativeThread, items: nativeRows});
+    if (path === linkBase(linkWork) + linkNativePath + '/read') return json(200, {unread_count: 0});
+    return json(404, {error: {code: 'not_found'}});
+  };
+  const navigate = (nextHash) => {
+    globalThis.location.hash = nextHash;
+    return fire(browser, 'hashchange');
+  };
+  const messages = () => el('message-list').children.map(node => node.dataset.messageId);
+  const selected = () => sessionRows(el).find(row => row?.getAttribute('aria-current') === 'true')?.dataset.conversation;
+  return {doc, el, fetcher, routes, calls, scrolls, navigate, messages, selected, agent, nativeThread, nativeRows, restore};
+}
+
+test('a linked native history and its message jump render before the unrelated Social directory returns', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const directory = Promise.withResolvers();
+  const receipt = Promise.withResolvers();
+  const onboarding = Promise.withResolvers();
+  const settings = Promise.withResolvers();
+  fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
+  fixture.routes.set(scope + linkNativePath + '/read', () => receipt.promise);
+  fixture.routes.set('/v1/onboarding', () => onboarding.promise);
+  fixture.routes.set('/v1/settings', () => settings.promise);
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
+    assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath), false, 'settings still load before detail');
+    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
+    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'POST');
+    const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
+    const detail = fixture.calls.findIndex(call => call.path === scope + linkNativePath);
+    assert.ok(personal >= 0 && personal < workspaces && workspaces < detail, 'workspace authorization precedes detail');
+    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.el('chat-title').textContent, fixture.agent.name);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
+    assert.deepEqual(fixture.scrolls.map(row => row.id), [linkAgentOlder]);
+    assert.equal(globalThis.location.hash, hash);
+    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('/read')).map(call => call.body),
+      [{message_id: linkAgentLatest}], 'the native read receipt stops at the last rendered assistant reply');
+    receipt.resolve(json(200, {unread_count: 0}));
+    directory.resolve(json(200, {items: []}));
+    await loading;
+    await settle();
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.el('onboarding-banner').hidden, true);
+    onboarding.resolve(json(200, {onboarding: {completed: false}}));
+    await settle();
+    assert.equal(fixture.el('onboarding-banner').hidden, false);
+  } finally {
+    settings.resolve(json(200, {settings: {values: {}}}));
+    onboarding.resolve(json(200, {onboarding: {completed: true}}));
+    receipt.resolve(json(200, {unread_count: 0}));
+    directory.resolve(json(200, {items: []}));
+    fixture.restore();
+  }
+});
+
+test('a linked Social history reaches its older target without waiting for the native directory or marking unread', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&social=${linkSocial}&message=${linkSocialOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const directory = Promise.withResolvers();
+  fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory), 'the native directory really is pending');
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialOlder]);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
+    assert.deepEqual(fixture.scrolls.map(row => row.id), [linkSocialOlder]);
+    assert.equal(globalThis.location.hash, hash);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '/messages?around=' + linkSocialOlder + '&limit=50').length, 1);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    directory.resolve(json(200, {items: [], conversations: []}));
+    await loading;
+    await settle();
+    assert.equal(fixture.selected(), linkSocial);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 1);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    assert.deepEqual(fixture.messages(), [linkSocialOlder]);
+  } finally {
+    directory.resolve(json(200, {items: [], conversations: []}));
+    fixture.restore();
+  }
+});
+
+for (const newer of [false, true]) {
+  test(`a late directory snapshot ${newer ? 'retains unread newer than' : 'does not restore unread covered by'} the linked Social read`, async () => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`);
+    const directory = Promise.withResolvers();
+    fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+    if (newer) fixture.routes.set(scope + linkSocialDirectory, () => json(200, {items: [
+      {id: linkSocial, kind: 'group', title: 'Linked group', last_seq: 9, updated: 31, unread_count: 1, members: [linkMember]},
+    ]}));
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+      assert.deepEqual(fixture.calls.find(call => call.path === scope + linkSocialPath + '/read')?.body, {seq: 8});
+      directory.resolve(json(200, {items: [], conversations: []}));
+      await loading;
+      await settle();
+      const linked = sessionRows(fixture.el).find(row => row?.dataset.conversation === linkSocial);
+      assert.ok(linked);
+      assert.equal(linked.getAttribute('aria-current'), 'true');
+      const badge = descendants(linked).find(node => node.classList.contains('unread-badge'));
+      assert.equal(badge?.textContent, newer ? '1' : undefined);
+    } finally {
+      directory.resolve(json(200, {items: [], conversations: []}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a late exact native history cannot overwrite a different workspace and Social target selected by hashchange', async () => {
+  const old = linkBase(linkWork) + linkNativePath;
+  const current = linkBase(linkTeam) + linkSocialPath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const wait = Promise.withResolvers();
+  const oldOnboarding = Promise.withResolvers();
+  let onboardingRequests = 0;
+  fixture.routes.set(old, () => wait.promise);
+  fixture.routes.set('/v1/onboarding', () => ++onboardingRequests === 1
+    ? oldOnboarding.promise : json(200, {onboarding: {completed: true}}));
+  try {
+    const first = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.filter(call => call.path === old).length, 1);
+    const newHash = `#workspace=${linkTeam}&social=${linkSocial}`;
+    await fixture.navigate(newHash);
+    await settle();
+    assert.equal(fixture.el('workspace').value, linkTeam);
+    assert.equal(fixture.calls.filter(call => call.path === current).length, 1);
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    assert.deepEqual(fixture.calls.find(call => call.path === current + '/read')?.body, {seq: 8});
+    oldOnboarding.resolve(json(200, {onboarding: {completed: false}}));
+    wait.resolve(json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items: fixture.nativeRows}));
+    await first;
+    await settle();
+    assert.equal(globalThis.location.hash, newHash);
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    assert.equal(fixture.selected(), linkSocial);
+    assert.equal(fixture.el('onboarding-banner').hidden, true);
+    assert.equal(fixture.calls.some(call => call.path === old + '/read'), false);
+  } finally {
+    oldOnboarding.resolve(json(200, {onboarding: {completed: false}}));
+    wait.resolve(json(404, {error: {code: 'not_found'}}));
+    fixture.restore();
+  }
+});
+
+for (const target of ['bare agent', 'default']) {
+  test(`startup still waits for the directory before selecting a ${target} conversation`, async () => {
+    const scope = linkBase(linkWork);
+    const hash = `#workspace=${linkWork}` + (target === 'bare agent' ? `&agent=${linkAgent}` : '');
+    const fixture = linkedChatFixture(hash);
+    const directory = Promise.withResolvers();
+    fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory));
+      assert.equal(fixture.calls.some(call => [scope + linkNativePath, scope + linkSocialPath].includes(call.path)), false);
+      directory.resolve(json(200, {items: [fixture.agent], conversations: [fixture.nativeThread]}));
+      await loading;
+      await settle();
+      assert.equal(fixture.selected(), target === 'bare agent' ? linkThread : linkSocial);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, target === 'bare agent' ? 1 : 0);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, target === 'default' ? 1 : 0);
+    } finally {
+      directory.resolve(json(200, {items: [], conversations: []}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a failed Social directory does not hide a successful native deep link in a hidden tab', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`, {visibility: 'hidden'});
+  fixture.routes.set(scope + linkSocialDirectory, () => json(503, {error: {code: 'unavailable'}}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.el('conversations-status').hidden, false);
+    assert.match(fixture.el('conversations-status').textContent, /部分对话加载失败/);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath + '/read'), false);
+  } finally { fixture.restore(); }
+});
+
+test('an unavailable direct target keeps its own error and the directory without opening another thread', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  fixture.routes.set(scope + linkNativePath, () => json(404, {error: {code: 'not_found', message: '原会话已移除'}}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkSocialPath), false);
+    assert.deepEqual(fixture.messages(), []);
+    assert.ok(sessionRows(fixture.el).some(row => row?.dataset.conversation === linkSocial));
+    assert.match(fixture.el('status').textContent, /原会话已移除/);
+  } finally { fixture.restore(); }
+});
+
+for (const path of [linkNativePath, linkSocialPath]) {
+  test(`an inactive workspace cannot dispatch a linked ${path === linkNativePath ? 'native' : 'Social'} target`, async () => {
+    const target = path === linkNativePath ? `agent=${linkAgent}&conversation=${linkThread}` : `social=${linkSocial}`;
+    const fixture = linkedChatFixture(`#workspace=${linkUnavailable}&${target}`);
+    try {
+      await mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.equal(fixture.calls.some(call => call.path.endsWith(path)), false,
+        'the inactive link cannot be opened, including against an active workspace picked as fallback');
+      assert.equal(fixture.calls.some(call => call.path.startsWith(linkBase(linkUnavailable) + '/')), false);
+      assert.deepEqual(fixture.messages(), []);
+      assert.match(fixture.el('status').textContent, /无法访问此会话所在的工作区/);
+    } finally { fixture.restore(); }
+  });
+}
 
 const reminderRow = (id, overrides = {}) => ({
   id, title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
