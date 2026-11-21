@@ -1216,3 +1216,114 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
     white-space: nowrap;
   }
 }
+
+.sheet-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .5rem .75rem;
+  margin-block: .65rem;
+}
+.sheet-toolbar label { margin: 0; }
+#sheet-name { width: min(12rem,100%); }
+#sheet-draft { margin-block: .75rem; }
+#sheet-draft summary { cursor: pointer; }
+.sheet-grid-wrap {
+  max-width: 100%;
+  max-height: min(53dvh,32rem);
+  overflow: auto;
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+}
+#sheet-grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+#sheet-grid :is(th,td) { border-block-end: 1px solid var(--ot-line); border-inline-end: 1px solid var(--ot-line); padding: 0; }
+#sheet-grid th { background: var(--ot-surface-2); color: var(--ot-muted); min-width: 2.4rem; padding: .35rem; font-size: .75rem; }
+#sheet-grid thead th { position: sticky; top: 0; z-index: 1; }
+#sheet-grid tbody th { position: sticky; inset-inline-start: 0; }
+#sheet-grid input { border: 0; border-radius: 0; box-shadow: none; width: 8.25rem; min-height: 2.2rem; padding: .3rem .45rem; }
+#sheet-grid input:focus { outline: 2px solid var(--ot-accent); outline-offset: -2px; position: relative; z-index: 1; }
+#sheet-status:empty { display: none; }
+
+#main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
+  display: none;
+}
+body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
+  grid-row: 1 / -1;
+  grid-template-columns: minmax(0,1fr);
+  max-width: min(66rem, 100%);
+  min-width: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+#editor-form:has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) > :is(#save-artifact,#cancel-editor) { display: none; }
+.artifact-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+}
+.artifact-editor-actions :is(#sheet-save, #slides-save) {
+  margin-inline-start: auto;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  border-color: var(--ot-accent);
+}
+#spreadsheet-editor .sheet-toolbar > label { min-width: 0; max-width: 100%; }
+body.app-workspace #spreadsheet-editor :is(#sheet-name,#sheet-switch) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 13rem;
+  padding: .35rem .5rem;
+}
+body.app-workspace #spreadsheet-editor #sheet-grid input {
+  box-sizing: border-box;
+  min-width: 0;
+  border-radius: 0;
+  border: 0;
+}
+#sheet-grid thead th:first-child { inset-inline-start: 0; z-index: 3; }
+#sheet-grid tbody th { z-index: 2; }
+@media (max-width: 700px) {
+  body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) { padding: .75rem 0 1.25rem; }
+  .sheet-toolbar button, .artifact-editor-actions button { min-height: 2.375rem; }
+  #sheet-grid input { width: 6.75rem; font-size: 1rem; }
+}
+
+#slides-editor {
+  display: grid;
+  gap: .8rem;
+}
+#slides-editor .slides-toolbar { margin-block-end: 0; }
+#slide-draft {
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  padding: .7rem .85rem;
+}
+#slide-draft summary { cursor: pointer; font-weight: 600; }
+#slide-draft label { display: block; margin-block: .65rem .3rem; }
+#slide-draft-submit { margin-block-start: .5rem; }
+#slide-draft-status { margin: 0; overflow-wrap: anywhere; }
+#slide-draft-status:empty { display: none; }
+#editor-form :is(#slide-prompt, #slide-list textarea) {
+  min-height: 0;
+  box-sizing: border-box;
+}
+#slide-list .slide-card { min-width: 0; scroll-margin-block: 1rem; }
+#slide-list :is(input, textarea) { box-sizing: border-box; }
+#slide-list .slide-head { gap: .4rem; flex-wrap: wrap; }
+.slide-card-actions { display: flex; flex-wrap: wrap; gap: .3rem; }
+@media (max-width: 700px) {
+  #slides-editor button { min-height: 2.375rem; }
+  #slide-list :is(input, textarea), #slide-prompt { font-size: 1rem; }
+}
+#slide-context-title { margin: .25rem 0 0 1.3rem; overflow-wrap: anywhere; }
+#slide-context { width: auto; }
+#slides-editor > .artifact-editor-actions {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: .25rem;
+  background: var(--ot-surface);
+}

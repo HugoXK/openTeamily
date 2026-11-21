@@ -28,13 +28,15 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:candidates(?:\/[0-9a-f]{32})?|profile(?:\/dream)?|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/(?:spreadsheet|slides)\/draft$/, 'artifacts'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
   // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],
   [/^\/v1\/notification-prefs$/, 'settings'],
   [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
-  [/^\/v1\/model-api$/, 'model-api'],
+  [/^\/v1\/model-api(?:\/image)?$/, 'model-api'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/images(?:\/[0-9a-f]{32})?$/, 'images'],
   [/^\/v1\/composio$/, 'connectors'],
   [/^\/v1\/composio\/key$/, 'connectors'],
   [/^\/v1\/composio\/toolkits$/, 'connectors'],

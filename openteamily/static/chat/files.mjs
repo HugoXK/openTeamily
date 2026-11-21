@@ -233,6 +233,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     const valid = files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1)));
     if (valid.length !== files.length) status.textContent = '智能体私聊支持图片、PDF、Office 文档和文本文件。';
     let bytes = existing.reduce((sum,item) => sum + item.file.size,0);
+    const before = existing.length;
     for (const file of valid) {
       if (existing.length >= 4 || bytes + file.size > MAX_CHAT_FILE_BYTES) {
         status.textContent = '每条消息最多 4 个附件，合计 8 MB。';
@@ -254,26 +255,31 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     }
     if (existing.length) drafts.set(scope,existing);
     render();
+    return existing.length - before;
   }
 
-  input.addEventListener('change', () => {
+  function addFiles(picked, scope) {
     const destination = context();
-    const picked = [...input.files];
-    input.value = '';
-    if (!destination || !picked.length) return;
+    if (!destination || !picked.length || (scope !== undefined && destination.scope !== scope)) return 0;
     status.textContent = '';
     const accepted = picked.filter(file => file.size > 0 && file.size <= MAX_CHAT_FILE_BYTES);
     if (accepted.length !== picked.length) status.textContent = '空文件和超过 8 MB 的文件无法发送。';
     if (destination.private) {
-      stageFiles(destination.scope,accepted);
-      return;
+      return stageFiles(destination.scope,accepted);
     }
     for (const file of accepted) enqueue(file, destination);
     render();
     if (accepted.length) scroller.scrollTop = scroller.scrollHeight;
     void drain();
+    return accepted.length;
+  }
+
+  input.addEventListener('change', () => {
+    const picked = [...input.files];
+    input.value = '';
+    addFiles(picked);
   });
-  return {render,draftFiles,clearDraft, moveDraft(from,to) {
+  return {render,draftFiles,clearDraft,addFiles, moveDraft(from,to) {
     const saved = drafts.get(from);
     if (saved) {
       drafts.set(to,saved);

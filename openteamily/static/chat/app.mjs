@@ -3,6 +3,7 @@ import { mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
+import { mountImageCreator } from './image-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -996,11 +997,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actions.append(retry, discard);
     if (reply) bubble.append(quoteBlock(reply));
     bubble.append(body);
+    const previews = [];
+    const urls = document.defaultView?.URL;
     for (const file of files) {
-      bubble.append(renderChatFile(document, {title: file.name, mime: file.type, bytes: file.size}, {pending: true}));
+      const path = file.type?.startsWith('image/') && urls?.createObjectURL ? urls.createObjectURL(file) : '';
+      if (path) previews.push(path);
+      bubble.append(renderChatFile(document, {title:file.name,mime:file.type,bytes:file.size,path}, {pending:true}));
     }
     bubble.append(status, actions);
-    const job = {key, message, files, bubble, status, actions, retry, failed: false,
+    const job = {key, message, files, previews, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
@@ -1019,7 +1024,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function removeSendJob(queue, job) {
     queue.jobs = queue.jobs.filter(item => item !== job);
     job.bubble.remove();
+    for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
     if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+  }
+
+  function clearPendingSends() {
+    for (const queue of pendingSends.values()) {
+      for (const job of queue.jobs) removeSendJob(queue,job);
+    }
+    pendingSends.clear();
   }
 
   function pendingMessageKeys() {
@@ -3406,7 +3419,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
@@ -3427,7 +3440,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
@@ -4655,13 +4668,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   const plus = document.querySelector('details.composer-plus');
+  const imageCreator = mountImageCreator(document,{
+    request, key:() => idempotencyKey('chat-image-'),
+    context() {
+      if (!servedByDsbot || !currentUser || !workspaceId()) return null;
+      if (currentSource === 'agent' && currentAgent) {
+        return {workspace:workspaceId(),scope:sendScope(),private:true,attachLabel:'添加到输入框'};
+      }
+      if (currentSource === 'social' && currentConversation && !currentConversation.public_agent && !sendClosed()) {
+        return {workspace:workspaceId(),scope:sendScope(),private:false,
+          attachLabel:currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+      }
+      return null;
+    },
+    attach: (file,scope) => Boolean(attachmentSender?.addFiles?.([file],scope)),
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
+  });
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
     syncMemoryRecall();
+    imageCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
+    const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
+    const workspace = workspaceId();
+    const scope = new URLSearchParams();
+    if (workspace) {
+      scope.set('workspace',workspace);
+      if (shareable) scope.set('conversation',currentConversation.id);
+    }
+    for (const link of document.querySelectorAll('[data-create-artifact]')) {
+      link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
+    }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);
+    const available = servedByDsbot && (shareable || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;

@@ -145,6 +145,27 @@ function fakeRuntime({ useModel = true } = {}) {
   return { rt, ctx, log, bind: state => { bridgeState = state } }
 }
 
+test('the DeepSeek Flash vision model updates a retained provider and follows account changes', async () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, fake.ctx, { port: 1 })
+  fake.bind(bridge.state)
+  let model = 'DeepSeek-V4.1-Flash-1017'
+  bridge.state.startupModel = () => ({model})
+  fake.rt.addProvider = async () => { throw new Error('openteamily is already set up') }
+  const updates = []
+  fake.rt.saveProviderModels = async ({provider,models}) => updates.push([provider,models[0].input])
+  await bridge.prepareModel()
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[['openteamily',['text','image']]])
+  model = 'another-text-only-model'
+  await bridge.prepareModel()
+  model = 'deepseek-flash'
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[
+    ['openteamily',['text','image']], ['openteamily',['text']], ['openteamily',['text','image']],
+  ])
+})
+
 function fakeManagement(task, access) {
   const calls = []
   const requester = async (origin, token, method, path, body) => {

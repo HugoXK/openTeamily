@@ -34,6 +34,17 @@ export function userModelOverride(scope = globalThis) {
 }
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
+function modelInput(modelApi) {
+  const model = String(modelApi?.model || '').toLowerCase()
+  const isDeepSeekFlash = model === 'deepseek-flash' || model === 'deepseek-v4-flash-vision-exp'
+    || /^deepseek-v4\.1-flash(?:-\d{4,8})?$/.test(model)
+  return isDeepSeekFlash ? ['text','image'] : ['text']
+}
+
+function providerModel(input) {
+  return {id:MODEL_ID,name:'OpenTeamily model',contextWindow:128000,maxTokens:8192,input}
+}
+
 export const TOOLS_CAPABILITY = 'ot-tools'
 export const DEFAULT_PORT = 18731
 const BODY_LIMIT = 24 * 1024 * 1024
@@ -241,6 +252,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
   const listenPort = port ?? (Number(env.OPENTEAMILY_BRIDGE_PORT) || DEFAULT_PORT)
   const baseURL = `http://127.0.0.1:${listenPort}/v1`
   let ready = null
+  let hasImageInput
   let botId = null
   let skillNames = new Set()
   let toolsAttached = false
@@ -268,14 +280,25 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     renameSync(chatsPath + '.tmp', chatsPath)
   }
 
+  function effectiveInput() {
+    return modelInput(state.active?.modelApi || state.startupModel())
+  }
+
+  async function saveInput(input) {
+    await rt.saveProviderModels({provider:PROVIDER,models:[providerModel(input)]})
+    hasImageInput = input.includes('image')
+  }
+
   async function setup() {
+    const input = effectiveInput()
     try {
       await rt.addProvider({ provider: PROVIDER, custom: true, api: 'openai-completions', name: 'OpenTeamily', baseURL,
-        models: [{ id: MODEL_ID, name: 'OpenTeamily model', contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
-        key: state.token })
+        models:[providerModel(input)],key:state.token })
+      hasImageInput = input.includes('image')
     } catch (error) {
       if (!/already set up/.test(String(error?.message))) throw error
-      await rt.setProviderKey(PROVIDER, state.token)
+      await rt.setProviderKey(PROVIDER,state.token)
+      await saveInput(input)
     }
     await rt.bootstrap()
     botId = rt.state.mainBotIds.find(id => rt.botOf(id))
@@ -285,6 +308,12 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return botId
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
+
+  async function prepareModel() {
+    await ensureSetup()
+    const input = effectiveInput()
+    if (input.includes('image') !== hasImageInput) await saveInput(input)
+  }
 
   const attachedNow = () => new Set(rt.botOf(botId)?.capabilities ?? [])
   async function syncSkills(material) {
@@ -332,7 +361,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     // Active before setup: picking the Bot's model may release DS-Bot's greeting turn.
     state.active = active
     try {
-      await ensureSetup()
+      await prepareModel()
       await selectConversation(access.conversation_id || (rt.createSession ? 'task:' + payload.id : null))
       stage = 'skill verification/loading'
       const material = access.skills || []
@@ -407,7 +436,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return processed
   }
 
-  return { state, setup: ensureSetup, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId } }
+  return { state, setup: ensureSetup, prepareModel, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId } }
 }
 
 // Plugin entry: start the loopback server and the management task loop.

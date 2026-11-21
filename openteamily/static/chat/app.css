@@ -2344,3 +2344,25 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 #history-capture-list input { width: auto; margin-top: .2rem; }
 #history-capture-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .5rem; margin-top: .625rem; }
 #history-capture-dialog footer button { min-height: 2.75rem; }
+
+
+.image-create-head, .image-create-controls, .image-create-links {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .65rem;
+}
+.image-create-controls { align-items: end; }
+#image-create-status { margin: 0; }
+#image-create-result { margin: 0; }
+#image-create-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 42dvh;
+  object-fit: contain;
+  background: var(--ot-surface-2);
+  border-radius: .75rem;
+}
+.image-create-links { margin-top: .6rem; }
