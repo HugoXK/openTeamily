@@ -555,6 +555,28 @@ async function messengerScope(host, bs, workspace, conversationId, messageId) {
   return {personal: true, conversation}
 }
 
+export async function groupMemorySources(host, payload) {
+  const {workspace_id:workspace, conversation_id:id, message_ids:ids} = payload || {}
+  if (typeof workspace !== 'string' || !HEX.test(workspace) || !Array.isArray(ids) || ids.length > 12 || new Set(ids).size !== ids.length) {
+    throw new Fault(400,'invalid','请选择当前群聊中的文字消息。')
+  }
+  const bs = client(host)
+  const cid = seg(id,'conversation_id')
+  const scope = await messengerScope(host,bs,workspace,cid)
+  const group = scope.conversation || await bs.get('/v1/ot/conversations/' + cid)
+  if (group.kind !== 'group' || group.public_agent || (scope.personal ? !group.account_group : group.team_id !== scope.team.id)) {
+    throw new Fault(404,'not_found','该群聊不在当前工作区。')
+  }
+  const rows = await Promise.all(ids.map(async id => {
+    try { return await bs.get('/v1/ot/messages/' + seg(id,'message_id') + qs({conversation_id:cid})) }
+    catch (error) { if (error?.status === 404) return null; throw error }
+  }))
+  return {items:rows.filter(row => row && !row.retracted && row.author?.kind === 'member' && !row.voice && !row.attachment && row.body?.trim())
+    .sort((left,right) => left.seq-right.seq).map(row => ({
+      id:row.id, revision:row.revision, title:group.title, author:row.author.display_name || '群成员', text:row.body,
+    }))}
+}
+
 function messengerRoutes(host, wakeReplies) {
   const env = process.env
   const convPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations$/
@@ -657,6 +679,21 @@ function messengerRoutes(host, wakeReplies) {
           const conversation = seg(match[2], 'conversation_id')
           const message = seg(match[3], 'message_id')
           return [200, await bs.get(`/v1/ot/conversations/${conversation}/messages/${message}/voice`)]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/memory\/capture$/,
+      async handle({match,body}) {
+        return wrap(async () => {
+          const message_ids = body?.message_ids
+          if (!Array.isArray(message_ids) || !message_ids.length || !message_ids.every(id => typeof id === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(id))) {
+            throw new Fault(400,'invalid','请选择 1 到 12 条群成员的文字消息。')
+          }
+          const scope = {workspace_id:match[1],conversation_id:match[2]}
+          const {items} = await groupMemorySources(host,{...scope,message_ids})
+          if (items.length !== message_ids.length) throw new Fault(409,'conflict','有消息已撤回、删除或无法用于提炼，请重新选择。')
+          return [202,await host.call('memory/enqueueGroupHistory',{...scope,messages:items.map(({id,revision}) => ({id,revision}))})]
         })
       },
     },

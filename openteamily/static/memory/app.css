@@ -1005,3 +1005,39 @@ html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: f
   background: var(--ot-grad-soft);
   color: var(--ot-accent);
 }
+
+.profile-dream-dialog {
+  width: min(43rem, calc(100% - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  padding: 1rem;
+  box-sizing: border-box;
+  overflow: auto;
+  border: 1px solid var(--ot-line);
+  border-radius: .875rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+.profile-dream-dialog::backdrop { background: rgba(20, 27, 23, .5); }
+.profile-dream-dialog h2 { margin: 0 0 .5rem; font-size: 1.125rem; }
+.profile-dream-change { padding-block: .75rem; border-top: 1px solid var(--ot-line); }
+.profile-dream-change label { display: flex; align-items: center; gap: .5rem; font-weight: 650; }
+.profile-dream-change input { width: auto; }
+.profile-dream-comparison { display: grid; gap: .5rem; margin-top: .5rem; }
+.profile-dream-comparison > div { min-width: 0; padding: .625rem; border-radius: .5rem; background: var(--ot-surface-2); }
+.profile-dream-comparison strong { font-size: .8125rem; }
+.profile-dream-comparison p { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.profile-dream-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .75rem; }
+.profile-dream-actions button { min-height: 2.75rem; }
+@media (min-width: 640px) {
+  .profile-dream-comparison { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+#memory-candidates-list { display: grid; gap: .625rem; margin: .75rem 0; padding: 0; list-style: none; }
+#memory-candidates-list li { display: grid; gap: .35rem; padding: .75rem; border: 1px solid var(--ot-line); border-radius: .75rem; background: var(--ot-surface); }
+#memory-candidates-list li p { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+#memory-candidates-list li button { justify-self: start; min-height: 2.5rem; }
+#memory-capture-toggle[aria-pressed="true"] { color: var(--ot-ink); background: var(--ot-accent-soft); }
+#memory-candidate-form label { display: grid; gap: .25rem; margin-block: .75rem; }
+#memory-review-body { min-height: 7rem; }
+#memory-review-excerpt { margin: .5rem 0; padding: .625rem; border-inline-start: 3px solid var(--ot-line); background: var(--ot-surface-2); overflow-wrap: anywhere; }
+.memory-views a[data-view="candidates"] { padding-inline-start: 2.125rem; }

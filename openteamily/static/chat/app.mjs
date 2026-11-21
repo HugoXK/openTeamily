@@ -11,7 +11,7 @@ export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
-import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
+import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
@@ -388,6 +388,7 @@ function hashParams() {
     workspace: params.get('workspace') || '',
     agent: params.get('agent') || '',
     conversation: params.get('conversation') || '',
+    message: params.get('message') || '',
     social: params.get('social') || '',
     publicAgent: params.get('public-agent') || '',
   };
@@ -399,6 +400,7 @@ function writeHash(values) {
   if (values.agent) params.set('agent', values.agent);
   if (values.social) params.set('social', values.social);
   if (values.conversation) params.set('conversation', values.conversation);
+  if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
   if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
@@ -831,6 +833,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
 
+  const memoryRecall = document.getElementById('agent-memory-recall');
+  const memoryDrafts = new Map();
+  const memoryWrites = new Set();
+  const recallEnabled = scope => currentConversation?.memory_recall ?? memoryDrafts.get(scope)
+    ?? currentAgent?.memory_recall_default ?? true;
+
+  function syncMemoryRecall(scope = sendScope()) {
+    if (!memoryRecall) return;
+    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
+    memoryRecall.hidden = !visible;
+    if (!visible) return;
+    const enabled = recallEnabled(scope);
+    memoryRecall.setAttribute('aria-pressed', String(enabled));
+    const label = enabled ? '记忆已开启' : '记忆已关闭';
+    if (memoryRecall.textContent !== label) memoryRecall.textContent = label;
+    memoryRecall.disabled = memoryWrites.has(scope) || Boolean(pendingSends.get(scope)?.jobs.some(job => !job.failed));
+  }
+
+  memoryRecall?.addEventListener('click', async () => {
+    if (memoryRecall.hidden || memoryRecall.disabled) return;
+    const scope = sendScope();
+    const enabled = !recallEnabled(scope);
+    if (!currentConversation) {
+      memoryDrafts.set(scope, enabled);
+      syncMemoryRecall(scope);
+      return;
+    }
+    const path = `${agentBase()}/conversations/${currentConversation.id}`;
+    memoryWrites.add(scope);
+    renderPendingSend();
+    try {
+      const result = await request('POST', path, {memory_recall:enabled});
+      if (sendScope() !== scope) return;
+      if (result.status !== 200 || result.body.memory_recall !== enabled) throw new Error();
+      currentConversation.memory_recall = enabled;
+      show('ok', enabled ? '已开启后续消息的记忆检索。' : '已关闭后续消息的记忆检索。', {announceOnly: true});
+    } catch {
+      if (sendScope() === scope) show('error', '记忆开关未保存，请重试。');
+    } finally {
+      memoryWrites.delete(scope);
+      if (sendScope() === scope) renderPendingSend();
+    }
+  });
+
   const replyDrafts = new Map();
   const replyPanel = document.getElementById('chat-reply-preview');
   const replyDraftTitle = document.getElementById('chat-reply-author');
@@ -906,8 +952,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderPendingSend() {
     const list = document.getElementById('message-list');
-    const queue = pendingSends.get(sendScope());
-    document.getElementById('chat-send').disabled = sendClosed();
+    const scope = sendScope();
+    const queue = pendingSends.get(scope);
+    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
+    syncMemoryRecall(scope);
     const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
     for (const child of Array.from(list.children)) {
       if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
@@ -924,7 +972,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (job.status.textContent !== job.state) job.status.textContent = job.state;
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
-    job.retry.disabled = sendClosed();
+    job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
   }
 
   function makeSendJob(queue, message, files, reply) {
@@ -956,7 +1004,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const job = {key, message, files, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
-      if (!job.failed || sendClosed()) return;
+      if (!job.failed || job.retry.disabled) return;
       job.failed = false;
       job.state = '等待发送…';
       paintSendJob(job);
@@ -982,8 +1030,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function request(method, path, body, extra) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const plugin = servedByDsbot ? dsbotRoute(method, path, body, personalAgentId) : null;
-    if (plugin) return dsbotRequest(fetcher, plugin, personalAgentId, headers);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -1201,11 +1247,158 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
   }
 
+  function memorySources(item) {
+    if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
+    const wid = workspaceId();
+    const refs = Array.isArray(item.memory_refs)
+      ? item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id)) : [];
+    const links = refs.map(ref => {
+      const params = new URLSearchParams({workspace:wid, page:ref.id});
+      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
+      return [params, ref.title || '记忆页'];
+    });
+    if (item.memory_profile_workspace === wid) {
+      links.push([new URLSearchParams({workspace:wid, page:'profile'}), '我的资料与偏好']);
+    }
+    if (!links.length) return null;
+    const sources = document.createElement('details');
+    sources.className = 'reply-memory-sources';
+    const summary = document.createElement('summary');
+    summary.textContent = `参考记忆 · ${links.length}`;
+    const list = document.createElement('ol');
+    for (const [params, title] of links) {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/memory?' + params.toString();
+      link.textContent = title;
+      row.append(link);
+      list.append(row);
+    }
+    sources.append(summary, list);
+    return sources;
+  }
+
   let lastAgentItems = [];
+  const captureButton = document.getElementById('history-capture-open');
+  const captureDialog = document.getElementById('history-capture-dialog');
+  const captureList = document.getElementById('history-capture-list');
+  const captureQuery = document.getElementById('history-capture-query');
+  const captureMore = document.getElementById('history-capture-more');
+  const captureSubmit = document.getElementById('history-capture-submit');
+  const captureStatus = document.getElementById('history-capture-status');
+  const captureInbox = document.getElementById('history-capture-inbox');
+  let captureDraft = null;
+
+  function syncCaptureButton() {
+    if (!captureButton) return;
+    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation
+      || !lastAgentItems.some(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id));
+  }
+
+  function syncCaptureSelection() {
+    const count = captureDraft.selected.size;
+    for (const choice of captureDraft.visible) choice.disabled = captureDraft.busy || (!choice.checked && count >= 12);
+    captureSubmit.disabled = !count || captureDraft.busy;
+    captureSubmit.textContent = captureDraft.busy ? '正在加入队列…' : count ? `提炼 ${count} 条消息` : '提炼所选消息';
+  }
+
+  function renderCaptureChoices() {
+    if (!captureDraft) return;
+    const query = captureQuery.value.trim().toLocaleLowerCase();
+    const rows = captureDraft.items.filter(item => item.body.toLocaleLowerCase().includes(query));
+    captureDraft.visible = [];
+    captureList.replaceChildren();
+    for (const item of rows.slice(0,captureDraft.limit)) {
+      const label = document.createElement('label');
+      const choice = document.createElement('input');
+      choice.type = 'checkbox';
+      choice.checked = captureDraft.selected.has(item.id);
+      choice.addEventListener('change', () => {
+        if (choice.checked) captureDraft.selected.add(item.id);
+        else captureDraft.selected.delete(item.id);
+        syncCaptureSelection();
+      });
+      const excerpt = document.createElement('span');
+      excerpt.textContent = item.body.length > 280 ? item.body.slice(0,280) + '…' : item.body;
+      label.append(choice,excerpt);
+      captureList.append(label);
+      captureDraft.visible.push(choice);
+    }
+    if (!rows.length) {
+      const empty = document.createElement('p');
+      empty.className = 'note';
+      empty.textContent = '没有找到匹配的消息。';
+      captureList.append(empty);
+    }
+    captureMore.hidden = rows.length <= captureDraft.limit;
+    syncCaptureSelection();
+  }
+
+  captureButton?.addEventListener('click', () => {
+    if (captureButton.hidden || !captureDialog) return;
+    const items = lastAgentItems.filter(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id)).reverse();
+    if (!items.length) return;
+    captureDraft = {scope:sendScope(),items,selected:new Set(),limit:24,busy:false};
+    captureQuery.value = '';
+    captureStatus.textContent = '';
+    captureInbox.href = '/memory?' + new URLSearchParams({workspace:workspaceId(),page:'candidates'});
+    captureInbox.hidden = true;
+    document.getElementById('chat-more')?.setAttribute('aria-expanded','false');
+    renderCaptureChoices();
+    captureDialog.showModal();
+    captureQuery.focus();
+  });
+  captureQuery?.addEventListener('input', () => {
+    if (!captureDraft) return;
+    captureDraft.limit = 24;
+    renderCaptureChoices();
+  });
+  captureMore?.addEventListener('click', () => {
+    if (!captureDraft) return;
+    captureDraft.limit += 24;
+    renderCaptureChoices();
+  });
+  document.getElementById('history-capture-close')?.addEventListener('click', () => captureDialog.close());
+  captureDialog?.addEventListener('close', () => {
+    captureDraft = null;
+    document.getElementById('chat-more')?.focus();
+  });
+  document.getElementById('history-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = captureDraft;
+    if (!draft || draft.busy || !draft.selected.size || sendScope() !== draft.scope) return;
+    draft.busy = true;
+    syncCaptureSelection();
+    captureStatus.textContent = '';
+    const path = `${agentBase()}/conversations/${currentConversation.id}/memory/capture`;
+    try {
+      const result = await request('POST',path,{message_ids:[...draft.selected]});
+      if (captureDraft !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        captureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      captureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      captureInbox.hidden = !(queued || skipped);
+      if (!full) draft.selected.clear();
+      renderCaptureChoices();
+    } catch {
+      if (captureDraft === draft) captureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (captureDraft === draft) { draft.busy = false; syncCaptureSelection(); }
+    }
+  });
+
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
     lastAgentItems = items || [];
+    syncCaptureButton();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     let pending = false;
     const pendingKeys = pendingMessageKeys();
@@ -1233,6 +1426,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(role, body);
       }
       for (const attachment of item.attachments || []) li.append(renderChatFile(document,attachment));
+      const sources = memorySources(item);
+      if (sources) li.append(sources);
       if (item.role === 'assistant' && saveableAgentMessage(item)) {
         li.append(saveMessageButton(item, currentAgent.id));
       }
@@ -1260,6 +1455,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
     const target = document.getElementById('forward-target');
     document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    const capture = document.getElementById('selection-group-capture');
+    if (capture) {
+      capture.hidden = !servedByDsbot || currentSource !== 'social' || currentConversation?.kind !== 'group' || Boolean(currentConversation.public_agent);
+      capture.disabled = !selectedMessages.size;
+    }
     for (const id of ['selection-memory', 'selection-meeting']) {
       const action = document.getElementById(id);
       if (action) action.disabled = !selectedMessages.size;
@@ -2400,6 +2600,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSocialHeaderTools(social) {
+    if (social && captureButton) captureButton.hidden = true;
     const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
@@ -2417,6 +2618,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selecting = false; selectedMessages.clear(); syncForwardBar();
       if (!social) renderPinned([]);
     }
+  }
+
+  function openEmptyAgentChat(agentId) {
+    const agent = agents.find(item => item.id === agentId);
+    if (!agent) return;
+    socialOpen += 1;
+    currentConversation = null;
+    currentAgent = agent;
+    currentSource = 'agent';
+    stopPolling();
+    setSocialHistory(null);
+    autoTranslation.open(null);
+    agentMentions.clear();
+    voiceRecorder.clear();
+    voiceRecorder.refresh();
+    clearVoicePlayers();
+    chatCalls.sync();
+    setSocialHeaderTools(false);
+    setGroupInfo(null);
+    renderReplyDraft();
+    if (liveBanner) liveBanner.hidden = true;
+    document.getElementById('social-agent-members').hidden = true;
+    document.getElementById('pin-conversation').hidden = true;
+    setDirectoryLink({source:'agent'});
+    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    writeHash({workspace:workspaceId(), agent:agentId});
+    setSessionsOpen(false);
+    renderAgentMessages([]);
+    syncPlusState();
   }
 
   async function openAgentConversation(agentId, conversationId) {
@@ -2971,23 +3201,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (item.type === 'agent') {
           const first = sessions.find(row => row.source === 'agent' && row.agent_id === item.id);
           if (first) await openAgentConversation(item.id, first.id);
-          else {
-            currentAgent = agents.find(entry => entry.id === item.id) || null;
-            currentConversation = null;
-            currentSource = 'agent';
-            renderReplyDraft();
-            chatCalls.sync();
-            socialOpen += 1;
-            setSocialHistory(null);
-            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
-              currentAgent.id === personalAgentId ? personalLook : null);
-            document.getElementById('chat-empty').hidden = false;
-            document.getElementById('message-list').replaceChildren();
-            renderPendingSend();
-            syncPlusState();
-            attachmentSender?.render();
-            writeHash({workspace: workspaceId(), agent: item.id});
-          }
+          else openEmptyAgentChat(item.id);
         } else if (item.type === 'social' || item.kind === 'social') {
           const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
           if (opened && item.messageId && currentConversation?.id === item.conversationId) {
@@ -3061,6 +3275,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       autoTranslation.open(null);
       attachmentSender?.reset();
       pendingSends.clear();
+      memoryDrafts.clear();
+      memoryWrites.clear();
       replyDrafts.clear();
       renderReplyDraft();
       currentConversation = null;
@@ -3080,6 +3296,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
       pendingSends.clear();
+      memoryDrafts.clear();
+      memoryWrites.clear();
       replyDrafts.clear();
       renderReplyDraft();
     }
@@ -3176,26 +3394,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (start.social) {
-      await openSocialConversation(start.social);
+      if (await openSocialConversation(start.social, {acknowledge:!start.message}) && /^[A-Za-z0-9._-]{1,80}$/.test(start.message)) {
+        if (await jumpToMessage(start.message,null) === false) {
+          show('error','找不到这条来源消息。');
+          return;
+        }
+        writeHash({workspace:workspaceId(),social:start.social,message:start.message});
+      }
     } else if (start.agent && start.conversation) {
-      await openAgentConversation(start.agent, start.conversation);
+      if (await openAgentConversation(start.agent, start.conversation) && /^[0-9a-f]{32}$/.test(start.message)) {
+        if (await jumpToMessage(start.message, null) === false) {
+          show('error', '找不到这条来源消息。');
+          return;
+        }
+        writeHash({workspace:workspaceId(), agent:start.agent, conversation:start.conversation, message:start.message});
+      }
     } else if (start.agent) {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) await openAgentConversation(start.agent, first.id);
-      else {
-        currentAgent = agents.find(item => item.id === start.agent) || null;
-        currentSource = 'agent';
-        socialOpen += 1;
-        setSocialHistory(null);
-        if (currentAgent) {
-          applyChatIdentity(document, currentAgent.name, null, currentAgent.id === personalAgentId ? personalLook : null);
-          setSessionsOpen(false);
-        }
-        renderPendingSend();
-        syncPlusState();
-        attachmentSender?.render();
-        writeHash({workspace: workspaceId(), agent: start.agent});
-      }
+      else openEmptyAgentChat(start.agent);
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') await openSocialConversation(first.id);
@@ -3239,6 +3456,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.defaultView.location.assign(href);
     } catch {
       show('error', '无法打开会议草稿，请重试。');
+    }
+  });
+
+  const groupCaptureDialog = document.getElementById('group-capture-dialog');
+  const groupCaptureStatus = document.getElementById('group-capture-status');
+  const groupCaptureSubmit = document.getElementById('group-capture-submit');
+  const groupCaptureInbox = document.getElementById('group-capture-inbox');
+  let groupCapture = null;
+  document.getElementById('selection-group-capture')?.addEventListener('click', () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const matching = lastSocialItems.filter(item => selectedMessages.has(item.id));
+    if (!matching.length || matching.length !== selectedMessages.size || matching.length > 12
+        || matching.some(item => item.role === 'agent' || item.retracted || item.voice || item.attachment || !item.body?.trim())) {
+      show('error','请选择当前记录中 1 到 12 条群成员发出的文字消息。');
+      return;
+    }
+    const workspace = workspaceId();
+    groupCapture = {scope:sendScope(), ids:matching.map(item => item.id),
+      path:`${socialBase()}/${currentConversation.id}/memory/capture`,busy:false};
+    groupCaptureStatus.textContent = '';
+    groupCaptureSubmit.disabled = false;
+    groupCaptureInbox.hidden = true;
+    groupCaptureInbox.href = '/memory?' + new URLSearchParams({workspace,page:'candidates'});
+    document.getElementById('group-capture-review').textContent =
+      `已选 ${matching.length} 条群聊文字消息，将由你的 DS-Bot 在后台生成待核对建议。`;
+    groupCaptureDialog.showModal();
+  });
+  document.getElementById('group-capture-close')?.addEventListener('click', () => groupCaptureDialog.close());
+  groupCaptureDialog?.addEventListener('close', () => {groupCapture = null;});
+  document.getElementById('group-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = groupCapture;
+    if (!draft || draft.busy || sendScope() !== draft.scope) return;
+    draft.busy = groupCaptureSubmit.disabled = true;
+    groupCaptureStatus.textContent = '正在核对群聊消息…';
+    let done = false;
+    try {
+      const result = await request('POST',draft.path,{message_ids:draft.ids});
+      if (groupCapture !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        groupCaptureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      groupCaptureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      groupCaptureInbox.hidden = !(queued || skipped);
+      done = !full;
+      if (done) setSelecting(false);
+    } catch {
+      if (groupCapture === draft) groupCaptureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (groupCapture === draft) { draft.busy = false; groupCaptureSubmit.disabled = done; }
     }
   });
 
@@ -3388,6 +3661,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    syncCaptureButton();
     chatCalls.sync();
     voiceRecorder.refresh();
     clearVoicePlayers();
@@ -4044,7 +4318,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
     if (!field.value.trim() && !files.length) return;
-    if (sendClosed()) return;
+    if (sendClosed() || memoryWrites.has(scope)) return;
     if (social ? !currentConversation : !currentAgent) {
       show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
@@ -4063,6 +4337,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         base: social ? socialBase() : `${agentBase()}/conversations`,
         conversationId: currentConversation?.id, jobs: [], active: false,
         createKey: currentConversation ? null : idempotencyKey('chat-'),
+        memoryRecall: memoryDrafts.get(scope),
       };
       pendingSends.set(scope, queue);
     }
@@ -4094,7 +4369,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         try {
           if (!queue.conversationId) {
             feedback('正在创建对话…');
-            const created = await request('POST', queue.base, {title: '新对话'}, {'Idempotency-Key': queue.createKey});
+            const body = {title: '新对话'};
+            if (queue.memoryRecall !== undefined) body.memory_recall = queue.memoryRecall;
+            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
             const conversation = created.body.conversation;
             if (![200, 201].includes(created.status) || !conversation?.id) {
               throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
@@ -4105,6 +4382,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             queue.conversationId = conversation.id;
             queue.scope = JSON.stringify([queue.owner, queue.wid, 'agent', queue.agentId, conversation.id]);
             pendingSends.delete(previous);
+            memoryDrafts.delete(previous);
             pendingSends.set(queue.scope, queue);
             if (visible) {
               currentConversation = conversation;
@@ -4247,6 +4525,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
+    syncMemoryRecall();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const agent = currentSource === 'agent' && Boolean(currentAgent);
     const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);

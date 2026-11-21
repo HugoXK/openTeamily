@@ -4,6 +4,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DatabaseSync } from 'node:sqlite'
+import { createAgents } from '../features/agents/index.js'
 import { loadFeatures } from '../src/features.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 import { tokens, rank } from '../features/chat/recall.js'
@@ -25,43 +27,123 @@ test('recall tokens: Latin words and CJK bigrams', () => {
   assert.deepEqual(rank('nothing matches', pages), [])
 })
 
-test('chat turns run through the DS-Bot chatTurn service with profile and memory recall', async () => {
-  const table = await load()
-  table['memory/pages'] = async () => [{ id: 'm1', revision: 2, title: 'Launch plan', body: 'The launch is on Friday in Hangzhou.' }]
-  const calls = []
-  attachRuntime({ rt: {}, ctx: {}, chatTurn: async (key, text, requestId) => { calls.push({ key, text, requestId }); return { text: 'Friday.', sessionId: 's1', turnId: 't1' } } })
+test('private DS-Bot chats persist scoped recall citations and honor the conversation switch', async () => {
+  const wid = 'a'.repeat(32)
+  const scope = {workspace_id:wid}
+  const page = {...scope, id:'c'.repeat(32), revision:2, title:'Launch plan', body:'The launch is on Friday in Hangzhou.'}
+  const foreignPage = {...page, workspace_id:'b'.repeat(32), id:'f'.repeat(32), body:'Private other-workspace launch note.'}
+  const recallRequests = []
+  const personalRequests = []
+  const candidateQueue = []
+  const prompts = []
+  const events = new Map()
+  const bots = {main:{id:'main',name:'Main',capabilities:[]}}
+  let sessions = 0
+  const runtime = {
+    mainBot: async () => 'main', chatTurn:async () => {}, ctx:{sessions:{flush:async () => {}}},
+    rt: {state:{bots}, botOf:id => bots[id], chatOwners:new Map(), save:async () => {},
+      createBot:async fields => (bots.agent = {...fields,id:'agent',capabilities:[]}),
+      createSession:async () => 'session-' + (++sessions),
+      workDirOf:() => '/fixture', resolveAgent:async id => ({session:{id}}),
+      async *eventsBackwards(id) { yield* events.get(id) || [] }},
+    async nativeTurn(bot, sid, prompt, key) {
+      assert.equal(bot,'agent')
+      prompts.push(prompt)
+      const native = events.get(sid) || []
+      native.push({type:'user/message',seq:native.length+1,time:1,data:{content:[{type:'text',text:prompt}],source:{rpcId:key}}})
+      native.push({type:'assistant/message',seq:native.length+1,time:2,data:{message:{content:[{type:'text',text:'Friday.'}]}}})
+      events.set(sid,native)
+      return {text:'Friday.',sessionId:sid,turnId:native.length}
+    },
+  }
+  const db = new DatabaseSync(':memory:')
   try {
-    await table['personal/set']({ name: 'Ada', instructions: 'Answer briefly.' })
-    const convo = await table['chat/create']({ title: 'Plans' })
-    const out = await table['chat/send']({ conversation_id: convo.id, text: 'When is the launch?' })
-    assert.equal(out.reply.text, 'Friday.')
-    assert.equal(out.reply.meta.engine, 'ds-bot')
-    assert.deepEqual(out.reply.meta.memory_refs.map((r) => r.id), ['m1'])
-    assert.equal(calls.length, 1)
-    assert.equal(calls[0].key, 'plugin:' + convo.id)
-    assert.match(calls[0].text, /Answer briefly\./)
-    assert.match(calls[0].text, /\[1\] Launch plan \(memory page m1 r2\)/)
-    assert.match(calls[0].text, /When is the launch\?$/)
-    const history = await table['chat/messages']({ conversation_id: convo.id })
-    assert.deepEqual(history.items.map((m) => m.role), ['user', 'assistant'])
-    assert.equal((await table['chat/conversations']()).items.length, 1)
-    await table['personal/set']({ recall: 'off' })
-    const off = await table['chat/send']({ conversation_id: convo.id, text: 'launch again' })
-    assert.deepEqual(off.reply.meta.memory_refs, [])
-    await assert.rejects(table['chat/send']({ conversation_id: 'x', text: 'hi' }), { code: 'chat/invalid' })
-    await assert.rejects(table['chat/send']({ conversation_id: 'e'.repeat(32), text: 'hi' }), { code: 'chat/not-found' })
-    await table['chat/remove']({ conversation_id: convo.id })
-    assert.equal((await table['chat/conversations']()).items.length, 0)
-  } finally { detachRuntime() }
-})
+    let profile = {name:'Ada',instructions:'Answer briefly.',recall:'all'}
+    let selectedHistory
+    let personalization = {...scope, profile:{communication:'Use concise bullets.'}, preferences:['Use metric units.']}
+    const {endpoints} = createAgents({db,host:{
+      runtime:async () => runtime,
+      async call(endpoint, payload) {
+        if (endpoint === 'memory/pages') {
+          recallRequests.push(payload)
+          return [page,foreignPage]
+        }
+        if (endpoint === 'memory/personal') {
+          personalRequests.push(payload)
+          return personalization
+        }
+        if (endpoint === 'personal/get') return profile
+        if (endpoint === 'memory/enqueueCapture') { candidateQueue.push(payload); return }
+        if (endpoint === 'memory/enqueueHistory') { selectedHistory = payload; return {queued:1} }
+        assert.equal(endpoint,'skills/materialForScope')
+      },
+    }})
+    const {agent} = await endpoints.create({...scope,name:'Planner',idempotency_key:'create-planner-fixture'})
+    const base = `/v1/workspaces/${wid}/agents/${agent.id}/conversations`
+    const create = body => endpoints.v1({method:'POST',path:base,body,idempotency_key:'create-launch-fixture'})
+    const created = await create({title:'Plans'})
+    assert.equal(created.body.conversation.memory_recall,true)
+    const path = base + '/' + created.body.conversation.id
+    const send = key => endpoints.v1({method:'POST',path:path+'/messages',body:{body:'When is the launch?'},idempotency_key:key})
+    const first = await send('workspace-recall-fixture')
+    assert.equal(first.status,201)
+    assert.equal(first.body.reply.body,'Friday.')
+    assert.deepEqual(first.body.reply.memory_refs,[{...scope,id:page.id,revision:2,title:page.title}])
+    assert.equal(first.body.message.client_key,'workspace-recall-fixture')
+    assert.match(prompts[0],/Friday in Hangzhou/)
+    assert.match(prompts[0],/Use concise bullets.*\nPreference: "Use metric units/)
+    assert.equal(first.body.reply.memory_profile_workspace,wid)
+    assert.deepEqual(personalRequests,[scope])
+    assert.doesNotMatch(prompts[0],/other-workspace/)
+    const source = candidateQueue[0]
+    assert.equal(source.message_id,first.body.message.id)
+    assert.deepEqual(await endpoints.captureSource(source),{title:'Plans',text:'When is the launch?'})
+    assert.equal(await endpoints.captureSource({...source,message_id:first.body.reply.id}),null)
+    await assert.rejects(endpoints.captureSource({...source,workspace_id:foreignPage.workspace_id}),{status:404})
+    assert.deepEqual(recallRequests,[scope])
+    const reopened = (await endpoints.v1({method:'GET',path})).body.items[1]
+    assert.deepEqual(reopened.memory_refs,first.body.reply.memory_refs)
+    assert.equal(reopened.memory_profile_workspace,wid)
+    assert.doesNotMatch(JSON.stringify(reopened),/concise bullets|metric units/)
 
-test('chat without the DS-Bot service fails closed', async () => {
-  const table = await load()
-  attachRuntime({ rt: {}, ctx: {} })
-  try {
-    const convo = await table['chat/create']({})
-    await assert.rejects(table['chat/send']({ conversation_id: convo.id, text: 'hi' }), { code: 'chat/runtime-unavailable' })
-  } finally { detachRuntime() }
+    assert.equal((await endpoints.v1({method:'POST',path,body:{memory_recall:false}})).body.memory_recall,false)
+    assert.equal((await create({title:'Plans'})).body.conversation.memory_recall,false)
+    assert.equal((await send('workspace-recall-fixture')).body.reply.id,first.body.reply.id)
+    const disabled = (await send('workspace-recall-disabled')).body.reply
+    assert.equal(disabled.memory_refs,undefined)
+    assert.equal(disabled.memory_profile_workspace,undefined)
+    assert.doesNotMatch(prompts[1],/Reference notes|concise bullets|metric units/)
+    assert.equal(recallRequests.length,1)
+    assert.equal(await endpoints.captureSource(source),null)
+    assert.deepEqual(await endpoints.captureSource({...source,selected:true}),{title:'Plans',text:'When is the launch?'})
+    const submitHistory = ids => endpoints.v1({method:'POST',path:path+'/memory/capture',body:{message_ids:ids}})
+    assert.equal((await submitHistory([first.body.reply.id])).status,400)
+    assert.equal((await submitHistory([source.message_id,source.message_id])).status,400)
+    assert.equal((await submitHistory([source.message_id])).status,202)
+    assert.deepEqual(selectedHistory,{...scope,agent_id:agent.id,conversation_id:created.body.conversation.id,message_ids:[source.message_id]})
+    assert.equal(candidateQueue.length,1)
+    assert.equal(personalRequests.length,1)
+
+    await endpoints['adopt-personal-chat']({...scope,id:agent.id,conversations:[]},false)
+    profile = {...profile,recall:'off'}
+    const {conversation} = await endpoints['conversation-create']({...scope,id:agent.id,title:'Personal'})
+    assert.equal(conversation.memory_recall,false)
+    const personal = base + '/' + conversation.id
+    await endpoints.v1({method:'POST',path:personal,body:{memory_recall:true}})
+    personalization = {...personalization,workspace_id:foreignPage.workspace_id,preferences:['Other workspace preference.']}
+    const on = await endpoints.v1({method:'POST',path:personal+'/messages',body:{body:'launch'},idempotency_key:'personal-recall-fixture'})
+    assert.deepEqual(on.body.reply.memory_refs,first.body.reply.memory_refs)
+    assert.match(prompts[2],/Answer briefly/)
+    assert.doesNotMatch(prompts[2],/Other workspace preference/)
+    assert.equal(on.body.reply.memory_profile_workspace,undefined)
+    assert.deepEqual(recallRequests,[scope,scope])
+    assert.deepEqual(personalRequests,[scope,scope])
+
+    await endpoints.turn({agent_id:agent.id,key:'social:shared-room',text:'launch'})
+    assert.doesNotMatch(prompts[3],/Friday in Hangzhou|Answer briefly|Private workspace personalization/)
+    assert.deepEqual(recallRequests,[scope,scope])
+    assert.deepEqual(personalRequests,[scope,scope])
+  } finally { db.close() }
 })
 
 test('skills are native DS-Bot capabilities attached to the Main Bot', async () => {

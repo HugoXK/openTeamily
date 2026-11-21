@@ -17,7 +17,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/dream/${ID}`, ORIGIN).feature, 'memory');
-  for (const rest of ['actions', `actions/${ID}/remove`, 'links', 'graph', 'profile', `preferences/${ID}/remove`]) {
+  for (const rest of ['actions', `actions/${ID}/remove`, 'links', 'graph', 'profile', 'profile/dream', 'candidates', `candidates/${ID}`, `preferences/${ID}/remove`]) {
     assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${rest}`, ORIGIN).feature, 'memory', rest);
   }
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/bogus`, ORIGIN), null);
@@ -31,6 +31,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/run`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/runs/${ID}/retry`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents?limit=100`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/memory/capture`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
@@ -68,6 +69,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/memory/capture`, ORIGIN).feature, 'messenger');
   for (const action of ['create', 'preview', 'join', 'poll', 'signal', 'leave', 'end']) {
     assert.equal(movedTarget('/v1/meeting-calls/' + action, ORIGIN).feature, 'messenger');
   }
