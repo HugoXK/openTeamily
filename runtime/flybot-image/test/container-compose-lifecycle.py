@@ -73,30 +73,20 @@ def describe_error(error, secrets):
     return redact(' '.join(parts), secrets)
 
 
-def trace_engine(engine, secrets, iid):
-    def current_secrets():
-        extra = list(secrets)
-        try:
-            token = json.loads(engine.runtime_key_path(iid).read_text()).get('token')
-            if token:
-                extra.append(token)
-        except Exception:
-            pass
-        return extra
-
+def trace_engine(engine, secrets):
     def wrap(method):
         def wrapped(*args, **kwargs):
             try:
                 return method(*args, **kwargs)
             except Exception as error:
-                print('compose engine %s: %s' % (method.__name__, describe_error(error, current_secrets())), file=sys.stderr)
+                print('compose engine %s: %s' % (method.__name__, describe_error(error, secrets)), file=sys.stderr)
                 raise
         return wrapped
 
     engine.inspect = wrap(engine.inspect)
     engine.compose = wrap(engine.compose)
     engine.wait = wrap(engine.wait)
-    engine.install_runtime_key = wrap(engine.install_runtime_key)
+    engine.install_agent_bootstrap = wrap(engine.install_agent_bootstrap)
     return engine
 
 
@@ -343,7 +333,7 @@ def main(argv):
             'instances': {iid: {'image': image_ref, 'healthcheck': HEALTHCHECK, 'publish_port': None}},
         })
         registry = Registry(str(root / 'manager.json'))
-        engine = trace_engine(ComposeEngine(registry, Runner(registry, enabled=True)), secrets, iid)
+        engine = trace_engine(ComposeEngine(registry, Runner(registry, enabled=True)), secrets)
         client = ManagerClient(loopback_origin, 'manager-a', manager_token, enabled=True, timeout=5)
         worker = ManagerWorker(client, registry, engine)
 
@@ -360,15 +350,15 @@ def main(argv):
             print(redact((logs.stdout or '') + '\n' + (logs.stderr or ''), secrets), file=sys.stderr)
             raise RuntimeError(redact('compose start failed: %r' % running, secrets))
 
-        key_path = engine.runtime_key_path(iid)
-        require(key_path.exists() and (key_path.stat().st_mode & 0o777) in (0o600, 0o644),
-                'runtime key file missing or mode unexpected')
-        key_doc = json.loads(key_path.read_text())
-        require(key_doc.get('agent_bootstrap', {}).get('instance_id') == iid and key_doc.get('token'),
-                'personal agent bootstrap was not mounted', secrets)
-        secrets.append(key_doc['token'])
-        require('token' not in json.dumps(running), 'runtime token leaked in worker observe result', secrets)
+        def assert_bootstrap_file():
+            path = engine.agent_bootstrap_path(iid)
+            require(path.exists() and (path.stat().st_mode & 0o777) in (0o600, 0o644),
+                    'personal-agent bootstrap file missing or mode unexpected', secrets)
+            document = json.loads(path.read_text())
+            require(set(document) == {'agent_bootstrap'} and document['agent_bootstrap'].get('instance_id') == iid,
+                    'personal-agent bootstrap file has unexpected fields or instance', secrets)
 
+        assert_bootstrap_file()
         cid = compose_container_id(iid, secrets)
         require(native_binding(cid, network, secrets) == binding, 'personal agent was not imported on first start')
         docker(['exec', '-u', '1000:1000', cid, 'sh', '-c', 'echo persistent-test-content > /data/volume-sentinel'], secrets=secrets)
@@ -387,9 +377,10 @@ def main(argv):
         sentinel = docker(['exec', '-u', '1000:1000', cid, 'cat', '/data/volume-sentinel'], secrets=secrets)
         require(sentinel.stdout.strip() == 'persistent-test-content',
                 'volume sentinel missing after no-delete recreate: %r' % sentinel.stdout)
-        logs = docker(['logs', cid], allow_failure=True, secrets=secrets)
-        combined = (logs.stdout or '') + '\n' + (logs.stderr or '')
-        require(key_doc['token'] not in combined, 'runtime token appeared in container logs')
+        assert_bootstrap_file()
+        with store.connect() as db:
+            require(db.execute('SELECT COUNT(*) FROM instance_runtime_keys').fetchone()[0] == 0,
+                    'container lifecycle created a retired instance credential')
         require(native_binding(cid, network, secrets) == binding, 'recreated DS-Bot lost its personal agent')
         print('PASS: Compose manager started a digest-pinned DS-Bot, provisioned its personal agent, '
               'and preserved the binding and data volume across recreate.')

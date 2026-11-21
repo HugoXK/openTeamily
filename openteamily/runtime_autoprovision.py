@@ -3,7 +3,7 @@
 Self-written for OpenTeamily. Default OFF. When enabled, ensuring a user's
 personal agent creates exactly one runtime instance in that user's own personal
 workspace (owner = that user, the trusted RuntimePolicy image/profile/backend,
-its own ``ot-<id>`` volume and, at start, its own instance runtime key) and
+its own ``ot-<id>`` volume and, at start, its personal agent bootstrap) and
 binds the personal agent to it. The binding and the manager assignment are
 derived server-side only; no request field can name an instance or a manager.
 
