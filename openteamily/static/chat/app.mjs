@@ -804,6 +804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let groupMode = 'custom';
   let groupReplyAttempt = null;
   let groupReplyBusy = false;
+  let groupReplyFormScope = '';
   let searchSeq = 0;
   let resourceCursor = '';
   let resourceItems = [];
@@ -1033,6 +1034,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function clearPendingSends() {
     stopReplyProgress();
+    stopGroupReplyProgress();
     stopPolling();
     for (const queue of pendingSends.values()) {
       for (const job of queue.jobs) removeSendJob(queue,job);
@@ -1123,6 +1125,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     add.disabled = !available.length;
     document.getElementById('group-agent-add-submit').disabled = !available.length;
     const holder = document.getElementById('group-agent-choices');
+    const scope = sendScope();
+    const checked = new Set();
+    if (groupReplyFormScope === scope) {
+      for (const label of holder.children) {
+        const box = label.children[0];
+        if (box?.checked) checked.add(box.value);
+      }
+    } else {
+      groupReplyFormScope = scope;
+      document.getElementById('group-agent-prompt').value = '';
+    }
     holder.replaceChildren();
     for (const agent of saved.filter(item => !item.archived && item.mine !== false)) {
       const label = document.createElement('label');
@@ -1131,6 +1144,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.name = 'group-agent';
       box.value = agent.id || agent.agent_id;
       box.disabled = active.has(box.value);
+      box.checked = !box.disabled && checked.has(box.value);
       label.append(box, document.createTextNode(agent.name + (box.disabled ? '（回复中）' : '')));
       holder.append(label);
     }
@@ -1158,8 +1172,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSessionsOpen(open) {
-    if (open) document.body.classList.add('sessions-open');
-    else document.body.classList.remove('sessions-open');
+    if (open) {
+      document.body.classList.add('sessions-open');
+      if (narrowScreen()) stopGroupReplyProgress();
+    } else document.body.classList.remove('sessions-open');
   }
 
   function narrowScreen() {
@@ -1424,7 +1440,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
   }
 
-  function agentAtBottom(scroller) {
+  function messageScrollerAtBottom(scroller) {
     return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
   }
 
@@ -1471,7 +1487,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderAgentMessages(items, {followLatest = true, anchor} = {}) {
     const scroller = document.getElementById('message-scroller');
     const top = anchor?.top ?? scroller.scrollTop;
-    const follow = anchor?.follow ?? (followLatest || agentAtBottom(scroller));
+    const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
     list.replaceChildren();
     agentReplyViews.clear();
@@ -1517,7 +1533,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
-    const follow = agentAtBottom(scroller);
+    const follow = messageScrollerAtBottom(scroller);
     view.body.textContent = snapshot.text;
     view.body.hidden = !snapshot.text;
     if (follow) scroller.scrollTop = scroller.scrollHeight;
@@ -1929,12 +1945,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let socialHistory = null;
   let socialOpen = 0;
   let historyJump = 0;
+  let groupReplyWatch = null;
+  const groupReplyViews = new Map();
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
   const historyNotice = document.getElementById('chat-history-status');
 
   function setSocialHistory(state) {
     socialHistory = state;
+    if (!state || state.readingHistory) stopGroupReplyProgress();
+    if (!state) groupReplyViews.clear();
     if (historyNotice) historyNotice.textContent = '';
     updateHistoryControls();
   }
@@ -1957,6 +1977,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = socialHistory;
     if (!state?.cursor || state.loading) return;
     state.loading = true;
+    syncGroupReplyProgress();
     updateHistoryControls();
     if (historyNotice) historyNotice.textContent = '';
     try {
@@ -1975,6 +1996,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } finally {
       state.loading = false;
       updateHistoryControls();
+      syncGroupReplyProgress();
     }
   });
   latestMessages?.addEventListener('click', () => {
@@ -1982,10 +2004,121 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   let lastSocialItems = [];
-  function hasPendingReplies(items = lastSocialItems) {
-    return items?.some(item => item.reply_jobs?.some(job => job.status === 'queued' || job.status === 'running'));
+  function waitingGroupReply(job) {
+    return job.status === 'queued' || job.status === 'running';
   }
 
+  function hasPendingReplies(items = lastSocialItems) {
+    return items?.some(item => item.reply_jobs?.some(waitingGroupReply));
+  }
+
+  function canWatchGroupReplies() {
+    return servedByDsbot && currentSource === 'social' && currentConversation?.kind === 'group'
+      && !currentConversation.public_agent && socialHistory?.cid === currentConversation.id
+      && !socialHistory.readingHistory && !socialHistory.loading
+      && canWatchReply() && groupReplyViews.size > 0;
+  }
+
+  function paintGroupReplyProgress(items) {
+    const changes = [];
+    for (const [id, view] of groupReplyViews) {
+      const snapshot = items.get(id);
+      const text = snapshot && snapshot.message_id === view.messageId && snapshot.attempt === view.attempt
+        && typeof snapshot.text === 'string' ? snapshot.text : '';
+      if (view.preview.textContent !== text) changes.push({view, text});
+    }
+    if (!changes.length) return;
+    const scroller = document.getElementById('message-scroller');
+    const top = scroller.scrollTop;
+    const follow = messageScrollerAtBottom(scroller);
+    for (const {view, text} of changes) {
+      view.preview.textContent = text;
+      view.preview.hidden = !text;
+      const state = text ? 'running' : view.job.status;
+      view.row.dataset.state = state;
+      view.note.textContent = view.job.agent_name + GROUP_REPLY_LABELS[state];
+    }
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+  }
+
+  function stopGroupReplyProgress() {
+    const watch = groupReplyWatch;
+    if (!watch) return;
+    groupReplyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+    paintGroupReplyProgress(new Map());
+  }
+
+  function currentGroupReplyWatch(watch) {
+    return watch && groupReplyWatch === watch && sendScope() === watch.scope && canWatchGroupReplies();
+  }
+
+  function scheduleGroupReplyProgress(watch, delay = 500) {
+    if (!currentGroupReplyWatch(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollGroupReplyProgress(watch), delay);
+  }
+
+  async function pollGroupReplyProgress(watch) {
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    if (result?.status === 200 && Array.isArray(result.body.items)) {
+      const items = new Map(result.body.items.filter(item => item?.id).map(item => [item.id, item]));
+      const settled = [...watch.items.values()].some(snapshot => {
+        const view = groupReplyViews.get(snapshot.id);
+        return view && view.messageId === snapshot.message_id && view.attempt === snapshot.attempt
+          && items.get(snapshot.id)?.attempt !== snapshot.attempt;
+      });
+      watch.items = items;
+      if (watch.degraded) stopPolling();
+      watch.degraded = false;
+      paintGroupReplyProgress(items);
+      if (settled) {
+        if (readingSocialContext()) {
+          if (liveBanner) liveBanner.hidden = false;
+        } else if (!pollTimer) schedulePoll(1200);
+      }
+      scheduleGroupReplyProgress(watch);
+    } else if ([401, 403, 404].includes(result?.status)) {
+      stopGroupReplyProgress();
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+    } else {
+      watch.degraded = true;
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+      scheduleGroupReplyProgress(watch, 1500);
+    }
+  }
+
+  function syncGroupReplyProgress() {
+    if (!canWatchGroupReplies()) {
+      stopGroupReplyProgress();
+      return;
+    }
+    const scope = sendScope();
+    if (groupReplyWatch?.scope === scope) {
+      paintGroupReplyProgress(groupReplyWatch.items);
+      return;
+    }
+    stopGroupReplyProgress();
+    groupReplyWatch = {
+      scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(),
+    };
+    scheduleGroupReplyProgress(groupReplyWatch);
+  }
+
+  const GROUP_REPLY_LABELS = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
   function renderReplyJobs(item) {
     const rows = document.createElement('div');
     rows.className = 'group-reply-jobs';
@@ -1994,10 +2127,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const row = document.createElement('div');
       row.className = 'group-reply-job';
       row.dataset.state = job.status;
+      row.dataset.replyJobId = job.id;
+      if (Number.isSafeInteger(job.attempt)) row.dataset.replyAttempt = String(job.attempt);
       const note = document.createElement('span');
-      const states = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
-      note.textContent = job.agent_name + (states[job.status] || '');
+      note.textContent = job.agent_name + (GROUP_REPLY_LABELS[job.status] || '');
       row.append(note);
+      if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
+        const preview = document.createElement('div');
+        preview.className = 'group-reply-preview';
+        preview.hidden = true;
+        preview.setAttribute('aria-live', 'off');
+        groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview});
+        row.append(preview);
+      }
       if (job.can_retry) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -2017,10 +2159,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const list = document.getElementById('message-list');
             const message = lastSocialItems.find(current => current.id === item.id);
             if (message) {
+              for (const previous of message.reply_jobs || []) groupReplyViews.delete(previous.id);
               message.reply_jobs = result.body.reply_jobs;
-              const updated = renderReplyJobs(message);
               const target = [...list.children].find(element => element.dataset.messageId === item.id);
-              target?.querySelector('.group-reply-jobs')?.replaceWith(updated);
+              const jobs = target?.querySelector('.group-reply-jobs');
+              if (jobs) jobs.replaceWith(renderReplyJobs(message));
+              syncGroupReplyProgress();
             }
             if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
             show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
@@ -2178,6 +2322,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (model) models.set(row.dataset.messageId, model);
     }
     list.replaceChildren();
+    groupReplyViews.clear();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
     const pendingKeys = pendingMessageKeys();
@@ -2333,6 +2478,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     renderPendingSend();
+    syncGroupReplyProgress();
     attachmentSender?.render();
     if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
@@ -2924,6 +3070,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openAgentConversation(agentId, conversationId, {refresh = false} = {}) {
     if (!refresh) {
       stopReplyProgress();
+      stopGroupReplyProgress();
       stopPolling();
     }
     const open = ++socialOpen;
@@ -2935,6 +3082,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!refresh) {
         show('error', messageFor(result.body.error, '无法打开对话。'));
         syncReplyProgress();
+        syncGroupReplyProgress();
       }
       return false;
     }
@@ -2989,7 +3137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopReplyProgress();
     const open = ++socialOpen;
     const wid = workspaceId();
-    if (currentConversation?.id !== conversationId) {
+    if (currentSource !== 'social' || currentConversation?.id !== conversationId) {
       setSocialHistory(null);
       voiceRecorder.clear();
     }
@@ -3080,6 +3228,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function scheduleSocialPoll(conversation) {
     if (hasPendingReplies() || conversation?.public_agent?.pending) {
+      if (currentGroupReplyWatch(groupReplyWatch) && !groupReplyWatch.degraded) return;
       schedulePoll(servedByDsbot ? 8000 : 1800);
     } else if (!servedByDsbot && pollsAccountThread(conversation)) {
       schedulePoll(8000);
@@ -3113,6 +3262,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
     }
+    syncGroupReplyProgress();
     if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
       || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
     if (servedByDsbot) scheduleSocialPoll(currentConversation);
@@ -4448,6 +4598,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('chat-back').addEventListener('click', () => {
     stopReplyProgress();
+    stopGroupReplyProgress();
     if (currentSource === 'agent') stopPolling();
     setSessionsOpen(true);
     document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
@@ -4524,43 +4675,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
+    if (groupReplyBusy || currentSource !== 'social' || currentConversation?.kind !== 'group'
+      || currentConversation.public_agent) return;
     const cid = currentConversation.id;
+    const scope = sendScope();
     const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
       .map(box => box.value);
-    const prompt = document.getElementById('group-agent-prompt').value;
+    const field = document.getElementById('group-agent-prompt');
+    const prompt = field.value;
     if (!agentIds.length) {
       show('error', '请选择至少一个群内智能体。');
       return;
     }
     if (!prompt.trim()) return;
-    const fingerprint = JSON.stringify([workspaceId(), cid, agentIds.slice().sort(), prompt]);
+    const fingerprint = JSON.stringify([scope, agentIds.slice().sort(), prompt]);
     if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
       groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
     }
     groupReplyBusy = true;
-    document.getElementById('group-agent-submit').disabled = true;
+    const button = document.getElementById('group-agent-submit');
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '发送中…';
     try {
       const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
-        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key});
-      if (![200, 201].includes(result.status)) {
-        show('error', messageFor(result.body.error, '请求未确认；重试相同内容将复用请求标识。'));
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key})
+        .catch(() => ({status: 0, body: {}}));
+      if (result.status !== 202 || !result.body.message?.id) {
+        if (scope === sendScope()) show('error', messageFor(result.body.error, '发送未确认，请重试。'));
         return;
       }
       groupReplyAttempt = null;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-        const replies = result.body.replies || (result.body.reply ? [result.body.reply] : []);
-        const failed = replies.filter(item => item.status === 'failed').length;
-        show(failed ? 'error' : 'ok', failed
-          ? (replies.length - failed) + ' 个已提交，' + failed + ' 个失败。'
-          : '已请求 ' + replies.length + ' 个智能体回复。');
+      if (scope === sendScope()) {
+        if (field.value === prompt) field.value = '';
+        if (socialHistory?.readingHistory) void openSocialConversation(cid);
+        else {
+          renderDeliveredSocialMessage(scope, result.body.message);
+          scheduleSocialPoll(currentConversation);
+        }
+        show('ok', '已发送到群聊。', {announceOnly: true});
       }
     } finally {
       groupReplyBusy = false;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-      }
+      button.textContent = label;
+      button.disabled = !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
     }
   });
 
@@ -4725,7 +4883,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           queue.replying = job;
           if (isCurrent()) {
             const scroller = document.getElementById('message-scroller');
-            const follow = agentAtBottom(scroller);
+            const follow = messageScrollerAtBottom(scroller);
             stopPolling();
             renderPendingSend();
             syncReplyProgress();
@@ -4780,7 +4938,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             if (queue.replying === job) {
               if (isCurrent()) {
                 const scroller = document.getElementById('message-scroller');
-                anchor = {top: scroller.scrollTop, follow: agentAtBottom(scroller)};
+                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
                 if (replyWatch?.key === job.key) stopReplyProgress();
               }
               queue.replying = null;

@@ -695,5 +695,9 @@ export default async function agents(host) {
   timer.unref?.()
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.groupTurn = async (payload, call) => {
+    if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
+    return endpoints.turn(payload, {onProgress:payload.onProgress})
+  }
   return { pages: ['agents'], endpoints: wrapped, migrate }
 }

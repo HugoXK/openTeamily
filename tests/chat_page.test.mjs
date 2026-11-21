@@ -756,6 +756,138 @@ test('an already running native reply resumes in its existing bubble and loads t
   } finally { restore(); }
 });
 
+function groupReplyChat(transport) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const restore = installChatGlobals();
+  globalThis.location.hash = '#workspace=ws-1&social=conv-1';
+  const {fetcher: fallback} = sessionFetcher();
+  const base = '/v1/workspaces/ws-1/social/conversations';
+  const conversation = {id: 'conv-1', kind: 'group', title: '测试群', updated: 40,
+    members: [{user_id: alice, username: 'alice'}],
+    agent_members: [{id: 'agent-1', name: '助手一'}, {id: 'agent-2', name: '助手二'}]};
+  const fetcher = (url, opts) => url.startsWith(base + '/conv-1')
+    ? transport(url.slice((base + '/conv-1').length), opts, conversation)
+    : fallback(url);
+  return {doc, el, restore, fetcher};
+}
+
+test('group progress updates only the original job and attempt and clears stale text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const source = {id: 'source', user_id: alice, body: '请两位协助', created: 1, seq: 1, reply_jobs: [
+    {id: 'job-a', attempt: 2, status: 'queued', agent_name: '助手一'},
+    {id: 'job-b', attempt: 1, status: 'running', agent_name: '助手二'},
+  ]};
+  const flowing = [{id: 'job-a', message_id: 'source', attempt: 2, text: '原样显示 <em>片段</em>'},
+    {id: 'job-b', message_id: 'other-source', attempt: 1, text: '别的消息'}];
+  const batches = [...Array(18).fill(flowing),
+    [{id: 'job-a', message_id: 'source', attempt: 1, text: '过期的尝试'},
+      {id: 'job-b', message_id: 'source', attempt: 1, text: '另一个智能体的新进度'}],
+  ];
+  let historyReads = 0;
+  let progressReads = 0;
+  let pending;
+  let signal;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {conversation, items: [source]});
+    }
+    assert.equal(path, '/reply-progress');
+    progressReads += 1;
+    if (batches.length) return json(200, {items: batches.shift()});
+    signal = opts.signal;
+    return new Promise(resolve => { pending = resolve; });
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const original = list.children[0];
+    const jobs = descendants(original).filter(node => node.className === 'group-reply-job');
+    const [first, second] = jobs.map(row => row.children.find(node => node.className === 'group-reply-preview'));
+    t.mock.timers.tick(500); await settle();
+    assert.equal(list.children[0], original);
+    assert.equal(first.textContent, '原样显示 <em>片段</em>');
+    assert.equal(first.children.length, 0);
+    assert.equal(first.getAttribute('aria-live'), 'off');
+    assert.equal(second.hidden, true);
+    assert.equal(jobs[0].dataset.state, 'running');
+    for (let index = 0; index < 17; index += 1) {
+      t.mock.timers.tick(500);
+      await settle();
+    }
+    assert.equal(historyReads, 1, 'no legacy transcript poll after 8 seconds of healthy snapshots');
+
+    const scroller = el('message-scroller');
+    scroller.scrollHeight = 1000;
+    scroller.clientHeight = 200;
+    scroller.scrollTop = 120;
+    t.mock.timers.tick(500); await settle();
+    assert.equal(first.hidden, true);
+    assert.equal(second.textContent, '另一个智能体的新进度');
+    assert.equal(scroller.scrollTop, 120);
+    assert.equal(historyReads, 1);
+
+    t.mock.timers.tick(500); await settle();
+    doc.visibilityState = 'hidden';
+    await fire(doc, 'visibilitychange');
+    assert.equal(signal.aborted, true);
+    assert.equal(second.hidden, true);
+    pending(json(200, {items: [{id: 'job-b', message_id: 'source', attempt: 1, text: '迟到的隐藏更新'}]}));
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(progressReads, 20);
+    assert.equal(second.hidden, true);
+  } finally { restore(); }
+});
+
+test('manual group requests preserve a failed draft and append the eventual accepted group message', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const promptText = '请总结这次讨论';
+  const message = {id: 'requested', body: promptText, user_id: alice, created: 1, seq: 1,
+    reply_jobs: [{id: 'manual-job', attempt: 1, agent_name: '助手一', status: 'queued'}]};
+  const sends = [];
+  let historyReads = 0;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {conversation, items: []});
+    }
+    if (path === '/agent-replies') {
+      sends.push({body: JSON.parse(opts.body), key: opts.headers['Idempotency-Key']});
+      return sends.length === 1 ? json(503, {}) : json(202, {message});
+    }
+    assert.equal(path, '/reply-progress');
+    return json(200, {items: [{id: 'manual-job', message_id: message.id, attempt: 1, text: '讨论要点'}]});
+  });
+  const querySelectorAll = doc.querySelectorAll;
+  doc.querySelectorAll = selector => selector === '#group-agent-choices input[name="group-agent"]:checked'
+    ? el('group-agent-choices').children.map(label => label.children[0]).filter(box => box.checked)
+    : querySelectorAll(selector);
+  try {
+    await mount(doc, {fetcher});
+    const prompt = el('group-agent-prompt');
+    const selected = el('group-agent-choices').children[0].children[0];
+    selected.checked = true;
+    prompt.value = promptText;
+    const submit = () => fire(el('group-agent-form'), 'submit', {preventDefault() {}});
+    await submit();
+    assert.equal(prompt.value, promptText);
+    assert.equal(selected.checked, true);
+    assert.equal(el('message-list').children.length, 0);
+
+    await submit();
+    assert.equal(prompt.value, '');
+    assert.deepEqual(sends[0].body, {agent_ids: ['agent-1'], prompt: promptText});
+    assert.equal(sends[0].key, sends[1].key);
+    const original = el('message-list').children[0];
+    assert.equal(original.dataset.messageId, message.id);
+    const preview = descendants(original).find(node => node.className === 'group-reply-preview');
+    t.mock.timers.tick(500); await settle();
+    assert.equal(preview.textContent, '讨论要点');
+    assert.equal(historyReads, 1);
+  } finally { restore(); }
+});
+
 test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: fallback, requests} = sessionFetcher();

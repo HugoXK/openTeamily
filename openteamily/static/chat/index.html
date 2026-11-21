@@ -546,7 +546,7 @@
       <summary>群内智能体</summary>
       <h2 class="visually-hidden">群内智能体</h2>
       <p id="social-agent-members" class="group-agent-note" hidden></p>
-      <p class="note">将本次请求发给选中的智能体。回复会出现在群聊里。</p>
+      <p class="note">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
         <div class="agent-add">
@@ -559,8 +559,8 @@
           <legend>请求哪些智能体回复</legend>
           <div id="group-agent-choices" class="agent-choices"></div>
         </fieldset>
-        <label>本次请求 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
-        <button id="group-agent-submit" type="submit">请求回复</button>
+        <label>群消息 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
+        <button id="group-agent-submit" type="submit">发送并请求回复</button>
       </form>
       <ul id="group-agent-requests" aria-live="polite"></ul>
       </details>

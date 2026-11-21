@@ -587,6 +587,12 @@ body.app-workspace > #status[data-announce-only="true"] {
   overflow-wrap: anywhere;
 }
 .group-reply-job[data-state="failed"] { color: var(--ot-danger); }
+.group-reply-preview {
+  flex: 0 0 100%;
+  color: var(--ot-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .group-reply-job button {
   min-height: 2rem;
   padding: 0.15rem 0.45rem;
