@@ -2270,7 +2270,10 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 .chat-save-dialog textarea { resize: vertical; }
 .chat-save-dialog .actions { display: flex; justify-content: end; gap: .5rem; }
 .group-memory-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-#group-memory-status:empty { display: none; }
+#group-memory-status:empty, #group-memory-auto-status:empty { display: none; }
+.group-memory-settings { margin-block: .75rem; padding: .3rem .5rem; background: var(--ot-surface-2); border-radius: .65rem; }
+.group-memory-settings-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .75rem; padding: 0 .5rem .35rem; font-size: .8125rem; }
+.group-memory-settings-footer p { margin: 0; color: var(--ot-danger); }
 #group-memory-list { list-style: none; display: grid; gap: .75rem; margin: .75rem 0 0; padding: 0; }
 #group-memory-list li { border: 1px solid var(--ot-line); border-radius: .65rem; padding: .75rem; }
 #group-memory-list :is(h3, p) { margin: 0 0 .4rem; overflow-wrap: anywhere; }

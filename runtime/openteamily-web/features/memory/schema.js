@@ -61,6 +61,12 @@ CREATE INDEX memory_capture_selected ON memory_capture_items(workspace_id,agent_
 `, `
 ALTER TABLE memory_capture_items ADD COLUMN source_message_id TEXT;
 ALTER TABLE memory_capture_items ADD COLUMN source_batch TEXT;
+`, `
+CREATE TABLE memory_capture_groups (
+  workspace_id TEXT NOT NULL, conversation_id TEXT NOT NULL, generation TEXT NOT NULL,
+  membership INTEGER NOT NULL, cursor INTEGER NOT NULL, next_scan INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id,conversation_id));
+CREATE INDEX memory_capture_groups_due ON memory_capture_groups(next_scan);
 `]
 
 export const IMPORT_TABLES = {

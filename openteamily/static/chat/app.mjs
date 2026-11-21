@@ -1906,6 +1906,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupMemoryDialog = document.getElementById('group-memory-dialog');
   const groupMemoryStatus = document.getElementById('group-memory-status');
   const groupMemoryList = document.getElementById('group-memory-list');
+  const groupMemoryAuto = document.getElementById('group-memory-auto');
+  const groupMemoryAutoStatus = document.getElementById('group-memory-auto-status');
   let groupMemoryView = null;
 
   function groupMemoryButton(label, action) {
@@ -1916,12 +1918,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return button;
   }
 
+  const groupMemoryActive = view => groupMemoryDialog?.open && groupMemoryView === view && sendScope() === view.scope;
+  groupMemoryAuto?.addEventListener('click', async () => {
+    const view = groupMemoryView;
+    if (!groupMemoryActive(view) || typeof view.autoCapture !== 'boolean') return;
+    const enabled = !view.autoCapture;
+    groupMemoryAuto.setAttribute('aria-checked', String(enabled));
+    groupMemoryAuto.disabled = true;
+    groupMemoryAutoStatus.textContent = '';
+    const result = await request('POST', `${view.path}/auto-capture`,{enabled})
+      .catch(() => ({status:0,body:{}}));
+    if (!groupMemoryActive(view)) return;
+    if (result.status === 200) view.autoCapture = result.body.enabled === true;
+    else groupMemoryAutoStatus.textContent = messageFor(result.body.error,'设置保存失败，请重试。');
+    groupMemoryAuto.setAttribute('aria-checked', String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
+  });
+
   async function openGroupMemory(highlight) {
     if (!servedByDsbot || currentSource !== 'social' ||
         currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
     const view = {scope:sendScope(), path:`${socialBase()}/${currentConversation.id}/shared-memory`};
     groupMemoryView = view;
-    const active = () => groupMemoryDialog.open && groupMemoryView === view && sendScope() === view.scope;
+    const active = () => groupMemoryActive(view);
+    groupMemoryAuto.disabled = true;
+    groupMemoryAuto.setAttribute('aria-checked','false');
+    groupMemoryAutoStatus.textContent = '';
+    document.getElementById('group-memory-inbox').href = '/memory?'+new URLSearchParams({workspace:workspaceId(),page:'candidates'});
     groupMemoryList.replaceChildren();
     groupMemoryStatus.textContent = '正在读取群记忆…';
     if (!groupMemoryDialog.open) groupMemoryDialog.showModal();
@@ -1931,6 +1954,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       groupMemoryStatus.textContent = messageFor(result.body.error,'群记忆加载失败，请重试。');
       return;
     }
+    view.autoCapture = result.body.auto_capture === true;
+    groupMemoryAuto.setAttribute('aria-checked',String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
     const items = result.body.items || [];
     const selected = items.find(item => item.id === highlight);
     groupMemoryStatus.textContent = highlight && !selected ? '这条群记忆已失效或被移除。'

@@ -348,6 +348,16 @@
         <h2 id="group-memory-title">群记忆</h2>
         <form method="dialog"><button type="submit" autofocus>关闭</button></form>
       </div>
+      <section class="group-memory-settings" aria-label="自动提炼群记忆">
+        <div class="group-info-toggle-row">
+          <span><strong>自动提炼新群消息</strong><small>生成仅自己可见的记忆建议，审核后可保存或分享。</small></span>
+          <button type="button" role="switch" class="group-info-switch" id="group-memory-auto" aria-label="自动提炼新群消息" aria-checked="false" disabled></button>
+        </div>
+        <div class="group-memory-settings-footer">
+          <a id="group-memory-inbox">查看记忆建议</a>
+          <p id="group-memory-auto-status" class="note" role="status"></p>
+        </div>
+      </section>
       <p id="group-memory-status" class="note" role="status"></p>
       <ul id="group-memory-list"></ul>
     </dialog>

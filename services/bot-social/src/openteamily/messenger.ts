@@ -1031,6 +1031,45 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     });
   });
 
+  app.post("/v1/ot/conversations/:id/memory-sources", async req => {
+    const viewer = ot.me(req).ownerId;
+    const conv = requireMemoryGroup(ot,params(req).id,viewer);
+    const input = body(req);
+    if (input.workspace_id === undefined) {
+      assert(conv.account_group === 1,404,"not_found","该群聊不在个人工作区。");
+    } else {
+      const workspace = text(input.workspace_id,"workspace_id",{min:32,max:32});
+      assert(workspaceTeam(ot,workspace,viewer).id === conv.team_id,404,"not_found","该群聊不在当前工作区。");
+    }
+    const membership = ot.get<{since:number}>(`SELECT MAX(member.created_at,COALESCE(team_member.created_at,0)) AS since
+      FROM ot_conversation_members member LEFT JOIN ot_team_members team_member ON team_member.team_id=? AND team_member.owner_id=member.owner_id
+      WHERE member.conversation_id=? AND member.owner_id=?`,conv.team_id,conv.id,viewer)!.since;
+    const readable = `FROM ot_messages m WHERE m.conversation_id=? AND ${VISIBLE_MESSAGE}
+      AND m.author_kind='member' AND m.retracted=0 AND trim(m.body)<>''
+      AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
+      AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)`;
+    const select = `SELECT m.id,m.seq,m.body,m.revision,m.author_id ${readable}`;
+    let rows: {id:string;seq:number;body:string;revision:number;author_id:string}[];
+    let cursor = conv.last_seq;
+    if (input.after !== undefined) {
+      assert(input.message_ids === undefined && Number.isSafeInteger(input.after) && input.after >= 0,
+        400,"invalid_request","无效的群记忆游标。");
+      rows = ot.all(`${select} AND m.seq>? AND m.created_at>=? ORDER BY m.seq LIMIT 13`,conv.id,viewer,input.after,membership);
+      if (rows.length > 12) {
+        rows.pop();
+        cursor = rows[rows.length - 1].seq;
+      }
+    } else {
+      const ids = input.message_ids;
+      assert(Array.isArray(ids) && ids.length<=12 && new Set(ids).size===ids.length &&
+        ids.every(id=>typeof id==="string" && /^[A-Za-z0-9._-]{1,80}$/.test(id)),400,"invalid_request","请选择有效的群聊消息。");
+      rows = ids.length ? ot.all(`${select} AND m.id IN (${ids.map(()=>"?").join(",")}) ORDER BY m.seq`,conv.id,viewer,...ids) : [];
+    }
+    return {cursor,membership,items:rows.map(row=>({
+      id:row.id,revision:row.revision,title:conv.title,author:ot.profileView(row.author_id).display_name || "群成员",text:row.body,
+    }))};
+  });
+
   app.get("/v1/ot/conversations/:id/memories", async req => {
     const viewer = ot.me(req).ownerId;
     const conv = requireMemoryGroup(ot,params(req).id,viewer);

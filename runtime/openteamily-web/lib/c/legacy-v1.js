@@ -574,21 +574,14 @@ export async function shareGroupMemory(host, payload) {
 }
 
 export async function groupMemorySources(host, payload) {
-  const {workspace_id:workspace, conversation_id:id, message_ids:ids} = payload || {}
-  if (!Array.isArray(ids) || ids.length > 12 || new Set(ids).size !== ids.length) {
-    throw new Fault(400,'invalid','请选择当前群聊中的文字消息。')
-  }
-  const bs = client(host)
+  const {workspace_id:workspace, conversation_id:id, message_ids, after} = payload || {}
+  if (typeof workspace !== 'string' || !HEX.test(workspace)) throw new Fault(400,'invalid','无效的工作区。')
   const cid = seg(id,'conversation_id')
-  const group = await requireGroupMemoryScope(host,bs,workspace,cid)
-  const rows = await Promise.all(ids.map(async id => {
-    try { return await bs.get('/v1/ot/messages/' + seg(id,'message_id') + qs({conversation_id:cid})) }
-    catch (error) { if (error?.status === 404) return null; throw error }
-  }))
-  return {items:rows.filter(row => row && !row.retracted && row.author?.kind === 'member' && !row.voice && !row.attachment && row.body?.trim())
-    .sort((left,right) => left.seq-right.seq).map(row => ({
-      id:row.id, revision:row.revision, title:group.title, author:row.author.display_name || '群成员', text:row.body,
-    }))}
+  const binding = await host.call('agents/personal-binding', {})
+  return client(host).post(`/v1/ot/conversations/${cid}/memory-sources`,{
+    ...(binding?.workspace_id === workspace ? {} : {workspace_id:workspace}),
+    ...(after === undefined ? {message_ids} : {after}),
+  })
 }
 
 function messengerRoutes(host, wakeReplies) {
@@ -702,7 +695,22 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           await requireGroupMemoryScope(host,bs,match[1],match[2])
-          return [200,await bs.get(`/v1/ot/conversations/${match[2]}/memories`)]
+          const [shared, capture] = await Promise.all([
+            bs.get(`/v1/ot/conversations/${match[2]}/memories`),
+            host.call('memory/groupCaptureStatus',{workspace_id:match[1],conversation_id:match[2]}),
+          ])
+          return [200,{...shared,auto_capture:capture.enabled}]
+        })
+      },
+    },
+    {
+      method:'POST', path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/shared-memory\/auto-capture$/,
+      async handle({match,body}) {
+        return wrap(async () => {
+          if (typeof body?.enabled !== 'boolean') throw new Fault(400,'invalid','请选择是否自动提炼。')
+          return [200,await host.call('memory/setGroupCapture',{
+            workspace_id:match[1],conversation_id:match[2],enabled:body.enabled,
+          })]
         })
       },
     },
