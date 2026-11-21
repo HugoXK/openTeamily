@@ -220,8 +220,9 @@ function validateAll({ title, started_at, attendees, transcript, summary, action
 
 async function create(req, workspaceId) {
   const body = requireBodyKeys(await req.json(LIMITS.BODY), FIELDS)
+  const requestedStart = body.started_at ?? null
   const fields = {
-    title: body.title, started_at: body.started_at ?? req.now, attendees: body.attendees ?? [],
+    title: body.title, started_at: requestedStart ?? req.now, attendees: body.attendees ?? [],
     transcript: body.transcript ?? '', summary: body.summary ?? '', action_items: body.action_items ?? [],
   }
   validateAll(fields)
@@ -229,13 +230,16 @@ async function create(req, workspaceId) {
   const attendees = fields.attendees.map(strip)
   const actions = normalizeActions(fields.action_items)
   const key = idempotencyKey(req.headers)
-  const payload = { title, started_at: fields.started_at, attendees: [...attendees].sort(), transcript: fields.transcript, summary: fields.summary, action_items: actions }
+  const payload = { title, started_at: requestedStart, attendees: [...attendees].sort(), transcript: fields.transcript, summary: fields.summary, action_items: actions }
   const keyHash = digest('meeting:' + key)
   const requestHash = digest(stableJson(payload))
   return req.store.transaction((store) => {
     const prior = store.get('SELECT * FROM meetings WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
-      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+      // Older implicit saves hashed the creation time, which stays fixed when the start time is edited.
+      const matches = prior.request_hash === requestHash || (requestedStart === null
+        && prior.request_hash === digest(stableJson({ ...payload, started_at: prior.created })))
+      if (!matches) refuse(409, 'conflict', 'Idempotency key was used for a different request')
       return { status: 200, body: { meeting: view(prior) } }
     }
     const hash = titleHash(title)

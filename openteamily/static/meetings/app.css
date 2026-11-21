@@ -63,7 +63,24 @@
 .meeting-row .preview { color: var(--ot-muted); font-size: 0.8rem; }
 #meeting-form { display: grid; gap: 0.7rem; }
 #meeting-form label { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; font-size: 0.85rem; color: var(--ot-muted); }
+#meeting-form > label > input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: .5rem .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .6rem;
+  color: var(--ot-ink);
+  background: var(--ot-surface);
+  font: inherit;
+  font-size: .95rem;
+}
+#meeting-form > label > input:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 1px; }
 #meeting-form fieldset { border-radius: var(--ot-radius); }
+#meeting-save-status { margin: 0; padding: .5rem .65rem; border-radius: .55rem; background: var(--ot-bg-accent); }
+#meeting-save-status:empty { display: none; }
+#meeting-save-status[data-kind="error"] { color: var(--ot-danger, #b42318); }
 .action-list { display: grid; gap: 0.45rem; margin-bottom: 0.5rem; }
 .action-row {
   display: grid;
@@ -71,7 +88,7 @@
   gap: 0.4rem;
   align-items: center;
 }
-.action-done { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--ot-muted); }
+#meeting-form .action-done { flex-direction: row; align-items: center; gap: 0.25rem; white-space: nowrap; }
 .action-followup { grid-column: 1 / -1; justify-self: start; align-content: center; font-size: .85rem; }
 .action-followup[aria-disabled="true"] { color: var(--ot-muted); text-decoration: none; }
 .meeting-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
@@ -256,6 +273,7 @@
     border-bottom: 1px solid var(--ot-line);
     background: var(--ot-surface);
   }
+  #meeting-save-status { grid-row: 1; position: sticky; top: 3.65rem; z-index: 1; background: var(--ot-surface); border: 1px solid var(--ot-line); }
   .meeting-mobile-toolbar button, #new-meeting, #meeting-resume, #meeting-search,
   #meeting-list-filters .meeting-open-filter, .meeting-list-pagination button,
   #save-meeting-artifact, .action-followup, #meeting-artifact-link { min-height: 2.75rem; }
