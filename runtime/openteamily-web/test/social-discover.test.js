@@ -239,3 +239,39 @@ test('native work detail and comment routes forward the personal connector and r
   assert.equal((await call('POST', root + '/comments/' + id + '/remove', {})).body.comment_count, 0)
   assert.equal((await call('GET', root + '/comments?limit=1&limit=2')).status, 400)
 })
+
+test('native website publication copies the authorized saved HTML and exposes only site availability in detail', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-website-'))
+  const records = []
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'publisher', server: SERVER}), {mode: 0o600})
+  const workspace = 'b'.repeat(32)
+  const artifact = 'c'.repeat(32)
+  const html = '<h1>本地计数器</h1><p>点按增加数值。</p><script>document.title = "script fixture"</script>'
+  const listing = {kind: 'work', work_kind: 'website', listed: true, slug: 'local-counter', title: '本地计数器', site_available: true}
+  const site = createBotSocial({server: SERVER, credentialsPath, async fetch(url, init) {
+    records.push([init.method, new URL(url).pathname, init.body ? JSON.parse(init.body) : null])
+    if (url.endsWith('/mine')) return Response.json({listings: []})
+    if (url.endsWith('/detail')) return Response.json({work: {...listing, site_html: html}})
+    return Response.json(listing)
+  }})
+  setSharedBotSocial(site)
+  const run = discover({dataDir: dir, async call(endpoint, data) {
+    assert.equal(endpoint, 'artifacts/v1')
+    assert.equal(data.path, `/v1/workspaces/${workspace}/artifacts/${artifact}`)
+    return {body: {artifact: {id: artifact, title: '本地计数器', kind: 'website', revision: 2, body: html}}}
+  }}).endpoints.v1
+  const publish = await run({
+    method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`,
+    body: {slug: 'local-counter', site_html: 'request override'},
+  })
+  assert.equal(publish.status, 201)
+  assert.deepEqual(records.find(([method]) => method === 'PUT')?.[2], {
+    kind: 'work', ref: artifact, slug: 'local-counter', title: '本地计数器',
+    summary: '本地计数器\n点按增加数值。', work_kind: 'website', site_html: html,
+  })
+  const detail = await run({method: 'GET', path: '/v1/discover/works/local-counter'})
+  assert.equal(detail.body.work.site_available, true)
+  assert.equal(Object.hasOwn(detail.body.work, 'site_html'), false)
+  assert.equal(JSON.stringify(detail).includes('script fixture'), false)
+})

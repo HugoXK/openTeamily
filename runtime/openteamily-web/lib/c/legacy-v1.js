@@ -6,6 +6,8 @@
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
 import {workbookText} from '../../features/artifacts/workbook.js'
+import {textLines} from '../../features/artifacts/model.js'
+import {sanitizeHtml} from '../../features/artifacts/render.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -159,6 +161,7 @@ function workItem(row) {
     following: !!row.following,
     own_work: !!row.own,
     comment_count: row.comment_count ?? 0,
+    ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
   }
 }
 
@@ -1112,7 +1115,9 @@ function discoverRoutes(host) {
           const isModel = artifact.kind === 'media' && artifact.media?.mime === GLB_MIME
           const kind = isModel ? 'model3d' :
             ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
           const snapshot = artifact.kind === 'spreadsheet' && artifact.spreadsheet ? workbookText(artifact.spreadsheet) : String(artifact.body || '')
+          const summary = siteHtml ? textLines(sanitizeHtml(siteHtml), true).join('\n') : snapshot
           let modelData
           if (isModel) {
             const result = await host.call('artifacts/chatAttachment', {
@@ -1125,7 +1130,8 @@ function discoverRoutes(host) {
           }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary: snapshot.slice(0, 300), work_kind: kind, snapshot: snapshot.slice(0, 200000),
+            summary: summary.slice(0, 300), work_kind: kind,
+            ...(siteHtml ? {site_html: siteHtml} : {snapshot: snapshot.slice(0, 200000)}),
             ...(isModel ? {model_data: modelData} : {}),
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]

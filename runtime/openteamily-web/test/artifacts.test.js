@@ -1,3 +1,4 @@
+import { createLegacyDispatch, LEGACY_PATH } from '../src/dispatch.js'
 import { triangleGlb } from './fixtures/triangle-glb.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -303,4 +304,49 @@ test('generated GLB can be viewed, downloaded and attached to chat above the usu
   assert.equal(share.attachment.mime, 'model/gltf-binary')
   assert.match(share.attachment.title, /\.glb$/)
   assert.equal(share.attachment.data, view.download.data)
+})
+
+
+test('website iframe renders only the selected saved revision with an opaque script sandbox', async () => {
+  const bot = await boot()
+  const html = '<!doctype html><title>Demo</title><button>Count</button><script>document.title = "Active"</script>'
+  const site = await bot.call('artifacts', 'POST', base(), { title: '互动网页', kind: 'website', body: html }, key())
+  assert.equal(site.status, 201, JSON.stringify(site.body))
+  const path = base('/' + site.body.artifact.id)
+  const dispatch = createLegacyDispatch({ endpoints: bot.features.table })
+  const open = (path, query = '') => {
+    const url = new URL(LEGACY_PATH, 'http://127.0.0.1')
+    url.search = new URLSearchParams({ feature: 'artifacts', path, query })
+    return dispatch(new Request(url))
+  }
+  const preview = await open(path + '/preview', 'revision=1')
+  assert.equal(preview.status, 200)
+  assert.equal(await preview.text(), html)
+  assert.equal(preview.headers.get('content-type'), 'text/html; charset=utf-8')
+  assert.equal(preview.headers.get('cache-control'), 'private, no-store')
+  assert.equal(preview.headers.get('x-content-type-options'), 'nosniff')
+  assert.equal(preview.headers.get('referrer-policy'), 'no-referrer')
+  const csp = preview.headers.get('content-security-policy')
+  assert.match(csp, /(?:^|; )sandbox allow-scripts(?:;|$)/)
+  assert.match(csp, /frame-ancestors 'self'/)
+  assert.match(csp, /connect-src 'none'/)
+  assert.match(csp, /form-action 'none'/)
+  assert.doesNotMatch(csp, /allow-same-origin|allow-top-navigation|allow-popups/)
+
+  const staticPreview = await open(path + '/preview')
+  assert.equal(staticPreview.status, 200)
+  assert.doesNotMatch(await staticPreview.text(), /<script>/)
+  assert.doesNotMatch(staticPreview.headers.get('content-security-policy'), /allow-scripts/)
+  const exported = await open(path + '/export')
+  assert.equal(exported.status, 200)
+  assert.match(exported.headers.get('content-disposition'), /^attachment/)
+  assert.doesNotMatch(exported.headers.get('content-security-policy'), /allow-scripts/)
+  assert.equal((await open(path + '/preview', 'revision=1&revision=1')).status, 400)
+  assert.equal((await open(path + '/preview', 'revision=2')).status, 409)
+
+  const updated = await bot.call('artifacts', 'POST', path, { revision: 1, changes: { body: '<h1>Saved again</h1>' } })
+  assert.equal(updated.status, 200)
+  assert.equal((await open(path + '/preview', 'revision=1')).status, 409)
+  assert.equal(await (await open(path + '/preview', 'revision=2')).text(), '<h1>Saved again</h1>')
+  assert.equal((await open(base('/' + site.body.artifact.id + '/preview', 'b'.repeat(32)), 'revision=2')).status, 404)
 })

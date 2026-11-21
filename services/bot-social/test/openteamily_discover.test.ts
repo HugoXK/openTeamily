@@ -415,3 +415,77 @@ test("guest work pages navigate directly between public works and keep the share
   assert.match(previous, /<a rel="prev" href="\/w\/guest-nav-newer"[^>]*>上一件<\/a>/);
   assert.match(previous, /<span aria-disabled="true">下一件<\/span>/);
 });
+
+test("public website HTML lives only in an isolated frame and is deleted on revocation", async () => {
+  const publisher = await home(S.base, "website-publisher");
+  const reader = await home(S.base, "website-reader");
+  const slug = "interactive-counter";
+  const page = S.base + "/w/" + slug;
+  const put = "/v1/ot/listings";
+  const summary = "一个可点击的计数器。";
+  const site_html = '<!doctype html><button id="site-counter">0</button><script>site-counter-data</script>';
+  const input = {kind: "work", work_kind: "website", ref: "website_artifact", slug, title: "计数器 <demo>", summary};
+
+  assert.equal((await fetch(page + "/site")).status, 404);
+  const anon = await fetch(S.base + put, {
+    method: "PUT", headers: {"content-type":"application/json"}, body: JSON.stringify({...input, site_html}),
+  });
+  assert.equal(anon.status, 401);
+  assert.equal((await publisher.call("PUT", put, {...input, work_kind: "document", site_html})).status, 400);
+  assert.equal((await publisher.call("PUT", put, {...input, site_html: " "})).status, 400);
+  assert.equal((await publisher.call("PUT", put, {...input, site_html: "网".repeat(12_000)})).status, 413);
+  assert.equal((await fetch(page)).status, 404);
+
+  const work = await publisher.ok("PUT", put, {...input, site_html, snapshot: site_html});
+  assert.equal(work.site_available, true);
+  assert.equal("site_html" in work, false);
+  assert.equal(work.snapshot, null);
+  assert.equal((await reader.call("PUT", put, {...input, site_html: "different"})).status, 409);
+
+  const signed = await reader.ok("GET", "/v1/ot/discover/" + slug + "/detail");
+  const anonymous = await (await fetch(page, {headers: {accept: "application/json"}})).json() as any;
+  for (const projection of [signed.work, anonymous]) {
+    assert.equal(projection.site_available, true);
+    assert.equal(JSON.stringify(projection).includes("site-counter-data"), false);
+    assert.equal("site_html" in projection, false);
+  }
+  const feed = await reader.ok("GET", "/v1/ot/discover?kind=work&work_kind=website&q=计数器");
+  assert.equal(feed.items[0].site_available, true);
+  assert.equal(JSON.stringify(feed).includes("site-counter-data"), false);
+
+  const host = await (await fetch(page)).text();
+  assert.match(host, /<iframe class="work-site-frame" src="\/w\/interactive-counter\/site"/);
+  assert.match(host, /sandbox="allow-scripts" referrerpolicy="no-referrer"/);
+  assert.match(host, /title="计数器 &lt;demo&gt; 的互动预览"/);
+  assert.match(host, /frame-src 'self'/);
+  assert.match(host, /评论/);
+  assert.doesNotMatch(host, /site-counter-data/);
+  assert.deepEqual(await (await fetch(page + "/preview")).json(), {preview: summary});
+
+  const frame = await fetch(page + "/site");
+  assert.equal(frame.status, 200);
+  assert.match(frame.headers.get("content-type") ?? "", /^text\/html; charset=utf-8$/);
+  assert.equal(frame.headers.get("cache-control"), "no-store");
+  assert.equal(frame.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(frame.headers.get("referrer-policy"), "no-referrer");
+  assert.deepEqual(new Set(frame.headers.get("content-security-policy")?.split("; ")), new Set([
+    "sandbox allow-scripts", "frame-ancestors 'self'", "default-src 'none'",
+    "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", "img-src data:", "font-src data:", "media-src data:",
+    "connect-src 'none'", "object-src 'none'", "frame-src 'none'", "worker-src 'none'", "base-uri 'none'", "form-action 'none'",
+  ]));
+  assert.equal(await frame.text(), site_html);
+
+  assert.equal((await reader.call("DELETE", put + "/" + work.id)).status, 404);
+  await publisher.ok("DELETE", put + "/" + work.id);
+  assert.equal((await fetch(page + "/site")).status, 404);
+  assert.equal((await fetch(page)).status, 404);
+
+  const legacy = await publisher.ok("PUT", put, {...input, snapshot: "既有静态网页"});
+  assert.equal(legacy.site_available, false);
+  assert.match(await (await fetch(page)).text(), /既有静态网页/);
+  assert.equal((await fetch(page + "/site")).status, 404);
+  await publisher.ok("PUT", put, {...input, site_html});
+  await publisher.ok("PUT", put, {...input, work_kind: "document", snapshot: "普通文档"});
+  assert.equal((await fetch(page + "/site")).status, 404);
+  assert.doesNotMatch(await (await fetch(page)).text(), /work-site-frame" src=/);
+});
