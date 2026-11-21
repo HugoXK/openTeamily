@@ -1449,8 +1449,15 @@ function deferred() {
   return {promise: new Promise(resolve => { finish = resolve; }), finish: value => finish(value)};
 }
 
-function linkFixture(respond, search = linkedSearch) {
+function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   const page = fakeDocument();
+  if (native) {
+    page.doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
+    const dialog = page.doc.getElementById('duplicate-artifact-dialog');
+    dialog.showModal = () => { dialog.open = true; };
+    dialog.close = () => { dialog.open = false; };
+    page.doc.getElementById('duplicate-artifact-title').select = () => {};
+  }
   page.form.hidden = true;
   const view = new FakeNode();
   view.location = {search, hash: '', pathname: '/space'};
@@ -1463,7 +1470,7 @@ function linkFixture(respond, search = linkedSearch) {
   page.doc.defaultView = view;
   const calls = [];
   const fetcher = async (path, options) => {
-    calls.push({path, method: options.method, signal: options.signal, body: options.body});
+    calls.push({path, method: options.method, signal: options.signal, body: options.body, headers: options.headers});
     const result = respond(path, options);
     if (result) return result;
     if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
@@ -1476,6 +1483,53 @@ function linkFixture(respond, search = linkedSearch) {
   };
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
+
+test('copying a historic version recovers a lost receipt without discarding an unsaved Space draft', async () => {
+  const copy = {...linkedRecord,id:'c'.repeat(32),title:'历史副本',body:'第一版内容'};
+  const saved = {...linkedRecord,revision:2,body:'第二版内容'};
+  let writes = 0;
+  const page = linkFixture((path,options) => {
+    if (path === linkedDetail) return reply({body:{artifact:saved}});
+    if (path === linkedCatalog+'?order=recent') return reply({body:{items:[saved]}});
+    if (path === linkedDetail+'/versions') return reply({body:{items:[{revision:2,title:saved.title},{revision:1,title:'第一版'}]}});
+    if (path === linkedCatalog && options.method === 'POST') {
+      if (++writes === 1) return Promise.reject(new Error('simulated lost response'));
+      return reply({body:{artifact:copy}});
+    }
+  },linkedSearch,{native:true});
+  await page.mounted;
+  page.form.elements.body.value = '继续编辑的未保存草稿';
+  const versions = page.elements.get('version-panel');
+  versions.open = true;
+  await versions.dispatch('toggle');
+  await nextTask();
+  const historical = page.elements.get('version-list').children[1];
+  await historical.children.find(node => node.textContent === '复制为新作品').dispatch('click');
+  const dialog = page.elements.get('duplicate-artifact-dialog');
+  const form = page.elements.get('duplicate-artifact-form');
+  assert.equal(dialog.open,true);
+  page.elements.get('duplicate-artifact-title').value = copy.title;
+  await form.dispatch('submit');
+  assert.equal(page.elements.get('duplicate-artifact-submit').textContent,'重试');
+  await form.dispatch('submit');
+  const posts = page.calls.filter(call => call.path === linkedCatalog && call.method === 'POST');
+  assert.equal(posts.length,2);
+  assert.ok(posts[0].headers['Idempotency-Key']);
+  assert.equal(posts[0].headers['Idempotency-Key'],posts[1].headers['Idempotency-Key']);
+  assert.deepEqual(JSON.parse(posts[1].body),{title:copy.title,duplicate_from:{artifact_id:linkedArtifact,revision:1}});
+  assert.equal(dialog.open,true);
+  assert.equal(page.form.elements.body.value,'继续编辑的未保存草稿');
+  page.view.confirm = () => false;
+  await form.dispatch('submit');
+  assert.equal(dialog.open,true);
+  assert.equal(page.form.elements.body.value,'继续编辑的未保存草稿');
+  page.view.confirm = () => true;
+  await form.dispatch('submit');
+  assert.equal(dialog.open,false);
+  assert.equal(page.form.elements.body.value,copy.body);
+  assert.equal(page.form.elements.title.value,copy.title);
+  assert.equal(page.calls.some(call => call.method === 'GET' && call.path === linkedCatalog+'/'+copy.id),false);
+});
 
 test('an authorized direct link opens editable content with the catalog and optional panels held', async () => {
   const session = deferred();

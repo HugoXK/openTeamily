@@ -1,16 +1,30 @@
 import {PUBLIC_AGENT_MESSAGE_LIMIT} from '../shell/public-agent-link.mjs';
 
-// Keep drafts separated when switching conversations. A public draft remains in
-// this tab through reload and can only be restored for its owner and thread.
-export function mountPublicDraft(document) {
+const textOf = value => typeof value === 'string' && value.length <= PUBLIC_AGENT_MESSAGE_LIMIT ? value : '';
+
+function draftOwner(scope) {
+  try {
+    const [owner, workspace, kind, agent, conversation] = JSON.parse(scope);
+    if (typeof owner !== 'string' || !owner || typeof workspace !== 'string' || !workspace) return null;
+    if (kind === 'agent' && typeof agent === 'string' && agent) return owner;
+    if (kind === 'social' && typeof conversation === 'string' && conversation) return owner;
+  } catch {}
+  return null;
+}
+
+export function mountPublicDraft(document, {onChange = () => {}} = {}) {
   const input = document.getElementById('chat-body');
   const recovery = document.getElementById('public-draft-recovery');
   const recoveryText = document.getElementById('public-draft-recovery-text');
   const memory = new Map();
   const recovered = new Map();
+  const accountDrafts = new Map();
+  const dirtyAccounts = new Set();
   let active = null;
+  let writeTimer;
   const prefix = 'openteamily.public-agent-draft:';
   const recoveryPrefix = 'openteamily.public-agent-draft-recovery:';
+  const accountPrefix = 'openteamily.chat-drafts:';
 
   function read(scope, keyPrefix) {
     try { return document.defaultView?.sessionStorage?.getItem(keyPrefix + scope); } catch {}
@@ -30,15 +44,61 @@ export function mountPublicDraft(document) {
     recoveryText.value = text || '';
   }
 
-  function persist() {
-    if (!active) return;
-    const text = input.value || '';
-    if (text) memory.set(active.scope, text);
-    else memory.delete(active.scope);
-    if (active.publicChat) save(active.scope, prefix, text);
+  function draftsOf(owner) {
+    if (!accountDrafts.has(owner)) {
+      const drafts = new Map();
+      try {
+        const stored = JSON.parse(read(owner, accountPrefix) || '{}');
+        for (const [scope, value] of Object.entries(stored || {})) {
+          if (draftOwner(scope) === owner && textOf(value)) drafts.set(scope, value);
+        }
+      } catch {}
+      accountDrafts.set(owner, drafts);
+    }
+    return accountDrafts.get(owner);
   }
 
-  input.addEventListener('input', persist);
+  function flush() {
+    globalThis.clearTimeout(writeTimer);
+    writeTimer = undefined;
+    for (const owner of dirtyAccounts) {
+      const drafts = draftsOf(owner);
+      save(owner, accountPrefix, drafts.size ? JSON.stringify(Object.fromEntries(drafts)) : '');
+    }
+    dirtyAccounts.clear();
+  }
+
+  function lookup(scope, publicChat = false) {
+    if (publicChat) return memory.get(scope) ?? textOf(read(scope, prefix));
+    const owner = draftOwner(scope);
+    return (owner ? draftsOf(owner).get(scope) : memory.get(scope)) || '';
+  }
+
+  function update(scope, publicChat, text) {
+    const previous = lookup(scope, publicChat);
+    if (previous === text) return;
+    const owner = publicChat ? null : draftOwner(scope);
+    const drafts = owner ? draftsOf(owner) : memory;
+    if (text) drafts.set(scope, text);
+    else drafts.delete(scope);
+    if (publicChat) save(scope, prefix, text);
+    if (owner) {
+      dirtyAccounts.add(owner);
+      writeTimer ??= globalThis.setTimeout(flush, 200);
+    }
+    onChange(scope, text, previous);
+  }
+
+  function persist({now = true} = {}) {
+    if (active) update(active.scope, active.publicChat, input.value || '');
+    if (now) flush();
+  }
+
+  input.addEventListener('input', () => persist({now: false}));
+  document.defaultView?.addEventListener?.('pagehide', () => persist());
+  document.addEventListener?.('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persist();
+  });
   document.getElementById('public-draft-recovery-clear').addEventListener('click', () => {
     if (!active?.publicChat) return;
     recovered.set(active.scope, '');
@@ -48,28 +108,35 @@ export function mountPublicDraft(document) {
   });
   return {
     enter(scope, publicChat = false) {
-      if (active?.scope === scope) return;
-      if (active) persist();
+      if (active?.scope === scope && active.publicChat === publicChat) return;
+      if (active) persist({now: false});
       const initialText = active ? '' : (input.value || '');
       active = {scope, publicChat};
-      const previous = memory.get(scope) ?? (publicChat ? read(scope, prefix) : null);
-      input.value = typeof previous === 'string' && previous.length <= PUBLIC_AGENT_MESSAGE_LIMIT
-        ? previous : (publicChat ? '' : initialText);
+      input.value = textOf(lookup(scope, publicChat)) || (publicChat ? '' : initialText);
       showRecovery(publicChat ? recovered.get(scope) ?? read(scope, recoveryPrefix) : '');
     },
     move(fromScope, toScope) {
+      if (fromScope === toScope || draftOwner(fromScope) !== draftOwner(toScope)) return;
       if (active?.scope === fromScope) {
         if (active.publicChat) return;
-        memory.delete(fromScope);
+        const text = input.value || '';
         active.scope = toScope;
-        persist();
+        update(fromScope, false, '');
+        update(toScope, false, text);
       } else {
-        const text = memory.get(fromScope);
-        if (!text || memory.has(toScope) || (active?.scope === toScope && input.value)) return;
-        memory.set(toScope, text);
-        memory.delete(fromScope);
+        const text = lookup(fromScope);
+        if (!text || lookup(toScope) || (active?.scope === toScope && input.value)) return;
+        update(toScope, false, text);
+        update(fromScope, false, '');
         if (active?.scope === toScope) input.value = text;
       }
+      flush();
+    },
+    lookup,
+    forget(scope) {
+      if (active?.scope === scope) input.value = '';
+      update(scope, active?.scope === scope && active.publicChat, '');
+      flush();
     },
     fill(text) {
       if (!active?.publicChat || input.disabled) return false;
@@ -104,6 +171,7 @@ export function mountPublicDraft(document) {
       active = null;
       memory.clear();
       recovered.clear();
+      accountDrafts.clear();
       input.value = '';
       showRecovery('');
     },

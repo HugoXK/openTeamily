@@ -1122,6 +1122,7 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 #conversation-list .copy { display: grid; gap: .125rem; min-width: 0; }
 #conversation-list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; font-weight: 550; }
 #conversation-list .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ot-muted); font-size: .75rem; }
+.session-draft-label { margin-inline-end: .375rem; color: var(--ot-accent-hover); font-weight: 650; }
 #conversation-list .time { align-self: start; padding-top: .125rem; color: var(--ot-muted); font-size: .75rem; }
 #conversation-list .unread-badge { min-width: 1rem; padding: 0 .3rem; font-size: .625rem; line-height: 1rem; }
 

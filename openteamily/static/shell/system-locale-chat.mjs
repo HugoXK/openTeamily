@@ -39,6 +39,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.sessions.type": ["会话类型", "Conversation type"],
   "chat.all": ["全部", "All"],
   "chat.sessions.personal_agent": ["个人智能体", "Personal agent"],
+  "chat.sessions.drafts": ["草稿", "Drafts"],
   "chat.sessions.group_chat": ["群聊", "Group chat"],
   "chat.sessions.direct_chat": ["单聊", "Direct chat"],
   "chat.sessions.unread": ["未读", "Unread"],

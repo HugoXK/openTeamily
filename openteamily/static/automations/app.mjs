@@ -305,27 +305,51 @@ function clampNumber(value, low, high, fallback) {
 
 // The list row says the same thing as the schedule picker, and never leaks the
 // stored kind (`now`, `once`, `daily`, ...) to the reader.
-export function scheduleSummary(schedule, enabled) {
-  const state = enabled ? '已启用' : '未启用';
+export function scheduleSummary(schedule, enabled, includeState = true) {
+  const state = includeState ? `· ${enabled ? '已启用' : '未启用'}` : '';
   const kind = schedule && schedule.kind ? schedule.kind : 'now';
   const zone = (schedule && schedule.time_zone) || 'Asia/Shanghai';
   const time = (schedule && schedule.time) || '09:00';
-  if (kind === 'now') return `立即运行 · ${state}`;
+  if (kind === 'now') return `立即运行${state ? ` ${state}` : ''}`;
   if (kind === 'once' || kind === 'later') {
     const date = schedule && schedule.date ? `${schedule.date} ` : '';
-    return `单次 ${date}${time}（${zone}）· ${state}`;
+    return `单次 ${date}${time}（${zone}）${state}`;
   }
-  if (kind === 'daily') return `每天 ${time}（${zone}）· ${state}`;
-  if (kind === 'weekdays') return `工作日 ${time}（${zone}）· ${state}`;
+  if (kind === 'daily') return `每天 ${time}（${zone}）${state}`;
+  if (kind === 'weekdays') return `工作日 ${time}（${zone}）${state}`;
   if (kind === 'weekly') {
     const weekday = WEEKDAY_NAMES[clampNumber(schedule && schedule.weekday, 1, 7, 1) - 1];
-    return `每周${weekday} ${time}（${zone}）· ${state}`;
+    return `每周${weekday} ${time}（${zone}）${state}`;
   }
   if (kind === 'monthly') {
     const day = clampNumber(schedule && schedule.day, 1, 31, 1);
-    return `每月 ${day} 日 ${time}（${zone}）· ${state}`;
+    return `每月 ${day} 日 ${time}（${zone}）${state}`;
   }
-  return `已安排 · ${state}`;
+  return `已安排${state ? ` ${state}` : ''}`;
+}
+
+function renderNextRun(node, item) {
+  const status = item?.schedule_status;
+  node.textContent = '';
+  node.hidden = true;
+  if (!status) return;
+  if (status.state === 'due') node.textContent = '已到计划运行时间';
+  if (status.state === 'once_triggered') node.textContent = '单次计划已触发';
+  if (status.state === 'scheduled' && Number.isSafeInteger(status.at) && status.at > 0) {
+    const zone = item.schedule?.time_zone;
+    if (typeof zone !== 'string' || !zone) return;
+    try {
+      const date = new Date(status.at * 1000);
+      const formatted = new Intl.DateTimeFormat('zh-CN', {timeZone:zone, year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(date);
+      const time = node.ownerDocument.createElement('time');
+      time.dateTime = date.toISOString();
+      time.textContent = `${formatted}（${zone}）`;
+      node.textContent = '下次运行 ';
+      node.append(time);
+    } catch { return; }
+  }
+  node.hidden = !node.textContent;
 }
 
 function fillEditor(form, item, username) {
@@ -398,12 +422,19 @@ function renderList(items, list, empty, onOpen) {
     open.addEventListener('click', () => onOpen(item));
     const meta = document.createElement('span');
     meta.className = 'item-schedule';
-    meta.textContent = scheduleSummary(item.schedule, item.enabled);
+    meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
     copy.appendChild(open);
     copy.appendChild(meta);
+    const consumed = item.schedule_status?.state === 'once_triggered';
+    if (item.schedule_status && !consumed) {
+      const next = document.createElement('span');
+      next.className = 'item-schedule item-next-run';
+      renderNextRun(next, item);
+      if (!next.hidden) copy.appendChild(next);
+    }
     const state = document.createElement('span');
-    state.className = 'status-pill' + (item.enabled ? ' is-on' : '');
-    state.textContent = item.enabled ? '已启用' : '未启用';
+    state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
+    state.textContent = consumed ? '单次计划已触发' : item.enabled ? '已启用' : '未启用';
     row.appendChild(avatar);
     row.appendChild(copy);
     row.appendChild(state);
@@ -463,6 +494,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceStatus = document.getElementById('workspace-status');
   const templateRetry = document.getElementById('automation-template-retry');
   const editorOptions = document.getElementById('automation-editor-options');
+  const nextRun = document.getElementById('automation-next-run');
+  const scheduleSettings = document.getElementById('automation-schedule-settings');
   const native = servedByDsBot(document);
   let currentUser = null;
   let loadRequest = 0;
@@ -949,6 +982,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       runCursors = cursors;
       nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
       activeRun = typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive);
+      const upcoming = listed.body.schedule_status;
+      if (listed.body.schedule_revision === current.revision &&
+          (upcoming?.state !== current.schedule_status?.state || upcoming?.at !== current.schedule_status?.at)) {
+        current.schedule_status = upcoming;
+        renderEditorSchedule();
+        renderManualRunNote();
+      }
       setRunPageControls();
       renderRuns(items);
       if (focus) showRunHistory();
@@ -1086,6 +1126,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
     renderMeetingSource(source);
+    renderEditorSchedule();
     form.elements.template_id.disabled = Boolean(item?.id);
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = item?.id ? item.title : source ? '创建会议跟进' : '新建自动化';
@@ -1101,9 +1142,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderManualRunNote() {
     if (!manualRunNote) return;
     manualRunNote.hidden = !current?.id && !meetingSource;
-    manualRunNote.textContent = meetingSource ? '保存为暂停的自动化。保存后可手动运行一次。' : current?.enabled
+    manualRunNote.textContent = meetingSource ? '保存为暂停的自动化。保存后可手动运行一次。'
+      : current?.schedule_status?.state === 'once_triggered' ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
+  }
+
+  function renderEditorSchedule() {
+    if (!nextRun) return;
+    if (!current?.schedule_status || !current.schedule) {
+      renderNextRun(nextRun);
+      return;
+    }
+    const shown = scheduleFromForm(new FormData(form));
+    const saved = current.schedule;
+    const unchanged = form.elements.enabled.checked === current.enabled && Object.keys(shown).every(key =>
+      (key === 'kind' && saved.kind === 'later' ? 'once' : saved[key]) === shown[key]);
+    renderNextRun(nextRun, unchanged ? current : null);
   }
 
   async function openLinkedAutomation(target, loadSeq) {
@@ -1437,6 +1492,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openEditor(null);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
+  scheduleSettings?.addEventListener('input', renderEditorSchedule);
 
   backButton.addEventListener('click', async () => {
     editorRequest += 1;
@@ -1527,6 +1583,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeConfirm({restoreFocus: false});
     fillEditor(form, current, currentUser && currentUser.username);
+    renderEditorSchedule();
     form.elements.template_id.disabled = true;
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = current.title;

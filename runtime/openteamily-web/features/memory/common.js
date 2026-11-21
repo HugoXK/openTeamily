@@ -85,6 +85,10 @@ export function pageView(store, row, { includeBody = true, topics, user = userna
     data.body = row.body
     const source = store.get('SELECT * FROM memory_capture_items WHERE workspace_id=? AND page_id=?', row.workspace_id,row.id)
     if (source) data.source = captureSourceView(source)
+    else {
+      const meeting = store.get('SELECT meeting_id,meeting_revision FROM memory_meeting_sources WHERE workspace_id=? AND page_id=?', row.workspace_id,row.id)
+      if (meeting) data.source = {kind:'meeting', ...meeting}
+    }
   } else data.preview = snippet(row.body)
   data.topics = topics ?? topicsFor(store, [row.id])[row.id] ?? []
   return data

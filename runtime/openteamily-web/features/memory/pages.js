@@ -198,30 +198,37 @@ async function update(req, workspaceId, pageId) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((key) => !['title', 'body', 'topics'].includes(key))) refuse(400, 'invalid', 'Unknown memory field')
-  const user = actor(req)
   return req.store.transaction((store) => {
-    // Compare inside the write transaction, after the request body has arrived.
     const row = pageAtRevision(store, workspaceId, pageId, revision)
-    let title = row.title
-    let content = row.body
-    const current = topicsFor(store, [row.id])[row.id] ?? []
-    let topics = current
-    if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory page title and body'); title = changes.title.trim() }
-    if ('body' in changes) { if (!validBody(changes.body)) refuse(400, 'invalid', 'Provide a memory page title and body'); content = changes.body }
-    if ('topics' in changes) { topics = normalizeTopics(changes.topics); if (topics === null) refuse(400, 'invalid', 'Provide valid memory topics') }
-    if (title === row.title && content === row.body && stableJson(topics) === stableJson(current)) return { body: { page: pageView(store, row) } }
-    const hash = titleHash(title)
-    if (title !== row.title && store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?', workspaceId, hash, row.id)) {
-      refuse(409, 'conflict', 'A memory page with this title already exists')
-    }
-    if (!store.get('SELECT 1 AS ok FROM memory_page_versions WHERE page_id=? LIMIT 1', row.id)) {
-      recordVersion(store, workspaceId, row.id, row.revision, row.title, row.body, row.updated, row.updated_by)
-    }
-    store.run('UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?', title, hash, content, row.revision + 1, req.now, user, row.id)
-    recordVersion(store, workspaceId, row.id, row.revision + 1, title, content, req.now, user)
-    if ('topics' in changes) replaceTopics(store, workspaceId, row.id, topics)
-    return { body: { page: pageView(store, loadPage(store, workspaceId, row.id)) } }
+    return { body: { page: pageView(store, writePage(req, row, changes)) } }
   })
+}
+
+// Update a page after the caller has checked its revision in the write transaction.
+export function writePage(req, row, changes) {
+  const {store, now} = req
+  const workspaceId = row.workspace_id
+  const title = 'title' in changes ? changes.title : row.title
+  const content = 'body' in changes ? changes.body : row.body
+  const current = topicsFor(store, [row.id])[row.id] ?? []
+  const topics = 'topics' in changes ? normalizeTopics(changes.topics) : current
+  if (!validTitle(title) || !validBody(content)) refuse(400, 'invalid', 'Provide a memory page title and body')
+  if (topics === null) refuse(400, 'invalid', 'Provide valid memory topics')
+  const clean = title.trim()
+  if (clean === row.title && content === row.body && stableJson(topics) === stableJson(current)) return row
+  const hash = titleHash(clean)
+  if (clean !== row.title && store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?', workspaceId, hash, row.id)) {
+    refuse(409, 'conflict', 'A memory page with this title already exists')
+  }
+  if (!store.get('SELECT 1 AS ok FROM memory_page_versions WHERE page_id=? LIMIT 1', row.id)) {
+    recordVersion(store, workspaceId, row.id, row.revision, row.title, row.body, row.updated, row.updated_by)
+  }
+  const user = actor(req)
+  const revision = row.revision + 1
+  store.run('UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?', clean, hash, content, revision, now, user, row.id)
+  recordVersion(store, workspaceId, row.id, revision, clean, content, now, user)
+  if ('topics' in changes) replaceTopics(store, workspaceId, row.id, topics)
+  return loadPage(store, workspaceId, row.id)
 }
 
 async function dispatch(req, workspaceId, targetId, removing) {

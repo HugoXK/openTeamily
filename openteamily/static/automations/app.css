@@ -181,6 +181,16 @@ body.app-workspace #main-panel {
   color: var(--ot-muted);
 }
 
+#automation-list .item-next-run,
+#automation-next-run {
+  color: var(--ot-ink);
+  overflow-wrap: anywhere;
+}
+
+#automation-next-run {
+  margin: 0.4rem 0 0;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

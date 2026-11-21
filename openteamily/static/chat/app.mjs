@@ -969,7 +969,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
-  const publicDraft = mountPublicDraft(document);
+  const sessionRows = new Map();
+  const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
   const starterList = document.getElementById('agent-quick-starts-list');
   const starterStatus = document.getElementById('agent-quick-starts-status');
@@ -1857,23 +1858,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (sessionTransition && !sessionTransition.pending) void openSessionTarget(sessionTransition);
   });
 
+  function draftScopeForSession(session) {
+    return JSON.stringify([currentUser?.id, workspaceId(), session.source, session.agent_id, session.id]);
+  }
+
+  function paintSessionPreview({button, preview, session}, value) {
+    const draft = value.trim().replace(/\s+/g, ' ').slice(0, 160);
+    if (draft) {
+      const mark = document.createElement('span');
+      mark.className = 'session-draft-label';
+      mark.textContent = uiLabel('草稿', 'Draft');
+      preview.replaceChildren(mark, document.createTextNode(draft));
+    } else fillBold(document, preview, session.preview || '');
+    button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
+      (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
+  }
+
+  function sessionDraftChanged(scope, text, previous) {
+    const row = sessionRows.get(scope);
+    if (document.getElementById('session-filter-value')?.value === 'drafts' && Boolean(text.trim()) !== Boolean(previous.trim())) {
+      if (row || sessions.some(session => draftScopeForSession(session) === scope)) renderSessions();
+    } else if (row) paintSessionPreview(row, text);
+  }
+
+  function clearComposerDrafts() {
+    publicDraft.clear();
+    for (const row of sessionRows.values()) paintSessionPreview(row, '');
+    sessionRows.clear();
+  }
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     if (privateArchiveOpen) privateArchiveOpen.hidden = !currentThreadWorkspace();
     list.replaceChildren();
+    sessionRows.clear();
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
+    const draftFor = item => currentUser ? publicDraft.lookup(draftScopeForSession(item), item.kind === 'public') : '';
     const visible = sessions.filter(item => filter === 'all'
       || (filter === 'agent' && item.source === 'agent')
       || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
+      || (filter === 'drafts' && Boolean(draftFor(item).trim()))
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversation-heading').textContent = uiLabel('对话 · ', 'Conversations · ') + visible.length;
+    const heading = filter === 'drafts' ? uiLabel('草稿', 'Drafts') : uiLabel('对话', 'Conversations');
+    document.getElementById('conversation-heading').textContent = `${heading} · ${visible.length}`;
     const empty = document.getElementById('conversations-empty');
     empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
-    if (!empty.hidden) empty.textContent = filter === 'all'
+    if (!empty.hidden) empty.textContent = filter === 'drafts' ? uiLabel('还没有未发送的草稿。', 'No unsent drafts.') : filter === 'all'
       ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
     const readAll = document.getElementById('conversations-read-all');
     if (readAll) {
@@ -1908,7 +1942,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.textContent = (session.pinned ? '置顶 · ' : '') + session.title;
       const preview = document.createElement('span');
       preview.className = 'preview';
-      fillBold(document, preview, session.preview || '');
+      const row = {button, preview, session};
+      sessionRows.set(draftScopeForSession(session), row);
+      paintSessionPreview(row, draftFor(session));
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
@@ -1928,7 +1964,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (group !== lastGroup) {
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
-      button.setAttribute('aria-label', group + '：' + session.title + (session.muted ? '，免打扰' : ''));
       li.append(button);
       list.append(li);
     }
@@ -3820,6 +3855,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         pendingSends.delete(exactScope);
       }
       replyDrafts.delete(exactScope);
+      publicDraft.forget(exactScope);
       attachmentSender?.forget?.(exactScope);
       voiceRecorder.clear();
       lastSocialItems = [];
@@ -5172,7 +5208,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
-      publicDraft.clear();
+      clearComposerDrafts();
       renderReplyDraft();
       currentConversation = null;
       chatCalls.sync();
@@ -5203,7 +5239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
-      publicDraft.clear();
+      clearComposerDrafts();
       renderReplyDraft();
     }
     const owner = session.body.user;
@@ -6386,7 +6422,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     queue.jobs.push(job);
     if (!sticker) {
       field.value = '';
-      publicDraft.persist();
+      publicDraft.persist({now: false});
       field.focus({preventScroll: true});
       if (social) agentMentions.clear();
     }
@@ -6597,6 +6633,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const field = document.getElementById('chat-body');
       const selection = wrapBold(field.value || '', field.selectionStart, field.selectionEnd);
       field.value = selection.text;
+      publicDraft.persist({now: false});
       field.focus();
       if (typeof field.setSelectionRange === 'function') {
         field.setSelectionRange(selection.start, selection.end);

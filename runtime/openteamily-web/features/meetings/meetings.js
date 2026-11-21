@@ -215,6 +215,21 @@ async function saveMeetingArtifact(req, workspaceId, meetingId) {
   return {status: result.status, body: {artifact: result.artifact}}
 }
 
+async function saveMeetingMemory(req, workspaceId, meetingId) {
+  if (req.method !== 'POST') refuse(405, 'method', 'Only POST is supported')
+  if (req.queryString) refuse(400, 'invalid', 'Queries are not supported')
+  const {revision} = requireBodyKeys(await req.json(), ['revision'])
+  if (!Number.isSafeInteger(revision) || revision < 1) refuse(400, 'invalid', '请选择已保存的纪要版本。')
+  const row = savedSnapshot(req, workspaceId, meetingId, revision)
+  const actions = parse(row.action_items)
+  const summary = row.summary.trim()
+  if (!summary && !actions.length) refuse(400, 'invalid', '请先保存摘要或行动项。')
+  return req.host.call('memory/saveMeetingNote', {
+    workspace_id:workspaceId, meeting_id:meetingId, revision, title:row.title, summary,
+    actions:actions.length ? markdownActions(actions) : [],
+  })
+}
+
 function validateAll({ title, started_at, attendees, transcript, summary, action_items }) {
   if (!validTitle(title) || !validStartedAt(started_at) || !validAttendees(attendees) || !validTranscript(transcript)
       || !validSummary(summary) || !validActionItems(action_items)) refuse(400, 'invalid', 'Provide valid meeting fields')
@@ -360,6 +375,7 @@ export const spec = {
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/export$/, handle: exportMeeting },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: readSavedAction },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/artifact$/, handle: saveMeetingArtifact },
+    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/memory$/, handle: saveMeetingMemory },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings(?:\/([0-9a-f]{32})(?:\/(remove))?)?$/, handle: dispatch },
   ],
   search,

@@ -2,13 +2,66 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { boot, bootMemory, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
 import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
+
+test('one scoped meeting memory keeps provenance and preserves separate edits across repeated copies', async () => {
+  const bot = await bootMemory()
+  const {meeting} = (await bot.call('meetings', 'POST', base(), body, key())).body
+  const route = base(meeting.id) + '/memory'
+  const copy = revision => bot.call('meetings', 'POST', route, {revision})
+  const revise = (revision, changes) => bot.call('meetings', 'POST', base(meeting.id), {revision, changes})
+  const [first, again] = await Promise.all([copy(1), copy(1)])
+  assert.deepEqual([first.status, again.status].sort(), [200, 201])
+  const {id} = first.body.memory
+  assert.equal(again.body.memory.id, id)
+  const target = '/v1/workspaces/' + WS + '/memory/' + id
+  const read = async () => (await bot.call('memory', 'GET', target)).body.page
+  const initial = await read()
+  assert.match(initial.body, /同步进度。[\s\S]+订会议室（bob）/)
+  assert.ok(!initial.body.includes(body.transcript))
+  assert.deepEqual(initial.source, {kind:'meeting', meeting_id:meeting.id, meeting_revision:1})
+  assert.equal((await bot.call('meetings', 'POST', base(meeting.id, 'b'.repeat(32)) + '/memory', {revision:1})).status, 404)
+  assert.equal((await bot.endpoint('memory/saveMeetingNote', {})).ok, false)
+  await revise(1, {summary:'决定在下周发布。'})
+  assert.equal((await copy(1)).status, 409)
+  assert.deepEqual((await copy(2)).body, {memory:{id, workspace_id:WS}, state:'updated', truncated:false})
+  const refreshed = await read()
+  assert.equal(refreshed.revision, 2)
+  assert.equal(refreshed.source.meeting_revision, 2)
+  assert.match(refreshed.body, /决定在下周发布/)
+  const versions = await bot.call('memory', 'GET', target + '/versions')
+  assert.deepEqual(versions.body.items.map(item => item.revision), [1])
+  await bot.call('memory', 'POST', target, {revision:2,changes:{body:'记忆页自己的备注。'}})
+  await revise(2, {summary:'修改了会议，保留记忆页自己的备注。'})
+  assert.equal((await copy(3)).body.state, 'edited')
+  assert.equal((await read()).body, '记忆页自己的备注。')
+  await bot.call('memory', 'POST', target + '/remove', {})
+  assert.equal((await copy(3)).status, 201)
+})
+
+test('large meeting minutes retain useful summaries and actionable excerpts inside the memory limit', async () => {
+  const bot = await bootMemory()
+  const title = '听'.repeat(79) + '😀会议'
+  const {meeting} = (await bot.call('meetings', 'POST', base(), {
+    title, summary:'😀'.repeat(4000), action_items:Array.from({length:50}, (_, i) => ({
+      text:'任务 ' + i + ' ' + '继续'.repeat(240),
+    })),
+  }, key())).body
+  const result = await bot.call('meetings', 'POST', base(meeting.id) + '/memory', {revision:1})
+  assert.equal(result.status, 201)
+  assert.equal(result.body.truncated, true)
+  const path = '/v1/workspaces/' + WS + '/memory/' + result.body.memory.id
+  const page = (await bot.call('memory', 'GET', path)).body.page
+  assert.ok(page.title.length <= 80 && page.body.length <= 8000 && !page.body.includes('\ufffd'))
+  assert.match(page.body, /任务 49/)
+  assert.match(page.body, /完整纪要请从来源链接查看/)
+})
 
 test('meetings feature loads in this DS-Bot and keeps its data in its own feature directory', async () => {
   const bot = await boot()

@@ -113,7 +113,7 @@
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
         <label>交给智能体的任务 <textarea name="prompt" maxlength="4000" placeholder="描述要完成的任务和期望的结果"></textarea></label>
       </fieldset>
-      <fieldset>
+      <fieldset id="automation-schedule-settings">
         <legend>运行时间</legend>
         <label>频率
           <select name="kind" id="schedule-kind">
@@ -143,6 +143,7 @@
           <label data-schedule-kind="timed" hidden>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
+        <p id="automation-next-run" class="note" hidden></p>
       </fieldset>
       <details id="automation-editor-options" class="editor-options">
         <summary>更多设置</summary>

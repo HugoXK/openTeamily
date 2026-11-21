@@ -205,6 +205,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/share-recipients'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/shares'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/artifact'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/memory'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/action'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/revoke'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')

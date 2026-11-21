@@ -430,9 +430,12 @@ function mount() {
   const listRetry = document.getElementById('meeting-list-retry');
   const listStatus = document.getElementById('meeting-list-status');
   const resume = document.getElementById('meeting-resume');
-  const artifactButton = document.getElementById('save-meeting-artifact');
-  const artifactStatus = document.getElementById('meeting-artifact-status');
-  const artifactLink = document.getElementById('meeting-artifact-link');
+  const copyDestinations = ['artifact', 'memory'].map(kind => ({
+    kind,
+    button: document.getElementById('save-meeting-' + kind),
+    status: document.getElementById('meeting-' + kind + '-status'),
+    link: document.getElementById('meeting-' + kind + '-link'),
+  }));
   const native = servedByDsBot(document);
   let workspaceLoad = 0;
   let viewer = '';
@@ -458,7 +461,7 @@ function mount() {
   let actions = [];
   let actionBoxes = [];
   let actionFollowups = [];
-  let artifactWrite = null;
+  let copyingNotes = null;
   let writing = null;
   let saveRetry = null;
   let saveConflict = false;
@@ -532,8 +535,10 @@ function mount() {
 
   function syncSavedActions(pending) {
     const saved = native && Boolean(current?.id);
-    artifactButton.hidden = !saved;
-    artifactButton.disabled = !saved || pending || Boolean(artifactWrite && active(artifactWrite));
+    for (const {button} of copyDestinations) {
+      button.hidden = !saved;
+      button.disabled = !saved || pending || Boolean(copyingNotes && active(copyingNotes));
+    }
     for (const {link, action} of actionFollowups) {
       const item = saved && current.action_items?.[action.savedIndex];
       link.hidden = !item || item.done || action.done;
@@ -551,37 +556,54 @@ function mount() {
     }
   }
 
-  function clearArtifactResult() {
-    artifactStatus.textContent = '';
-    artifactLink.hidden = true;
-    artifactLink.removeAttribute('href');
+  function clearNoteCopies() {
+    for (const {status, link} of copyDestinations) {
+      status.textContent = '';
+      link.hidden = true;
+      link.removeAttribute('href');
+    }
   }
 
-  artifactButton.addEventListener('click', async () => {
-    if (!native || !current?.id || artifactButton.disabled) return;
+  async function copySavedNotes({kind, button, status, link}) {
+    if (!native || !current?.id || button.disabled) return;
     const target = {...scope(), id: current.id, revision: current.revision};
-    artifactWrite = target;
-    clearArtifactResult();
+    copyingNotes = target;
+    clearNoteCopies();
     syncWriting();
-    artifactStatus.textContent = `正在复制修订 ${target.revision} 的纪要…`;
-    const result = await request('POST', `${base()}/${target.id}/artifact`, {revision: target.revision}).catch(() => unavailable);
-    if (artifactWrite === target) artifactWrite = null;
+    status.textContent = `正在复制修订 ${target.revision} 的纪要…`;
+    const result = await request('POST', `${base()}/${target.id}/${kind}`, {revision: target.revision}).catch(() => unavailable);
+    if (copyingNotes === target) copyingNotes = null;
     if (!active(target) || current?.id !== target.id) return;
     syncWriting();
     if (current.revision !== target.revision) return;
-    const artifact = result.body.artifact;
-    if (![200, 201].includes(result.status) || !meetingIdPattern.test(artifact?.id || '') ||
-        (artifact.workspace_id && artifact.workspace_id !== target.workspace)) {
-      artifactStatus.textContent = result.status === 409 ? '会议已在别处更新，请重新打开后再保存纪要。'
+    const receipt = result.body[kind];
+    if (![200, 201].includes(result.status) || !meetingIdPattern.test(receipt?.id || '') ||
+        (receipt.workspace_id && receipt.workspace_id !== target.workspace)) {
+      status.textContent = result.status === 409 ? '会议已在别处更新，请重新打开后再保存纪要。'
         : messageFor(result.body.error, '无法保存纪要，请重试。');
       return;
     }
-    artifactLink.href = '/space?' + new URLSearchParams({workspace: target.workspace, artifact: artifact.id});
-    artifactLink.hidden = false;
-    artifactStatus.textContent = result.status === 201
-      ? `修订 ${target.revision} 的纪要已保存到资料空间。`
-      : `修订 ${target.revision} 的纪要已在资料空间。`;
-  });
+    const workspace = target.workspace;
+    link.hidden = false;
+    if (kind === 'memory') {
+      link.href = '/memory?' + new URLSearchParams({workspace, page: receipt.id});
+      if (result.body.state === 'edited') {
+        status.textContent = '记忆页已单独编辑，已保留你的修改。可打开记忆页继续整理。';
+      } else {
+        status.textContent = `修订 ${target.revision} 的纪要已存入记忆。` +
+          (result.body.truncated ? ' 内容较长，完整纪要可从记忆页的来源链接查看。' : '');
+      }
+    } else {
+      link.href = '/space?' + new URLSearchParams({workspace, artifact: receipt.id});
+      status.textContent = result.status === 201
+        ? `修订 ${target.revision} 的纪要已保存到资料空间。`
+        : `修订 ${target.revision} 的纪要已在资料空间。`;
+    }
+  }
+
+  for (const destination of copyDestinations) {
+    destination.button.addEventListener('click', () => copySavedNotes(destination));
+  }
 
   function rewriteLocation(params) {
     if (globalThis.history?.replaceState && globalThis.location) {
@@ -831,7 +853,7 @@ function mount() {
       return;
     }
     current = result.body.meeting;
-    clearArtifactResult();
+    clearNoteCopies();
     document.getElementById('meeting-meta').textContent =
       '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
     meetings = meetings.map(item => item.id === current.id ? current : item);
@@ -927,7 +949,7 @@ function mount() {
     current = meeting;
     callDraft = source;
     resume.hidden = true;
-    clearArtifactResult();
+    clearNoteCopies();
     setReceiptMode(false);
     if (layout) layout.dataset.view = 'editor';
     form.hidden = false;
@@ -953,7 +975,7 @@ function mount() {
     actions = [];
     actionFollowups = [];
     resume.hidden = true;
-    clearArtifactResult();
+    clearNoteCopies();
     setReceiptMode(false);
     audio.reset();
     clearDraft();
@@ -1161,7 +1183,7 @@ function mount() {
       search.value = '';
       openOnly.checked = false;
       resume.hidden = true;
-      clearArtifactResult();
+      clearNoteCopies();
       sharing.sync();
       if (sharedDetail) sharedDetail.hidden = true;
       audio.reset();
@@ -1350,7 +1372,7 @@ function mount() {
     else {
       current = meeting;
       callDraft = null;
-      clearArtifactResult();
+      clearNoteCopies();
       for (const action of actions) delete action.savedIndex;
       if (!revisedCreate) operation.submittedActions.forEach((action, index) => { action.savedIndex = index; });
       syncWriting();

@@ -18,6 +18,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/artifact`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/memory`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/action?index=0&revision=1`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
