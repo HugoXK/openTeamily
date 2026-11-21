@@ -1,4 +1,5 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
+import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { renderThumb, thumbModel } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -49,7 +50,7 @@ export function catalogQuery(text = '', cursor = '', category = 'all', creator =
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频'];
+export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品'];
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
@@ -66,26 +67,30 @@ export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显�
 export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
 export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
-export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
+export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video', 'model3d'];
 
-export function feedQuery(query, cursor = '', kind = '') {
+export function feedQuery(query, cursor = '', kind = '', sort = 'latest') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
+  if (sort === 'popular') params.set('sort', sort);
   return params.toString();
 }
 
-// The feed tab, category and search live in the URL so a filtered feed can be
+// The feed tab, category, sort and search live in the URL so a filtered feed can be
 // shared and survives a refresh. `?tab=agents` stays the catalog switch, and the
 // default 动态 feed keeps an empty query string.
 export function feedStateFromSearch(search) {
   const params = new URLSearchParams(typeof search === 'string' ? search : '');
   const feed = params.get('feed');
-  const kind = params.get('kind') || '';
+  const tab = feed === 'following' || feed === 'collected' ? feed : 'activity';
+  const requestedKind = params.get('kind');
+  const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   return {
-    tab: feed === 'following' || feed === 'collected' ? feed : 'activity',
-    kind: FEED_KINDS.includes(kind) ? kind : '',
+    tab,
+    kind,
+    sort: tab === 'activity' && !kind && params.get('sort') === 'popular' ? 'popular' : 'latest',
     query: (params.get('q') || '').slice(0, 80),
   };
 }
@@ -95,6 +100,7 @@ export function feedSearchText(state) {
   const tab = state && state.tab;
   if (tab === 'following' || tab === 'collected') params.set('feed', tab);
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
+  if (tab === 'activity' && !state.kind && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
   const text = params.toString();
   return text ? '?' + text : '';
@@ -115,7 +121,7 @@ export function coverPattern(title) {
   return String(hash % 8);
 }
 
-const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'};
+const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',model3d:'3D 作品',whiteboard:'白板',dashboard:'看板',media:'媒体'};
 
 // Covers come from /w/<slug>/preview (same exposure as the public work page),
 // so the feed listing itself stays a body-free projection.
@@ -129,7 +135,7 @@ export function attachFeedThumb(document, cover, preview) {
 }
 
 export function feedPreviewPath(item) {
-  if (!item || item.kind === 'image' || !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(String(item.slug || ''))) return '';
+  if (!item || item.kind === 'image' || item.kind === 'model3d' || !validSlug(item.slug)) return '';
   return '/w/' + item.slug + '/preview';
 }
 
@@ -177,10 +183,16 @@ export function detailMetaText(item) {
   ].filter(Boolean).join(' · ');
 }
 
+function publicModelPath(item) {
+  if (item.kind !== 'model3d' || !validSlug(item.slug)) return '';
+  const path = '/w/' + item.slug;
+  return item.path === '/social' + path ? item.path : path;
+}
+
 export function renderFeedCard(document, item) {
   const card = document.createElement('a');
   card.className = 'feed-card';
-  card.href = item.path || ('/w/' + (item.slug || ''));
+  card.href = publicModelPath(item) || item.path || ('/w/' + (item.slug || ''));
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
@@ -318,9 +330,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const manageAgent = manageParams.get('agent');
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
-  const initialFeed = catalogView
-    ? {tab: 'activity', kind: '', query: ''}
-    : feedStateFromSearch(location && location.search);
+  const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
 
   function setCurrent(id, on) {
     const node = document.getElementById(id);
@@ -456,29 +466,28 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false};
+  const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
 
-  function setFeedTab(tab) {
-    feedState.tab = tab;
-    for (const name of ['following', 'activity', 'collected']) {
-      const button = document.getElementById('feed-tab-' + name);
-      if (button) button.setAttribute('aria-selected', name === tab ? 'true' : 'false');
-    }
-    applyFeedNote();
-  }
-
-  function applyFeedChrome() {
+  function applyFeedChrome({restoreQuery = false} = {}) {
     for (const name of ['following', 'activity', 'collected']) {
       const button = document.getElementById('feed-tab-' + name);
       if (button) button.setAttribute('aria-selected', name === feedState.tab ? 'true' : 'false');
     }
+    const popular = feedState.tab === 'activity' && feedState.sort === 'popular';
+    const popularButton = document.getElementById('feed-sort-popular');
+    if (popularButton) {
+      popularButton.hidden = feedState.tab !== 'activity';
+      popularButton.setAttribute('aria-current', String(popular));
+    }
     for (const kind of FEED_KINDS) {
       const node = document.getElementById('feed-kind-' + (kind || 'all'));
-      if (node) node.setAttribute('aria-current', kind === feedState.kind ? 'true' : 'false');
+      if (node) node.setAttribute('aria-current', String(!popular && kind === feedState.kind));
     }
-    const input = document.getElementById('feed-query');
-    if (input) input.value = feedState.query;
+    if (restoreQuery) {
+      const input = document.getElementById('feed-query');
+      if (input) input.value = feedState.query;
+    }
   }
 
   function feedUrl() {
@@ -493,13 +502,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
     window.addEventListener('popstate', () => {
-      const next = feedStateFromSearch(location && location.search);
-      feedState.tab = next.tab;
-      feedState.kind = next.kind;
-      feedState.query = next.query;
-      applyFeedChrome();
-      applyFeedNote();
-      loadFeed();
+      Object.assign(feedState, feedStateFromSearch(location?.search));
+      applyFeedChrome({restoreQuery: true});
+      return loadFeed();
     });
   }
 
@@ -512,14 +517,29 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (gridSection) gridSection.hidden = false;
     if (searchNote) searchNote.hidden = true;
     if (!note) return;
+    if (feedState.loading) {
+      note.textContent = '';
+      return;
+    }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
-    else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading
+    else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
 
   const previewCache = new Map();
+  const pendingCovers = new Map();
+  const coverObserver = window?.IntersectionObserver ? new window.IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting || !pendingCovers.has(entry.target)) continue;
+      const item = pendingCovers.get(entry.target);
+      pendingCovers.delete(entry.target);
+      coverObserver.unobserve(entry.target);
+      loadThumb(entry.target, item);
+    }
+  }, {rootMargin: '160px 0px'}) : null;
+
   // One shape for both the cover thumb and the detail: a refused preview is
   // marked so the detail can say "unreadable" instead of "empty".
   function cachedPreview(item) {
@@ -541,9 +561,54 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return previewCache.get(key);
   }
 
+  function loadThumb(cover, item) {
+    cachedPreview(item).then(result => {
+      if (cover.isConnected !== false) attachFeedThumb(document, cover, result.preview);
+    }).catch(() => {});
+  }
+
   function hydrateThumb(cover, item) {
-    if (!cover) return;
-    cachedPreview(item).then(result => attachFeedThumb(document, cover, result.preview)).catch(() => {});
+    if (!cover || !feedPreviewPath(item)) return;
+    if (coverObserver) {
+      pendingCovers.set(cover, item);
+      coverObserver.observe(cover);
+    } else {
+      loadThumb(cover, item);
+    }
+  }
+
+  function attachModel3dDetail(panel, link, slug, url) {
+    const actions = document.createElement('div');
+    actions.className = 'feed-model3d-actions';
+    const preview = document.createElement('div');
+    preview.id = 'feed-model3d-preview-' + slug;
+    preview.className = 'feed-model3d-preview';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'feed-model3d-preview-toggle';
+    toggle.setAttribute('aria-controls', preview.id);
+    const download = document.createElement('a');
+    download.className = 'feed-detail-open feed-model3d-download';
+    download.href = url;
+    download.download = '';
+    download.textContent = '下载 GLB';
+    const status = document.createElement('p');
+    status.className = 'feed-model3d-status';
+    status.setAttribute('role', 'status');
+    actions.append(toggle, download, link);
+    panel.append(actions, status, preview);
+    return bindModel3dPreview(toggle, preview, status, {onReady() {
+      if (!window?.matchMedia?.('(max-width: 700px)')?.matches) return;
+      const viewport = document.getElementById('main')?.getBoundingClientRect();
+      if (!viewport) return;
+      const trigger = toggle.getBoundingClientRect();
+      // Respect any scrolling the viewer did while the model loaded.
+      if (trigger.bottom <= viewport.top || trigger.top >= viewport.bottom) return;
+      const model = preview.getBoundingClientRect();
+      if (model.top < viewport.top || model.bottom > viewport.bottom) {
+        panel.scrollIntoView({block: 'nearest', inline: 'nearest', behavior: 'instant'});
+      }
+    }});
   }
 
   // The detail is opened in place: the card keeps its own link to the work
@@ -564,11 +629,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (panel.id) toggle.setAttribute('aria-controls', panel.id);
     let open = false;
     let filled = false;
+    let modelPreview;
+    const modelPath = publicModelPath(item);
+    const modelFile = modelPath ? modelPath + '/file' : '';
     toggle.addEventListener('click', async () => {
       open = !open;
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       toggle.textContent = open ? FEED_DETAIL_LESS : FEED_DETAIL_MORE;
       panel.hidden = !open;
+      if (modelPreview) {
+        modelPreview.setSource(open ? modelFile : '');
+        return;
+      }
       if (!open || filled) return;
       filled = true;
       const meta = document.createElement('p');
@@ -579,8 +651,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       summary.textContent = FEED_DETAIL_LOADING;
       const link = document.createElement('a');
       link.className = 'feed-detail-open';
-      link.href = item.path || ('/w/' + (item.slug || ''));
+      link.href = modelPath || item.path || ('/w/' + (item.slug || ''));
       link.textContent = FEED_DETAIL_OPEN;
+      if (modelFile) {
+        panel.append(meta);
+        modelPreview = attachModel3dDetail(panel, link, item.slug, modelFile);
+        modelPreview.setSource(modelFile);
+        return;
+      }
       panel.append(meta, summary, link);
       if (!feedPreviewPath(item)) {
         summary.textContent = FEED_DETAIL_NO_TEXT;
@@ -604,11 +682,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     entry.append(toggle, panel);
   }
 
-  function renderFeed() {
+  function renderFeed(start = 0) {
     const grid = document.getElementById('feed-grid');
     if (!grid) return;
-    grid.replaceChildren();
-    for (const item of feedState.items) {
+    if (start === 0) {
+      coverObserver?.disconnect();
+      pendingCovers.clear();
+      grid.replaceChildren();
+    }
+    for (const item of feedState.items.slice(start)) {
       const card = renderFeedCard(document, item);
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
@@ -640,26 +722,30 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.append(entry);
     }
     grid.dataset.empty = feedState.items.length ? 'false' : 'true';
+    updateFeedStatus();
+  }
+
+  function updateFeedStatus() {
+    document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(feedState.loading));
     const count = document.getElementById('feed-count');
     if (count) {
-      count.textContent = feedState.items.length
-        ? '已显示 ' + feedState.items.length + ' 件公开作品'
-        : '';
+      if (feedState.loading) count.textContent = feedState.items.length ? '正在加载更多作品…' : '正在加载作品…';
+      else count.textContent = feedState.items.length ? '已显示 ' + feedState.items.length + ' 件公开作品' : '';
     }
     const more = document.getElementById('feed-more');
-    if (more) more.hidden = !feedState.cursor || feedState.loading;
+    if (more) {
+      more.hidden = !feedState.cursor;
+      more.disabled = feedState.loading;
+    }
     applyFeedNote();
   }
 
   async function loadFeed({append = false} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
-    const input = document.getElementById('feed-query');
-    const query = input ? (input.value || '').trim() : '';
     if (!append) {
       feedState.items = [];
       feedState.cursor = '';
-      feedState.query = query;
     }
     feedState.loading = true;
     const error = document.getElementById('feed-error');
@@ -667,8 +753,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       error.hidden = true;
       error.textContent = '';
     }
+    if (append) updateFeedStatus();
+    else renderFeed();
     const privateFeed = currentUser || feedState.tab !== 'activity';
-    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind);
+    const sort = feedState.tab === 'activity' ? feedState.sort : 'latest';
+    const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     let result;
@@ -676,19 +765,32 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     catch { result = {status: 0, body: {}}; }
     if (seq !== feedRequest) return;
     feedState.loading = false;
+    if (append && sort === 'popular' && result.status === 409 && result.body?.error?.code === 'popularity_expired') {
+      return loadFeed();
+    }
     if (result.status !== 200) {
       if (error) {
         error.hidden = false;
         error.textContent = (result.body && result.body.error && result.body.error.message)
           || '无法加载公开作品。';
       }
-      renderFeed();
+      updateFeedStatus();
       return;
     }
-    const incoming = result.body.items || [];
-    feedState.items = append ? feedState.items.concat(incoming) : incoming;
+    const start = feedState.items.length;
+    const incoming = catalogItems(result.body);
+    if (append) {
+      const seen = new Set(feedState.items.map(item => item.slug));
+      for (const item of incoming) {
+        if (seen.has(item.slug)) continue;
+        feedState.items.push(item);
+        seen.add(item.slug);
+      }
+    } else {
+      feedState.items = incoming;
+    }
     feedState.cursor = result.body.cursor || '';
-    renderFeed();
+    renderFeed(start);
   }
 
   function show(kind, text) {
@@ -1105,6 +1207,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       mainPanel.hidden = false;
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
+      if (!catalogView) return loadFeed();
       if (teamsView) await loadTeams();
       await directoryLoad;
       return;
@@ -1132,6 +1235,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     show('', '');
+    if (!catalogView) return loadFeed();
     if (teamsView) await loadTeams();
     await directoryLoad;
   }
@@ -1194,14 +1298,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!button) continue;
     button.addEventListener('click', () => {
       feedState.kind = kind;
-      for (const candidate of FEED_KINDS) {
-        const node = document.getElementById('feed-kind-' + (candidate || 'all'));
-        if (node) node.setAttribute('aria-current', candidate === kind ? 'true' : 'false');
-      }
+      feedState.sort = 'latest';
+      applyFeedChrome();
       pushFeedUrl();
       return loadFeed();
     });
   }
+  document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
+    if (feedState.tab !== 'activity') return;
+    if (feedState.sort === 'popular') {
+      if (!feedState.loading) return loadFeed();
+      return;
+    }
+    feedState.kind = '';
+    feedState.sort = 'popular';
+    applyFeedChrome();
+    pushFeedUrl();
+    return loadFeed();
+  });
   const feedSearch = document.getElementById('feed-search');
   if (feedSearch) {
     feedSearch.addEventListener('submit', event => {
@@ -1209,7 +1323,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const input = document.getElementById('feed-query');
       feedState.query = input ? (input.value || '').trim() : '';
       pushFeedUrl();
-      loadFeed();
+      return loadFeed();
     });
   }
   const feedMore = document.getElementById('feed-more');
@@ -1221,7 +1335,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const tab of ['following', 'activity', 'collected']) {
     const button = document.getElementById('feed-tab-' + tab);
     if (button) button.addEventListener('click', () => {
-      setFeedTab(tab);
+      feedState.tab = tab;
+      if (tab !== 'activity') feedState.sort = 'latest';
+      applyFeedChrome();
       pushFeedUrl();
       return loadFeed();
     });
@@ -1233,7 +1349,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await load();
   });
 
-  return load().then(() => { if (!catalogView) { setFeedTab(feedState.tab); applyFeedChrome(); return loadFeed(); } });
+  if (!catalogView) applyFeedChrome({restoreQuery: true});
+  return load();
 }
 
 if (globalThis.document && globalThis.document.getElementById('manage-list')) {

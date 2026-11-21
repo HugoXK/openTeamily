@@ -42,7 +42,7 @@ test('isTeamsCatalog only matches the recorded tab=agents&section=groups query',
 });
 
 test('available feed categories have a consistent order', () => {
-  assert.deepEqual(FEED_CATEGORIES, ['网页', '图片', '音乐', '幻灯片', '视频']);
+  assert.deepEqual(FEED_CATEGORIES, ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品']);
 });
 
 test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
@@ -52,7 +52,7 @@ test('feed all-filter shows the recorded 全部 label and keeps an empty canvas'
   assert.equal(/class="feed-filter-all"[^>]*><\/button>/.test(block), false);
   assert.equal(/aria-label="全部"/.test(block), false);
   assert.equal(/没有单独标出文字|圆形按钮/.test(block), false);
-  const order = ['全部', ...FEED_CATEGORIES];
+  const order = ['全部', '热门', ...FEED_CATEGORIES];
   const positions = order.map((label) => block.indexOf(`>${label}<`));
   assert.equal(positions.every((index) => index !== -1), true);
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
@@ -332,6 +332,7 @@ test('search and join use the team directory and show the approval status', asyn
 test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('', ''), 'limit=12');
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
+  assert.equal(feedQuery('设计', 'hot-key', '', 'popular'), 'limit=12&q=%E8%AE%BE%E8%AE%A1&cursor=hot-key&sort=popular');
 });
 
 test('the activity feed renders opted-in work cards from the public API', async () => {
@@ -405,7 +406,7 @@ test('work type selection uses the real API and resets pagination, all restores 
 
 test('the feed only presents available filters', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
-  for (const kind of ['website', 'image', 'audio', 'slides', 'video']) {
+  for (const kind of ['website', 'image', 'audio', 'slides', 'video', 'model3d']) {
     const tag = html.match(new RegExp('<button[^>]*id="feed-kind-' + kind + '"[^>]*>'))[0];
     assert.equal(tag.includes('disabled'), false);
   }
@@ -479,21 +480,82 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
 test('feed selection round-trips through the URL search', async () => {
   const {feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=video&q=cat'),
-    {tab: 'following', kind: 'video', query: 'cat'});
+    {tab: 'following', kind: 'video', sort: 'latest', query: 'cat'});
   assert.deepEqual(feedStateFromSearch('?feed=collected&q=%E4%B8%AD%E6%96%87'),
-    {tab: 'collected', kind: '', query: '中文'});
+    {tab: 'collected', kind: '', sort: 'latest', query: '中文'});
   assert.deepEqual(feedStateFromSearch('?tab=agents'),
-    {tab: 'activity', kind: '', query: ''});
+    {tab: 'activity', kind: '', sort: 'latest', query: ''});
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=bogus'),
-    {tab: 'following', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: ''});
+    {tab: 'following', kind: '', sort: 'latest', query: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', sort: 'latest', query: ''});
+  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', sort: 'latest', query: ''});
+  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', sort: 'latest', query: ''});
+  assert.deepEqual(feedStateFromSearch('?sort=popular&q=cat'), {tab: 'activity', kind: '', sort: 'popular', query: 'cat'});
+  assert.deepEqual(feedStateFromSearch('?kind=model3d'), {tab: 'activity', kind: 'model3d', sort: 'latest', query: ''});
+  assert.equal(feedSearchText(feedStateFromSearch('?sort=popular&q=cat')), '?sort=popular&q=cat');
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
   assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
   assert.equal(feedSearchText({tab: 'activity', kind: '', query: ''}), '');
   assert.equal(feedSearchText({tab: 'following', kind: 'bogus', query: ''}), '?feed=following');
+});
+
+test('热门 and work kinds replace each other and restore their activity URLs', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), requests = [], visits = [], handlers = {};
+  const location = {search: '?kind=model3d&q=chair', pathname: '/discover'};
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    requests.push(new URL(path, 'https://example.com').searchParams);
+    return {status: 200, json: async () => ({items: [], cursor: null})};
+  };
+  await mount(doc, {fetcher, location, history: {pushState(_state, _title, url) {visits.push(url);}},
+    window: {addEventListener(type, handler) {handlers[type] = handler;}}});
+  const el = id => doc.getElementById(id);
+  assert.equal(el('feed-kind-model3d').attributes['aria-current'], 'true');
+  await el('feed-sort-popular').handlers.click();
+  assert.equal(visits.at(-1), '/discover?sort=popular&q=chair');
+  assert.equal(requests.at(-1).get('sort'), 'popular');
+  assert.equal(requests.at(-1).get('tab'), 'all');
+  assert.equal(requests.at(-1).has('kind'), false);
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'false');
+  assert.equal(el('feed-sort-popular').attributes['aria-current'], 'true');
+  await el('feed-kind-all').handlers.click();
+  assert.equal(visits.at(-1), '/discover?q=chair');
+  assert.equal(requests.at(-1).has('sort'), false);
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'true');
+  location.search = '?sort=popular&q=chair';
+  await handlers.popstate();
+  assert.equal(el('feed-sort-popular').attributes['aria-current'], 'true');
+  await el('feed-tab-following').handlers.click();
+  assert.equal(el('feed-sort-popular').hidden, true);
+  assert.equal(requests.at(-1).has('sort'), false);
+  assert.equal(requests.at(-1).get('tab'), 'following');
+});
+
+test('a popularity cursor refreshes from the first page after expiring', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), paths = [];
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    paths.push(path);
+    if (path.includes('cursor=')) {
+      return {status: 409, json: async () => ({error: {code: 'popularity_expired'}})};
+    }
+    const item = {slug: 'paper-chair', title: paths.length === 1 ? 'Original' : 'Refreshed', kind: 'model3d'};
+    return {status: 200, json: async () => ({items: [item], cursor: paths.length === 1 ? 'hot-key' : null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?sort=popular'}});
+  doc.getElementById('feed-more').handlers.click();
+  await flush();
+  assert.deepEqual(paths, [
+    '/v1/discover/works?limit=12&sort=popular',
+    '/v1/discover/works?limit=12&cursor=hot-key&sort=popular',
+    '/v1/discover/works?limit=12&sort=popular',
+  ]);
+  assert.match(JSON.stringify(doc.getElementById('feed-grid').children), /Refreshed/);
+  assert.equal(doc.getElementById('feed-sort-popular').attributes['aria-current'], 'true');
+  assert.equal(doc.getElementById('feed-error').hidden, true);
 });
 
 
@@ -788,6 +850,38 @@ function detailFetcher(item, previewResult) {
   };
   return {fetcher, requests};
 }
+
+test('the 3D detail exposes an explicit preview and direct download without prefetching the file', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture({
+    kind: 'model3d', kind_label: '', path: '/social/w/ci-fixture-doc',
+  }), () => {
+    assert.fail('a 3D cover does not need a text preview');
+  });
+  await mount(doc, {fetcher, location: {search: '?kind=model3d'}});
+  const grid = doc.getElementById('feed-grid');
+  assert.equal(grid.children[0].children[0].children[1].textContent, '3D 作品');
+  const [detail] = classHits(grid, 'feed-detail-toggle');
+  await detail.handlers.click();
+  const [preview] = classHits(grid, 'feed-model3d-preview-toggle');
+  const [download] = classHits(grid, 'feed-model3d-download');
+  assert.equal(preview.textContent, '预览 3D 模型');
+  assert.equal(preview.disabled, false);
+  assert.equal(download.href, '/social/w/ci-fixture-doc/file');
+  assert.equal(download.download, '');
+  assert.equal(requests.some(path => path.startsWith('/w/')), false);
+  await detail.handlers.click();
+  assert.equal(preview.disabled, true);
+});
+
+test('3D card URLs fall back to the matching same-origin work route', () => {
+  const doc = feedDocument();
+  const item = detailFixture({kind: 'model3d'});
+  for (const path of ['//other.example/w/ci-fixture-doc', '/social/w/other-asset', '/w/ci-fixture-doc?next=outside']) {
+    assert.equal(renderFeedCard(doc, {...item, path}).href, '/w/ci-fixture-doc');
+  }
+});
 
 test('a work card opens a read-only detail in place without leaving the feed', async () => {
   const app = await import('../openteamily/static/discover/app.mjs');

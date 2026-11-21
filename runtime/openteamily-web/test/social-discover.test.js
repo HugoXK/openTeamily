@@ -114,3 +114,67 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('GET', remix)).status, 404)
   assert.equal(created.length, 1)
 })
+
+test('native Discover forwards popularity cursors separately and publishes only the selected saved 3D revision', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-models-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const workspace = 'a'.repeat(32)
+  const artifact = '3'.repeat(32)
+  const cursor = 'd'.repeat(32) + '.12'
+  const kind = 'model/gltf-binary'
+  const published = {id: 'entry', kind: 'work', work_kind: 'model3d', slug: 'vase', title: '陶瓷花瓶', listed: true}
+  const modelData = Buffer.from('published GLB fixture').toString('base64')
+  let review = false
+  const fetch = async (url, init) => {
+    const target = new URL(url)
+    if (target.pathname === '/v1/ot/discover') {
+      if (target.searchParams.has('before')) {
+        assert.equal(target.searchParams.get('before'), '123')
+        assert.equal(target.searchParams.has('sort'), false)
+        return Response.json({items: [], next_before: 100})
+      }
+      assert.equal(target.searchParams.get('kind'), 'work')
+      assert.equal(target.searchParams.get('sort'), 'popular')
+      assert.equal(target.searchParams.get('work_kind'), 'model3d')
+      assert.equal(target.searchParams.get('cursor'), cursor)
+      return review
+        ? Response.json({error: {code: 'popularity_expired', message: 'refresh'}}, {status: 409})
+        : Response.json({items: [{...published, model_data: modelData}], next_cursor: cursor})
+    }
+    if (target.pathname === '/v1/ot/listings/mine') return Response.json({listings: []})
+    assert.equal(target.pathname, '/v1/ot/listings')
+    assert.equal(init.method, 'PUT')
+    assert.deepEqual(JSON.parse(init.body), {
+      kind: 'work', ref: artifact, slug: 'vase', title: '陶瓷花瓶',
+      summary: '', work_kind: 'model3d', snapshot: '', model_data: modelData,
+    })
+    return Response.json(published)
+  }
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch}))
+  const call = discover({
+    dataDir: dir,
+    async call(endpoint, input) {
+      if (endpoint === 'artifacts/v1') {
+        assert.equal(input.path, `/v1/workspaces/${workspace}/artifacts/${artifact}`)
+        return {body: {artifact: {kind: 'media', title: '陶瓷花瓶', revision: 5, media: {mime: kind}}}}
+      }
+      assert.equal(endpoint, 'artifacts/chatAttachment')
+      assert.deepEqual(input, {workspace_id: workspace, artifact_id: artifact, revision: 5})
+      return {attachment: {mime: kind, data: modelData}}
+    },
+  }).endpoints.v1
+  const feed = '/v1/discover/me/works?sort=popular&kind=model3d&cursor=' + cursor
+  const results = await call({method: 'GET', path: feed})
+  assert.equal(results.body.items[0].kind, 'model3d')
+  assert.equal(results.body.items[0].model_data, undefined)
+  assert.equal(results.body.cursor, cursor)
+  assert.equal((await call({method: 'GET', path: '/v1/discover/me/works?cursor=123'})).body.cursor, 100)
+  review = true
+  const expired = await call({method: 'GET', path: feed})
+  assert.equal(expired.status, 409)
+  assert.equal(expired.body.error.code, 'popularity_expired')
+  const saved = await call({method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`, body: {slug: 'vase'}})
+  assert.equal(saved.status, 201)
+  assert.equal(saved.body.discover.listed, true)
+})

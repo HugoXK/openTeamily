@@ -12,11 +12,12 @@ import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
 import { replyPrompt, selectGroupMemories } from './agent-replies.js'
+import { GLB_MIME } from '../glb.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const WORK_LABELS = {
   document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
-  image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板',
+  image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板', model3d: '3D 作品',
 }
 
 const unix = (ms) => {
@@ -200,6 +201,7 @@ function rethrow(error) {
     meeting_ended: 'meeting_ended',
     public_chat_closed: 'public_chat_closed',
     quick_start_changed: 'quick_start_changed',
+    popularity_expired: 'popularity_expired',
     reply_unavailable: 'reply_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
@@ -1056,13 +1058,23 @@ function discoverRoutes(host) {
   const feed = (kind) => async ({ query }) => wrap(async () => {
     const bs = client(host)
     const q = parseQuery(query)
+    const sort = q.get('sort')
+    if (q.getAll('sort').length > 1 || (sort !== null && sort !== 'latest' && sort !== 'popular')) {
+      throw new Fault(400, 'invalid', '无效的发现排序。')
+    }
+    const popular = sort === 'popular'
+    const cursor = q.get('cursor')
+    if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
+      throw new Fault(400, 'invalid', '无效的热门作品请求。')
+    }
+    const pagination = popular ? {sort, cursor} : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
-      before: q.get('cursor'), limit: q.get('limit'),
+      ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, { items, cursor: data.next_before ?? null }]
+    return [200, { items, cursor: (popular ? data.next_cursor : data.next_before) ?? null }]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
@@ -1081,11 +1093,24 @@ function discoverRoutes(host) {
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
           const prior = await workListing(bs, match[2])
-          const kind = ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const isModel = artifact.kind === 'media' && artifact.media?.mime === GLB_MIME
+          const kind = isModel ? 'model3d' :
+            ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
           const snapshot = artifact.kind === 'spreadsheet' && artifact.spreadsheet ? workbookText(artifact.spreadsheet) : String(artifact.body || '')
+          let modelData
+          if (isModel) {
+            const result = await host.call('artifacts/chatAttachment', {
+              workspace_id: match[1], artifact_id: match[2], revision: artifact.revision,
+            })
+            if (result?.attachment?.mime !== GLB_MIME || !result.attachment.data) {
+              throw new Fault(409, 'conflict', '3D 文件已更新，请刷新后重新发布。')
+            }
+            modelData = result.attachment.data
+          }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary:snapshot.slice(0,300),work_kind:kind,snapshot:snapshot.slice(0,200000),
+            summary: snapshot.slice(0, 300), work_kind: kind, snapshot: snapshot.slice(0, 200000),
+            ...(isModel ? {model_data: modelData} : {}),
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
         })

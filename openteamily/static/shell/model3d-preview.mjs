@@ -1,5 +1,5 @@
 // The renderer and model download are only needed after the viewer is opened.
-export function bindModel3dPreview(button, container, status) {
+export function bindModel3dPreview(button, container, status, {onReady} = {}) {
   if (!button || !container || !status) return {setSource() {}};
 
   const document = container.ownerDocument;
@@ -54,7 +54,9 @@ export function bindModel3dPreview(button, container, status) {
       if (preview !== active) return;
       close();
       status.textContent = '无法预览，可下载 GLB 文件。';
+      return;
     }
+    onReady?.();
   });
 
   return {

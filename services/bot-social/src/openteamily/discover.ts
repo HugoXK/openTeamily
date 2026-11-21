@@ -2,9 +2,12 @@
 // creator follows and follow notifications. Ported from the legacy discover.py (#87, #313, #335).
 // A listing is a whitelisted projection the owner's DS-Bot chose to publish (title, summary,
 // category, kind and an optional explicitly released snapshot).
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
+import { DEFAULT_ATTACHMENT_LIMITS } from "../attachments.js";
+import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 
 export const DISCOVER_SCHEMA = `
@@ -16,18 +19,27 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
+CREATE INDEX IF NOT EXISTS ot_listings_recent_works ON ot_listings(updated_at DESC, id DESC) WHERE listed = 1 AND kind = 'work';
+CREATE TABLE IF NOT EXISTS ot_listing_models (
+  listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, content BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
 CREATE INDEX IF NOT EXISTS ot_follows_creator ON ot_follows(creator_id);
+CREATE INDEX IF NOT EXISTS ot_likes_recent ON ot_likes(listing_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_collections_recent ON ot_collections(listing_id, created_at);
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
-export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard"];
+export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d"];
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
+const MODEL_MIME = "model/gltf-binary";
 
 function engagement(ot: OtContext, l: any, viewer: string) {
   const has = (table: string) => !!ot.get(`SELECT 1 FROM ${table} WHERE listing_id = ? AND owner_id = ?`, l.id, viewer);
@@ -85,6 +97,7 @@ function publicPage(l: any, view: any) {
   const title = String(view.title || view.slug);
   const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
   if (l.kind === "work") {
+    const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
     const content = l.snapshot && !String(l.snapshot).startsWith("{")
       ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
       : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
@@ -103,6 +116,7 @@ pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
 <p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 ${content}
+${download}
 </body></html>
 `;
   }
@@ -188,12 +202,89 @@ function listedBySlug(ot: OtContext, slug: string) {
   return l;
 }
 
+const RANKING_WINDOW = 500;
+const RANKING_TTL = 10 * 60_000;
+const RANKING_SESSIONS = 128;
+const RANKED_CURSOR = /^([A-Za-z0-9_-]{32})\.([1-9][0-9]{0,2})$/;
+const WEEK = 7 * 86_400_000;
+
+function popularWorks(ot: OtContext) {
+  type Ranking = { context: string; keys: string; expires: number };
+  const rankings = new Map<string, Ranking>();
+
+  function rank(where: string, args: unknown[]) {
+    const now = ot.now();
+    const minimumEngagementTime = now - 8 * WEEK;
+    // Weight recent distinct likes and collections on opted-in works, without
+    // counting an author's own engagement.
+    const rows = ot.all<{id: string}>(`WITH recent AS MATERIALIZED (
+      SELECT l.id, l.owner_id, l.updated_at FROM ot_listings l
+      LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE l.listed = 1 AND l.kind = 'work' AND ${where}
+      ORDER BY l.updated_at DESC, l.id DESC LIMIT ${RANKING_WINDOW}
+    )
+    SELECT l.id FROM recent l ORDER BY (
+      2 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
+        WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12))
+      + 3 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
+        WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8))
+      - MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER)))
+    ) DESC, l.updated_at DESC, l.id DESC`, ...args, minimumEngagementTime, minimumEngagementTime, now);
+    return JSON.stringify(rows.map(row => row.id));
+  }
+
+  return (where: string, args: unknown[], viewer: string, limit: number, cursor: string | undefined) => {
+    const context = hashCode(JSON.stringify([viewer, where, args]));
+    const now = ot.now();
+    let token: string;
+    let ranking: Ranking;
+    let offset = 0;
+    if (cursor !== undefined) {
+      const match = RANKED_CURSOR.exec(cursor);
+      assert(match && Number(match[2]) < RANKING_WINDOW, 400, "invalid_request", "invalid popularity cursor");
+      token = match[1];
+      offset = Number(match[2]);
+      const previous = rankings.get(token);
+      assert(previous && previous.expires > now, 409, "popularity_expired", "refresh the popular works feed");
+      assert(previous.context === context, 400, "invalid_request", "cursor belongs to another feed");
+      ranking = previous;
+    } else {
+      token = randomBytes(24).toString("base64url");
+      ranking = {context, keys: rank(where, args), expires: now + RANKING_TTL};
+    }
+
+    // Use the captured order for pagination, but verify current publication
+    // and filter membership before returning a card. Revocation takes effect
+    // immediately and engagement changes cannot make a work repeat on a later page.
+    const rows = ot.all<any>(`SELECT l.id, l.owner_id, l.kind, l.slug, l.title, l.summary, l.category, l.work_kind,
+      l.listed, l.chat_enabled, l.updated_at, l.created_at, r.key AS position FROM json_each(?) r
+      JOIN ot_listings l ON l.id = r.value LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE r.key >= ? AND l.listed = 1 AND l.kind = 'work' AND ${where}
+      ORDER BY r.key LIMIT ?`, ranking.keys, offset, ...args, limit + 1);
+    const next = rows[limit];
+    if (next && cursor === undefined) {
+      for (const [key, entry] of rankings) if (entry.expires <= now) rankings.delete(key);
+      if (rankings.size >= RANKING_SESSIONS) {
+        const oldest = rankings.keys().next().value;
+        if (oldest) rankings.delete(oldest);
+      }
+      rankings.set(token, ranking);
+    }
+    return { items: rows.slice(0, limit).map(row => listingView(ot, row, viewer)),
+      next_cursor: next ? `${token}.${next.position}` : null };
+  };
+}
+
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
+  const popular = popularWorks(ot);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
 
-  app.put("/v1/ot/listings", async (req) => {
+  app.put("/v1/ot/listings", {
+    bodyLimit: CHAT_FILE_BODY_LIMIT,
+    onRequest: async req => { ot.me(req); },
+  }, async (req) => {
     const me = ot.me(req);
     const b = body(req);
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
@@ -204,6 +295,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
     const workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
+    if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
+    const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
     const snapshot = b.snapshot == null ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
@@ -224,6 +317,16 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
         ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
       }
+      if (model) {
+        const budget = ot.get<{bytes: number}>(`SELECT COALESCE(SUM(length(content)),0) AS bytes
+          FROM ot_listing_models WHERE owner_id = ? AND listing_id <> ?`, me.ownerId, id);
+        assert((budget?.bytes ?? 0) + model.length <= DEFAULT_ATTACHMENT_LIMITS.ownerBudgetBytes,
+          413, "attachment_storage_full", "public model storage is full");
+        ot.run(`INSERT INTO ot_listing_models (listing_id, owner_id, content) VALUES (?,?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET content=excluded.content`, id, me.ownerId, model);
+      } else if (existing?.work_kind === "model3d") {
+        ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      }
       if (!existing || !existing.listed) {
         for (const f of ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? LIMIT 5000", me.ownerId)) {
           ot.notify(f.follower_id, "discover.published", { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) });
@@ -234,8 +337,12 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
-    const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), params(req).id, me.ownerId);
-    assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
+    const id = params(req).id;
+    ot.tx(() => {
+      const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), id, me.ownerId);
+      assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
+      ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+    });
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
@@ -248,6 +355,15 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const q = query(req);
     const kind = one(q.kind, "kind");
     const tab = one(q.tab, "tab") ?? "all";
+    const sort = one(q.sort, "sort") ?? "latest";
+    const cursor = one(q.cursor, "cursor");
+    assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
+    if (sort === "popular") {
+      assert(kind === "work" && tab === "all" && q.before === undefined, 400, "invalid_request",
+        "popularity sorting applies to the all works feed and uses a popularity cursor");
+    } else {
+      assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
+    }
     const category = one(q.category, "category");
     const workKind = one(q.work_kind, "work_kind");
     const creator = one(q.creator, "creator");
@@ -257,12 +373,16 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const where = ["l.listed = 1"]; const args: unknown[] = [];
     if (kind) { assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work"); where.push("l.kind = ?"); args.push(kind); }
     if (category) { where.push("l.category = ?"); args.push(category); }
-    if (workKind) { where.push("l.work_kind = ?"); args.push(workKind); }
+    if (workKind) {
+      assert(WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
+      where.push("l.work_kind = ?"); args.push(workKind);
+    }
     if (creator) { where.push("l.owner_id = ?"); args.push(ot.ownerByHandle(creator)); }
     if (tab === "following") { where.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)"); args.push(me.ownerId); }
     else if (tab === "collected") { where.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)"); args.push(me.ownerId); }
     else assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
     if (search) { where.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)"); args.push(search, search, search, search); }
+    if (sort === "popular") return popular(where.join(" AND "), args, me.ownerId, Math.max(1, limit), cursor);
     if (before) { where.push("l.updated_at < ?"); args.push(before); }
     const rows = ot.all<any>(`SELECT l.* FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id WHERE ${where.join(" AND ")} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, limit);
     return { items: rows.map((l) => listingView(ot, l, me.ownerId)), next_before: rows.length === limit ? rows[rows.length - 1].updated_at : null };
@@ -321,11 +441,25 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const accept = String(req.headers.accept || "");
     if (accept.includes("application/json") && !accept.includes("text/html")) return view;
     reply.header("Content-Type", "text/html; charset=utf-8");
-    if (kind === "work") reply.header("Cache-Control", "public, max-age=60");
+    if (kind === "work") reply.header("Cache-Control", l.work_kind === "model3d" ? "no-store" : "public, max-age=60");
     return reply.send(publicPage(l, view));
   };
   app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
   app.get("/w/:slug", async (req, reply) => sendPublic(req, reply, "work"));
+  app.get("/w/:slug/file", async (req, reply) => {
+    const slug = params(req).slug;
+    const model = ot.get<{title: string; content: Buffer}>(`SELECT l.title, m.content FROM ot_listing_models m
+      JOIN ot_listings l ON l.id = m.listing_id
+      WHERE l.slug = ? AND l.listed = 1 AND l.kind = 'work' AND l.work_kind = 'model3d'`, slug);
+    reply.header("Cache-Control", "no-store");
+    assert(model, 404, "listing_not_found", "no such public model");
+    const name = encodeURIComponent(model.title.replace(/[\ud800-\udfff]/gu, "\ufffd") + ".glb").replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16));
+    return reply.type(MODEL_MIME)
+      .header("Content-Disposition", `attachment; filename="${slug}.glb"; filename*=UTF-8''${name}`)
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Content-Security-Policy", "default-src 'none'; sandbox")
+      .send(model.content);
+  });
   app.get("/w/:slug/preview", async (req) => {
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");

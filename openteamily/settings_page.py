@@ -199,14 +199,16 @@ class SettingsPage:
                 seen.add(key)
                 if key == 'feed' and value not in ('following', 'collected'):
                     return False
-                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video'):
+                if key == 'sort' and value != 'popular':
+                    return False
+                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
                     return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind'):
+                elif key not in ('feed', 'kind', 'sort'):
                     return False
-            return bool(seen)
+            return bool(seen) and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
@@ -237,7 +239,7 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
-        if path in ('/chat', '/chat/', '/space', '/artifacts'):
+        if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
             csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),

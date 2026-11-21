@@ -5,6 +5,16 @@ import assert from "node:assert/strict";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
+const TRIANGLE_GLB = [
+  "Z2xURgIAAACUAQAAVAEAAEpTT057ImFzc2V0Ijp7InZlcnNpb24iOiIyLjAifSwic2NlbmUiOjAsInNjZW5lcyI6",
+  "W3sibm9kZXMiOlswXX1dLCJub2RlcyI6W3sibWVzaCI6MH1dLCJtZXNoZXMiOlt7InByaW1pdGl2ZXMiOlt7ImF0",
+  "dHJpYnV0ZXMiOnsiUE9TSVRJT04iOjB9fV19XSwiYnVmZmVycyI6W3siYnl0ZUxlbmd0aCI6MzZ9XSwiYnVmZmVy",
+  "Vmlld3MiOlt7ImJ1ZmZlciI6MCwiYnl0ZUxlbmd0aCI6MzYsInRhcmdldCI6MzQ5NjJ9XSwiYWNjZXNzb3JzIjpb",
+  "eyJidWZmZXJWaWV3IjowLCJjb21wb25lbnRUeXBlIjo1MTI2LCJjb3VudCI6MywidHlwZSI6IlZFQzMiLCJtaW4i",
+  "OlstMSwtMSwwXSwibWF4IjpbMSwxLDBdfV19ICAgJAAAAEJJTgAAAIC/AACAvwAAAAAAAIA/AACAvwAAAAAAAAAA",
+  "AACAPwAAAAA=",
+].join("");
+
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
@@ -213,4 +223,98 @@ test("public quick-start opens one private thread and drafts the current publish
   assert.equal(unpublished.status, 404);
   assert.equal(unpublished.headers.get("cache-control"), "no-store");
   assert.equal((await visitor.call("POST", path, request)).status, 404);
+});
+
+test("popular works use recent public engagement, with stable account-scoped cursors", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "popularity-author");
+  const reader = await home(server.base, "popularity-reader");
+  const other = await home(server.base, "popularity-other");
+  const publish = async (slug: string, work_kind = "document", kind = "work") => {
+    now += 1_000;
+    return author.ok("PUT", "/v1/ot/listings", {
+      kind, ref: slug, slug, title: `Workshop ${slug}`, work_kind, snapshot: `Public ${slug}`,
+      ...(work_kind === "model3d" ? {model_data: TRIANGLE_GLB} : {}),
+    });
+  };
+  const oldest = await publish("old-work");
+  const model = await publish("model-work", "model3d");
+  await publish("new-work");
+  await publish("not-a-work", "document", "agent");
+  const base = "/v1/ot/discover?kind=work&sort=popular&q=workshop";
+  const slugs = (page: {items: {slug: string}[]}) => page.items.map(item => item.slug);
+
+  assert.equal((await fetch(server.base + base)).status, 401);
+  const sparse = await reader.ok("GET", base);
+  assert.deepEqual(slugs(sparse), ["new-work", "model-work", "old-work"]);
+  assert.equal(sparse.next_cursor, null);
+  await author.ok("POST", `/v1/ot/listings/${oldest.id}/like`, {});
+  assert.deepEqual(slugs(await reader.ok("GET", base)), slugs(sparse), "self-engagement does not boost a work");
+  await reader.ok("POST", "/v1/ot/follows", {handle: author.handle});
+  await reader.ok("POST", `/v1/ot/listings/${oldest.id}/like`, {});
+  await reader.ok("POST", `/v1/ot/listings/${model.id}/collect`, {});
+  const ranked = await reader.ok("GET", base);
+  assert.deepEqual(slugs(ranked), ["model-work", "old-work", "new-work"]);
+  assert.equal(ranked.items[0].collected, true);
+  assert.equal(ranked.items[0].following, true);
+  assert.ok(ranked.items.every((item: any) => item.snapshot === undefined && item.ref === undefined && item.position === undefined));
+  const independent = await other.ok("GET", base);
+  assert.deepEqual(slugs(independent), slugs(ranked), "shared order is independent of the viewer's flags");
+  assert.equal(independent.items[0].collected, false);
+  assert.equal(independent.items[0].following, false);
+  assert.deepEqual(slugs(await other.ok("GET", base + "&work_kind=model3d")), ["model-work"]);
+  assert.deepEqual(slugs(await other.ok("GET", "/v1/ot/discover?kind=work&q=workshop")), slugs(sparse));
+  assert.deepEqual(slugs(await reader.ok("GET", "/v1/ot/discover?kind=work&tab=following&q=workshop")), slugs(sparse));
+
+  const pageOne = await reader.ok("GET", base + "&limit=1");
+  assert.deepEqual(slugs(pageOne), ["model-work"]);
+  assert.match(pageOne.next_cursor, /^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/);
+  const suffix = "&limit=1&cursor=" + encodeURIComponent(pageOne.next_cursor);
+  assert.equal((await other.call("GET", base + suffix)).status, 400);
+  assert.equal((await reader.call("GET", base + suffix + "&work_kind=model3d")).status, 400);
+  assert.equal((await reader.call("GET", base + "&before=42")).status, 400);
+  assert.equal((await reader.call("GET", base + "&tab=collected")).status, 400);
+  assert.equal((await reader.call("GET", base + "&cursor=42")).status, 400);
+
+  await reader.ok("POST", `/v1/ot/listings/${model.id}/collect`, {on:false});
+  await author.ok("DELETE", `/v1/ot/listings/${oldest.id}`);
+  const pageTwo = await reader.ok("GET", base + suffix);
+  assert.deepEqual(slugs(pageTwo), ["new-work"], "revoked works are skipped without re-ranking page one");
+  assert.equal(pageTwo.next_cursor, null);
+  assert.deepEqual(slugs(await reader.ok("GET", base)), ["new-work", "model-work"]);
+  assert.equal((await fetch(server.base + "/w/old-work")).status, 404);
+  now += 11 * 60_000;
+  const expired = await reader.call("GET", base + suffix);
+  assert.equal(expired.status, 409);
+  assert.equal(expired.data.error.code, "popularity_expired");
+});
+
+
+test("public GLB downloads appear only after an explicit publish and disappear on revoke", async () => {
+  const owner = await home(S.base, "model-author");
+  const visitor = await home(S.base, "model-visitor");
+  const payload = {kind: "work", ref: "glb-fixture", slug: "clay-figure", title: "陶土模型 🏺", work_kind: "model3d"};
+  const publicPage = S.base + "/w/clay-figure";
+  const publicFile = publicPage + "/file";
+  assert.equal((await fetch(publicFile)).status, 404);
+  assert.equal((await owner.call("PUT", "/v1/ot/listings", {...payload, model_data: "aGVsbG8="})).status, 400);
+  assert.equal((await fetch(publicPage)).status, 404, "invalid files never create a public page");
+  const model = await owner.ok("PUT", "/v1/ot/listings", {...payload, model_data: TRIANGLE_GLB});
+  assert.equal(model.model_data, undefined);
+  const document = await fetch(publicPage);
+  assert.equal(document.status, 200);
+  assert.match(await document.text(), /href="\/w\/clay-figure\/file"/);
+  const file = await fetch(publicFile);
+  assert.equal(file.status, 200);
+  assert.equal(file.headers.get("content-type"), "model/gltf-binary");
+  assert.equal(file.headers.get("cache-control"), "no-store");
+  assert.match(file.headers.get("content-disposition") ?? "", /filename="clay-figure\.glb"/);
+  assert.equal(Buffer.from(await file.arrayBuffer()).toString("base64"), TRIANGLE_GLB);
+
+  assert.equal((await visitor.call("DELETE", "/v1/ot/listings/" + model.id)).status, 404);
+  await owner.ok("DELETE", "/v1/ot/listings/" + model.id);
+  assert.equal((await fetch(publicPage)).status, 404);
+  assert.equal((await fetch(publicFile)).status, 404);
 });
