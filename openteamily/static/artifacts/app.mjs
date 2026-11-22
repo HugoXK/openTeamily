@@ -677,6 +677,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   const studio = mountSharedStudio(document, {
     request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+    personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
+      (!item.owner_id || item.owner_id === currentUser?.id))?.id,
     onDocument(workspace, id, revision) {
       const href = studioDocumentHref(workspace, id, revision);
       if (href) writeSpaceAddress(href);

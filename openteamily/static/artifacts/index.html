@@ -644,6 +644,7 @@
         <div class="studio-actions">
           <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
           <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
+          <button type="button" id="studio-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
           <button type="submit" id="studio-save">保存</button>
         </div>
       </div>
@@ -682,6 +683,22 @@
       <button type="button" id="studio-delete" class="danger" hidden>删除团队文档</button>
     </form>
   </dialog>
+  <dialog id="studio-personal-dialog" class="send-dialog-card" aria-labelledby="studio-personal-heading">
+    <h2 id="studio-personal-heading">保存到我的资料空间</h2>
+    <p id="studio-personal-meta" class="note"></p>
+    <section id="studio-personal-preview" aria-labelledby="studio-personal-title" hidden>
+      <h3 id="studio-personal-title"></h3>
+      <pre id="studio-personal-body" tabindex="0"></pre>
+    </section>
+    <p id="studio-personal-status" class="note" role="status"></p>
+    <div class="space-action-row">
+      <button type="button" id="studio-personal-close" autofocus>关闭</button>
+      <button type="button" id="studio-personal-retry" hidden>重新查看</button>
+      <a id="studio-personal-download" hidden>下载 Markdown</a>
+      <button type="button" id="studio-personal-confirm" class="primary" hidden>保存副本</button>
+      <a id="studio-personal-result" target="_blank" rel="noopener" hidden>打开个人副本</a>
+    </div>
+  </dialog>
   <dialog id="studio-discussion-dialog" aria-labelledby="studio-discussion-title">
     <h2 id="studio-discussion-title">与个人智能体讨论</h2>
     <p id="studio-discussion-source" class="note"></p>
@@ -713,6 +730,7 @@
       <h3 id="studio-history-title"></h3>
       <pre id="studio-history-body"></pre>
       <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
+      <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
     </section>
   </dialog>
   </main>

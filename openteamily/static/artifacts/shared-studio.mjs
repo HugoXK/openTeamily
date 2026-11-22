@@ -1,6 +1,7 @@
 import {studioDocumentHref} from '../shell/studio-link.mjs';
 import {mountStudioHistory} from './studio-history.mjs';
 import {mountStudioDiscussion} from './studio-discussion.mjs';
+import {mountStudioPersonalCopy} from './studio-personal-copy.mjs';
 import {mergeStudioDraft} from './studio-merge.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
@@ -32,7 +33,7 @@ function setEditorValue(input, value) {
   input.scrollTop = scrollTop;
 }
 
-export function mountSharedStudio(document, {request, onClose, onCatalog, onDocument}) {
+export function mountSharedStudio(document, {request, personalWorkspace, onClose, onCatalog, onDocument}) {
   const get = id => document.getElementById('studio-' + id);
   const button = get('open');
   const dialog = get('dialog');
@@ -50,6 +51,7 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
   const add = get('add');
   const copyLink = get('copy-link');
   const discuss = get('discuss');
+  const savePersonal = get('save-personal');
   const linkWrap = get('link-wrap');
   const view = document.defaultView;
   let scope = null;
@@ -118,6 +120,15 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
     openChat: path => view.location.assign(path),
   });
   discuss?.addEventListener('click', () => discussion?.open());
+  const personalCopy = mountStudioPersonalCopy(document, request);
+
+  function saveToPersonal(revision = screen?.base?.revision) {
+    const state = screen, wid = scope?.id, owner = scope?.account, id = state?.base?.id;
+    if (!state || !isCurrent(state) || state.unavailable || !id || !Number.isSafeInteger(revision)) return;
+    personalCopy?.open({workspace:wid, workspaceName:scope.name, personal:personalWorkspace?.(), id, revision,
+      current:()=>isCurrent(state) && scope?.id === wid && scope?.account === owner && state.base?.id === id && !state.unavailable});
+  }
+  savePersonal?.addEventListener('click',()=>saveToPersonal());
 
   function send(method, path, body, signal) {
     const timeout = AbortSignal.timeout(12000);
@@ -129,8 +140,10 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
     context: () => screen?.base && isCurrent(screen) ? {
       path:documentPath(screen), revision:screen.base.revision, dirty:isDirty(screen),
       busy:screen.busy, blocked:screen.blocked || Boolean(screen.remote), unavailable:screen.unavailable,
+      personalCopy:Boolean(personalWorkspace?.()),
     } : null,
     send,
+    savePersonal:saveToPersonal,
     async restoreVersion(path, revision, to) {
       const state = screen;
       if (!state?.base || !isCurrent(state) || state.busy || state.blocked || state.remote ||
@@ -167,6 +180,7 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
     remove.hidden = !base?.can_delete || unavailable;
     remove.disabled = busy || Boolean(remote || blocked);
     copyLink.hidden = !base || unavailable;
+    if (savePersonal) savePersonal.hidden = !base || unavailable || !personalWorkspace?.();
     if (discuss) {
       discuss.hidden = !base || unavailable;
       discuss.disabled = !canDiscuss(state);
@@ -180,6 +194,7 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
   }
 
   function stopScreen() {
+    personalCopy?.close();
     discussion?.close();
     history.dismiss();
     const previous = screen;
@@ -243,6 +258,7 @@ export function mountSharedStudio(document, {request, onClose, onCatalog, onDocu
   }
 
   function unavailable(state) {
+    personalCopy?.close();
     state.unavailable = true;
     discardDraft(state);
     state.remote = state.deferred = null;

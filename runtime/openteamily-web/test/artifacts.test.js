@@ -183,6 +183,58 @@ test('saving link-shared text copies only the reviewed snapshot to the personal 
   assert.equal((await call('GET',base('',workspace))).body.items.length,1)
 })
 
+test('a reviewed Studio version saves exactly once to the account’s personal workspace', async (t) => {
+  const bot = await boot()
+  const personal = 'a'.repeat(32)
+  const source = 'b'.repeat(32)
+  const id = 'c'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:personal})
+  const path = base('/studio-personal-copy',personal)
+  const call = data => bot.call('artifacts','POST',path,data)
+  const review = {source_workspace_id:source,document_id:id,revision:7}
+  let readable = true
+  let reads = 0
+  let body = 'Exact saved text'
+  setSharedBotSocial({
+    async request(method,target) {
+      assert.equal(method,'GET')
+      assert.equal(target,`/v1/ot/teams/${source}/studio/documents/${id}/versions/7`)
+      reads += 1
+      if (!readable) throw Object.assign(new Error('Missing membership'),{status:404})
+      return {version:{revision:7,title:'Team copy',body}}
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+
+  assert.equal((await bot.call('artifacts','POST',base('/studio-personal-copy','d'.repeat(32)),review)).status,404)
+  assert.equal((await call({...review,body:'Untrusted browser content'})).status,400)
+  assert.equal(reads,0)
+  const {snapshot} = (await call(review)).body
+  assert.equal(snapshot.body,body)
+  assert.equal(snapshot.can_copy,true)
+  assert.deepEqual((await bot.call('artifacts','GET',base('',personal))).body.items,[])
+  const confirm = {...review,fingerprint:snapshot.fingerprint}
+  readable = false
+  assert.equal((await call(confirm)).status,404)
+  readable = true
+  body = 'Another body'
+  assert.equal((await call(confirm)).status,409)
+  body = '长'.repeat(8001)
+  const long = (await call(review)).body.snapshot
+  assert.equal(long.can_copy,false)
+  assert.equal(long.body.length,8001)
+  assert.equal((await call({...review,fingerprint:long.fingerprint})).status,413)
+  body = snapshot.body
+  const [first, second] = await Promise.all([call(confirm),call(confirm)])
+  assert.deepEqual([first.status,second.status].sort(),[200,201])
+  assert.equal(first.body.artifact.id,second.body.artifact.id)
+  assert.equal(first.body.artifact.body,snapshot.body)
+  assert.equal(first.body.artifact.source,undefined)
+  readable = false
+  assert.equal((await call(review)).status,404)
+  assert.equal((await call(confirm)).body.artifact.id,first.body.artifact.id)
+})
+
 test('saved website, structured work and historical media copies keep their native content', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('artifacts',...args)

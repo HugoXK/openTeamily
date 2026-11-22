@@ -1495,6 +1495,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
+    const action = job.quoteUnavailable ? uiLabel('恢复到输入框', 'Restore to composer') : uiLabel('重试', 'Retry');
+    if (job.retry.textContent !== action) job.retry.textContent = action;
+  }
+
+  function restoreUnavailableQuote(queue, job) {
+    if (sendScope() !== queue.scope || sendClosed()) return false;
+    const input = document.getElementById('chat-body');
+    if (input.value || replyDrafts.has(queue.scope) || attachmentSender?.draftFiles?.(queue.scope)?.length ||
+        !agentMentions.restoreDraft(job.message.agent_mentions)) return false;
+    input.value = job.message.body;
+    publicDraft.persist();
+    setReplyDraft(queue.scope, {message_id:job.reply.message_id, state:'missing', available:false});
+    removeSendJob(queue, job);
+    return true;
   }
 
   function makeSendJob(queue, message, files, reply, sticker, sendKey) {
@@ -1536,6 +1550,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
+      if (job.quoteUnavailable) {
+        if (restoreUnavailableQuote(queue, job)) {
+          renderPendingSend();
+          document.getElementById('chat-body').focus({preventScroll:true});
+        } else {
+          job.state = uiLabel('请先处理输入框中的草稿、引用或提及，再恢复这条消息。',
+            'Finish or clear the current draft, quote, or mentions before restoring this message.');
+          paintSendJob(job);
+        }
+        return;
+      }
       job.failed = false;
       job.state = '等待发送…';
       paintSendJob(job);
@@ -8745,6 +8770,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);
           if (!accepted || !result.body.message?.id) {
             const code = result.body.error?.code;
+            if (queue.social && result.status === 409 && code === 'reply_unavailable' && job.reply && !job.sticker) {
+              if (isCurrent() && restoreUnavailableQuote(queue, job)) continue;
+              job.quoteUnavailable = true;
+              throw new Error(uiLabel('原消息已不可用。恢复草稿并取消引用后即可发送。',
+                'The original message is unavailable. Restore this draft and remove the quote to send.'));
+            }
             if (isCurrent() && job.message.direct_agent_request && code === 'direct_agent_unavailable') {
               const refreshed = await openSocialConversation(queue.conversationId, {acknowledge:false});
               const input = document.getElementById('chat-body');

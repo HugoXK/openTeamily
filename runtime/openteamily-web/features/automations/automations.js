@@ -927,14 +927,23 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     return { run: found ? runView(found) : null }
   }
 
+  function requireReviewedRevision(row, revision) {
+    if (revision === undefined) return
+    if (!Number.isSafeInteger(revision) || revision < 1) refuse(400, 'invalid', '请选择已保存的设置版本。')
+    if (revision !== row.revision) refuse(409, 'run_revision_changed', '自动化设置已更新，请载入最新设置后再运行。',
+      {revision:row.revision})
+  }
+
   function runNow(payload) {
-    const row = load(workspaceOf(payload), payload.id)
+    const workspaceId = workspaceOf(payload)
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const keyHash = sha(key)
     const outcome = tx(db, () => {
+      const row = load(workspaceId, payload.id)
       const prior = submittedRun(row.id, key)
       if (prior) return { status: 200, run: runView(prior) }
+      requireReviewedRevision(row, payload.expected_revision)
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       // Keep manual runs and scheduled slots distinct.
       const id = insertRun(row, nextAdHocSlot(row.id))
@@ -957,23 +966,25 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   }
 
   function retry(payload) {
-    const row = load(workspaceOf(payload), payload.id)
+    const workspaceId = workspaceOf(payload)
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-    const item = loadRun(row, payload.run_id)
     const keyHash = sha('automation-retry:' + key)
     const outcome = tx(db, () => {
+      const row = load(workspaceId, payload.id)
+      const item = loadRun(row, payload.run_id)
       const prior = submittedRun(row.id, key, item.id)
       if (prior) return { status: 200, run: runView(prior) }
+      requireReviewedRevision(row, payload.expected_revision)
       if (item.status !== 'failed') refuse(409, 'conflict', 'Only a failed run can be retried')
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       const id = insertRun(row, nextAdHocSlot(row.id), item.id)
       run('INSERT INTO ot_automation_retries VALUES(?,?,?,?)', item.id, keyHash, id, clock())
-      return { status: 201, id }
+      return { status: 201, id, retried:runView(item) }
     })
     if (outcome.run) return outcome
     drain()
-    return { status: 201, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)), retried: runView(item) }
+    return { status: 201, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)), retried: outcome.retried }
   }
 
   // Legacy rows (management export bundle for this user) imported idempotently by id.

@@ -202,6 +202,7 @@
           <p id="meeting-save-status" class="note" role="status"></p>
           <div class="meeting-actions">
             <button type="submit" id="save-meeting">保存</button>
+            <button type="button" id="review-meeting-conflict" class="secondary" aria-haspopup="dialog" hidden>核对最新版本</button>
             <button type="button" id="cancel-meeting" class="secondary">取消</button>
             <button type="button" id="share-meeting" class="secondary" aria-haspopup="dialog" hidden>分享纪要</button>
             <button type="button" id="save-meeting-artifact" class="secondary" aria-describedby="meeting-artifact-description" title="按已保存的摘要和行动项生成纪要" hidden>保存到资料空间</button>
@@ -220,6 +221,15 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-conflict-dialog" aria-labelledby="meeting-conflict-title" aria-describedby="meeting-conflict-description">
+    <h2 id="meeting-conflict-title">核对纪要修改</h2>
+    <p id="meeting-conflict-description" class="note"></p>
+    <div id="meeting-conflict-fields"></div>
+    <div class="meeting-actions">
+      <button type="button" id="cancel-meeting-conflict" class="secondary">返回编辑</button>
+      <button type="button" id="apply-meeting-conflict">载入并继续编辑</button>
+    </div>
+  </dialog>
   <dialog id="meeting-unsaved-dialog" aria-labelledby="meeting-unsaved-title" aria-describedby="meeting-unsaved-message">
     <h2 id="meeting-unsaved-title">离开会议编辑？</h2>
     <p id="meeting-unsaved-message"></p>

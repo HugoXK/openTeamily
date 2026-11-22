@@ -790,6 +790,55 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
     .map(row => [row.run_id, row.status]), [[claimedId, 'interrupted'], [queuedId, 'succeeded']])
 })
 
+test('explicit runs and retries refuse stale settings while replaying an accepted attempt', async () => {
+  const calls = []
+  const {e,feature} = fixture(async invocation => {
+    calls.push(invocation)
+    if (calls.length === 1) throw Error('First attempt failed')
+    return {text:'Retried after review'}
+  })
+  const created = e['automations/create']({workspace_id:W, template_id:'custom', title:'Review settings',
+    prompt:'Original task instructions', participants:['alice'], schedule:{kind:'now',time_zone:'UTC'},
+    idempotency_key:'review-settings-create'}).automation
+  const path = `/v1/workspaces/${W}/automations/${created.id}`
+  const send = (suffix, revision, key) => e['automations/v1']({method:'POST',path:path+suffix,
+    body:{expected_revision:revision},idempotency_key:key})
+  const started = await send('/run',1,'review-first-attempt')
+  assert.equal(started.status,202)
+  await Promise.all(feature.inflight.values())
+  const original = started.body.run
+  const retryPath = '/runs/'+original.id+'/retry'
+  const update = (revision,prompt) => e['automations/update']({workspace_id:W,id:created.id,revision,changes:{prompt}})
+  update(1,'Reviewed task revision two')
+  const staleRetry = await send(retryPath,1,'review-rejected-retry')
+  assert.equal(staleRetry.status,409)
+  assert.equal(staleRetry.body.error.code,'run_revision_changed')
+  assert.deepEqual(staleRetry.body.error.current,{revision:2})
+  const staleManual = await send('/run',1,'review-rejected-manual')
+  assert.equal(staleManual.status,409)
+  assert.equal(staleManual.body.error.code,'run_revision_changed')
+  assert.equal((await send(retryPath,'2','review-invalid-retry')).status,400)
+  assert.equal(calls.length,1)
+  assert.equal(e['automations/runs']({workspace_id:W,id:created.id}).items.length,1)
+
+  const retryKey = 'review-approved-retry'
+  const accepted = await send(retryPath,2,retryKey)
+  assert.equal(accepted.status,201)
+  assert.equal(accepted.body.run.automation_revision,2)
+  assert.equal(accepted.body.run.retry_of,original.id)
+  await Promise.all(feature.inflight.values())
+  update(2,'Later task revision three')
+  const replay = await send(retryPath,2,retryKey)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.run.id,accepted.body.run.id)
+  assert.equal(replay.body.run.status,'succeeded')
+  const receipt = await e['automations/v1']({method:'GET',path:path+retryPath,idempotency_key:retryKey})
+  assert.deepEqual(receipt.body,replay.body)
+  assert.deepEqual(calls.map(call => call.prompt.split('\n').at(-1)),[
+    'Original task instructions','Reviewed task revision two',
+  ])
+})
+
 test('queued runs keep their accepted settings revision through edits and a process interruption', async t => {
   const {e, feature, dbPath, clock} = fixture(() => new Promise(() => {}))
   const draft = {workspace_id:W, template_id:'custom', prompt:'Respond once', participants:['alice'],
