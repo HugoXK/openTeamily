@@ -2,16 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title>自动化 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/automations/app.css">
+  <link rel="modulepreload" href="/shell/thumb.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/automations/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -54,6 +55,7 @@
     </div>
   </nav>
   <p id="status" role="status"></p>
+  <button type="button" id="automation-link-retry" hidden>重新打开自动化</button>
   <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
@@ -91,18 +93,34 @@
       </label>
       <ul id="automation-list"></ul>
       <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
+      <button type="button" id="automation-template-retry" class="secondary" hidden>重试加载模板</button>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
-        <h1 id="editor-heading">新建自动化</h1>
+        <div class="editor-run-actions">
+          <button type="button" id="tick-automation" hidden>运行一次</button>
+          <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        </div>
+        <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
+        <div class="manual-run-feedback">
+          <p id="manual-run-status" class="note" role="status"></p>
+          <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
+        </div>
       </header>
+      <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
+        <h2 id="meeting-action-source-heading">会议行动项</h2>
+        <p id="meeting-action-source-title"></p>
+        <p id="meeting-action-source-text"></p>
+        <p id="meeting-action-source-owner" class="note" hidden></p>
+        <a id="meeting-action-source-link">查看会议</a>
+      </section>
       <fieldset class="task-details">
         <legend>任务</legend>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
         <label>交给智能体的任务 <textarea name="prompt" maxlength="4000" placeholder="描述要完成的任务和期望的结果"></textarea></label>
       </fieldset>
-      <fieldset>
+      <fieldset id="automation-schedule-settings">
         <legend>运行时间</legend>
         <label>频率
           <select name="kind" id="schedule-kind">
@@ -132,8 +150,9 @@
           <label data-schedule-kind="timed" hidden>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
+        <p id="automation-next-run" class="note" hidden></p>
       </fieldset>
-      <details class="editor-options">
+      <details id="automation-editor-options" class="editor-options">
         <summary>更多设置</summary>
         <div class="editor-option-fields">
           <label>模板 <select name="template_id"><option value="custom">自定义</option></select></label>
@@ -158,24 +177,35 @@
           <label>参与的智能体 <input type="text" name="agents" maxlength="512" autocomplete="off" placeholder="名称，以逗号分隔"></label>
         </div>
       </details>
+      <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
-        <button type="button" id="tick-automation" hidden>运行一次</button>
         <button type="button" id="remove-automation" hidden>删除</button>
       </div>
     </form>
     <section id="run-panel" hidden>
-      <h2>运行记录</h2>
-      <nav class="run-filters" aria-label="运行状态">
-        <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
-        <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
-        <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
-      </nav>
+      <h2 id="run-heading" tabindex="-1">运行记录</h2>
+      <div class="run-history-tools">
+        <nav class="run-filters" aria-label="运行状态">
+          <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
+          <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
+          <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
+        </nav>
+        <nav class="run-pages" id="run-pages" aria-label="运行记录分页" hidden>
+          <button type="button" id="run-newer">较新记录</button>
+          <button type="button" id="run-older">更早记录</button>
+        </nav>
+      </div>
+      <div id="run-history-error" hidden>
+        <p class="note" role="status">无法更新运行记录。</p>
+        <button type="button" id="run-history-retry" class="secondary">重新加载</button>
+      </div>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>
       <p id="run-filter-empty" class="empty-state" hidden>没有符合这个筛选的运行记录。</p>
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

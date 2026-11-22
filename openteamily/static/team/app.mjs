@@ -1,3 +1,5 @@
+import {teamInviteUrl} from '../shell/team-invite-link.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -44,12 +46,12 @@ export function inviteValues(document) {
 // The invite object has no email field, and the endpoint rejects unknown ones, so
 // an address typed in the wizard only ever becomes a link in the user's own mail
 // client. Nothing is sent to the server and no mail is claimed to be sent.
-export function inviteMailto(email, teamName, token) {
+export function inviteMailto(email, teamName, url) {
   const address = (email || '').trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || /[\r\n]/.test(address)) return '';
+  if (!url || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || /[\r\n]/.test(address)) return '';
   const subject = '邀请你加入团队「' + (teamName || 'OpenTeamily 团队') + '」';
-  const body = '邀请令牌：' + token + '\n\n在 OpenTeamily 的成员页「接受邀请」里粘贴这个令牌即可加入。令牌只显示一次。';
-  return 'mailto:' + encodeURI(address) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  const body = '打开邀请，登录后确认加入：\n' + url;
+  return 'mailto:' + encodeURIComponent(address) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 
 // Renders the server's own invite object; it carries no email, so none is shown.
@@ -82,8 +84,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const form = document.getElementById('wizard-form');
   let step = 1;
   let owned = [];
+  let choicesLoading = true;
+  let choicesFailed = false;
   let created = null;
-  let invited = false;
+  let creation = null;
   let busy = false;
 
   function show(kind, text) {
@@ -105,7 +109,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function syncContinue() {
-    document.getElementById('next').disabled = !step1Ready(readWizard(form));
+    const values = readWizard(form);
+    document.getElementById('next').disabled = !step1Ready(values) ||
+      (values.mode === 'convert' && !owned.some(item => item.id === values.workspace_id));
   }
 
   function syncConvertPicker() {
@@ -114,18 +120,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const needsPicker = converting && owned.length > 1;
     const note = document.getElementById('convert-workspace-note');
     const field = document.getElementById('convert-workspace-field');
-    if (note) note.hidden = !converting;
-    if (field) field.hidden = !needsPicker;
+    const option = document.getElementById('convert-mode');
+    option.disabled = owned.length === 0;
+    note.hidden = !converting && owned.length > 0;
+    note.textContent = choicesLoading ? '正在检查可转换的工作区…' :
+      choicesFailed ? '暂时无法读取可转换的工作区，请刷新后重试。' :
+      !owned.length ? '没有可转换的工作区。个人工作区用于你的专属智能体。' :
+      owned.length === 1 ? '将转换「' + owned[0].name + '」。' : '选择要转换为团队的工作区。';
+    field.hidden = !needsPicker;
   }
 
   function renderStep() {
     document.getElementById('step-1').hidden = step !== 1;
     document.getElementById('step-2').hidden = step !== 2;
     document.getElementById('step-3').hidden = step !== 3;
-    document.getElementById('back').hidden = step === 1;
+    const back = document.getElementById('back');
+    back.hidden = step !== 2 || Boolean(created);
+    back.disabled = busy;
     document.getElementById('next').hidden = step !== 1;
-    document.getElementById('submit').hidden = step !== 2;
-    document.getElementById('invite-skip').hidden = step !== 2;
+    const submit = document.getElementById('submit');
+    submit.hidden = step !== 2;
+    submit.disabled = busy;
+    submit.textContent = created ? '生成邀请链接' : '创建团队并生成邀请';
+    const skip = document.getElementById('invite-skip');
+    skip.hidden = step !== 2;
+    skip.disabled = busy;
+    skip.textContent = created ? '完成，稍后邀请' : '跳过，只建团队';
+    document.getElementById('step-2').setAttribute('aria-busy', String(busy));
     const label = document.getElementById('wizard-step-label');
     if (label) label.textContent = '第 ' + step + ' / 3 步';
     const progress = document.getElementById('wizard-progress');
@@ -142,12 +163,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function resetWizard() {
     step = 1;
     created = null;
-    invited = false;
+    creation = null;
     busy = false;
-    document.getElementById('submit').disabled = false;
     document.getElementById('invite-result').hidden = true;
     document.getElementById('invite-summary').textContent = '';
-    document.getElementById('invite-token').textContent = '';
+    document.getElementById('invite-token').value = '';
     document.getElementById('invite-mailto').hidden = true;
     form.reset();
     form.elements.mode.value = 'new';
@@ -190,12 +210,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     loginPanel.hidden = true;
-    mainPanel.hidden = false;
     const whoami = document.getElementById('whoami');
     if (whoami) whoami.textContent = session.body.user.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
-    const items = listed.status === 200 ? (listed.body.items || []) : [];
-    owned = items.filter(item => item.owner_id === session.body.user.id && item.kind !== 'team');
+    choicesLoading = true;
+    choicesFailed = false;
+    owned = [];
+    renderStep();
+    mainPanel.hidden = false;
+    const listed = await request('GET', '/v1/workspaces?scope=convertible&limit=100').catch(() => null);
+    choicesLoading = false;
+    choicesFailed = listed?.status !== 200;
+    const items = Array.isArray(listed?.body?.items) ? listed.body.items : [];
+    owned = items.filter(item => item.owner_id === session.body.user.id && item.kind === 'workspace');
     const select = form.elements.workspace_id;
     const previous = select.value;
     select.textContent = '';
@@ -238,7 +264,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请先填好团队名称和 Team ID。');
       return;
     }
-    if (values.mode === 'convert' && owned.length > 0 && !values.workspace_id) {
+    if (values.mode === 'convert' && !owned.some(item => item.id === values.workspace_id)) {
       show('error', '当前没有可转换的工作区。');
       return;
     }
@@ -248,12 +274,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function createAndInvite(withInvite) {
-    if (busy) return;
-    if (invited) {
-      step = 3;
-      renderStep();
-      return;
-    }
+    if (busy || step !== 2) return;
     const values = readWizard(form);
     if (!step1Ready(values)) {
       show('error', '请先填好团队名称和 Team ID。');
@@ -261,18 +282,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderStep();
       return;
     }
-    if (values.mode === 'convert' && !values.workspace_id) {
+    if (values.mode === 'convert' && !owned.some(item => item.id === values.workspace_id)) {
       show('error', '当前没有可转换的工作区。');
       return;
     }
     busy = true;
+    renderStep();
+    show('loading', created ? '正在生成邀请链接…' : '正在创建团队…');
     try {
       if (!created) {
         const body = {name: values.name, slug: values.slug, mode: values.mode};
         if (values.mode === 'convert') body.workspace_id = values.workspace_id;
-        const result = await request('POST', '/v1/teams', body, {'Idempotency-Key': idempotencyKey()});
+        const draft = JSON.stringify(body);
+        if (creation?.draft !== draft) creation = {draft, key: idempotencyKey()};
+        const result = await request('POST', '/v1/teams', body, {'Idempotency-Key': creation.key});
         if (result.status !== 200 && result.status !== 201) {
-          show('error', messageFor(result.body.error, '创建团队失败。'));
+          show('error', result.status >= 500 ? '暂时无法确认团队是否创建，请重试。' :
+            messageFor(result.body.error, '创建团队失败。'));
           return;
         }
         const workspace = result.body.workspace || {};
@@ -281,26 +307,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           return;
         }
         created = workspace;
+        const hash = '#workspace=' + encodeURIComponent(created.id);
+        document.getElementById('finish-members').setAttribute('href', '/members' + hash);
+        document.getElementById('finish-chat').setAttribute('href', '/chat' + hash);
+        document.getElementById('created-team-name').textContent = created.name;
+        document.getElementById('created-team-name').hidden = !created.name;
+        renderStep();
       }
       if (!withInvite) {
         step = 3;
-        show('ok', '团队已创建。');
+        show('', '');
         renderStep();
+        document.getElementById('finish-members').focus();
         return;
       }
+      show('loading', '团队已创建，正在生成邀请链接…');
       const result = await request('POST', '/v1/workspaces/' + created.id + '/invites', inviteValues(document));
       if (result.status !== 201) {
         // The team exists by now; say so instead of implying nothing happened.
-        show('error', '团队已创建，但邀请没有发出去：' + messageFor(result.body.error, '无法生成邀请。'));
+        show('error', result.status >= 500 ? '团队已创建。暂时无法确认邀请是否生成，可以稍后在成员页查看。' :
+          '团队已创建。' + messageFor(result.body.error, '无法生成邀请链接。'));
         return;
       }
-      invited = true;
       document.getElementById('invite-summary').textContent = inviteSummary(result.body.invite);
-      document.getElementById('invite-token').textContent = result.body.token || '';
+      const url = teamInviteUrl(result.body.token, document.defaultView?.location?.origin);
+      document.getElementById('invite-token').value = url;
+      document.getElementById('copy-invite').disabled = !url;
       const mail = document.getElementById('invite-mailto');
       if (mail) {
         const address = (document.getElementById('invite-email') || {}).value || '';
-        const href = inviteMailto(address, created.name, result.body.token || '');
+        const href = inviteMailto(address, created.name, url);
         mail.hidden = !href;
         if (href) {
           mail.setAttribute('href', href);
@@ -308,10 +344,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
       }
       document.getElementById('invite-result').hidden = false;
-      document.getElementById('submit').disabled = true;
-      show('ok', '团队已创建，邀请已生成。复制令牌发给同事即可。');
+      step = 3;
+      show('', '');
+      renderStep();
+      document.getElementById('copy-invite').focus();
+    } catch {
+      show('error', created ? '团队已创建。暂时无法确认邀请是否生成，可以稍后在成员页查看。' :
+        '暂时无法确认团队是否创建，请重试。');
     } finally {
       busy = false;
+      renderStep();
     }
   }
 
@@ -320,19 +362,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('back').addEventListener('click', () => {
-    if (step > 1) step -= 1;
+    if (busy || created || step !== 2) return;
+    step = 1;
+    show('', '');
     renderStep();
   });
 
   document.getElementById('invite-skip').addEventListener('click', () => createAndInvite(false));
 
   document.getElementById('copy-invite').addEventListener('click', async () => {
-    const token = document.getElementById('invite-token').textContent;
+    const field = document.getElementById('invite-token');
+    if (!field.value) return;
     try {
-      await globalThis.navigator.clipboard.writeText(token);
-      show('ok', '已复制邀请令牌，粘贴给同事即可。');
+      await globalThis.navigator.clipboard.writeText(field.value);
+      show('ok', '已复制邀请链接。');
     } catch {
-      show('error', '这个浏览器不允许自动复制，请手动选中令牌。');
+      field.select();
+      show('error', '请复制选中的链接。');
     }
   });
 

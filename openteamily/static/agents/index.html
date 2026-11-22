@@ -77,11 +77,10 @@
         <select id="workspace"></select>
       </label>
     </header>
-    <p id="role-note" class="note"></p>
-    <details class="gap-note">
-      <summary>对照说明</summary>
-      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者下拉按创建人筛选智能体，可以和类目叠加使用；AI 团队模板从服务端读取并可一键应用到当前工作区（建或复用同名智能体，再建一个群会话）；模板本身不能在这里编辑。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
-    </details>
+    <div class="directory-context">
+      <p id="role-note" class="note"></p>
+      <a id="open-team-runs" href="/team-runs">协作任务</a>
+    </div>
     <div class="filter-row" aria-label="筛选">
       <button type="button" class="pill" data-category="all" aria-pressed="true">全部</button>
       <button type="button" class="pill" data-category="content-creation" aria-pressed="false">Content Creation</button>
@@ -124,6 +123,8 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="new-agent-quick-starts-help"></textarea></label>
+          <p class="note" id="new-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
@@ -136,6 +137,8 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="edit-agent-quick-starts-help"></textarea></label>
+          <p class="note" id="edit-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
@@ -146,13 +149,8 @@
       </form>
       <section id="homepage-panel" hidden>
         <h2>公开主页</h2>
-        <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
-        <p id="homepage-status" class="note"></p>
-        <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
-        <div class="actions">
-          <button type="button" id="publish-homepage">发布链接</button>
-          <button type="button" id="revoke-homepage">撤回链接</button>
-        </div>
+        <p class="note">在发现页管理访客聊天，并选择是否公开展示快捷开场。</p>
+        <a id="manage-public-homepage" href="/discover?tab=agents#catalog-manage">管理公开主页</a>
       </section>
       <section id="api-key-panel" hidden>
         <h2>外部 API 访问</h2>
@@ -179,16 +177,7 @@
       </section>
       <section id="chat-panel" hidden>
         <h2 id="chat-title">对话</h2>
-        <p id="chat-note" class="note">对话已移到独立的聊天页，避免和目录堆在一起。</p>
-        <p><a id="open-in-chat" href="/chat">在聊天中打开</a></p>
-        <ul id="conversation-list" hidden></ul>
-        <p id="conversations-empty" class="note" hidden>还没有对话。</p>
-        <button type="button" id="new-conversation">新对话</button>
-        <ol id="message-list" hidden></ol>
-        <form id="chat-form" method="post" action="/v1/workspaces" hidden>
-          <label class="stack">消息 <textarea id="chat-body" name="body" maxlength="4000" required></textarea></label>
-          <button type="submit">发送</button>
-        </form>
+        <a id="open-in-chat" href="/chat">在聊天中打开</a>
       </section>
     </aside>
   </section>

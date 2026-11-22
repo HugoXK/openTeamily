@@ -61,6 +61,25 @@ CREATE INDEX memory_capture_selected ON memory_capture_items(workspace_id,agent_
 `, `
 ALTER TABLE memory_capture_items ADD COLUMN source_message_id TEXT;
 ALTER TABLE memory_capture_items ADD COLUMN source_batch TEXT;
+`, `
+CREATE TABLE memory_capture_groups (
+  workspace_id TEXT NOT NULL, conversation_id TEXT NOT NULL, generation TEXT NOT NULL,
+  membership INTEGER NOT NULL, cursor INTEGER NOT NULL, next_scan INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id,conversation_id));
+CREATE INDEX memory_capture_groups_due ON memory_capture_groups(next_scan);
+`, `
+CREATE TABLE memory_action_draft_saves (
+  workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL,
+  request_hash TEXT NOT NULL, action_ids TEXT NOT NULL,
+  PRIMARY KEY (workspace_id,owner_id,key_hash));
+`, `
+CREATE INDEX IF NOT EXISTS memory_page_workspace_recent ON memory_pages(workspace_id, updated DESC, id);
+`, `
+CREATE TABLE memory_meeting_sources (
+  workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL,
+  page_id TEXT NOT NULL UNIQUE REFERENCES memory_pages(id) ON DELETE CASCADE,
+  meeting_revision INTEGER NOT NULL, page_revision INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id, meeting_id));
 `]
 
 export const IMPORT_TABLES = {

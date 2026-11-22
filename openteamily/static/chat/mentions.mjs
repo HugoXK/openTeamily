@@ -1,5 +1,6 @@
 const MAX_MENTIONS = 20;
 const agentKey = agent => JSON.stringify([agent.owner_id, agent.id]);
+const availableAgent = agent => Boolean(agent?.name && agent.owner_id && agent.id && !agent.archived);
 
 export function activeMentionQuery(text, caret) {
   const match = /(?:^|[\s(（、，。])@([^\s@]{0,40})$/u.exec(text.slice(0, caret));
@@ -10,12 +11,23 @@ export function mountAgentMentions(doc, context) {
   const input = doc.getElementById('chat-body');
   const list = doc.getElementById('chat-agent-mention-options');
   const chips = doc.getElementById('chat-agent-mentions');
-  if (!input || !list || !chips) return {refresh() {}, clear() {}, keydown: () => false, message: body => ({body})};
+  if (!input || !list || !chips) return {
+    refresh() {}, clear() {}, openPicker() {}, canPick: () => false, keydown: () => false, message: body => ({body}),
+  };
+  const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
+  const launcher = pickerNode('open');
+  const picker = doc.getElementById('chat-agent-picker');
+  const results = pickerNode('results');
+  const queryField = pickerNode('search');
+  const applyButton = pickerNode('confirm');
+  const selectedLabel = pickerNode('count');
+  const text = (zh, en) => doc.documentElement?.lang?.startsWith('en') ? en : zh;
 
   let scope = null;
   let options = [];
   let active = 0;
   const selected = new Map();
+  let picking = null;
 
   function close() {
     list.hidden = true;
@@ -29,7 +41,8 @@ export function mountAgentMentions(doc, context) {
       const button = doc.createElement('button');
       button.type = 'button';
       button.textContent = agent.owner_name ? `@${agent.name} · ${agent.owner_name} ×` : `@${agent.name} ×`;
-      button.setAttribute('aria-label', `移除对 ${agent.name}${agent.owner_name ? `（${agent.owner_name}）` : ''} 的提及`);
+      button.setAttribute('aria-label', text(`移除对 ${agent.name}${agent.owner_name ? `（${agent.owner_name}）` : ''} 的提及`,
+        `Remove mention of ${agent.name}${agent.owner_name ? ` (${agent.owner_name})` : ''}`));
       button.addEventListener('click', () => {
         selected.delete(key);
         renderSelected();
@@ -42,11 +55,13 @@ export function mountAgentMentions(doc, context) {
 
   function refresh() {
     const group = context();
+    if (launcher) launcher.hidden = !group?.agents.some(availableAgent);
     if (scope !== group?.scope) {
       scope = group?.scope;
       selected.clear();
       renderSelected();
       close();
+      if (picker?.open) picker.close();
     }
     return group;
   }
@@ -64,6 +79,7 @@ export function mountAgentMentions(doc, context) {
     selected.set(agentKey(agent), agent);
     renderSelected();
     close();
+    input.dispatchEvent?.(new Event('input', {bubbles: true}));
     input.focus();
   }
 
@@ -78,7 +94,7 @@ export function mountAgentMentions(doc, context) {
     const query = activeMentionQuery(input.value, input.selectionStart);
     if (!group || !query || selected.size >= MAX_MENTIONS) { close(); return; }
     const needle = query.query.toLowerCase();
-    options = group.agents.filter(agent => agent.name && agent.owner_id && agent.id && !agent.archived && !selected.has(agentKey(agent))
+    options = group.agents.filter(agent => availableAgent(agent) && !selected.has(agentKey(agent))
       && agent.name.toLowerCase().includes(needle)).slice(0, 8);
     if (!options.length) { close(); return; }
     active = 0;
@@ -99,9 +115,107 @@ export function mountAgentMentions(doc, context) {
   input.addEventListener('input', suggest);
   input.addEventListener('compositionend', suggest);
   input.addEventListener('blur', close);
+
+  function setPickerCount() {
+    const size = picking.choices.size;
+    selectedLabel.textContent = text(`已选 ${size}`, `${size} selected`);
+    applyButton.disabled = Boolean(picking.reply && !size);
+    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= MAX_MENTIONS;
+  }
+
+  function renderPicker() {
+    const view = picking;
+    const filter = queryField.value.trim().toLocaleLowerCase();
+    const people = [...view.roster].filter(([, agent]) => `${agent.name} ${agent.owner_name || ''}`.toLocaleLowerCase().includes(filter));
+    results.replaceChildren(...people.map(([key, agent]) => {
+      const label = doc.createElement('label');
+      label.className = 'chat-agent-picker-choice';
+      const box = doc.createElement('input');
+      box.type = 'checkbox';
+      box.checked = view.choices.has(key);
+      const name = doc.createElement('span');
+      name.textContent = agent.name;
+      if (agent.owner_name) {
+        const owner = doc.createElement('small');
+        owner.textContent = agent.owner_name;
+        name.append(owner);
+      }
+      label.append(box, name);
+      box.addEventListener('change', () => {
+        if (view !== picking || !picker.open) return;
+        if (box.checked) view.choices.add(key);
+        else view.choices.delete(key);
+        setPickerCount();
+      });
+      return label;
+    }));
+    pickerNode('empty').hidden = people.length > 0;
+    setPickerCount();
+  }
+
+  function openPicker({reply, onApply} = {}) {
+    const group = refresh();
+    if (!picker || picker.open || !group || input.disabled) return false;
+    const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
+    if (!roster.size) return false;
+    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))), reply, onApply};
+    queryField.value = '';
+    pickerNode('quote').hidden = !reply;
+    pickerNode('quote-author').textContent = reply?.author || '';
+    pickerNode('quote-text').textContent = reply?.excerpt || '';
+    close();
+    renderPicker();
+    picker.showModal();
+    pickerNode('title').focus({preventScroll: true});
+    return true;
+  }
+
+  launcher?.addEventListener('click', () => openPicker());
+  pickerNode('cancel')?.addEventListener('click', () => picker.close());
+  queryField?.addEventListener('input', () => { if (picking && picker.open) renderPicker(); });
+  picker?.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+  picker?.addEventListener('close', () => {
+    if (picker.open) return;
+    picking = null;
+    results.replaceChildren();
+    queryField.value = '';
+    pickerNode('quote-author').textContent = '';
+    pickerNode('quote-text').textContent = '';
+  });
+  pickerNode('form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    const view = picking;
+    const group = refresh();
+    if (!view || !picker.open || view.scope !== group?.scope || input.disabled || applyButton.disabled) return;
+    const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
+    const choices = [...view.choices].filter(key => roster.has(key));
+    if (choices.length !== view.choices.size) {
+      view.roster = roster;
+      view.choices = new Set(choices);
+      renderPicker();
+      selectedLabel.textContent = text('可选成员已更新，请重新确认。', 'Available agents changed. Review your selection again.');
+      queryField.focus();
+      return;
+    }
+    selected.clear();
+    for (const key of choices) selected.set(key, roster.get(key));
+    renderSelected();
+    picker.close();
+    view.onApply?.();
+    input.focus({preventScroll: true});
+  });
+
   return {
     refresh,
-    clear() { selected.clear(); renderSelected(); close(); },
+    openPicker,
+    canPick: () => Boolean(picker && refresh()?.agents.some(availableAgent) && !input.disabled),
+    clear() {
+      selected.clear();
+      renderSelected();
+      close();
+      if (picker?.open) picker.close();
+      if (launcher) launcher.hidden = true;
+    },
     keydown(event) {
       if (event.isComposing || list.hidden || !options.length) return false;
       const keys = ['Escape', 'ArrowDown', 'ArrowUp', 'Enter', 'Tab'];

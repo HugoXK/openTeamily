@@ -1,5 +1,6 @@
 // Persisted private model operations. Provider output is text, never executable markup.
-export function mountMessageUtilities(document, {request, context, composerContext = context, notify}) {
+export function mountMessageUtilities(document, {request, context, composerContext = context, notify,
+  stickersAvailable, activateStickers, closeStickers}) {
   const dialog = document.getElementById('message-assist-dialog');
   const announcement = document.getElementById('announcement-dialog');
   if (!dialog || !announcement) return {open() {}, refreshAnnouncement() {}};
@@ -97,7 +98,7 @@ export function mountMessageUtilities(document, {request, context, composerConte
   const pickerStatus = document.getElementById('resource-picker-status');
   const more = document.getElementById('resource-picker-more');
   let pickerContext = null, cursor = '', pickerGeneration = 0;
-  const pickerSame = c => { const now = composerContext(); return now && c && now.wid === c.wid && now.cid === c.cid && now.source === c.source; };
+  const pickerSame = c => { const now = composerContext(); return now && c && now.wid === c.wid && now.cid === c.cid && now.source === c.source && now.scope === c.scope; };
   async function listResources(append = false) {
     const c = pickerContext, token = ++pickerGeneration, kind = pickerKind.value;
     if (!pickerSame(c)) { pickerStatus.textContent = '会话已切换，请重新打开。'; return; }
@@ -144,11 +145,61 @@ export function mountMessageUtilities(document, {request, context, composerConte
   picker?.addEventListener('close', () => { pickerGeneration += 1; pickerContext = null; });
   const emojiDialog=document.getElementById('composer-emoji-dialog');
   const emojiList=document.getElementById('composer-emoji-list');
+  const mediaTabs = document.getElementById('composer-media-tabs');
+  const emojiTab = document.getElementById('composer-emoji-tab');
+  const stickerTab = document.getElementById('composer-sticker-tab');
+  const emojiPanel = document.getElementById('composer-emoji-panel');
+  const stickerPanel = document.getElementById('composer-sticker-panel');
+  const stickerStatus = document.getElementById('composer-sticker-status');
   let emojiTarget=null;
+
+  function selectMediaTab(tab) {
+    if (!mediaTabs) return;
+    const showStickers = tab === stickerTab;
+    for (const item of [emojiTab, stickerTab]) {
+      item.setAttribute('aria-selected', String(item === tab));
+      item.tabIndex = item === tab ? 0 : -1;
+    }
+    emojiPanel.hidden = showStickers;
+    stickerPanel.hidden = !showStickers;
+    if (!showStickers) return;
+    Promise.resolve().then(() => activateStickers?.()).catch(() => {
+      if (!emojiDialog.open || stickerPanel.hidden) return;
+      stickerStatus.textContent = document.documentElement.lang.startsWith('en')
+        ? 'Could not open stickers. Select the tab to try again.' : '贴纸暂时打不开，请重新点一下贴纸标签。';
+    });
+  }
+
+  emojiTab?.addEventListener('click', () => selectMediaTab(emojiTab));
+  stickerTab?.addEventListener('click', () => selectMediaTab(stickerTab));
+  mediaTabs?.addEventListener('keydown', event => {
+    const tabs = [emojiTab, stickerTab];
+    const active = tabs.indexOf(document.activeElement);
+    if (active < 0) return;
+    const next = {ArrowLeft: 1 - active, ArrowRight: 1 - active, Home: 0, End: 1}[event.key];
+    if (!Number.isInteger(next)) return;
+    event.preventDefault();
+    for (const [index, tab] of tabs.entries()) tab.tabIndex = index === next ? 0 : -1;
+    tabs[next].focus();
+  });
   document.getElementById('composer-emoji-open')?.addEventListener('click',()=>{
     const c=composerContext(),composer=document.getElementById('chat-body');
     if(!c||composer.disabled){notify('error','请先打开可发送的会话。');return;}
-    emojiTarget={context:c,start:composer.selectionStart,end:composer.selectionEnd};emojiDialog.showModal();
+    emojiTarget={context:c,start:composer.selectionStart,end:composer.selectionEnd};
+    if (mediaTabs) {
+      mediaTabs.hidden = !stickersAvailable?.();
+      if (mediaTabs.hidden) {
+        emojiPanel.removeAttribute('role');
+        emojiPanel.removeAttribute('aria-labelledby');
+      } else {
+        emojiPanel.setAttribute('role', 'tabpanel');
+        emojiPanel.setAttribute('aria-labelledby', emojiTab.id);
+      }
+      selectMediaTab(emojiTab);
+    }
+    emojiDialog.showModal();
+    if (mediaTabs && !mediaTabs.hidden) emojiTab.focus();
+    else emojiList?.firstElementChild?.focus();
   });
   for(const emoji of ['😀','👍','❤️','🎉','🙏','🤔','✅','🚀','👀','💡','📌','✨']){
     if(!emojiList)break;
@@ -164,7 +215,7 @@ export function mountMessageUtilities(document, {request, context, composerConte
     emojiList.append(button);
   }
   document.getElementById('composer-emoji-close')?.addEventListener('click',()=>emojiDialog.close());
-  emojiDialog?.addEventListener('close',()=>{emojiTarget=null;});
+  emojiDialog?.addEventListener('close',()=>{emojiTarget=null;closeStickers?.();});
   return {
     refreshAnnouncement,
     open(item, operation) {

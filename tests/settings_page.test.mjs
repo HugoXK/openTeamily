@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -100,6 +100,10 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
   assert.equal(settingsViewFromLocation('/settings', '#message-display'), 'message-folding');
   assert.equal(settingsViewFromLocation('/settings', '#model-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#video-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings/model-api', '#video-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#music-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#model3d-api'), 'model-api');
 });
 
 test('applySettingsView shows one recorded page at a time', () => {
@@ -472,6 +476,49 @@ function settingsDocument() {
 
 function settingsJson(status, body) { return {status, json: async () => body}; }
 
+test('model settings show the ready platform model, keep personal credentials optional, and clear stale account state', () => {
+  const {doc} = settingsDocument();
+  const el = id => doc.getElementById(id);
+  const form = el('model-api-form');
+  doc.documentElement.lang = 'zh-CN';
+  const platform = {
+    model_api: {revision: 0, api_key_set: false},
+    effective: {source: 'platform', model: 'DeepSeek-V4.1-Flash', base_url: 'https://internal.example/v1'},
+  };
+  renderModelApi(doc, form, platform);
+  assert.equal(el('model-key-state').textContent, '平台默认');
+  assert.equal(el('model-effective-source').textContent, '正在使用平台默认配置');
+  assert.equal(el('model-effective-model').textContent, ' (DeepSeek-V4.1-Flash)');
+  assert.equal(el('model-platform-ready').hidden, false);
+  assert.equal(el('model-api-override').hidden, false);
+  assert.equal(el('model-api-override').open, false);
+  assert.equal(el('restore-platform-model').hidden, true);
+  assert.equal(form.elements.base_url.value, '', 'the platform endpoint is never placed in the personal form');
+  assert.equal(form.elements.api_key.value, '');
+  assert.equal(form.elements.api_key.required, true, 'creating an override requires a personal key');
+
+  doc.documentElement.lang = 'en';
+  renderModelApi(doc, form, {
+    model_api: {revision: 2, api_key_set: true, provider: 'custom', model: 'owner-model', base_url: 'https://owner.example/v1'},
+    effective: {source: 'account', model: 'owner-model'},
+  });
+  assert.equal(el('model-key-state').textContent, 'Personal configuration');
+  assert.equal(el('model-effective-source').textContent, 'Using your personal configuration');
+  assert.equal(el('model-api-override').open, true);
+  assert.equal(el('model-platform-ready').hidden, true);
+  assert.equal(el('restore-platform-model').hidden, false);
+  assert.equal(form.elements.model.value, 'owner-model');
+  assert.equal(form.elements.api_key.value, '');
+  assert.equal(form.elements.api_key.required, false);
+
+  renderModelApi(doc, form, null, true);
+  assert.equal(el('model-effective-source').textContent, 'Could not check model status');
+  assert.equal(el('model-effective-model').textContent, '');
+  assert.equal(el('model-api-override').hidden, true);
+  assert.equal(el('model-api-fields').disabled, true);
+  assert.equal(form.elements.model.value, '');
+});
+
 function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
   const calls = [];
   const items = secrets.map(name => ({name}));
@@ -547,6 +594,61 @@ async function mountSettingsPage({secrets} = {}) {
     status: doc.getElementById('status'),
   };
 }
+
+async function checkMediaModelForm(type, provider, model) {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const changes = [];
+  const key = 'synthetic-' + type + '-key';
+  let config = {provider, model, has_api_key: false, revision: 2};
+  const fetcher = async (path, options) => {
+    if (path === '/v1/model-api/' + type) {
+      if (options.method === 'POST') {
+        const change = JSON.parse(options.body);
+        changes.push(change);
+        config = {...config, has_api_key: change.api_key !== null, revision: config.revision + 1};
+      }
+      return settingsJson(200, {[type + '_api']: config});
+    }
+    if (path === '/v1/model-api/image') return settingsJson(404, {});
+    return api.fetcher(path, options);
+  };
+  const previousLocation = globalThis.location;
+  globalThis.location = {pathname: '/settings/model-api', hash: '#' + type + '-api'};
+  const restoreListeners = stubWindowListeners();
+  stubFormData(doc.getElementById('settings-form'));
+  try {
+    await mount(doc, {fetcher});
+    const form = doc.getElementById(type + '-api-form');
+    const remove = doc.getElementById('clear-' + type + '-api');
+    assert.equal(doc.getElementById(type + '-api').disabled, false);
+    assert.equal(remove.hidden, true);
+    form.elements.api_key.value = key;
+    doc.fire('submit', {target: form});
+    assert.equal(form.elements.api_key.value, '');
+    await settleSettings();
+    assert.equal(remove.hidden, false);
+    doc.fire('click', {target: remove});
+    await settleSettings();
+    assert.equal(remove.hidden, true);
+    assert.deepEqual(changes, [
+      {revision: 2, api_key: key},
+      {revision: 3, api_key: null},
+    ]);
+  } finally {
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+}
+
+test('the video model form saves and clears the write-only key using its own revision',
+  () => checkMediaModelForm('video', 'runway', 'gen4.5'));
+test('the music model form saves and clears the write-only key using its own revision',
+  () => checkMediaModelForm('music', 'elevenlabs', 'music_v2_5'));
+test('the 3D model form saves and clears the write-only Meshy key using its own revision',
+  () => checkMediaModelForm('model3d', 'meshy', 'meshy-7.1'));
 
 function secretRow(list, name) {
   return list.children.find(row => row.children.some(child => child.tagName === 'button' && child.textContent === '删除')

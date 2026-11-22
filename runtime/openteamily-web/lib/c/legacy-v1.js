@@ -5,17 +5,33 @@
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
+import {structuredArtifactText} from '../../features/artifacts/catalog-search.js'
+import {normalizeBoard,normalizeSlides} from '../../features/artifacts/structured.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
-import { replyPrompt, selectGroupMemories } from './agent-replies.js'
+import { GLB_MIME } from '../glb.js'
 
 const HEX = /^[0-9a-f]{32}$/
+const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
+const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
+const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}\.[a-f0-9]{24}$/
+const DISCOVER_WORK_QUERY_LIMIT = 1024
+const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
+const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
+const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
+const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
+const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:''}
+const DISCOVER_MEDIA_KINDS = new Map([
+  ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
+  ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
+  ['video/mp4', 'video'], ['video/webm', 'video'],
+])
 const WORK_LABELS = {
-  document: '文档', website: '网页', whiteboard: '白板', media: '媒体',
-  image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板',
+  document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
+  image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板', model3d: '3D 作品',
 }
 
 const unix = (ms) => {
@@ -82,8 +98,10 @@ function requestItem(row, workspaceId) {
 }
 
 function conversationItem(row, me, env, workspaceId) {
+  const management = row.kind === 'group' && !row.public_agent ? row.group_management : null
   const members = (row.members || []).map((m) => ({
     ...memberItem({ ...m, role: m.role || 'member' }, me, env),
+    ...(management && m.owner_id ? {group_member_id: m.owner_id} : {}),
   }))
   return {
     id: row.id,
@@ -92,6 +110,7 @@ function conversationItem(row, me, env, workspaceId) {
     ...(row.public_agent ? {public_agent: row.public_agent} : {}),
     ...(row.direct ? {direct: row.direct} : {}),
     ...(row.account_group ? {account_group: true} : {}),
+    ...(management ? {group_management: management} : {}),
     native_room_id: row.native_room_id || null,
     native_session_id: row.native_session_id || null,
     title: row.title || '',
@@ -106,6 +125,13 @@ function conversationItem(row, me, env, workspaceId) {
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
     agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '' })),
+  }
+}
+
+function attachmentItem({ title, mime, bytes, resource, sticker }, workspaceId, conversationId, messageId) {
+  return { title, mime, bytes, id: messageId, ...(resource ? {resource} : {}),
+    ...(sticker === true ? {sticker:true} : {}),
+    path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(conversationId)}/messages/${seg(messageId)}/file`,
   }
 }
 
@@ -129,16 +155,26 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
+    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
-    ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
-      path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
-    } } : {}),
+    ...(row.attachment ? { attachment: attachmentItem(row.attachment, workspaceId, row.conversation_id, row.id) } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
 
+function workMatch(match) {
+  if (!match || !['title', 'summary', 'body', 'creator'].includes(match.kind)
+    || typeof match.text !== 'string' || match.text.length > 160
+    || !Number.isInteger(match.start) || !Number.isInteger(match.end)
+    || match.start < 0 || match.end <= match.start || match.end > match.text.length) return null
+  return {kind: match.kind, text: match.text, start: match.start, end: match.end}
+}
+
 function workItem(row) {
   const kind = row.work_kind || (row.kind === 'work' ? 'document' : row.kind)
+  const match = workMatch(row.match)
+  const fileAvailable = row.file_available === true && DISCOVER_MEDIA_KINDS.get(row.file_mime) === kind
+    && Number.isSafeInteger(row.file_bytes) && row.file_bytes > 0
   return {
     slug: row.slug,
     title: row.title,
@@ -153,6 +189,11 @@ function workItem(row) {
     collected: !!row.collected,
     following: !!row.following,
     own_work: !!row.own,
+    comment_count: row.comment_count ?? 0,
+    ...(match ? {match} : {}),
+    ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
+    ...(fileAvailable ? {file_available: true, file_mime: row.file_mime, file_bytes: row.file_bytes} : {}),
+    ...(row.remix_available === true ? {remix_available: true} : {}),
   }
 }
 
@@ -197,7 +238,17 @@ function rethrow(error) {
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
+    group_management_conflict: 'group_management_conflict',
+    group_owner_transfer_required: 'group_owner_transfer_required',
+    member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
+    public_agent_changed: 'public_agent_changed',
+    listing_changed: 'listing_changed',
+    title_conflict: 'title_conflict',
+    quick_start_changed: 'quick_start_changed',
+    popularity_expired: 'popularity_expired',
+    comment_not_found: 'not_found',
+    comment_conflict: 'conflict',
     reply_unavailable: 'reply_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
@@ -341,6 +392,24 @@ function invitesRoutes(host) {
       },
     },
     {
+      method: 'POST', path: /^\/v1\/invites\/preview$/,
+      async handle({ body }) {
+        return wrap(async () => {
+          const token = body?.token
+          if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
+            throw new Fault(400, 'invalid_invite', '邀请链接格式不正确。')
+          }
+          const data = await client(host).post('/v1/ot/invites/preview', { code: token })
+          if (!data.usable) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
+          return [200, { invitation: {
+            team_name: String(data.team?.name || '').slice(0, 80),
+            role: data.role === 'admin' ? 'admin' : 'member',
+            requires_approval: data.requires_approval === true,
+          } }]
+        })
+      },
+    },
+    {
       method: 'POST', path: /^\/v1\/invites\/accept$/,
       async handle({ body }) {
         return wrap(async () => {
@@ -350,7 +419,9 @@ function invitesRoutes(host) {
             return [202, { join_request: { id: data.request_id, status: 'pending', team_id: data.team_id } }]
           }
           if (data.status === 'suspended') throw new Fault(403, 'forbidden', 'Your membership in this workspace is suspended')
-          return [200, { workspace: { id: data.workspace_id || data.team_id }, member: { role: 'member' } }]
+          return [200, { workspace: { id: data.workspace_id || data.team_id }, member: {
+            role: ['owner', 'admin'].includes(data.role) ? data.role : 'member',
+          } }]
         })
       },
     },
@@ -384,7 +455,11 @@ function invitesRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const data = await bs.get('/v1/ot/join-requests/mine')
-          return [200, { items: (data.requests || []).map((row) => requestItem(row)) }]
+          return [200, { items: (data.requests || []).map(row => ({
+            ...requestItem(row),
+            workspace_id: HEX.test(row.workspace_id || '') ? row.workspace_id : null,
+            team_name: typeof row.team_name === 'string' ? row.team_name : '',
+          })) }]
         })
       },
     },
@@ -423,13 +498,63 @@ function teamsRoutes(host) {
   return [
     {
       method: 'GET', path: /^\/v1\/workspaces$/,
-      async handle({ query }) {
+      async handle({ query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           const binding = host.call('agents/personal-binding', {})
           if (q.get('scope') === 'personal') {
-            const personal = personalWorkspace(await binding, env)
-            return [200, { items: personal ? [personal] : [], cursor: null }]
+            const localBinding = await binding
+            const personal = personalWorkspace(localBinding, env)
+            const result = { items: personal ? [personal] : [], cursor: null }
+            const include = q.get('include')
+            if (include === 'automations') {
+              Object.assign(result, platformViewer(call))
+              const workspaces = q.getAll('workspace')
+              const personalScope = !workspaces.length || (workspaces.length === 1 && workspaces[0] === personal?.id)
+              if (personal && personalScope && q.getAll('include').length === 1 && result.viewer_username) {
+                const list = await host.call('automations/list', {
+                  workspace_id: personal.id, category: 'mine', username: result.viewer_username,
+                }).catch(() => null)
+                if (Array.isArray(list?.items)) result.automations = {items: list.items}
+              }
+              return [200, result]
+            }
+            if (include === 'artifacts' || include === 'chat') {
+              Object.assign(result, platformViewer(call))
+              if (personal && (personal.owner_id || result.viewer_username)) {
+                if (include === 'chat') result.personal_agent_id = localBinding.agent_id
+                if (!q.has('workspace') || q.get('workspace') === personal.id) {
+                  if (include === 'chat') {
+                    const agent = q.get('entry_agent')
+                    const conversation = q.get('entry_conversation')
+                    const entryRequested = q.get('workspace') === personal.id && q.getAll('workspace').length === 1 && HEX.test(agent || '')
+                      && q.getAll('entry_agent').length === 1
+                      && (conversation === null || (HEX.test(conversation) && q.getAll('entry_conversation').length === 1))
+                    if (entryRequested) {
+                      result.entry = await host.call('agents/startupEntry', {
+                        workspace_id: personal.id, agent_id: agent, conversation_id: conversation ?? undefined,
+                      }).catch(() => null)
+                    }
+                    // Exact conversation links can verify the same local owner
+                    // binding before loading the directory independently.
+                    if (q.get('directory') !== '0' || (entryRequested && conversation === null && !result.entry)) {
+                      const directory = await host.call('agents/v1', {
+                        method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
+                      }).catch(() => null)
+                      if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
+                          Array.isArray(directory.body.conversations)) result.chat = directory.body
+                    }
+                  } else {
+                    const order = q.get('order') === 'recent' ? '?order=recent' : ''
+                    const catalog = await host.call('artifacts/v1', {
+                      method: 'GET', path: `/v1/workspaces/${personal.id}/artifacts${order}`,
+                    }).catch(() => null)
+                    if (catalog?.status === 200 && Array.isArray(catalog.body?.items)) result.catalog = catalog.body
+                  }
+                }
+              }
+            }
+            return [200, result]
           }
           const bs = client(host)
           const limit = Math.min(Math.max(Number(q.get('limit') || 20) || 20, 1), 100)
@@ -441,7 +566,11 @@ function teamsRoutes(host) {
             .filter((t) => HEX.test(String(t.workspace_id || '')))
             .map((t) => workspaceItem(t, me, env))
           const personal = personalWorkspace(localBinding, env)
-          if (personal && !rows.some(row => row.id === personal.id)) rows.unshift(personal)
+          if (q.get('scope') === 'convertible') {
+            rows = rows.filter(row => row.id !== personal?.id && row.kind === 'workspace' && row.role === 'owner')
+          } else if (personal && !rows.some(row => row.id === personal.id)) {
+            rows.unshift(personal)
+          }
           if (cursor) {
             const at = rows.findIndex((row) => row.id === cursor)
             rows = at >= 0 ? rows.slice(at + 1) : []
@@ -472,6 +601,13 @@ function teamsRoutes(host) {
           const slug = body?.slug
           if (!name || !['new', 'convert'].includes(body?.mode)) throw new Fault(400, 'invalid', 'Provide a team name, a valid Team ID, and new or convert')
           if (!IDEM.test(String(key || ''))) throw new Fault(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+          if (body.mode === 'convert') {
+            const binding = await host.call('agents/personal-binding', {})
+            const personal = personalWorkspace(binding, env)
+            if (personal && personal.id === body.workspace_id) {
+              throw new Fault(409, 'conflict', 'The personal workspace cannot be converted into a team')
+            }
+          }
           const bs = client(host)
           const me = await meOf(bs, env)
           const team = body.mode === 'new'
@@ -556,7 +692,7 @@ async function messengerScope(host, bs, workspace, conversationId, messageId) {
   return {personal: true, conversation}
 }
 
-async function requireGroupMemoryScope(host,bs,workspace,cid) {
+async function requireSharedGroupScope(host,bs,workspace,cid) {
   if (typeof workspace !== 'string' || !HEX.test(workspace)) throw new Fault(400,'invalid','无效的工作区。')
   const scope = await messengerScope(host,bs,workspace,cid)
   const group = scope.conversation || await bs.get('/v1/ot/conversations/' + cid)
@@ -569,32 +705,26 @@ async function requireGroupMemoryScope(host,bs,workspace,cid) {
 export async function shareGroupMemory(host, payload) {
   const {workspace_id,conversation_id,title,body,source_message_id,sources,client_key} = payload || {}
   const bs = client(host), cid = seg(conversation_id,'conversation_id')
-  await requireGroupMemoryScope(host,bs,workspace_id,cid)
+  await requireSharedGroupScope(host,bs,workspace_id,cid)
   return bs.post(`/v1/ot/conversations/${cid}/memories`,{title,body,source_message_id,sources,client_key})
 }
 
 export async function groupMemorySources(host, payload) {
-  const {workspace_id:workspace, conversation_id:id, message_ids:ids} = payload || {}
-  if (!Array.isArray(ids) || ids.length > 12 || new Set(ids).size !== ids.length) {
-    throw new Fault(400,'invalid','请选择当前群聊中的文字消息。')
-  }
-  const bs = client(host)
+  const {workspace_id:workspace, conversation_id:id, message_ids, after} = payload || {}
+  if (typeof workspace !== 'string' || !HEX.test(workspace)) throw new Fault(400,'invalid','无效的工作区。')
   const cid = seg(id,'conversation_id')
-  const group = await requireGroupMemoryScope(host,bs,workspace,cid)
-  const rows = await Promise.all(ids.map(async id => {
-    try { return await bs.get('/v1/ot/messages/' + seg(id,'message_id') + qs({conversation_id:cid})) }
-    catch (error) { if (error?.status === 404) return null; throw error }
-  }))
-  return {items:rows.filter(row => row && !row.retracted && row.author?.kind === 'member' && !row.voice && !row.attachment && row.body?.trim())
-    .sort((left,right) => left.seq-right.seq).map(row => ({
-      id:row.id, revision:row.revision, title:group.title, author:row.author.display_name || '群成员', text:row.body,
-    }))}
+  const binding = await host.call('agents/personal-binding', {})
+  return client(host).post(`/v1/ot/conversations/${cid}/memory-sources`,{
+    ...(binding?.workspace_id === workspace ? {} : {workspace_id:workspace}),
+    ...(after === undefined ? {message_ids} : {after}),
+  })
 }
 
 function messengerRoutes(host, wakeReplies) {
   const env = process.env
   const convPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations$/
   const onePath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})$/
+  const managementPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/management$/
   return [
     {
       method: 'GET', path: convPath,
@@ -649,20 +779,68 @@ function messengerRoutes(host, wakeReplies) {
     },
     {
       method: 'GET', path: onePath,
-      async handle({ match }) {
+      async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({limit: 100, pins: 1}))
+          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
+            workspace_id: unread && !scope.personal ? match[1] : undefined,
+          }))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
+              has_newer:page.has_newer === true}} : {}),
           }]
+        })
+      },
+    },
+    {
+      method: 'GET', path: managementPath,
+      async handle({match}) {
+        return wrap(async () => {
+          const bs = client(host)
+          const group = await requireSharedGroupScope(host,bs,match[1],match[2])
+          if (!group.group_management) throw new Fault(404,'not_found','无法管理此群聊。')
+          return [200,{conversation:conversationItem(group,await meOf(bs,env),env,match[1])}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: managementPath,
+      async handle({match,body}) {
+        return wrap(async () => {
+          const [ , workspace, id ] = match
+          const {action, revision, title, member_id:memberId} = body || {}
+          const field = typeof action === 'string' && Object.hasOwn(GROUP_MANAGEMENT_FIELDS,action) ? GROUP_MANAGEMENT_FIELDS[action] : null
+          if (field === null || !Number.isSafeInteger(revision) || revision < 0 ||
+              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field) ||
+              (field === 'title' && (typeof title !== 'string' || !title.trim() || title.length > 80)) ||
+              (field === 'member_id' && (typeof memberId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(memberId)))) {
+            throw new Fault(400, 'invalid', '群聊管理请求无效。')
+          }
+          const bs = client(host)
+          const binding = await host.call('agents/personal-binding', {})
+          const direct = binding?.workspace_id === workspace
+          const result = await bs.post(`/v1/ot/conversations/${seg(id,'conversation_id')}/management`, {
+            action, revision, ...(field ? {[field]:body[field]} : {}), ...(direct ? {direct:true} : {workspace}),
+          })
+          if (action === 'leave') {
+            if (result.left === true && result.conversation_id === id) return [200,{left:true,conversation_id:id}]
+            throw new Fault(502,'unavailable','无法确认退群结果。')
+          }
+          if (result.conversation?.id !== id || !result.conversation.group_management) {
+            throw new Fault(502, 'unavailable', '无法确认群聊管理结果。')
+          }
+          const me = await meOf(bs, env)
+          return [200, {conversation:conversationItem(result.conversation, me, env, workspace)}]
         })
       },
     },
@@ -671,15 +849,17 @@ function messengerRoutes(host, wakeReplies) {
       async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
-          await messengerScope(host, bs, match[1], match[2])
+          const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const q = parseQuery(query)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
-            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
+            workspace_id: !scope.personal && q.get('scope') === 'workspace' ? match[1] : undefined,
+            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), after: q.get('after'), around: q.get('around'), q: q.get('q'),
           }))
           return [200, {
             items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
             cursor: page.next_before ?? null, has_newer: page.has_newer === true,
+            ...(q.has('after') ? {last_seq:page.last_seq} : {}),
           }]
         })
       },
@@ -701,8 +881,23 @@ function messengerRoutes(host, wakeReplies) {
       async handle({match}) {
         return wrap(async () => {
           const bs = client(host)
-          await requireGroupMemoryScope(host,bs,match[1],match[2])
-          return [200,await bs.get(`/v1/ot/conversations/${match[2]}/memories`)]
+          await requireSharedGroupScope(host,bs,match[1],match[2])
+          const [shared, capture] = await Promise.all([
+            bs.get(`/v1/ot/conversations/${match[2]}/memories`),
+            host.call('memory/groupCaptureStatus',{workspace_id:match[1],conversation_id:match[2]}),
+          ])
+          return [200,{...shared,auto_capture:capture.enabled}]
+        })
+      },
+    },
+    {
+      method:'POST', path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/shared-memory\/auto-capture$/,
+      async handle({match,body}) {
+        return wrap(async () => {
+          if (typeof body?.enabled !== 'boolean') throw new Fault(400,'invalid','请选择是否自动提炼。')
+          return [200,await host.call('memory/setGroupCapture',{
+            workspace_id:match[1],conversation_id:match[2],enabled:body.enabled,
+          })]
         })
       },
     },
@@ -711,7 +906,7 @@ function messengerRoutes(host, wakeReplies) {
       async handle({match}) {
         return wrap(async () => {
           const bs = client(host)
-          await requireGroupMemoryScope(host,bs,match[1],match[2])
+          await requireSharedGroupScope(host,bs,match[1],match[2])
           return [200,await bs.del(`/v1/ot/conversations/${match[2]}/memories/${match[3]}`)]
         })
       },
@@ -737,17 +932,40 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
-          let message = body
-          if (body?.artifact_id !== undefined) {
+          let attachment
+          let stickerReplay = false
+          if (body?.sticker_id !== undefined) {
+            if (typeof body.sticker_id !== 'string' || !HEX.test(body.sticker_id) || !idempotency_key ||
+                body.artifact_id !== undefined || body.attachment !== undefined || body.voice !== undefined ||
+                scope.conversation?.public_agent) {
+              throw new Fault(400, 'invalid', '请选择一张可发送到此会话的贴纸。')
+            }
+            try {
+              const snapshot = await host.call('stickers/attachment', {id:body.sticker_id})
+              attachment = {...snapshot.attachment,sticker:true}
+            } catch (error) {
+              if (error?.status !== 404) throw error
+              stickerReplay = true
+            }
+          } else if (body?.artifact_id !== undefined) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
             const snapshot = await host.call('artifacts/chatAttachment', {workspace_id: match[1],
               artifact_id: body.artifact_id, revision: body.artifact_revision})
-            message = {...body, body: snapshot.body, attachment: snapshot.attachment}
+            body = {...body,body:snapshot.body}
+            attachment = snapshot.attachment
+          } else if (body?.attachment !== undefined) {
+            const {title,mime,data} = body.attachment || {}
+            attachment = {title,mime,data}
           }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: message?.body, voice: message?.voice, attachment: message?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: message?.mentions, agent_mentions: message?.agent_mentions, reply_to: message?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, {
+            workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key,
+            ...(stickerReplay ? {sticker_replay:true} : {
+              body:body?.body,voice:body?.voice,attachment,mentions:body?.mentions,agent_mentions:body?.agent_mentions,reply_to:body?.reply_to,
+            }),
+          })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
@@ -787,7 +1005,6 @@ function messengerExtraRoutes(host, wakeReplies) {
   const re = (tail) => new RegExp(base + tail + '$')
   const conv = (id) => `/v1/ot/conversations/${seg(id, 'conversation_id')}`
   const msg = (id) => `/v1/ot/messages/${seg(id, 'message_id')}`
-  const page = async (bs, cid) => (await bs.get(`${conv(cid)}/messages` + qs({ limit: 100 }))).messages || []
   const findMessage = (bs, cid, mid) => bs.get(msg(mid) + qs({conversation_id: cid}))
   const callTeam = async (bs, workspace, cid) => {
     const scope = await messengerScope(host, bs, workspace, cid)
@@ -805,9 +1022,33 @@ function messengerExtraRoutes(host, wakeReplies) {
         const [, workspace, conversation, message] = match
         const bs = client(host)
         await messengerScope(host, bs, workspace, conversation)
-        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry', {job_id: body?.job_id})
+        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry',
+          {job_id: body?.job_id, attempt: body?.attempt})
         wakeReplies()
         return [200, result]
+      }),
+    },
+    {
+      method: 'GET', path: re('\\/attachments'), queryLimit: 1024,
+      handle: ({ match, query }) => wrap(async () => {
+        const [, workspace, conversation] = match
+        const params = parseQuery(query)
+        for (const name of params.keys()) {
+          if (!['kind', 'q', 'cursor', 'limit'].includes(name) || params.getAll(name).length !== 1) {
+            throw new Fault(400, 'invalid', '无效的附件搜索参数。')
+          }
+        }
+        const binding = await host.call('agents/personal-binding', {})
+        const path = binding?.workspace_id === workspace ? conv(conversation)
+          : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
+        const data = await client(host).get(path + '/attachments' + qs(Object.fromEntries(params)))
+        return [200, {
+          items: (data.items || []).map(row => ({
+            message_id: row.message_id, created_at: unix(row.created_at),
+            attachment: attachmentItem(row.attachment, workspace, conversation, row.message_id),
+          })),
+          next_cursor: data.next_cursor ?? null,
+        }]
       }),
     },
     {
@@ -899,6 +1140,19 @@ function messengerExtraRoutes(host, wakeReplies) {
       },
     },
     {
+      method: 'POST', path: re('\\/messages\\/hide'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const {personal} = await messengerScope(host, bs, match[1])
+          const data = await bs.post(conv(match[2]) + '/messages/hide', {
+            message_ids: body?.message_ids, ...(personal ? {direct:true} : {workspace:match[1]}),
+          })
+          return [200, data]
+        })
+      },
+    },
+    {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/(edit|retract)'),
       async handle({ match, body }) {
         return wrap(async () => {
@@ -984,35 +1238,42 @@ function messengerExtraRoutes(host, wakeReplies) {
       },
     },
     {
+      method: 'GET', path: re('\\/reply-progress'),
+      async handle({ match, query }) {
+        return wrap(async () => {
+          if (query) throw new Fault(400, 'invalid', 'Invalid reply progress request')
+          const [, workspace, conversation] = match
+          const binding = await host.call('agents/personal-binding', {})
+          const path = binding?.workspace_id === workspace ? conv(conversation)
+            : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
+          return [200, await client(host).get(path + '/reply-progress')]
+        })
+      },
+    },
+    {
       method: 'POST', path: re('\\/agent-replies'),
       async handle({ match, body, idempotency_key: key }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
-          const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 5) : []
+          const [, workspace, conversationId] = match
+          const ids = Array.isArray(body?.agent_ids) ? [...new Set(body.agent_ids)] : []
           const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
-          if (!ids.length || !prompt || prompt.length > 4000) throw new Fault(400, 'invalid', 'Provide agent_ids and a 1–4000 character prompt')
-          const services = host.currentRuntime?.()
-          if (!services || typeof services.chatTurn !== 'function') throw new Fault(503, 'runtime_unavailable', 'DS-Bot chat service unavailable')
-          const conversation = await bs.get(conv(match[2]))
-          if (conversation.public_agent) throw new Fault(409, 'public_chat_fixed', '公开智能体会话会自动回复。')
-          const context = (await page(bs, match[2])).slice(-12).map((m) => ({ author: m.author, body: m.body }))
-          const memories = conversation.kind === 'group'
-            ? selectGroupMemories(prompt,(await bs.get(`${conv(match[2])}/memories`)).items) : []
-          const tag = String(key || Date.now()).slice(0, 40)
-          const me = await meOf(bs, env)
-          const replies = []
-          for (const id of ids) {
-            const agent = (conversation.agents || []).find((a) => a.agent_ref === id && a.mine)
-            if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
-            const turn = await host.call('agents/turn', { agent_id: id, key: `social:${match[2]}`, text: replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }, memories), request_id: `otr:${tag}:${id}` })
-            const text = String(turn?.text ?? '').trim()
-            if (!text) continue
-            const posted = await bs.post(`${conv(match[2])}/agent-messages`, { agent_ref: id, body: text.slice(0, 4000), mode: 'mention', client_key: `m:${tag}:${id}`.slice(0, 80),
-              ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
-            })
-            replies.push(messageItem({ ...posted, conversation_id: match[2] }, me, env, match[1]))
+          if (!ids.length || ids.length > 5 || !ids.every(id => typeof id === 'string') || !prompt || prompt.length > 4000
+              || typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
+            throw new Fault(400, 'invalid', 'Provide up to five group agents, a prompt and a send key')
           }
-          return [201, { replies }]
+          const bs = client(host)
+          const conversation = await requireSharedGroupScope(host, bs, workspace, conversationId)
+          const me = await meOf(bs, env)
+          const targets = ids.map(agentId => {
+            const agent = (conversation.agents || []).find(a => a.agent_ref === agentId && a.mine)
+            if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
+            return {owner_id:me.owner_id, agent_id:agentId}
+          })
+          const source = await bs.post(`${conv(conversationId)}/messages`, {
+            body:prompt, workspace, direct:accountConversation(conversation), agent_mentions:targets, client_key:key,
+          })
+          if (source.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
+          return [202, {message:messageItem({...source, conversation_id:conversationId}, me, env, workspace)}]
         })
       },
     },
@@ -1029,6 +1290,10 @@ function remixInstructions(row) {
   } catch { return '' }
 }
 
+function publishesQuickStarts(row) {
+  try { return Array.isArray(JSON.parse(row?.snapshot || 'null')?.quick_starts) } catch { return false }
+}
+
 function remixTemplate(row) {
   const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
     instructions: remixInstructions(row) }
@@ -1036,22 +1301,91 @@ function remixTemplate(row) {
   return { ...template, revision }
 }
 
+function workCommentItem(row) {
+  const author = row.author
+  return {
+    id: row.id, parent_id: row.parent_id ?? null, body: row.body, created_at: row.created_at,
+    author: author ? {handle: author.handle, name: author.name} : null,
+    mine: row.mine === true, can_remove: row.can_remove === true, removed: row.removed === true,
+    reply_count: row.reply_count ?? 0, likes: row.likes ?? 0, liked: row.liked === true,
+  }
+}
+
+function platformViewer(call) {
+  // The platform gateway sets this header from the session that selected this runtime.
+  const viewer = call?.request?.headers?.get('x-ot-owner-username')
+  return typeof viewer === 'string' && PLATFORM_USERNAME.test(viewer) ? {viewer_username: viewer} : {}
+}
+
 function discoverRoutes(host) {
   const env = process.env
-  const feed = (kind) => async ({ query }) => wrap(async () => {
+  const feed = (kind) => async ({ query }, call) => wrap(async () => {
     const bs = client(host)
     const q = parseQuery(query)
+    const sort = q.get('sort')
+    if (q.getAll('sort').length > 1 || (sort !== null && sort !== 'latest' && sort !== 'popular')) {
+      throw new Fault(400, 'invalid', '无效的发现排序。')
+    }
+    const popular = sort === 'popular'
+    const cursor = q.get('cursor')
+    if (q.getAll('cursor').length > 1) throw new Fault(400, 'invalid', '无效的发现分页。')
+    if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
+      throw new Fault(400, 'invalid', '无效的热门作品请求。')
+    }
+    const keyset = kind === 'work' && !popular && (cursor === null || cursor.startsWith('l.'))
+    const position = cursor && keyset ? LATEST_WORK_CURSOR.exec(cursor) : null
+    if (cursor !== null && !popular && (keyset ? !position || !Number.isSafeInteger(Number(position[1])) : !/^[0-9]{1,16}$/.test(cursor))) {
+      throw new Fault(400, 'invalid', '无效的发现分页。')
+    }
+    const pagination = popular ? {sort, cursor} : keyset ? {pagination: 'keyset', cursor} : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
-      before: q.get('cursor'), limit: q.get('limit'),
+      ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, { items, cursor: data.next_before ?? null }]
+    const next = popular || keyset ? data.next_cursor : data.next_before
+    return [200, {items, cursor: next ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
-  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
+  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
+    {
+      method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
+      async handle({ match, query }) {
+        return wrap(async () => {
+          const q = parseQuery(query)
+          const notices = match[1] === 'follow-work'
+          const keys = notices ? ['q', 'cursor', 'limit'] : ['view', 'q', 'cursor', 'limit']
+          if ([...q.keys()].some(key => !keys.includes(key) || q.getAll(key).length !== 1)) {
+            throw new Fault(400, 'invalid', '无效的主页列表请求。')
+          }
+          return [200, await client(host).get('/v1/ot/profile/social' + qs({
+            view: notices ? 'work-notices' : q.get('view'), q: q.get('q'), cursor: q.get('cursor'), limit: q.get('limit'),
+          }))]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/profile\/(social|follow-work)$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const notices = match[1] === 'follow-work'
+          const key = notices ? 'enabled' : 'on'
+          if (!body || Array.isArray(body) || Object.keys(body).length !== 2
+            || typeof body.handle !== 'string' || !PROFILE_HANDLE.test(body.handle) || typeof body[key] !== 'boolean') {
+            throw new Fault(400, 'invalid', '请选择作者和更新状态。')
+          }
+          if (notices) {
+            const result = await client(host).post('/v1/ot/follows/notifications', {handle: body.handle, enabled: body.enabled})
+            return [200, {enabled: result.enabled === true}]
+          }
+          const result = await client(host).post('/v1/ot/follows', {handle: body.handle, on: body.on})
+          return [200, {following: result.following === true}]
+        })
+      },
+    },
     // Publish a work (artifact on this DS-Bot) to the public Bot Social catalog (/w/<slug>).
     {
       method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/discover$/,
@@ -1065,11 +1399,50 @@ function discoverRoutes(host) {
           const got = await host.call('artifacts/v1', { method: 'GET', path: `/v1/workspaces/${match[1]}/artifacts/${match[2]}` })
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
+          const editable = body?.allow_editable_remix
+          if (editable !== undefined && typeof editable !== 'boolean') {
+            throw new Fault(400,'invalid','请选择是否允许复制可编辑作品。')
+          }
+          if ((editable === true || body?.revision !== undefined) &&
+              (!Number.isSafeInteger(body?.revision) || body.revision !== artifact.revision)) {
+            throw new Fault(409,'artifact_changed','已保存的作品版本已更新，请重新打开后再发布。')
+          }
           const prior = await workListing(bs, match[2])
-          const kind = ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const mime = artifact.kind === 'media' ? artifact.media?.mime : undefined
+          const mediaKind = mime === GLB_MIME ? 'model3d' : DISCOVER_MEDIA_KINDS.get(mime)
+          if (artifact.kind === 'media' && !mediaKind) {
+            throw new Fault(400, 'attachment_type_blocked', '这个文件格式无法公开发布。')
+          }
+          const kind = mediaKind || artifact.kind
+          let editableSnapshot
+          if (editable) {
+            if (kind !== 'slides' && kind !== 'whiteboard') throw new Fault(400,'invalid','该作品类型无法发布可编辑版本。')
+            const binding = await host.call('agents/personal-binding',{})
+            if (binding?.workspace_id !== match[1]) await teamFor(bs,match[1],'Workspace',env)
+            editableSnapshot = kind === 'slides' ? normalizeSlides(artifact.slides) : normalizeBoard(artifact.board)
+            if (!editableSnapshot) throw new Fault(400,'invalid','这个作品没有可发布的保存版本。')
+          }
+          const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
+          const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
+          let file = {}
+          if (mediaKind) {
+            const result = await host.call('artifacts/chatAttachment', {
+              workspace_id: match[1], artifact_id: match[2], revision: artifact.revision,
+            })
+            if (result?.attachment?.mime !== mime || typeof result.attachment.data !== 'string' || !result.attachment.data) {
+              throw new Fault(409, 'conflict', '作品文件已更新，请刷新后重新发布。')
+            }
+            file = mediaKind === 'model3d' ? {model_data: result.attachment.data} : {
+              media_data: result.attachment.data, media_mime: mime,
+              media_filename: artifact.media.filename || result.attachment.title,
+            }
+          }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary: String(artifact.body || '').slice(0, 300), work_kind: kind, snapshot: String(artifact.body || '').slice(0, 200000),
+            work_kind: kind,
+            ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
+            ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
+            ...file,
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
         })
@@ -1088,11 +1461,26 @@ function discoverRoutes(host) {
     },
     {
       method: 'POST', path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/start$/,
-      async handle({ match }) {
+      async handle({ match, body }) {
         return wrap(async () => {
+          const input = body === undefined ? {} : body
+          if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Fault(400, 'invalid', '无效的访客聊天请求。')
+          const fields = Object.keys(input)
+          const selected = Object.hasOwn(input, 'listing_id')
+          const quick = fields.length > 0 && !selected
+          if (selected && (fields.length !== 1 || typeof input.listing_id !== 'string' || !PUBLIC_LISTING_ID.test(input.listing_id))) {
+            throw new Fault(400, 'invalid', '无效的公开智能体。')
+          }
+          if (quick && (fields.length !== 2 || !Number.isInteger(input.quick_start)
+            || input.quick_start < 0 || input.quick_start > 4
+            || typeof input.quick_start_version !== 'string' || !/^[a-f0-9]{64}$/.test(input.quick_start_version))) {
+            throw new Fault(400, 'invalid', '请选择有效的快捷开场。')
+          }
           const binding = await host.call('agents/personal-binding', {})
           if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409, 'no_personal_workspace', '请先打开个人工作区。')
-          const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)
+          const request = selected ? {listing_id: input.listing_id}
+            : quick ? {quick_start: input.quick_start, quick_start_version: input.quick_start_version} : {}
+          const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`, request)
           return [200, { ...result, workspace_id: binding.workspace_id }]
         })
       },
@@ -1125,8 +1513,99 @@ function discoverRoutes(host) {
       },
     })),
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
-    { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
-    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
+    {
+      method: 'GET', path: new RegExp(`^${DISCOVER_WORK}$`),
+      queryLimit: DISCOVER_WORK_QUERY_LIMIT,
+      async handle({ match, query }, call) {
+        return wrap(async () => {
+          const q = parseQuery(query)
+          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator'].includes(key) || q.getAll(key).length !== 1)) {
+            throw new Fault(400, 'invalid', '无效的作品浏览请求。')
+          }
+          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'), creator: q.get('creator')}
+          const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
+          if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
+          const adjacent = row => row ? {slug: row.slug, title: row.title} : null
+          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'GET', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query }, call) {
+        return wrap(async () => {
+          if (query) throw new Fault(400,'invalid','无效的作品复制请求。')
+          const {template} = await client(host).get(`/v1/ot/discover/${match[1]}/remix`)
+          return [200,{template,...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query, body, idempotency_key: key }, call) {
+        return wrap(async () => {
+          if (query || !body || Object.keys(body).length !== 2 || !Object.hasOwn(body,'title') ||
+              typeof body.revision !== 'string' || !/^[0-9a-f]{64}$/.test(body.revision) ||
+              typeof key !== 'string' || !COMMENT_KEY.test(key)) {
+            throw new Fault(400,'invalid','无效的作品复制请求。')
+          }
+          const binding = await host.call('agents/personal-binding', {})
+          if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409,'no_personal_workspace','请先打开个人工作区。')
+          const slug = match[1]
+          const payload = {slug,workspace_id:binding.workspace_id,revision:body.revision,title:body.title,idempotency_key:key}
+          const previous = await host.call('artifacts/remixPublicWork',payload)
+          const project = ({status,body:{artifact}}) => [status,{
+            artifact:{id:artifact.id,workspace_id:artifact.workspace_id,kind:artifact.kind,title:artifact.title,revision:artifact.revision},
+            ...platformViewer(call),
+          }]
+          if (previous) return project(previous)
+          const snapshot = await client(host).get(`/v1/ot/discover/${slug}/remix` + qs({revision:body.revision}))
+          if (!snapshot.source || snapshot.template?.revision !== body.revision || snapshot.template.kind !== snapshot.source.kind) {
+            throw new Fault(409,'listing_changed','这个公开版本已不可用，请重新查看。')
+          }
+          return project(await host.call('artifacts/remixPublicWork',{...payload,source:snapshot.source}))
+        })
+      },
+    },
+    {
+      method: 'GET', path: new RegExp(`^${DISCOVER_WORK}/comments$`),
+      async handle({ match, query }) {
+        return wrap(async () => {
+          const q = parseQuery(query)
+          if ([...q.keys()].some(key => !['parent_id', 'cursor', 'limit'].includes(key) || q.getAll(key).length !== 1)) {
+            throw new Fault(400, 'invalid', '无效的评论分页请求。')
+          }
+          const params = {parent_id: q.get('parent_id'), cursor: q.get('cursor'), limit: q.get('limit')}
+          const result = await client(host).get(`/v1/ot/discover/${match[1]}/comments` + qs(params))
+          return [200, {items: result.items.map(workCommentItem), cursor: result.cursor ?? null, comment_count: result.comment_count}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: new RegExp(`^${DISCOVER_WORK}/comments$`),
+      async handle({ match, body, idempotency_key: key }) {
+        return wrap(async () => {
+          if (typeof key !== 'string' || !COMMENT_KEY.test(key)) throw new Fault(400, 'invalid', '缺少有效的评论请求标识。')
+          const result = await client(host).post(`/v1/ot/discover/${match[1]}/comments`, {
+            body: body?.body, parent_id: body?.parent_id, client_key: key,
+          })
+          return [result.replayed === true ? 200 : 201, {comment: workCommentItem(result.comment), comment_count: result.comment_count}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: new RegExp(`^${DISCOVER_WORK}/comments/(${WORK_COMMENT})/(like|remove)$`),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const [, slug, id, action] = match
+          const result = await client(host).post(`/v1/ot/discover/${slug}/comments/${id}/${action}`,
+            action === 'like' ? {enabled: body?.enabled} : {})
+          return [200, action === 'like' ? {comment: workCommentItem(result.comment)} : {comment_count: result.comment_count}]
+        })
+      },
+    },
     {
       method: 'POST', path: /^\/v1\/discover\/works\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/engagement$/,
       async handle({ match, body }) {
@@ -1153,7 +1632,8 @@ function discoverRoutes(host) {
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
           return [200, { discover: listing?.listed
-            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)), updated: unix(row.updated_at) }
+            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)),
+              publish_quick_starts: publishesQuickStarts(listing), updated: unix(row.updated_at) }
             : { listed: false } }]
         })
       },
@@ -1168,14 +1648,22 @@ function discoverRoutes(host) {
           if (body?.revision !== undefined && body.revision !== agent.revision) {
             throw new Fault(409, 'agent_changed', '智能体已更新，请刷新后重新预览。')
           }
+          if (body?.publish_quick_starts !== undefined && typeof body.publish_quick_starts !== 'boolean') {
+            throw new Fault(400, 'invalid', '请选择是否公开快捷开场。')
+          }
           const instructions = body?.copy_instructions === true ? agent.instructions : ''
-          const snapshot = instructions ? JSON.stringify({ version: 1, instructions }) : undefined
+          const shareStarts = body?.publish_quick_starts === true
+          const snapshot = instructions || shareStarts ? JSON.stringify({
+            version: 1, ...(instructions ? {instructions} : {}),
+            ...(shareStarts ? {quick_starts: (agent.quick_starts || []).slice(0, 5)} : {}),
+          }) : undefined
           const data = await bs.put('/v1/ot/listings', {
             kind: 'agent', ref: agent.id, slug: body?.slug, title: agent.name, summary: agent.summary,
             category: agent.category, snapshot, chat_enabled: body?.chat_enabled,
           })
           return [200, { discover: { listed: true, slug: data.slug, category: data.category,
-            chat_enabled: data.chat_enabled === true, copy_instructions: Boolean(instructions), updated: unix(data.updated_at) } }]
+            chat_enabled: data.chat_enabled === true, copy_instructions: Boolean(instructions),
+            publish_quick_starts: shareStarts, updated: unix(data.updated_at) } }]
         })
       },
     },

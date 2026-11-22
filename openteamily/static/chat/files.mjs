@@ -1,3 +1,18 @@
+import { artifactVersionLabel } from '../shell/thumb.mjs';
+
+export function deferModule(path) {
+  let promise;
+  let failures = 0;
+  // A failed module URL can stay cached in the document. Retry with a new URL.
+  return () => promise ??= import(failures ? path + '?retry=' + failures : path).catch(error => {
+    failures += 1;
+    promise = null;
+    throw error;
+  });
+}
+
+const loadModelPreview = deferModule('../shell/model3d-preview.mjs');
+
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
 const AGENT_FILE_EXT = new Set(['png','jpg','jpeg','gif','webp','pdf','txt','md','csv','tsv','json','docx','xlsx','pptx']);
@@ -36,12 +51,28 @@ function mediaElement(document, mime, url, title, pending) {
   return null;
 }
 
+export function chatFileDownload(document, attachment) {
+  if (!attachment.path) return null;
+  const title = attachment.title || '附件';
+  const link = document.createElement('a');
+  const separator = attachment.path.includes('?') ? '&' : '?';
+  link.href = attachment.path + (attachment.bytes === undefined ? '' : separator + 'download=1');
+  if (attachment.bytes !== undefined) link.download = title;
+  link.textContent = '下载';
+  link.setAttribute('aria-label', '下载' + title);
+  return link;
+}
+
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
-  const title = attachment.title || '附件';
+  const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
+  if (attachment.sticker === true && media) {
+    card.classList.add('chat-file-sticker');
+    return card;
+  }
   const details = document.createElement('div');
   details.className = 'chat-file-details';
   const info = document.createElement('span');
@@ -49,21 +80,59 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   const name = document.createElement('strong');
   name.textContent = title;
   info.append(name);
+  const version = artifactVersionLabel(attachment.resource, attachment.mime);
+  if (version) {
+    const meta = document.createElement('small');
+    meta.textContent = version;
+    info.append(meta);
+  }
   if (Number.isSafeInteger(attachment.bytes)) {
     const size = document.createElement('small');
     size.textContent = formatBytes(attachment.bytes);
     info.append(size);
   }
   details.append(info);
-  if (!pending && attachment.path) {
-    const link = document.createElement('a');
-    link.href = attachment.path + (attachment.bytes === undefined ? '' : '?download=1');
-    if (attachment.bytes !== undefined) link.download = title;
-    link.textContent = '下载';
-    link.setAttribute('aria-label', '下载' + title);
-    details.append(link);
-  }
+  const download = pending ? null : chatFileDownload(document, attachment);
+  if (download) details.append(download);
   card.append(details);
+  if (!pending && attachment.path && attachment.mime === 'model/gltf-binary') {
+    card.classList.add('chat-file-model3d');
+    card.dataset.model3dSource = attachment.path;
+    const button = document.createElement('button');
+    button.className = 'chat-file-model3d-toggle';
+    button.type = 'button';
+    button.textContent = '预览 3D 模型';
+    button.setAttribute('aria-expanded', 'false');
+    const status = document.createElement('p');
+    status.className = 'model3d-preview-status';
+    status.setAttribute('role', 'status');
+    const preview = document.createElement('div');
+    preview.className = 'chat-file-model3d-preview model3d-preview-frame';
+    preview.hidden = true;
+    details.append(button);
+    card.append(status, preview);
+    let loading = false;
+    async function initializePreview() {
+      if (loading) return;
+      loading = true;
+      button.setAttribute('aria-busy', 'true');
+      status.textContent = '正在加载模型预览…';
+      try {
+        const {bindModel3dPreview} = await loadModelPreview();
+        if (!card.isConnected) return;
+        button.removeEventListener('click', initializePreview);
+        const viewer = bindModel3dPreview(button, preview, status);
+        viewer.setSource(attachment.path);
+        void viewer.toggle();
+      } catch {
+        status.textContent = '无法打开预览，可重试或下载 GLB 文件。';
+      } finally {
+        loading = false;
+        button.removeAttribute('aria-busy');
+      }
+    }
+    button.addEventListener('click', initializePreview);
+  }
   return card;
 }
 
@@ -87,6 +156,7 @@ function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
 export function sendPrivateAttachmentMessage(view, path, message, files, headers, onProgress) {
   const form = new view.FormData();
   form.set('body', message.body || '');
+  if (message.chat_language) form.set('chat_language', message.chat_language);
   if (message.reply_language) form.set('reply_language', message.reply_language);
   for (const file of files) form.append('file',file);
   return uploadForm(view,path,headers,form,onProgress,240_000);
@@ -233,6 +303,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     const valid = files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1)));
     if (valid.length !== files.length) status.textContent = '智能体私聊支持图片、PDF、Office 文档和文本文件。';
     let bytes = existing.reduce((sum,item) => sum + item.file.size,0);
+    const before = existing.length;
     for (const file of valid) {
       if (existing.length >= 4 || bytes + file.size > MAX_CHAT_FILE_BYTES) {
         status.textContent = '每条消息最多 4 个附件，合计 8 MB。';
@@ -254,26 +325,34 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     }
     if (existing.length) drafts.set(scope,existing);
     render();
+    return existing.length - before;
   }
 
-  input.addEventListener('change', () => {
+  function addFiles(picked, scope) {
     const destination = context();
-    const picked = [...input.files];
-    input.value = '';
-    if (!destination || !picked.length) return;
+    if (!destination || !picked.length || (scope !== undefined && destination.scope !== scope)) return 0;
     status.textContent = '';
     const accepted = picked.filter(file => file.size > 0 && file.size <= MAX_CHAT_FILE_BYTES);
     if (accepted.length !== picked.length) status.textContent = '空文件和超过 8 MB 的文件无法发送。';
     if (destination.private) {
-      stageFiles(destination.scope,accepted);
-      return;
+      return stageFiles(destination.scope,accepted);
     }
     for (const file of accepted) enqueue(file, destination);
     render();
     if (accepted.length) scroller.scrollTop = scroller.scrollHeight;
     void drain();
+    return accepted.length;
+  }
+
+  input.addEventListener('change', () => {
+    const picked = [...input.files];
+    input.value = '';
+    addFiles(picked);
   });
-  return {render,draftFiles,clearDraft, moveDraft(from,to) {
+  return {render,draftFiles,clearDraft,addFiles, forget(scope) {
+    clearDraft(scope);
+    for (const job of jobs) if (job.destination.scope === scope) remove(job);
+  }, moveDraft(from,to) {
     const saved = drafts.get(from);
     if (saved) {
       drafts.set(to,saved);

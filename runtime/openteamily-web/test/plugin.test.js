@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, name, inject } from '../index.js'
 import { resolvePagePath, PAGE_PATH, SERVED_BY_HEADER } from '../src/pages.js'
-import { API_PATH, GATEWAY_PATH, LEGACY_PATH } from '../src/dispatch.js'
+import { API_PATH, GATEWAY_PATH, LEGACY_PATH, REPLY_STREAM_PATH } from '../src/dispatch.js'
 import { loadIdentity } from '../src/identity.js'
 
 function fakeCtx() {
@@ -37,7 +37,7 @@ function fixture() {
   return { root, pages, data }
 }
 
-const get = (route, path) => route.fetch(new Request(`http://10.0.0.2:8080${PAGE_PATH}?path=${encodeURIComponent(path)}`))
+const get = (route, path, headers) => route.fetch(new Request(`http://10.0.0.2:8080${PAGE_PATH}?path=${encodeURIComponent(path)}`, {headers}))
 const post = (route, body) => route.fetch(new Request(`http://10.0.0.2:8080${API_PATH}`, { method: 'POST', body: JSON.stringify(body) }))
 
 test('plugin identifies itself and only asks DSH for the connection service', () => {
@@ -49,11 +49,12 @@ test('registers exact authenticated routes on the shared /api channel', () => {
   const { pages, data } = fixture()
   const ctx = fakeCtx()
   apply(ctx, { pagesDir: pages, dataDir: data })
-  assert.deepEqual([...ctx.routes.keys()].sort(), [API_PATH, GATEWAY_PATH, LEGACY_PATH, PAGE_PATH].sort())
+  assert.deepEqual([...ctx.routes.keys()].sort(), [API_PATH, GATEWAY_PATH, LEGACY_PATH, PAGE_PATH, REPLY_STREAM_PATH].sort())
   assert.deepEqual(ctx.routes.get(PAGE_PATH).methods, ['GET'])
   assert.deepEqual(ctx.routes.get(API_PATH).methods, ['POST'])
+  assert.deepEqual(ctx.routes.get(REPLY_STREAM_PATH).methods, ['GET'])
   assert.deepEqual(ctx.routes.get(GATEWAY_PATH).methods, ['GET', 'POST'])
-  assert.deepEqual(ctx.routes.get(LEGACY_PATH).methods, ['GET', 'POST', 'PUT', 'DELETE'])
+  assert.deepEqual(ctx.routes.get(LEGACY_PATH).methods, ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'])
   for (const path of ctx.routes.keys()) assert.ok(path.startsWith('/api/'), 'DSH authenticates /api only')
 })
 
@@ -73,6 +74,93 @@ test('serves pages from this runtime, marked with this runtime identity', async 
   const css = await get(route, '/shell/app.css')
   assert.equal(css.status, 200)
   assert.match(css.headers.get('content-type'), /text\/css/)
+})
+
+test('legacy Messenger entry resolves to the native Chat inbox', async () => {
+  const { pages, data } = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, { pagesDir: pages, dataDir: data })
+  const route = ctx.routes.get(PAGE_PATH)
+  for (const path of ['/messenger', '/messenger/', '/messenger/index.html']) {
+    const response = await get(route, path)
+    assert.equal(response.status, 302, path)
+    assert.equal(response.headers.get('location'), '/chat')
+    assert.equal(await response.text(), '')
+  }
+  assert.equal((await get(route, '/messenger/app.mjs')).status, 404)
+})
+
+test('authenticated package assets revalidate against their actual bytes; personalised pages do not', async () => {
+  const {pages, data} = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, {pagesDir: pages, dataDir: data})
+  const route = ctx.routes.get(PAGE_PATH)
+  const path = '/shell/app.css'
+  const first = await get(route, path)
+  assert.equal(first.status, 200)
+  assert.equal(first.headers.get('cache-control'), 'private, no-cache')
+  assert.equal(await first.text(), 'body{}')
+  const etag = first.headers.get('etag')
+  assert.match(etag, /^"sha256-[0-9a-f]{64}"$/)
+  const unchanged = await get(route, path, {'If-None-Match': '"older", W/' + etag})
+  assert.equal(unchanged.status, 304)
+  assert.equal(unchanged.headers.get('etag'), etag)
+  assert.equal(await unchanged.text(), '')
+  writeFileSync(join(pages, path.slice(1)), 'body{margin:0}')
+  const changed = await get(route, path, {'If-None-Match': etag})
+  assert.equal(changed.status, 200)
+  assert.notEqual(changed.headers.get('etag'), etag)
+  assert.equal(await changed.text(), 'body{margin:0}')
+  const page = await get(route, '/chat', {'If-None-Match': '*'})
+  assert.equal(page.status, 200)
+  assert.equal(page.headers.get('cache-control'), 'no-store')
+  assert.equal(page.headers.has('etag'), false)
+})
+
+test('Chat versions its static dependency graph, keeps HTML private, and never caches newer bytes under an old URL', async () => {
+  const {pages, data} = fixture()
+  const css = join(pages, 'shell', 'app.css')
+  writeFileSync(join(pages, 'chat', 'index.html'), `<html><head>
+    <link rel="stylesheet" href="/shell/app.css">
+    <script type="module" src="/chat/app.mjs"></script>
+  </head><body><a href="/chat">Chat</a></body></html>`)
+  writeFileSync(join(pages, 'chat', 'app.mjs'), "import '../shell/utility.mjs'")
+  const dependencyFile = join(pages, 'shell', 'utility.mjs')
+  writeFileSync(dependencyFile, 'export const item = 1')
+  const mountPages = () => {
+    const ctx = fakeCtx()
+    apply(ctx, {pagesDir: pages, dataDir: data})
+    return ctx.routes.get(PAGE_PATH)
+  }
+  const route = mountPages()
+  const doc = await get(route, '/chat')
+  assert.equal(doc.headers.get('cache-control'), 'no-store')
+  const html = await doc.text()
+  const entry = /src="(\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs)"/.exec(html)?.[1]
+  assert.ok(entry)
+  const base = entry.slice(0, -'/chat/app.mjs'.length)
+  assert.ok(html.includes(`href="${base}/shell/app.css"`))
+  assert.ok(html.includes('<a href="/chat">'))
+  const dep = base + '/shell/utility.mjs'
+  const versioned = await get(route, dep)
+  assert.equal(await versioned.text(), 'export const item = 1')
+  assert.match(versioned.headers.get('cache-control'), /^private, max-age=31536000, immutable$/)
+  assert.equal((await get(route, dep, {'If-None-Match': versioned.headers.get('etag')})).status, 304)
+  assert.equal((await get(route, base + '/shell/leak.txt')).status, 404)
+  assert.equal((await get(route, base + '/chat/index.html')).status, 404)
+
+  writeFileSync(css, 'body{margin:0}')
+  writeFileSync(dependencyFile, 'export const item = 2')
+  const after = mountPages()
+  const rewritten = await (await get(after, '/chat')).text()
+  const revisedEntry = /src="(\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs)"/.exec(rewritten)?.[1]
+  assert.ok(revisedEntry)
+  assert.notEqual(revisedEntry, entry)
+  const changed = await get(after, dep)
+  assert.equal(changed.status, 302)
+  assert.equal(changed.headers.get('cache-control'), 'no-store')
+  const current = await get(after, changed.headers.get('location'))
+  assert.equal(await current.text(), 'export const item = 2')
 })
 
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {

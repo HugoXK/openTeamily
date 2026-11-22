@@ -8,6 +8,11 @@ export default function teams(host) {
     pages: ['team'],
     endpoints: {
       v1: teamsV1(host),
+      activeWorkspaces: async (_payload,call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'teams/not-found'})
+        const data = await bs().get('/v1/ot/workspaces',{signal:AbortSignal.timeout(2000)})
+        return (data.workspaces ?? []).map(({workspace_id,name}) => ({id:workspace_id,name}))
+      },
       list: async () => bs().get('/v1/ot/teams'),
       create: async (p) => bs().post('/v1/ot/teams', { name: p?.name, slug: p?.slug, summary: p?.summary }),
       get: async (p) => bs().get(`/v1/ot/teams/${seg(p?.team_id, 'team_id')}`),

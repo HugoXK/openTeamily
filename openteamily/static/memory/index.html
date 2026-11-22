@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -67,13 +67,19 @@
   <section id="main-panel" hidden>
     <header class="memory-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
-      <h1 class="visually-hidden">记忆</h1>
+      <h1 class="visually-hidden memory-main-title">记忆</h1>
       <p id="view-title" class="memory-view-title">总览</p>
       <p id="whoami" class="visually-hidden"></p>
-      <label class="workspace-picker">工作区
+      <label class="workspace-picker"><span class="workspace-caption">工作区</span>
         <select id="workspace"></select>
       </label>
+      <button type="button" id="memory-mobile-graph" class="memory-mobile-tool" aria-expanded="false" aria-controls="overview-panel">图谱</button>
+      <button type="button" id="memory-mobile-refresh" class="memory-mobile-tool">刷新</button>
       <p id="graph-counts" class="memory-counts"></p>
+      <div id="memory-citation" class="memory-citation" hidden>
+        <a id="memory-citation-return">返回原对话</a>
+        <p id="memory-citation-status" class="note" role="status"></p>
+      </div>
     </header>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
@@ -84,13 +90,14 @@
           </button>
         </div>
         <button type="button" id="new-page" disabled>+ 新建</button>
-        <label class="dir-search">
-          <span class="visually-hidden">搜索主题</span>
-          <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
-        </label>
+        <div class="dir-search">
+          <label for="search" class="visually-hidden">搜索记忆标题、正文或标签</label>
+          <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索标题、正文或标签">
+          <button type="button" id="memory-search-clear" aria-label="清除搜索" hidden>×</button>
+        </div>
         <div class="memory-filters" role="group" aria-label="筛选">
-          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count">0</span></button>
-          <button type="button" data-filter="updated" title="按最近更新排序；数字是最近 7 天更新过的页面数（还没有已读状态接口，所以不是未读数）。">更新 <span id="filter-updated-count" class="filter-count">0</span></button>
+          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count" hidden></span></button>
+          <button type="button" data-filter="updated" aria-pressed="false">近 7 天</button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
@@ -104,8 +111,11 @@
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
           <a href="/space?view=meetings"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>我的会议</a>
         </nav>
-        <ul id="memory-list"></ul>
+        <p id="memory-directory-status" class="memory-directory-status" role="status"></p>
+        <ul id="memory-list" aria-busy="false"></ul>
         <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
+        <button type="button" id="memory-directory-retry" class="memory-directory-button" aria-controls="memory-list" hidden>重试</button>
+        <button type="button" id="memory-load-more" class="memory-directory-button" aria-controls="memory-list" hidden>加载更多</button>
       </aside>
       <section id="overview-panel" class="memory-center">
         <label class="topic-search">搜索主题
@@ -144,8 +154,28 @@
       <section id="actions-panel" hidden>
         <header class="memory-page-head">
           <h2>下一步行动</h2>
-          <button type="button" id="dream-actions" disabled title="个人资料整理暂不可用">做梦</button>
+          <button type="button" id="dream-actions" disabled aria-controls="action-draft-panel" aria-expanded="false" title="从记忆页生成行动建议">做梦</button>
         </header>
+        <section id="action-draft-panel" class="action-draft-panel" aria-labelledby="action-draft-title" hidden>
+          <header class="memory-page-head">
+            <h3 id="action-draft-title">行动建议</h3>
+            <button type="button" id="action-draft-close">关闭</button>
+          </header>
+          <form id="action-draft-form">
+            <fieldset id="action-draft-source-field">
+              <legend>选择来源记忆页（最多 5 个）</legend>
+              <div id="action-draft-sources"></div>
+              <p id="action-draft-empty" class="note" hidden>先在此工作区创建记忆页。</p>
+            </fieldset>
+            <button type="submit" id="action-draft-generate" disabled>生成建议</button>
+          </form>
+          <div id="action-draft-review" hidden>
+            <p class="note">编辑并勾选要保存的行动。</p>
+            <ol id="action-draft-items"></ol>
+            <button type="button" id="action-draft-save" disabled>保存所选行动</button>
+          </div>
+          <p id="action-draft-status" class="note" role="status"></p>
+        </section>
         <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
         <button type="button" id="new-action-open">新建行动</button>
         <label id="action-filter-label">筛选
@@ -171,7 +201,7 @@
       <section id="memory-candidates" hidden>
         <header class="memory-page-head">
           <h2>记忆建议</h2>
-          <button type="button" id="memory-capture-toggle" aria-label="自动提炼记忆" aria-pressed="false" disabled>开启自动提炼</button>
+          <button type="button" id="memory-capture-toggle" aria-label="自动提炼私聊记忆" aria-pressed="false" disabled>开启私聊提炼</button>
         </header>
         <p class="note">核对从私聊和群聊提炼的要点，保存后供同一工作区的智能体私聊检索。</p>
         <p id="memory-candidates-status" role="status"></p>
@@ -230,8 +260,19 @@
           <p id="preference-status" role="status"></p>
         </section>
       </section>
+    <section id="memory-citation-preview" class="memory-editor" aria-labelledby="memory-citation-title" hidden>
+      <header class="memory-citation-preview-head">
+        <button type="button" id="close-memory-citation-preview" class="memory-editor-back">‹ 返回列表</button>
+        <p id="memory-citation-version" class="note"></p>
+        <h2 id="memory-citation-title" tabindex="-1">引用的记忆</h2>
+        <button type="button" id="memory-citation-edit" hidden>编辑当前版本</button>
+        <button type="button" id="memory-citation-retry" hidden>重试</button>
+      </header>
+      <div id="memory-citation-body" class="memory-citation-body"></div>
+    </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
       <div class="editor-topbar">
+        <button type="button" id="close-editor" class="memory-editor-back">‹ 返回列表</button>
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
@@ -306,7 +347,6 @@
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
-        <button type="button" id="close-editor">返回列表</button>
       </div>
       <div id="page-delete-confirm" role="alertdialog" aria-labelledby="page-delete-question" hidden>
         <p id="page-delete-question"></p>
@@ -330,6 +370,7 @@
       </form>
     </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
+      <button type="button" id="close-action-editor" class="memory-editor-back">‹ 返回列表</button>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
       <label>状态
@@ -348,7 +389,6 @@
       <div class="actions">
         <button type="submit" id="save-action">保存</button>
         <button type="button" id="delete-action">删除</button>
-        <button type="button" id="close-action-editor">返回列表</button>
       </div>
       <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
         <p id="action-delete-question"></p>
@@ -361,5 +401,6 @@
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

@@ -46,7 +46,7 @@ export default function chat(host) {
     }
     return {...await linked,id:scope.agent_id}
   }
-  for (const name of ['conversations','create','open','messages','send','rename','remove']) {
+  for (const name of ['conversations','create','open','messages','send']) {
     feature.endpoints[name] = async (p = {}) => {
       const scope = await binding(p)
       const payload = {...p,...scope}
@@ -54,11 +54,8 @@ export default function chat(host) {
       if (name === 'create') return (await host.call('agents/conversation-create',payload)).conversation
       if (name === 'open') return host.call('agents/openConversation',payload)
       if (name === 'messages') return host.call('agents/messages',payload)
-      if (name === 'send') {
-        const out = await host.call('agents/send',{...payload,return_failed:true})
-        return {user_message_id:out.message.id,message:out.message,reply:out.reply}
-      }
-      fail('chat/native-operation-required','Use canonical agent conversation management; retained legacy rows were not altered')
+      const out = await host.call('agents/send',{...payload,return_failed:true})
+      return {user_message_id:out.message.id,message:out.message,reply:out.reply}
     }
   }
   return feature

@@ -120,8 +120,10 @@ USER 1000:1000
 WORKDIR /data/workspace
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["node", "/opt/openteamily/runtime/flybot-image/healthcheck.mjs"]
+# Check frequently while the web listener is starting. Once it is healthy,
+# Docker resumes the normal probe interval.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --start-interval=500ms --retries=5 \
+    CMD ["sh", "/opt/openteamily/runtime/flybot-image/healthcheck.sh"]
 
 LABEL org.opencontainers.image.title="OpenTeamily FlyBot runtime" \
       org.opencontainers.image.description="Self-host FlyBot runtime: pinned DS-Bot plus image-build patches and the social host adapter, served by dsh web on 8080." \

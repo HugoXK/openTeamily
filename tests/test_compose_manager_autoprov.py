@@ -1,14 +1,19 @@
 """poll-once discovers server auto-provisioned instances over real loopback HTTP; Docker is a stub."""
 from contextlib import redirect_stdout
+from dataclasses import replace
 import io
 import json
 import unittest
+from unittest.mock import patch
 
 import test_compose_manager as base
-from openteamily.lifecycle import ManagerAuth, ManagerIdentity
-from openteamily.manager.__main__ import main
-from openteamily.manager.engine import Registry
-from openteamily.manager.safety import ManagerError
+from openteamily import model_api
+from openteamily.lifecycle import GATEWAY_REFRESH_SECONDS, ManagerAuth, ManagerIdentity
+from openteamily.dsbot_gateway import ensure_schema, owner_runtime_readiness, record_upstream
+from openteamily.manager.__main__ import main, dsbot_import, dsbot_route
+from openteamily.manager.engine import ComposeEngine, Registry, Runner
+from openteamily.manager.safety import ManagerError, write_new
+from openteamily.manager.worker import ManagerWorker
 from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest
 from tests.test_management import Client
@@ -19,27 +24,48 @@ class AutoProvisionPollTests(unittest.TestCase):
     start_http = base.ComposeManagerTests.start_http
     create = base.ComposeManagerTests.create
     manager = base.ComposeManagerTests.manager
+    put_model_api = base.ComposeManagerTests.put_model_api
 
-    def auto_instance(self, name='carol', peer='127.0.0.9', static=False):
+    def enable_auto(self, static=False):
         # The Docker stub models one project, so the auto-only manager has no static grant here.
         grants = frozenset([self.iid]) if static else frozenset()
         self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(self.token), grants, 'compose', True)])
         self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='manager-a', max_instances=3)
-        user = Client(self.app, peer=peer)
-        self.assertEqual(user.register(name)['status'], 201)
-        state = user.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
-        self.assertEqual(state['state'], 'provisioned')
-        return state['instance_id']
 
-    def poll(self):
+    def auto_instance(self, name='carol', peer='127.0.0.9', static=False):
+        self.enable_auto(static)
+        user = Client(self.app, peer=peer)
+        registration = user.register(name)
+        self.assertEqual(registration['status'], 201)
+        owner = registration['body']['user']['id']
+        # Before any home request, signup has already queued exactly one owner-scoped start.
+        with self.store.connect() as db:
+            first = db.execute(
+                'SELECT p.instance_id, i.desired, j.operation_type, j.revision FROM runtime_auto_provisions p '
+                'JOIN instances i ON i.id=p.instance_id JOIN runtime_jobs j ON j.instance_id=i.id WHERE p.user_id=?',
+                (owner,),
+            ).fetchall()
+        self.assertEqual(len(first), 1)
+        self.assertEqual(tuple(first[0])[1:], ('running', 'start', 1))
+        agent = user.call('POST', '/v1/personal-agent')['body']['personal_agent']
+        self.assertEqual(registration['body']['personal_chat'],
+                         {'workspace_id': agent['workspace']['id'], 'agent_id': agent['agent']['id']})
+        state = agent['runtime_provisioning']
+        self.assertEqual((state['state'], state['instance_id']), ('existing', first[0]['instance_id']))
+        return user, state['instance_id']
+
+    def poll(self, *options):
         out = io.StringIO()
         with redirect_stdout(out):
-            code = main(['--config', str(self.cfgpath), '--execute', 'poll-once'])
+            code = main(['--config', str(self.cfgpath), '--execute', 'poll-once', *options])
         return code, json.loads(out.getvalue())
 
     def test_poll_once_adopts_auto_instance_without_restart(self):
         self.start_http()
-        auto = self.auto_instance()
+        self.put_model_api('platform', 'synthetic-platform-fixture-key')
+        with self.store.transaction() as db:
+            ensure_schema(db)
+        _, auto = self.auto_instance()
         self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
         self.cfg['instances'] = {}
         self.cfgpath.write_text(json.dumps(self.cfg))
@@ -48,23 +74,162 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual([r['instance_id'] for r in first['results']], [auto])
         by_id = {r['instance_id']: r for r in first['results']}
         self.assertEqual(by_id[auto]['status'], 'observed', first)
-        self.assertEqual(by_id[auto]['observed'], 'stopped')
-        # The server queued the fenced start; the next pass runs it.
+        self.assertEqual(by_id[auto]['observed'], 'running', first)
+        self.assertEqual(by_id[auto]['revision'], 1)
+        lease_files = self.root / 'secrets'
+        config = json.loads((lease_files / ('model-api-' + auto + '.json')).read_text())
+        self.assertEqual((config['source'], config['api_key']), ('platform', 'synthetic-platform-fixture-key'))
+        with self.store.transaction() as db:
+            owner = db.execute('SELECT owner_id FROM instances WHERE id=?', (auto,)).fetchone()[0]
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_jobs WHERE instance_id=?', (auto,)).fetchone()[0], 1)
+            self.assertEqual(owner_runtime_readiness(db, owner), 'starting')
+            record_upstream(db, auto, '10.0.0.1:8080', 'dsh-auth-fixture=' + 'x' * 24, self.now)
+            self.assertEqual(owner_runtime_readiness(db, owner), 'ready')
+        # A repeat poll cannot enqueue or run an additional startup.
         code, second = self.poll()
         self.assertEqual(code, 0, second)
         by_id = {r['instance_id']: r for r in second['results']}
-        self.assertEqual(by_id[auto]['observed'], 'running', second)
-        self.assertTrue((self.root / 'secrets').exists())
+        self.assertEqual(by_id[auto]['status'], 'no_claim', second)
         manager_cfg = json.loads(self.cfgpath.read_text())
         self.assertNotIn(auto, manager_cfg['instances'])  # never written back
 
+    def test_new_accounts_inherit_platform_model_and_restart_picks_up_rotation(self):
+        client = self.start_http()
+        original = 'synthetic-platform-fixture-key'
+        rotated = 'rotated-platform-fixture-key'
+        self.put_model_api('platform', original)
+        carol, first = self.auto_instance()
+        dana, second = self.auto_instance('dana', peer='127.0.0.10')
+        self.assertNotEqual(first, second)
+        self.assertEqual(carol.call('GET', f'/v1/instances/{second}')['status'], 404)
+        self.assertEqual(dana.call('GET', f'/v1/instances/{first}')['status'], 404)
+
+        def start(iid):
+            # The Docker stub keeps a single project's state per fixture directory.
+            root = self.root / iid
+            root.mkdir(mode=0o700)
+            path = root / 'manager.json'
+            write_new(path, {**self.cfg, 'instances': {},
+                             'auto_instances': {'image': base.IMAGE, 'healthcheck': None}})
+            registry = Registry(str(path))
+            snapshot = client.snapshot(iid)
+            self.assertEqual(snapshot['volume_ref'], 'ot-' + iid)
+            registry.adopt(iid, snapshot)
+            engine = ComposeEngine(registry, Runner(registry, enabled=True))
+            worker = ManagerWorker(client, registry, engine)
+            boot = worker.run_once(iid)
+            self.assertEqual(boot['observed'], 'running')
+            secret = engine.secret_path(iid)
+            self.assertEqual(secret.relative_to(root).as_posix(), f'secrets/model-api-{iid}.json')
+            payload = json.loads(secret.read_text())
+            self.assertEqual((payload['source'], payload['api_key']), ('platform', original))
+            self.assertNotIn(original, json.dumps(boot))
+            return worker, secret, boot['process_ref']
+
+        first_worker, first_secret, first_process = start(first)
+        _, second_secret, _ = start(second)
+        self.assertNotEqual(first_secret, second_secret)
+        with self.store.transaction() as db:
+            blob = model_api.wrap(model_api.wrapping_key(self.store), rotated)
+            db.execute("UPDATE model_api_configs SET key_blob=?, revision=revision+1 WHERE scope='platform'", (blob,))
+        restart = carol.call('POST', f'/v1/instances/{first}/restart', {'operation_id': 'rotate-platform-model-0001'})
+        self.assertEqual(restart['status'], 202)
+        receipt = first_worker.run_once(first)
+        self.assertEqual(receipt['observed'], 'running')
+        self.assertNotEqual(receipt['process_ref'], first_process)
+        self.assertEqual(json.loads(first_secret.read_text())['api_key'], rotated)
+        self.assertEqual(json.loads(second_secret.read_text())['api_key'], original)
+        self.assertNotIn(rotated, json.dumps(receipt))
+
+    def test_signup_remains_valid_when_personal_workspace_has_no_capacity(self):
+        self.enable_auto()
+        self.app.config = replace(self.app.config, max_workspaces=1)
+        user = Client(self.app, peer='127.0.0.9')
+        self.assertEqual(user.register('carol')['status'], 201)
+        self.assertEqual(user.call('GET', '/v1/auth/session')['status'], 200)
+        self.assertEqual(user.call('GET', '/v1/personal-agent')['body'], {'personal_agent': None})
+        self.assertEqual(user.call('POST', '/v1/personal-agent')['status'], 429)
+        self.app.config = replace(self.app.config, max_workspaces=10)
+        provisioning = user.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
+        self.assertEqual(provisioning['state'], 'provisioned')
+        self.assertEqual(user.call('GET', '/v1/instances/' + provisioning['instance_id'])['body']['instance']['desired'], 'running')
+
     def test_without_template_auto_instance_is_skipped(self):
         self.start_http()
-        auto = self.auto_instance(static=True)
+        _, auto = self.auto_instance(static=True)
         code, result = self.poll()
         self.assertEqual(code, 0, result)
         by_id = {r['instance_id']: r for r in result['results']}
         self.assertEqual(by_id[auto]['status'], 'skipped')
+
+    def test_cold_signup_starts_ahead_of_restart_and_busy_inventory(self):
+        client = self.start_http()
+        _, cold = self.auto_instance(static=True)
+        _, stopped = self.auto_instance('dana', peer='127.0.0.10', static=True)
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['dsbot_gateway'] = {'web_container': 'fixture-web'}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        pending_restart = {**client.snapshot(self.iid), 'desired': 'running', 'observed': 'running',
+                           'converged': False, 'revision': 4, 'observed_revision': 3}
+        stopped_instance = {**client.snapshot(stopped), 'desired': 'stopped', 'observed': 'stopped', 'converged': True}
+        inventory = [pending_restart, stopped_instance, client.snapshot(cold)]
+        events = []
+
+        def work(_worker, iid):
+            events.append(('claim', iid))
+            return ({'status': 'observed', 'observed': 'running', 'instance_id': iid} if iid == cold
+                    else {'status': 'no_claim', 'instance_id': iid})
+
+        def publish(_engine, _client, iid):
+            events.append(('route', iid))
+            return {'status': 'published', 'instance_id': iid}
+
+        with (patch.object(base.ManagerClient, 'assigned', return_value=inventory),
+              patch.object(ManagerWorker, 'run_once', autospec=True, side_effect=work),
+              patch.object(dsbot_route, 'publish', side_effect=publish)):
+            code, result = self.poll()
+        self.assertEqual(code, 0, result)
+        self.assertEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid)])
+
+    def test_recent_route_skips_repeat_claim_and_docker_publish_until_due(self):
+        client = self.start_http()
+        _, iid = self.auto_instance()
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['instances'] = {}
+        self.cfg['dsbot_gateway'] = {'web_container': 'fixture-web'}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        with self.store.transaction() as db:
+            ensure_schema(db)
+
+        calls = []
+        def publish(_engine, _client, target):
+            calls.append(target)
+            with self.store.transaction() as db:
+                record_upstream(db, target, '10.0.0.1:8080', 'dsh-auth-fixture=' + 'x' * 24, int(self.runtime.clock()))
+            return {'status': 'published', 'instance_id': target}
+
+        with patch.object(dsbot_route, 'publish', side_effect=publish):
+            self.assertEqual(self.poll()[0], 0)
+            item = client.snapshot(iid)
+            self.assertTrue(item['gateway_route_fresh'])
+            self.assertNotIn('auth_cookie', item)
+            self.assertNotIn('address', item)
+            with patch.object(ManagerWorker, 'run_once', side_effect=AssertionError('idle claim')):
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid])
+                with self.store.transaction() as db:
+                    db.execute('UPDATE dsbot_upstreams SET updated=updated-? WHERE instance_id=?', (GATEWAY_REFRESH_SECONDS, iid))
+                self.assertFalse(client.snapshot(iid)['gateway_route_fresh'])
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid, iid])
+                with self.store.transaction() as db:
+                    db.execute('DELETE FROM dsbot_upstreams WHERE instance_id=?', (iid,))
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid, iid, iid])
+                with patch.object(dsbot_import, 'deliver', return_value={'status': 'delivered'}) as deliver:
+                    self.assertEqual(self.poll('--import-legacy')[0], 0)
+                    self.assertEqual(calls, [iid, iid, iid, iid])
+                    self.assertEqual(deliver.call_args.args[-1], iid)
 
     def test_adopt_requires_matching_auto_snapshot(self):
         self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}

@@ -42,8 +42,18 @@ def poll_once(args):
     require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
     cfg = registry.config
     client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
+    gateway = cfg.get('dsbot_gateway') is not None
     results = []
-    for item in client.assigned():
+    def priority(item):
+        if item['converged'] or item['blocked']:
+            return 3
+        if item['desired'] == 'running':
+            return 0 if item.get('provisioning') == 'auto' and item['revision'] == 1 else 1
+        return 2
+
+    # A signup start must not wait behind every already-routed account. The
+    # returned order is a hint only; each job still takes a fenced claim.
+    for item in sorted(client.assigned(), key=priority):
         iid = item['id']
         try:
             if iid not in cfg['instances']:
@@ -51,13 +61,27 @@ def poll_once(args):
                     results.append({'status': 'skipped', 'instance_id': iid, 'reason': 'instance_not_registered'})
                     continue
                 registry.adopt(iid, item)
-            registry.entry(iid, item)
-            engine = ComposeEngine(registry, Runner(registry, enabled=True))
-            result = ManagerWorker(client, registry, engine).run_once(iid)
+            engine = None
+            if item['converged'] or item['blocked']:
+                # A newer intent arriving during this pass is picked up on the next listing.
+                result = {'status': 'no_claim', 'instance_id': iid}
+            else:
+                registry.entry(iid, item)
+                engine = ComposeEngine(registry, Runner(registry, enabled=True))
+                result = ManagerWorker(client, registry, engine).run_once(iid)
             results.append(result)
-            if registry.config.get('dsbot_gateway') is not None and result.get('status') in ('observed', 'no_claim'):
+            if gateway and result.get('status') in ('observed', 'no_claim'):
                 # Route the owner's browser to this DS-Bot (platform gateway). A refusal
                 # here never changes the job receipt above.
+                if (result.get('observed', item['observed']) != 'running'
+                        or (result['status'] == 'no_claim' and not item['converged'])):
+                    results.append({'status': 'not_running', 'instance_id': iid})
+                    continue
+                if result['status'] == 'no_claim' and item.get('gateway_route_fresh') is True and not args.import_legacy:
+                    continue
+                if engine is None:
+                    registry.entry(iid, item)
+                    engine = ComposeEngine(registry, Runner(registry, enabled=True))
                 try:
                     results.append(dsbot_route.publish(engine, client, iid))
                 except ManagerError as error:
@@ -122,8 +146,8 @@ def main(argv=None):
                         engine.install_secret(iid, None)
                     if not engine.bot_social_path(iid).exists():
                         engine.install_bot_social(iid, None)
-                    if not engine.runtime_key_path(iid).exists():
-                        engine.install_runtime_key(iid, None)
+                    if not engine.agent_bootstrap_path(iid).exists():
+                        engine.install_agent_bootstrap(iid, None)
                     preview['secret_files'] = 'created_if_missing'
                 preview['executed'] = False
                 preview['volume_deleted'] = False

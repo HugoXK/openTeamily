@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { boot, key, WS } from './helpers.js'
+import { boot, bootMemory, key, WS } from './helpers.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 // The search path should read the native agent ledger without starting a model turn.
@@ -14,7 +14,7 @@ function seedChat(bot, workspace = WS, prefix = 'a') {
   try {
     db.prepare(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, revision, created,
       updated, key_hash, request_hash) VALUES (?, ?, '周报助手', ?, '', '', 1, 1, 1, ?, ?)`).run(agent, workspace, agent, agent, agent)
-    db.prepare('INSERT INTO agent_conversations VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
+    db.prepare('INSERT INTO agent_conversations (id,agent_id,title,created,updated) VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
     const insert = db.prepare(`INSERT INTO agent_messages (id, conversation_id, role, text, status, created)
       VALUES (?, ?, ?, ?, 'succeeded', ?)`)
     for (const [i, text] of ['帮我写周报', '好的，周报草稿见 https://example.com/report。', '谢谢'].entries()) {
@@ -34,7 +34,9 @@ test('the session directory lists only the selected workspace conversations with
     workspace_id: WS, agent_ids: [local.agent, other.agent, local.agent],
   })
   assert.equal(result.ok, true, JSON.stringify(result))
-  assert.deepEqual(result.value.items, [{id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1}])
+  assert.deepEqual(result.value.items, [{
+    id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1, archived_at:null, archived:false, title_edited:false,
+  }])
 })
 
 test('message search runs in DS-Bot over this owner\'s own conversations', async () => {
@@ -164,7 +166,7 @@ test('saving an authorized chat message creates one private versioned document w
 })
 
 test('search/all spans memory and meetings in this DS-Bot', async () => {
-  const bot = await boot()
+  const bot = await bootMemory()
   await bot.call('memory', 'POST', `/v1/workspaces/${WS}/memory`, { title: '季度目标', body: '增长 20%' }, key())
   await bot.call('meetings', 'POST', `/v1/workspaces/${WS}/meetings`, { title: '季度复盘', summary: '回顾目标' }, key())
   const all = await bot.endpoint('search/all', { q: '季度' })
