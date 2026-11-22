@@ -39,6 +39,11 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = nodes; this.pickFirstOption(); }
   focus() {}
   click() { for (const handler of this.handlers.click || []) handler(); }
+  showModal() { this.open = true; }
+  close() {
+    this.open = false;
+    for (const handler of this.handlers.close || []) handler();
+  }
   reset() {}
   get options() { return this.children.filter((child) => child.tagName === 'option'); }
 }
@@ -258,6 +263,7 @@ test('an earlier write cannot update the newly selected meeting', async () => {
     await doc.getElementById('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
+    await doc.getElementById('discard-meeting-edits').handlers.click[0]();
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
     finish();
     await sent;
@@ -562,6 +568,7 @@ test('an older confirmed create cannot enter a newly selected draft', async () =
     ele('meeting-title').value = '先创建的会议';
     const writing = ele('meeting-form').handlers.submit[0]({preventDefault() {}});
     ele('new-meeting').click();
+    ele('discard-meeting-edits').click();
     ele('meeting-title').value = '新选中的草稿';
     acknowledge();
     await writing;
@@ -594,6 +601,7 @@ test('a failed navigation retains the unresolved create attempt in the visible d
     await ele('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
+    await ele('discard-meeting-edits').handlers.click[0]();
     assert.equal(ele('save-meeting').textContent, '确认并重试保存');
     ele('meeting-title').value = '仍在编辑的标题';
     await submit();
@@ -602,6 +610,32 @@ test('a failed navigation retains the unresolved create attempt in the visible d
     assert.match(ele('meeting-meta').textContent, /修订 1/);
   } finally {
     await settle();
+    restore();
+  }
+});
+
+test('a meeting switch reads nothing and keeps pending edits until discard is confirmed', async () => {
+  const {doc, state, restore} = await mountPage('guard-editor-switch');
+  const element = id => doc.getElementById(id);
+  const openOther = () => element('meeting-list').handlers.click[0]({
+    target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
+  });
+  try {
+    element('meeting-transcript').value = 'Unsaved minutes';
+    const reads = state.calls.length;
+    await openOther();
+    assert.equal(element('meeting-unsaved-dialog').open, true);
+    assert.equal(state.calls.length, reads);
+    element('keep-meeting-edits').click();
+    assert.equal(element('meeting-unsaved-dialog').open, false);
+    assert.equal(element('meeting-transcript').value, 'Unsaved minutes');
+    assert.equal(state.calls.length, reads);
+    await openOther();
+    await element('discard-meeting-edits').handlers.click[0]();
+    assert.equal(element('meeting-transcript').value, '');
+    assert.equal(element('meeting-title').value, 'Other');
+    assert.deepEqual(state.calls.slice(reads), [`GET ${meetingPath}/${OTHER_MEETING_ID}`]);
+  } finally {
     restore();
   }
 });

@@ -1630,6 +1630,19 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
   padding: 0;
 }
 #conversation-search-results:empty { display: none; }
+#conversation-search-results .message-search-hit { min-width: 0; padding: 0; border: 0; }
+.message-search-hit > .search-hit {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  text-align: start;
+  color: var(--ot-ink);
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+}
+.message-search-hit > .search-hit:focus-visible,
+.attachment-search-jump.search-hit:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: -2px; }
 .search-hit { display: grid; grid-template-columns: 2rem minmax(0, 1fr); grid-template-areas: "avatar head" "avatar text"; gap: .125rem .625rem; padding: .5rem; border-radius: .625rem; }
 .search-hit:hover { background: var(--ot-surface-2); }
 .search-hit-avatar { grid-area: avatar; width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 50%; background: var(--ot-accent-soft); color: var(--ot-accent); font-size: .8125rem; font-weight: 650; }
@@ -1660,8 +1673,20 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
 .attachment-search-download { flex: none; padding: .5rem .375rem; font-size: .75rem; }
 .resource-search-meta { display: flex; flex-wrap: wrap; gap: 0 .5rem; }
 #conversation-search-more, #conversation-search-retry { align-self: center; }
+@media (min-width: 901px) {
+  #main-panel:has(> #conversation-search-panel:not([hidden])) { --conversation-search-width: min(22rem, 45%); }
+  #main-panel:has(> #conversation-search-panel:not([hidden])) > #conversation-search-panel {
+    box-sizing: border-box;
+    width: var(--conversation-search-width);
+  }
+  #main-panel:has(> #conversation-search-panel:not([hidden])) > :is(.chat-timeline, #chat-form) {
+    margin-inline-end: calc(var(--conversation-search-width) + 1.5rem);
+  }
+}
 @media (max-width: 700px) {
-  #conversation-search-panel { position: fixed; top: auto; left: .5rem; right: .5rem; bottom: .5rem; width: auto; max-height: 80vh; }
+  #conversation-search-panel { position: fixed; top: auto; left: .5rem; right: .5rem; bottom: .5rem; width: auto; max-height: 80dvh; }
+  #conversation-search-form :is(input, button) { min-height: 2.75rem; }
+  #conversation-search-close { min-width: 2.75rem; }
 }
 
 /* Parity (2026-11-19) header status line and reply states (13b/13c). */

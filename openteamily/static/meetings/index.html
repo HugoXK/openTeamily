@@ -200,6 +200,14 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-unsaved-dialog" aria-labelledby="meeting-unsaved-title" aria-describedby="meeting-unsaved-message">
+    <h2 id="meeting-unsaved-title">离开会议编辑？</h2>
+    <p id="meeting-unsaved-message"></p>
+    <div class="meeting-actions">
+      <button type="button" id="keep-meeting-edits" autofocus>继续编辑</button>
+      <button type="button" id="discard-meeting-edits" class="secondary">放弃修改</button>
+    </div>
+  </dialog>
   <dialog id="meeting-delete-dialog" aria-labelledby="meeting-delete-title">
     <h2 id="meeting-delete-title">删除会议记录</h2>
     <p id="meeting-delete-target"></p>

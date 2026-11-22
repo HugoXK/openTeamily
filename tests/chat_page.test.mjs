@@ -2026,8 +2026,9 @@ test('independent conversation search uses current id and pages without opening 
     assert.equal(el('conversation-search-panel').hidden, false);
     el('conversation-search-query').value = 'needle';
     await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
-    const firstHit = el('conversation-search-results').children[0];
+    const firstHit = el('conversation-search-results').children[0].children[0];
     assert.equal(firstHit.className, 'search-hit');
+    assert.equal(firstHit.tagName, 'BUTTON');
     assert.ok(descendants(firstHit).some(node => node.textContent === 'Scoped result'), 'snippet is rendered in the hit row');
     assert.equal(el('conversation-search-more').hidden, false);
     await fire(el('conversation-search-more'), 'click');
@@ -2817,7 +2818,7 @@ test('social history prepends older messages and returns from a searched window 
     await fire(el('conversation-search-open'), 'click');
     el('conversation-search-query').value = 'Message';
     await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
-    await fire(el('conversation-search-results').children[0], 'click');
+    await fire(el('conversation-search-results').children[0].children[0], 'click');
     assert.deepEqual(ids(), ['history-1','history-2']);
     assert.equal(list.children[0].dataset.searchJump,'true');
     assert.equal(el('chat-back-to-latest').hidden,false);
@@ -2828,36 +2829,80 @@ test('social history prepends older messages and returns from a searched window 
   } finally { restore(); }
 });
 
-test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
+test('in-chat search keeps an unavailable result open and clears the phone drawer for a real jump', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow:true});
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/messages?q=')) return json(200, {items:[{id:'jump-loaded',body:'Find me'}, {id:'not-loaded',body:'Earlier message'}],cursor:null});
+      if (path.includes('/messages?q=')) return json(200, {items:[
+        {id:'jump-loaded', body:'Find me', user_id:alice, created:1767225600},
+        {id:'not-loaded', body:'Earlier message', user_id:bob, created:1767225200},
+      ],cursor:null});
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
     const target = el('message-list').children[0];
     target.dataset.messageId = 'jump-loaded';
-    let scrolled = false;
-    target.scrollIntoView = () => {scrolled=true;};
+    let sheetWasClosedOnScroll = false;
+    target.scrollIntoView = () => { sheetWasClosedOnScroll = el('conversation-search-panel').hidden; };
     el('message-scroller').scrollTop = 41;
     await fire(el('conversation-search-open'), 'click');
     el('conversation-search-query').value = 'Find';
     await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
-    const hits = el('conversation-search-results').children;
-    assert.equal(hits[0].getAttribute('role'), 'button');
-    await fire(hits[0], 'keydown', {key:'Enter',preventDefault(){}});
-    assert.equal(scrolled, true);
-    assert.equal(target.dataset.searchJump, 'true');
+    const hits = el('conversation-search-results').children.map(row => row.children[0]);
+    assert.equal(hits[0].tagName, 'BUTTON');
+    assert.match(hits[0].getAttribute('aria-label'), /我.*Find me/);
+    assert.equal(descendants(hits[0]).find(node => node.tagName === 'TIME').dateTime,
+      new Date(1767225600 * 1000).toISOString());
     await fire(hits[1], 'click');
     assert.match(el('conversation-search-status').textContent, /不在当前已加载/);
+    assert.equal(el('conversation-search-panel').hidden, false);
     el('message-scroller').scrollTop = 99;
     await fire(el('conversation-search-close'), 'click');
     assert.equal(el('message-scroller').scrollTop, 41);
-    assert.equal(el('conversation-search-panel').hidden, true);
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-results').children[0].children[0], 'click');
+    assert.equal(sheetWasClosedOnScroll, true);
+    assert.equal(target.dataset.searchJump, 'true');
+    assert.equal(target.focused, true);
+    assert.equal(el('conversation-search-open').getAttribute('aria-expanded'), 'false');
   } finally {restore();}
+});
+
+test('conversation search cancels the superseded request and ignores a late result', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const slow = Promise.withResolvers();
+  let oldSignal;
+  try {
+    await mount(doc, {fetcher: async (path, options) => {
+      if (path.includes('/messages?q=old')) {
+        oldSignal = options.signal;
+        return slow.promise;
+      }
+      if (path.includes('/messages?q=new')) {
+        return json(200, {items: [{id:'new-hit', body:'new result'}], cursor:null});
+      }
+      return original(path, options);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    const query = el('conversation-search-query');
+    const submit = () => fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    query.value = 'old';
+    const old = submit();
+    assert.equal(oldSignal.aborted, false);
+    query.value = 'new';
+    await submit();
+    assert.equal(oldSignal.aborted, true);
+    slow.resolve(json(200, {items: [{id:'old-hit', body:'old result'}], cursor:null}));
+    await old;
+    const results = el('conversation-search-results').children;
+    assert.equal(results.length, 1);
+    assert.match(results[0].children[0].getAttribute('aria-label'), /new result/);
+  } finally { restore(); }
 });
 
 test('removing a group agent sends nothing until the explicit confirmation', async () => {
@@ -3000,7 +3045,7 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
 test('conversation search lists photos, files and saved resource versions from real attachment fields', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
-  const restore = installChatGlobals({narrow: true});
+  const restore = installChatGlobals();
   const base = '/v1/workspaces/ws-1/social/conversations/conv-1';
   const file = (id, title, mime) => ({message_id: id, created_at: 1767225600, attachment: {
     id, title, mime, bytes: 200, path: base + '/messages/' + id + '/file',

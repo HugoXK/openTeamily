@@ -1466,6 +1466,27 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
   background: var(--ot-surface-2);
 }
 #artifact-live-message { margin: 0; }
+.artifact-draft-recovery {
+  margin-block: .5rem;
+  padding: .5rem .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  background: var(--ot-surface-2);
+}
+.artifact-draft-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .375rem .75rem;
+}
+.artifact-draft-heading p { margin: 0; }
+.artifact-draft-resume:not([hidden]) { justify-content: flex-start; margin-block-end: .625rem; }
+.artifact-draft-heading button,
+#artifact-draft-details summary { min-height: 2.75rem; }
+#artifact-draft-details summary { align-content: center; cursor: pointer; }
+#artifact-draft-copy { display: block; width: 100%; box-sizing: border-box; }
+
 #artifact-live-load { min-height: 2.75rem; }
 
 #main-panel.is-meetings #artifact-list {

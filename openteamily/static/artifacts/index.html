@@ -237,6 +237,10 @@
           <span id="artifact-list-note" class="note" role="status"></span>
           <button type="button" id="retry-artifact-list" hidden>重试</button>
         </div>
+        <div id="artifact-draft-resume" class="artifact-draft-heading artifact-draft-resume" hidden>
+          <button type="button" id="resume-draft-document" hidden>继续文档草稿</button>
+          <button type="button" id="resume-draft-website" hidden>继续网站草稿</button>
+        </div>
         <ul id="artifact-list"></ul>
         <div id="artifact-pagination" hidden>
           <p id="artifact-pagination-note" class="note" role="status" hidden></p>
@@ -322,6 +326,16 @@
         <p id="artifact-live-message" role="status"></p>
         <button type="button" id="artifact-live-load">读取服务器版本</button>
       </div>
+      <section id="artifact-draft-recovery" class="artifact-draft-recovery" aria-label="草稿恢复" hidden>
+        <div class="artifact-draft-heading">
+          <p id="artifact-draft-message" role="status"></p>
+          <button type="button" id="artifact-draft-discard">放弃草稿</button>
+        </div>
+        <details id="artifact-draft-details" hidden>
+          <summary>查看草稿原文</summary>
+          <textarea id="artifact-draft-copy" aria-label="先前草稿原文" rows="5" readonly></textarea>
+        </details>
+      </section>
       <section id="document-editor" hidden aria-label="文档编辑器">
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>

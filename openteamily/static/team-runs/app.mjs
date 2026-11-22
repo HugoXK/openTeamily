@@ -5,6 +5,8 @@ import {createTeamRunShares} from './shares.mjs';
 const ID = /^[a-f0-9]{32}$/;
 const SHARED_ID = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const LIMITS = {minimum: 2, maximum: 8, title: 80, goal: 2000, instruction: 1000, attempts: 3};
+const DRAFT_PREFIX = 'ot-team-run-draft:';
+const CREATE_KEY = /^team-run-[a-f0-9]{32}$/;
 const REUSABLE = new Set(['succeeded', 'failed', 'cancelled']);
 const STATUS = {
   waiting: '等待前序步骤', queued: '已排队', running: '运行中', succeeded: '已完成',
@@ -24,10 +26,12 @@ const STEP_ERROR = {
 export function teamRunTarget(hash = '') {
   if (!hash || hash === '#') return {};
   const params = new URLSearchParams(hash.replace(/^#/, ''));
-  const workspace = params.get('workspace'), run = params.get('run'), shared = params.get('shared');
-  if (!ID.test(workspace || '') || (run !== null && shared !== null) || params.size !== (run === null && shared === null ? 1 : 2)
-      || (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared))) return {invalid: true};
-  return {workspace, ...(run ? {run} : {}), ...(shared ? {shared} : {})};
+  const workspace = params.get('workspace'), run = params.get('run'), shared = params.get('shared'), draft = params.get('draft');
+  const selections = [run, shared, draft].filter(value => value !== null).length;
+  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections ||
+      (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared)) ||
+      (draft !== null && draft !== '1')) return {invalid: true};
+  return {workspace, ...(run ? {run} : {}), ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
 }
 
 export function teamRunPayload(draft, agents) {
@@ -71,6 +75,62 @@ export function removeDraftStep(steps, key) {
   const remaining = steps.filter(step => step.key !== key);
   for (const step of remaining) step.dependencies.delete(key);
   return remaining;
+}
+
+function hasDraftContent(draft) {
+  return Boolean(draft && (draft.title || draft.goal || draft.steps.length !== LIMITS.minimum ||
+    draft.steps.some(step => step.agent || step.instruction || step.dependencies.size)));
+}
+
+function draftStorageKey(owner, workspace) {
+  if (!ID.test(owner || '') || !ID.test(workspace || '')) return '';
+  return DRAFT_PREFIX + owner + ':' + workspace;
+}
+
+function readDraft(view, storageKey, nextKey) {
+  if (!storageKey) return null;
+  try {
+    const raw = view.sessionStorage.getItem(storageKey);
+    if (!raw || raw.length > 65536) return null;
+    const {title, goal, steps, sourceRun, createKey} = JSON.parse(raw);
+    if (typeof title !== 'string' || title.length > LIMITS.title || typeof goal !== 'string' ||
+        goal.length > LIMITS.goal || !Array.isArray(steps) || steps.length < LIMITS.minimum ||
+        steps.length > LIMITS.maximum || (sourceRun && !ID.test(sourceRun)) ||
+        (createKey && !CREATE_KEY.test(createKey))) return null;
+    const draft = {title, goal, steps: [], ...(sourceRun && {sourceRun})};
+    for (const [position, step] of steps.entries()) {
+      if (!step || typeof step.agent !== 'string' || (step.agent && !ID.test(step.agent)) ||
+          typeof step.instruction !== 'string' || step.instruction.length > LIMITS.instruction ||
+          !Array.isArray(step.dependsOn) || step.dependsOn.length > position ||
+          step.dependsOn.some(index => !Number.isInteger(index) || index < 0 || index >= position) ||
+          new Set(step.dependsOn).size !== step.dependsOn.length) return null;
+      draft.steps.push({key: nextKey(), agent: step.agent, instruction: step.instruction,
+        dependencies: new Set(step.dependsOn.map(index => draft.steps[index].key))});
+    }
+    if (!createKey) return {draft};
+    const payload = teamRunPayload(draft, draft.steps.map(step => ({id: step.agent})));
+    return payload ? {draft, attempt: {key: createKey, payload, draft}} : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(view, storageKey, draft, attempt) {
+  if (!storageKey) return false;
+  try {
+    if (!hasDraftContent(draft) && !attempt) {
+      view.sessionStorage.removeItem(storageKey);
+    } else {
+      const positions = new Map(draft.steps.map((step, index) => [step.key, index]));
+      const steps = draft.steps.map(step => ({agent: step.agent, instruction: step.instruction,
+        dependsOn: [...step.dependencies].map(key => positions.get(key))}));
+      view.sessionStorage.setItem(storageKey, JSON.stringify({title: draft.title, goal: draft.goal, steps,
+        sourceRun: draft.sourceRun, createKey: attempt?.key}));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function errorMessage(result, fallback) {
@@ -160,10 +220,30 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
   const savedKey = step => workspace + '/' + detailId + '/' + step.position;
 
-  function updateLocation(run = '') {
+  function updateLocation(extra = {}) {
     if (!workspace || !view?.history) return;
-    const hash = '#' + new URLSearchParams({workspace, ...(run ? {run} : {})});
+    const hash = '#' + new URLSearchParams({workspace, ...extra});
     if (view.location.hash !== hash) view.history.pushState(null, '', hash);
+  }
+
+  function hydrateDraft() {
+    if (drafts.has(workspace)) return;
+    const savedDraft = readDraft(view, draftStorageKey(viewer?.id, workspace), () => ++serial);
+    if (!savedDraft) return;
+    drafts.set(workspace, savedDraft.draft);
+    if (savedDraft.attempt) creates.set(workspace, savedDraft.attempt);
+  }
+
+  function persistDraft(owner = viewer, space = workspace, announce = screen === 'editor') {
+    const draft = drafts.get(space), attempt = creates.get(space);
+    const stored = writeDraft(view, draftStorageKey(owner?.id, space), draft, attempt);
+    if (!announce) return;
+    const status = node('team-run-draft-status');
+    status.hidden = !hasDraftContent(draft);
+    if (!status.hidden) {
+      show('team-run-draft-status', stored ? '草稿已保留在当前标签页。'
+        : '浏览器无法保留草稿，刷新前请先复制内容。', stored ? '' : 'error');
+    }
   }
 
   function hideQuestion(refocus = false) {
@@ -213,6 +293,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     editor.hidden = next !== 'editor';
     detail.hidden = next !== 'detail';
     newRun.hidden = next === 'editor';
+    newRun.textContent = hasDraftContent(drafts.get(workspace)) ? '继续草稿' : '新建任务';
     newRun.disabled = !workspace;
     show('team-run-status', '');
     show('team-run-start-status', '');
@@ -331,6 +412,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       select.value = item.agent;
       select.addEventListener('change', () => {
         item.agent = select.value;
+        persistDraft();
         if (agents.length) showAgentAvailability();
         editorControls();
       });
@@ -342,7 +424,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       instruction.rows = 2;
       instruction.value = item.instruction;
       instruction.dataset.stepInstruction = '';
-      instruction.addEventListener('input', () => { item.instruction = instruction.value; });
+      instruction.addEventListener('input', () => {
+        item.instruction = instruction.value;
+        persistDraft();
+      });
       instructionLabel.append(instruction);
       group.append(legend, agentLabel, instructionLabel);
       if (index > 0) {
@@ -357,6 +442,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
           check.addEventListener('change', () => {
             if (check.checked) item.dependencies.add(prior.key);
             else item.dependencies.delete(prior.key);
+            persistDraft();
           });
           label.append(check, `第 ${position + 1} 步`);
           dependencies.append(label);
@@ -368,6 +454,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         drop.classList.add('step-remove');
         drop.addEventListener('click', () => {
           currentDraft.steps = removeDraftStep(currentDraft.steps, item.key);
+          persistDraft();
           renderDraft(currentDraft.steps[Math.min(index, currentDraft.steps.length - 1)]?.key);
         });
         group.append(drop);
@@ -401,10 +488,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     renderDraft();
   }
 
-  function showEditor() {
+  function showEditor({address = true} = {}) {
     if (!workspace) return;
+    hydrateDraft();
     changeScreen('editor');
-    updateLocation();
+    if (address) updateLocation({draft: '1'});
     if (!drafts.has(workspace)) drafts.set(workspace, blankDraft());
     currentDraft = drafts.get(workspace);
     title.value = currentDraft.title;
@@ -412,6 +500,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : '新建任务';
     agents = [];
     renderDraft();
+    persistDraft();
     if (creates.has(workspace)) show('team-run-start-status', '暂时无法确认任务是否已创建。重试会核对原请求。', 'error');
     show('status', '');
     node('team-run-form-heading').focus();
@@ -433,6 +522,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       const key = Array.from(view.crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
       attempt = {payload, key: 'team-run-' + key, draft: currentDraft};
       creates.set(workspace, attempt);
+      persistDraft();
     }
     attempt.sending = true;
     editorControls();
@@ -446,18 +536,23 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (accepted && matchesRun(run, target.workspace) && Array.isArray(run.steps)) {
       creates.delete(target.workspace);
       drafts.delete(target.workspace);
+      persistDraft(target.viewer, target.workspace, false);
       if (active(target)) openDetail(run.id, run);
       else if (sameDraft) {
         currentDraft = blankDraft();
         drafts.set(workspace, currentDraft);
         title.value = goal.value = '';
+        persistDraft();
         renderDraft();
         show('team-run-start-status', '任务已启动，可返回任务列表查看。', 'ok');
       }
       return;
     }
     const uncertain = accepted || isUncertain(result.status);
-    if (!uncertain) creates.delete(target.workspace);
+    if (!uncertain) {
+      creates.delete(target.workspace);
+      persistDraft(target.viewer, target.workspace, sameDraft);
+    }
     if (!sameDraft) return;
     editorControls();
     show('team-run-start-status', uncertain ? '暂时无法确认任务是否已创建。重试会核对原请求。'
@@ -581,7 +676,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   function openDetail(id, initial, {address = true} = {}) {
     if (!workspace || !ID.test(id)) return;
     changeScreen('detail', id);
-    if (address) updateLocation(id);
+    if (address) updateLocation({run: id});
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     cancel.hidden = remove.hidden = reuse.hidden = true;
@@ -648,9 +743,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       show('team-run-status', '请先打开草稿并确认上次启动结果，再复用任务。', 'error');
       return;
     }
-    const previous = drafts.get(workspace);
-    if (!replace && previous && (previous.title || previous.goal || previous.steps.length !== LIMITS.minimum ||
-        previous.steps.some(step => step.agent || step.instruction || step.dependencies.size))) {
+    if (!replace && hasDraftContent(drafts.get(workspace))) {
       ask('reuse');
       return;
     }
@@ -673,6 +766,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         : '还没有可用的工作区。', 'error');
       return;
     }
+    hydrateDraft();
+    if (target.draft) return showEditor({address});
     if (target.run) return openDetail(target.run, null, {address});
     return showList({address: address && !target.shared});
   }
@@ -753,12 +848,19 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   }
 
   editor.addEventListener('submit', startRun);
-  title.addEventListener('input', () => { currentDraft.title = title.value; });
-  goal.addEventListener('input', () => { currentDraft.goal = goal.value; });
+  title.addEventListener('input', () => {
+    currentDraft.title = title.value;
+    persistDraft();
+  });
+  goal.addEventListener('input', () => {
+    currentDraft.goal = goal.value;
+    persistDraft();
+  });
   node('team-run-add-step').addEventListener('click', () => {
     if (currentDraft.steps.length >= LIMITS.maximum) return;
     const step = blankStep();
     currentDraft.steps.push(step);
+    persistDraft();
     renderDraft(step.key);
   });
   newRun.addEventListener('click', showEditor);

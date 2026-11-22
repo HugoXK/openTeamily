@@ -17,7 +17,8 @@ test('team run addresses allow exact workspace, private run or shared snapshot',
   assert.deepEqual(teamRunTarget('#workspace=' + WS), {workspace: WS});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&run=${RUN}`), {workspace: WS, run: RUN});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&shared=${shared}`), {workspace: WS, shared});
-  for (const bad of [`#run=${RUN}`, `#workspace=${WS}&run=${RUN}&shared=${shared}`,
+  assert.deepEqual(teamRunTarget(`#workspace=${WS}&draft=1`), {workspace: WS, draft: true});
+  for (const bad of [`#workspace=${WS}&draft=2`, `#workspace=${WS}&draft=1&run=${RUN}`, `#run=${RUN}`, `#workspace=${WS}&run=${RUN}&shared=${shared}`,
     `#workspace=${WS}&workspace=${OTHER_WS}`, `#workspace=${WS}&run=wrong`]) {
     assert.deepEqual(teamRunTarget(bad), {invalid: true});
   }
@@ -66,7 +67,7 @@ test('terminal run reuse carries definition and dependency identities without co
   assert.equal(teamRunDraftFromHistory(source, () => ++serial),null);
 });
 
-function fixture(hash = '') {
+function fixture(hash = '', storage = new Map()) {
   const nodes = new Map();
   const document = {activeElement: null, cookie: ''};
   class Element {
@@ -94,7 +95,10 @@ function fixture(hash = '') {
   document.querySelectorAll = () => [];
   const location = {hash};
   document.defaultView = {
-    location, crypto: globalThis.crypto,
+    location, crypto: globalThis.crypto, sessionStorage: {
+      getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
     addEventListener() {},
     history: {pushState(_state, _title, next) { location.hash = next; }},
   };
@@ -133,10 +137,11 @@ test('startup overlaps account and workspace reads before rendering private task
   assert.equal(node('team-runs-workspace').value, WS);
 });
 
-test('a lost create response leaves the same form locked until the exact request is confirmed', async () => {
-  const {document, node} = fixture();
+test('a lost create response survives reload and only its owner can retry the exact request', async () => {
+  const storage = new Map();
+  const {document, node} = fixture('', storage);
   const posts = [];
-  await mountTeamRuns(document, async (path, options) => {
+  const fetcher = async (path, options) => {
     const base = baseRead(path);
     if (base) return base;
     if (path === `/v1/workspaces/${WS}/agents?limit=100`) return ok({items: AGENTS});
@@ -147,7 +152,8 @@ test('a lost create response leaves the same form locked until the exact request
       return ok({run});
     }
     throw new Error(path);
-  });
+  };
+  await mountTeamRuns(document, fetcher);
   await node('team-runs-new').events.click();
   input(node('team-run-title'), '正式任务');
   input(node('team-run-goal'), '处理请求');
@@ -160,13 +166,26 @@ test('a lost create response leaves the same form locked until the exact request
   assert.equal(node('team-run-start').textContent, '确认并重试');
   assert.equal(node('team-run-fields').disabled, true);
   assert.match(node('team-run-start-status').textContent, /无法确认/);
-  await submit();
+  const hash = document.defaultView.location.hash;
+  assert.equal(hash, `#workspace=${WS}&draft=1`);
+  const other = fixture(hash, storage);
+  await mountTeamRuns(other.document, async (path, options) => path === '/v1/auth/session'
+    ? ok({user: {id: OTHER_WS, username: 'different-account'}}) : fetcher(path, options));
+  assert.equal(other.node('team-run-title').value, '');
+  assert.equal(other.node('team-run-fields').disabled, false);
+  const restored = fixture(hash, storage);
+  await mountTeamRuns(restored.document, fetcher);
+  assert.equal(restored.node('team-run-title').value, '正式任务');
+  assert.equal(restored.node('team-run-fields').disabled, true);
+  assert.equal(posts.length, 1);
+  await restored.node('team-run-form').events.submit({preventDefault() {}});
   assert.equal(posts.length, 2);
   assert.deepEqual(posts[0], posts[1]);
   assert.match(posts[0].key, /^team-run-[a-f0-9]{32}$/);
-  assert.equal(node('team-run-detail').hidden, false);
-  assert.match(node('team-run-progress').textContent, /失败/);
-  assert.equal(document.defaultView.location.hash, `#workspace=${WS}&run=${RUN}`);
+  assert.equal(restored.node('team-run-detail').hidden, false);
+  assert.match(restored.node('team-run-progress').textContent, /失败/);
+  assert.equal(restored.document.defaultView.location.hash, `#workspace=${WS}&run=${RUN}`);
+  assert.equal(storage.size, 0);
 });
 
 test('a delayed exact result cannot replace the list after switching workspaces', async () => {

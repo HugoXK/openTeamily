@@ -240,7 +240,8 @@
 #meeting-share-dialog p:empty { display: none; }
 .meeting-share-history { margin-top: 1rem; }
 
-#meeting-delete-dialog {
+#meeting-delete-dialog, #meeting-unsaved-dialog {
+  box-sizing: border-box;
   width: min(calc(100% - 2rem), 22rem);
   padding: 1.1rem;
   border: 1px solid var(--ot-line);
@@ -248,10 +249,11 @@
   background: var(--ot-surface);
   color: var(--ot-ink);
 }
-#meeting-delete-dialog::backdrop { background: rgb(0 0 0 / 38%); }
-#meeting-delete-title { margin-block: 0 .5rem; }
+#meeting-delete-dialog::backdrop, #meeting-unsaved-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+#meeting-delete-title, #meeting-unsaved-title { margin-block: 0 .5rem; }
 #meeting-delete-target { overflow-wrap: anywhere; }
-#meeting-delete-dialog .meeting-actions { justify-content: flex-end; }
+#meeting-delete-dialog .meeting-actions, #meeting-unsaved-dialog .meeting-actions { justify-content: flex-end; }
+#meeting-unsaved-dialog button { min-height: 2.75rem; }
 
 @media (max-width: 700px) {
   .meeting-page-top {

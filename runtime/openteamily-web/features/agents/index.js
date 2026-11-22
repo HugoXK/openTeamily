@@ -814,7 +814,7 @@ export function createAgents({ db, host }) {
       const comparison = p.ascending === true ? '>' : '<'
       const order = p.ascending === true ? 'ASC' : 'DESC'
       const linkFilter = p.links === true ? "AND (instr(m.text,'http://')>0 OR instr(m.text,'https://')>0)" : ''
-      return { items: all(`SELECT m.id, c.id AS conversation_id, a.id AS agent_id, c.title, m.text AS body, m.created
+      return { items: all(`SELECT m.id, c.id AS conversation_id, a.id AS agent_id, c.title, m.text AS body, m.created, m.role, a.name AS agent_name
         ${scope} AND instr(ot_search_fold(m.text),ot_search_fold(?))>0 ${linkFilter}
         AND (? IS NULL OR (m.created,m.id) ${comparison} (?,?))
         ORDER BY m.created ${order}, m.id ${order} LIMIT ?`, ...bindings, q, created, created, id, limit) }
