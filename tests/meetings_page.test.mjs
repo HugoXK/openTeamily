@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
 import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
+import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
 
 test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
   const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],
@@ -62,6 +63,36 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('meeting transcript locate uses literal matches and never changes the saved text', () => {
+  const document = meetingDocument();
+  const element = id => document.getElementById('meeting-transcript-' + id);
+  const transcript = document.createElement('textarea');
+  const source = '😀 预计 [v2] 周一上线。\n确认 [V2] 的结果。';
+  transcript.value = source;
+  transcript.setSelectionRange = (start, end) => { transcript.selected = transcript.value.slice(start, end); };
+  transcript.scrollIntoView = () => {};
+  const search = mountTranscriptSearch(document, transcript);
+  search.open('[v2]');
+  const passage = element('hit');
+  assert.equal(passage.focused, true);
+  assert.equal(passage.children[1].tag, 'mark');
+  assert.equal(passage.children[1].textContent, '[v2]');
+  assert.match(element('search-status').textContent, /第 1 处，共 2 处/);
+  element('next').fire('click');
+  assert.equal(passage.children[1].textContent, '[V2]');
+  element('location').fire('click');
+  assert.equal(transcript.focused, true);
+  assert.equal(transcript.selected, '[V2]');
+  assert.equal(transcript.value, source);
+  element('next').fire('click');
+  assert.match(element('search-status').textContent, /第 1 处/);
+  element('prev').fire('click');
+  assert.match(element('search-status').textContent, /第 2 处/);
+  search.reset();
+  assert.equal(passage.hidden, true);
+  assert.deepEqual(passage.children, []);
+});
 
 test('meeting sharing sends only the saved revision and selected account, then confirms revocation', async () => {
   const document = meetingDocument();

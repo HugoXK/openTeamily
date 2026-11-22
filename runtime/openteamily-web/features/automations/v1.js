@@ -90,7 +90,7 @@ export function automationsV1({ endpoints, log, personalBinding }) {
         const body = await req.json()
         if (Object.hasOwn(body, 'source_meeting') && !req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
         const result = await call('create', { ...body, workspace_id: workspaceId, idempotency_key: req.headers.get('idempotency-key') })
-        return { status: result.status ?? 201, body: { automation: result.automation } }
+        return { status: result.status ?? 201, body: { automation: result.automation, ...(result.sample_run ? {sample_run: result.sample_run} : {}) } }
       }
       if (id && req.method === 'GET') return { status: 200, body: await call('get', { workspace_id: workspaceId, id }) }
       if (id && req.method === 'POST') {

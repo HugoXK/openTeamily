@@ -40,6 +40,7 @@ export function dsBotTurn(host) {
 export const MAX_AUTOMATIONS = 100
 export const TICK_MS = 15_000
 const SCOPES = new Set(['once', 'ongoing'])
+const RECURRING = new Set(['daily', 'weekdays', 'weekly', 'monthly'])
 const REMINDER = 'reminder'
 const RESULT_TEXT = 8000
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
@@ -360,6 +361,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
     if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
+    if (payload.run_sample !== undefined && (typeof payload.run_sample !== 'boolean' ||
+      (payload.run_sample && (source || !RECURRING.has(schedule.kind))))) {
+      refuse(400, 'invalid_sample', '请先选定重复运行时间，然后试运行。')
+    }
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const sched = normalizeSchedule(schedule)
@@ -371,13 +376,17 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
     const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
-      ...(payload.enabled === undefined ? {} : { enabled }), ...(source ? { source_meeting: meetingReference(source) } : {}) }))
+      ...(payload.enabled === undefined ? {} : { enabled }), ...(source ? { source_meeting: meetingReference(source) } : {}),
+      ...(payload.run_sample ? { run_sample: true } : {}) }))
     const keyHash = sha(key)
+    const sampleKey = 'automation-sample:' + key
     const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (existing) {
-      const replay = !source && !meetingSourceFor(existing.id) && existing.template_id === REMINDER && templateId === REMINDER
+      const sample = submittedRun(existing.id, sampleKey)
+      const replay = !source && !sample && !payload.run_sample && !meetingSourceFor(existing.id) &&
+        existing.template_id === REMINDER && templateId === REMINDER
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, automation: detail(existing) }
+      return { status: 200, automation: detail(existing), ...(sample ? { sample_run: runView(sample) } : {}) }
     }
     if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
       refuse(409, 'conflict', 'An automation with this title already exists')
@@ -394,7 +403,23 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, source.meeting_id, source.revision, source.action_index,
       source.title, source.text, source.owner)
     }
-    return { status: 201, automation: detail(one('SELECT * FROM ot_automations WHERE id=?', id), now) }
+    const row = one('SELECT * FROM ot_automations WHERE id=?', id)
+    if (!payload.run_sample) return { status: 201, automation: detail(row, now) }
+    const sampleId = insertRun(row, nextAdHocSlot(id))
+    run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', id, sha(sampleKey), sampleId)
+    return { status: 201, automation: detail(row, now), sample_run: runView(loadRun(row, sampleId)) }
+  }
+
+  function create(payload) {
+    if (payload && Object.hasOwn(payload, 'source_meeting')) {
+      if (payload.run_sample !== undefined && payload.run_sample !== false) {
+        refuse(400, 'invalid_sample', '会议跟进需要先保存，再手动运行。')
+      }
+      return createMeetingFollowup(payload)
+    }
+    const result = tx(db, () => createInTransaction(payload))
+    if (result.sample_run) void execute(result.sample_run.id)
+    return result
   }
 
   async function createMeetingFollowup(payload) {
@@ -702,7 +727,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/list': list,
     'automations/get': (p) => ({ automation: detail(load(workspaceOf(p), p?.id)) }),
     'automations/meetingFollowup': (p) => ({ automation: existingFollowup(workspaceOf(p), meetingReference(p)) }),
-    'automations/create': (p) => p && Object.hasOwn(p, 'source_meeting') ? createMeetingFollowup(p) : tx(db, () => createInTransaction(p)),
+    'automations/create': create,
     'automations/createOnboarding': createOnboarding,
     'automations/update': update,
     'automations/remove': (p) => {

@@ -104,7 +104,7 @@
         <button type="button" id="meeting-resume" class="secondary" hidden>继续编辑会议</button>
         <form id="meeting-list-filters" role="search" hidden>
           <label for="meeting-search">搜索会议</label>
-          <input id="meeting-search" type="search" maxlength="80" placeholder="标题、参会人、摘要或行动项">
+          <input id="meeting-search" type="search" maxlength="80" placeholder="标题、参会人、摘要、转写或行动项">
           <label class="meeting-open-filter"><input id="meeting-open-only" type="checkbox"> 只看有未完成行动项的会议</label>
         </form>
         <p id="meeting-list-status" class="note" role="status"></p>
@@ -147,6 +147,16 @@
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
           <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <div id="meeting-transcript-find" class="meeting-transcript-find" role="search" aria-label="查找会议转写" hidden>
+            <label>查找转写 <input id="meeting-transcript-search" type="search" maxlength="80"></label>
+            <div class="meeting-transcript-navigation">
+              <button type="button" class="secondary" id="meeting-transcript-prev" disabled>上一处</button>
+              <button type="button" class="secondary" id="meeting-transcript-next" disabled>下一处</button>
+            </div>
+            <p id="meeting-transcript-search-status" class="note" role="status"></p>
+            <p id="meeting-transcript-hit" tabindex="-1" hidden></p>
+            <button type="button" class="secondary" id="meeting-transcript-location" hidden>定位到正文</button>
+          </div>
           <details id="meeting-audio" class="meeting-draft">
             <summary>音频转写</summary>
             <p class="note">可录音或上传音频，最长 10 分钟。请先征得参会人同意。音频和转写进度保留在当前编辑页面。</p>

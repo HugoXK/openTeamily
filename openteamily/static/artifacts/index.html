@@ -523,6 +523,13 @@
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
       <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的会话。</p>
+      <details id="send-to-chat-new" hidden>
+        <summary>新建智能体对话</summary>
+        <label for="send-to-chat-agent">选择工作区智能体</label>
+        <select id="send-to-chat-agent"></select>
+      </details>
+      <label for="send-to-chat-note" class="send-chat-note-label">附言或给智能体的指示（可选）</label>
+      <textarea id="send-to-chat-note" rows="2" maxlength="2000"></textarea>
       <p id="send-to-chat-error" class="note" role="status" hidden></p>
       <div class="send-dialog-actions">
         <button type="button" id="send-to-chat-cancel">取消</button>

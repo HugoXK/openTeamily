@@ -18,11 +18,15 @@ test('listQuery encodes tab and search', () => {
 test('an onboarding link must name exactly one saved automation and its workspace', () => {
   const workspace = 'a'.repeat(32);
   const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&runs=failed`),
     {workspace, automation});
   assert.equal(automationTargetFromSearch('?template=daily_brief'), null);
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&automation=${automation}`), {invalid: true});
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=missing`), {invalid: true});
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&run=${run}`), {workspace, automation, run});
+  assert.deepEqual(automationTargetFromSearch(`?run=${run}`), {invalid: true});
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&run=${run}&run=${run}`), {invalid: true});
 });
 
 test('meeting follow-up links carry a bounded action index, exact revision and no content', () => {
@@ -432,6 +436,98 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     restorePolling();
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
   }
+});
+
+test('save and sample submits one stable creation request and opens the exact exportable result', async t => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const done = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded', result: {text: '今日运行结果'}};
+  const clipboard = [];
+  const view = {location: {search: '?template=daily_brief', pathname: '/automations', origin: 'https://test.local'},
+    navigator: {clipboard: {writeText: async text => clipboard.push(text)}},
+    history: {replaceState(_state, _title, url) { view.location.search = new URL(url, 'https://test.local').search; }}};
+  doc.defaultView = view;
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const saved = globalThis.document;
+  const priorFormData = globalThis.FormData;
+  globalThis.document = doc;
+  globalThis.FormData = class {
+    constructor(form) { this.elements = form.elements; }
+    get(name) { return this.elements[name]?.value || ''; }
+    has(name) { return Boolean(this.elements[name]?.checked); }
+  };
+  t.after(() => { globalThis.document = saved; globalThis.FormData = priorFormData; });
+  const posts = [];
+  const path = `/v1/workspaces/${workspace}/automations`;
+  const attempt = async (target, options = {}) => {
+    if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
+    if (target === '/v1/automation-templates') return respond({items: [{id: 'daily_brief', title: '工作日报', category: 'work'}]});
+    if (target === path && options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      posts.push({body, key: options.headers['Idempotency-Key']});
+      if (posts.length === 1) throw Error('Lost response fixture');
+      return respond({automation: {...body, id: automation, workspace_id: workspace, revision: 1}, sample_run: {...done, status:'queued', result: undefined}}, 201);
+    }
+    if (target.startsWith(path + '/' + automation + '/runs?')) return respond({items: [done], has_pending: false});
+    assert.fail(`Unexpected request ${options.method || 'GET'} ${target}`);
+  };
+  await mount(doc, {fetcher: attempt});
+  const form = elements.get('editor-form');
+  const sample = elements.get('save-and-sample');
+  assert.equal(sample.hidden, true);
+  form.elements.kind.value = 'daily';
+  elements.get('automation-schedule-settings').handlers.change[0]();
+  assert.equal(sample.hidden, false);
+  await form.handlers.submit[0]({preventDefault() {}, submitter: sample});
+  await form.handlers.submit[0]({preventDefault() {}, submitter: sample});
+  assert.equal(posts.length, 2);
+  assert.deepEqual(posts[0], posts[1]);
+  assert.equal(posts[0].body.run_sample, true);
+  assert.equal(posts[0].body.enabled, false);
+  assert.equal(posts[0].body.schedule.kind, 'daily');
+  assert.equal(sample.hidden, true);
+  assert.equal(view.location.search, `?workspace=${workspace}&automation=${automation}&run=${run}`);
+  const detail = elements.get('run-list').children[0].children[1];
+  assert.equal(detail.hidden, false);
+  assert.match(detail.textContent, /今日运行结果/);
+  const controls = detail.children.find(child => child.className === 'run-result-actions');
+  await controls.children.find(child => child.dataset.runControl === 'copy-result').handlers.click[0]();
+  await controls.children.find(child => child.dataset.runControl === 'copy-run-link').handlers.click[0]();
+  assert.deepEqual(clipboard, ['今日运行结果', 'https://test.local/automations' + view.location.search]);
+});
+
+test('an exact linked run stays visible when older than the first page of history', async t => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+  doc.defaultView = {location: {search: `?workspace=${workspace}&automation=${automation}&run=${run}`}};
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = saved; });
+  const calls = [];
+  const savedRun = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded', result: {text: '历史样例'}};
+  await mount(doc, {fetcher: async target => {
+    calls.push(target);
+    if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
+    if (target === path) return respond({automation: {id: automation, workspace_id: workspace, title: '日报', enabled: false}});
+    if (target === path + '/runs/' + run) return respond({run: savedRun});
+    if (target.startsWith(path + '/runs?')) return respond({items: [{...savedRun, id: 'd'.repeat(32), result: {text:'最新运行'}}]});
+    assert.fail('Unexpected request ' + target);
+  }});
+  await flush();
+  const [exact, newest] = elements.get('run-list').children;
+  assert.equal(exact.dataset.runId, run);
+  assert.equal(exact.children[1].hidden, false);
+  assert.equal(newest.children[1].hidden, true);
+  assert.match(exact.textContent, /历史样例/);
+  assert.equal(calls.filter(target => target === path + '/runs/' + run).length, 1);
 });
 
 const SOURCE_WORKSPACE = 'a'.repeat(32);
