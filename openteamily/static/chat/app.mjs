@@ -9,6 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import { studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
@@ -314,15 +315,20 @@ function renderMessageBody(doc, node, text, prefs) {
   if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
-  const href = meetingCallHrefInMessage(source, origin);
-  if (href) {
-    const existing = Array.from(node.children).find(child => child.tagName === 'A' && meetingCallHrefInMessage(child.href, origin) === href);
+  const references = [
+    [meetingCallHrefInMessage, '整理会议纪要'],
+    [studioDocumentHrefInMessage, doc.documentElement?.lang === 'en' ? 'Open team document' : '打开团队文档'],
+  ];
+  for (const [reference, label] of references) {
+    const href = reference(source, origin);
+    if (!href) continue;
+    const existing = Array.from(node.children).find(child => child.tagName === 'A' && reference(child.href, origin) === href);
     const link = existing || doc.createElement('a');
     link.className = 'chat-link-card';
     link.href = href;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    link.textContent = '整理会议纪要';
+    link.textContent = label;
     link.title = '';
     if (!existing) node.append(link);
   }
@@ -811,8 +817,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const stickerSaves = new Map();
   const messageUtilities = mountMessageUtilities(document, {
     request, notify: show,
-    composerContext: () => currentConversation || currentSource === 'agent' && currentAgent
-      ? {wid:workspaceId(), cid:currentConversation?.id, source:currentSource, scope:sendScope()} : null,
+    composerContext: () => {
+      if (!currentConversation && !(currentSource === 'agent' && currentAgent)) return null;
+      const wid = workspaceId();
+      return {wid, cid:currentConversation?.id, source:currentSource, scope:sendScope(),
+        studio:servedByDsbot && workspaces.some(item => item.id === wid && item.kind === 'team')};
+    },
     context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent
       ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null,
     stickersAvailable: () => Boolean(stickerContext()),

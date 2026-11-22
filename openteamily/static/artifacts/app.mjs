@@ -1,5 +1,7 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
+import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
+import { mountSharedStudio } from './shared-studio.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -561,6 +563,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const duplicateSubmit = document.getElementById('duplicate-artifact-submit');
   let duplicateState = null;
   let currentUser = null;
+  let studioWorkspaces = [];
   let workspaceLoad = 0;
   let current = null;
   let editor = null;
@@ -625,6 +628,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (method, path, body, options = {}) =>
       request(method, path, body, undefined, options.signal, options.keepalive),
   });
+  const studio = mountSharedStudio(document, {
+    request: (method, path, body, {signal} = {}) => request(method, path, body, undefined, signal),
+    onClose() {
+      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    },
+  });
+
+  function syncStudioWorkspace() {
+    studio?.setWorkspace(nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+      currentUser?.id);
+  }
 
   async function renderProviders() {
     const box = document.getElementById('oidc-providers');
@@ -3072,6 +3086,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
     notifications.setWorkspace(workspaceId());
+    studioWorkspaces = items;
+    syncStudioWorkspace();
   }
 
   async function load() {
@@ -3079,13 +3095,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     activity.setScope('');
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
-    const requested = artifactTargetFromSearch(location?.search);
+    const linkedStudio = new URLSearchParams(location?.search).has('studio')
+      ? studioDocumentFromSearch(location.search) || {invalid: true} : null;
+    const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
-    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+    const linkedWorkspace = linkedStudio?.workspace || requested?.workspace ||
+      (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
-      !requested?.artifact && !requested?.invalid && !catalogQuery()
+      !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
       ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
           (linkedWorkspace ? '&workspace=' + linkedWorkspace : '')).catch(() => null)
       : null;
@@ -3094,6 +3113,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (session.status === 401) {
       hideEditor();
       currentUser = null;
+      syncStudioWorkspace();
       catalog = null;
       facets = null;
       clearFilters();
@@ -3149,12 +3169,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const emptyMessage = document.getElementById('list-empty-message');
       if (emptyMessage) emptyMessage.textContent = '还没有工作区。';
       renderCatalog();
-      if (requested) show('error', '文档链接无效，或你没有访问该工作区的权限。');
+      if (requested || linkedStudio) show('error', '文档链接无效，或你没有访问该工作区的权限。');
       return;
     }
     const emptyMessage = document.getElementById('list-empty-message');
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     hideEditor();
+    if (linkedStudio) {
+      void loadList();
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
+          !await studio?.open(linkedStudio.id)) {
+        show('error', '团队文档链接无效，或你没有访问权限。');
+      }
+      return;
+    }
     if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
       notifications.setWorkspace('');
@@ -3221,6 +3249,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     workspaceLoad += 1;
     notifications.setWorkspace(workspaceId());
+    syncStudioWorkspace();
     hideEditor();
     show('', '');
     meetingLoadedFor = '';
@@ -4253,6 +4282,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     workspaceLoad += 1;
     hideEditor();
     currentUser = null;
+    syncStudioWorkspace();
     workspaceSelect.textContent = '';
     catalog = null;
     facets = null;
@@ -4300,13 +4330,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
-      if (artifactTargetFromSearch(view.location.search) || newKindFromSearch(view.location.search)) {
+      if (studioDocumentFromSearch(view.location.search) || artifactTargetFromSearch(view.location.search) ||
+          newKindFromSearch(view.location.search)) {
         void load();
         return;
       }
       if (catalogView?.workspace && [...workspaceSelect.options].some(option => option.value === catalogView.workspace)) {
         workspaceSelect.value = catalogView.workspace;
         notifications.setWorkspace(workspaceId());
+        syncStudioWorkspace();
       }
       await loadList({reuse: true});
       if (catalogView && main && spaceAddress === address && !listPanel.hidden) {

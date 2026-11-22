@@ -898,8 +898,8 @@
 </dialog>
 
 <dialog id="resource-picker" aria-labelledby="resource-picker-title"><h2 id="resource-picker-title" data-ui-text="chat.resources.retrieve_title">调取资料</h2>
-<p data-ui-text="chat.resources.review_before_sending">读取工作区文档或记忆的已保存内容。选中后放入输入框；你检查并发送后，当前会话成员和所选模型才会收到这段内容。不会自动发送。</p>
-<label><span data-ui-text="chat.resources.source">来源</span><select id="resource-picker-kind"><option value="artifacts" data-ui-text="chat.document">文档</option><option value="memory" data-ui-text="chat.nav.memory">记忆</option></select></label>
+<p data-ui-text="chat.resources.review_before_sending">把文档或记忆正文、团队文档链接放入输入框，检查后再发送。</p>
+<label><span data-ui-text="chat.resources.source">来源</span><select id="resource-picker-kind"><option value="artifacts" data-ui-text="chat.document">文档</option><option value="memory" data-ui-text="chat.nav.memory">记忆</option><option id="resource-picker-studio" value="studio/documents" data-ui-text="chat.resources.studio" hidden disabled>团队文档</option></select></label>
 <ul id="resource-picker-list"></ul><button id="resource-picker-more" type="button" hidden data-ui-text="chat.load_more">加载更多</button><p id="resource-picker-status" role="status"></p><button type="button" id="resource-picker-close" data-ui-text="chat.close">关闭</button></dialog>
 <dialog id="composer-emoji-dialog" aria-labelledby="composer-emoji-heading">
   <div class="composer-media-header">

@@ -172,6 +172,19 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/settings/../settings.py')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
 
+    def test_team_studio_page_accepts_only_exact_document_links(self):
+        workspace, document = 'a' * 32, 'b' * 32
+        query = f'workspace={workspace}&studio={document}'
+        for route in ('/space', '/artifacts'):
+            page = self.raw.call('GET', route, query=query)
+            self.assertEqual(page['status'], 200)
+            for bad in (query + f'&studio={document}', query + f'&artifact={document}', 'studio=' + document):
+                self.assertEqual(self.raw.call('GET', route, query=bad)['status'], 400)
+
+        for script in ('/artifacts/shared-studio.mjs', '/shell/studio-link.mjs'):
+            self.assertEqual(self.raw.call('GET', script)['status'], 200)
+            self.assertEqual(self.raw.call('GET', script, query=query)['status'], 400)
+
     def test_discover_page_accepts_supported_filtered_links(self):
         for kind in ('document', 'whiteboard', 'dashboard', 'spreadsheet'):
             with self.subTest(kind=kind):

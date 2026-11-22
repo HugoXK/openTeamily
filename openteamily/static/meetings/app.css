@@ -258,6 +258,27 @@
 #meeting-delete-dialog .meeting-actions, #meeting-unsaved-dialog .meeting-actions { justify-content: flex-end; }
 #meeting-unsaved-dialog button { min-height: 2.75rem; }
 
+#meeting-discussion-entry-status:empty,
+#meeting-discussion-dialog p:empty { display: none; }
+#meeting-discussion-dialog {
+  box-sizing: border-box;
+  width: min(calc(100% - 1.5rem), 34rem);
+  max-height: calc(100dvh - 1.5rem);
+  padding: 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#meeting-discussion-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+#meeting-discussion-title { margin: 0 0 .65rem; }
+#meeting-discussion-form { display: grid; gap: .5rem; border: 0; padding: 0; margin: 0; }
+#meeting-discussion-form textarea { box-sizing: border-box; font-size: 1rem; width: 100%; min-width: 0; }
+#meeting-discussion-preview { background: var(--ot-bg); color: var(--ot-ink); }
+.meeting-discussion-option { display: flex; align-items: center; gap: .4rem; }
+#meeting-discussion-dialog .meeting-actions { justify-content: flex-end; }
+#meeting-discussion-dialog button, #meeting-discussion { min-height: 2.75rem; }
+
 @media (max-width: 700px) {
   .meeting-page-top {
     display: grid;

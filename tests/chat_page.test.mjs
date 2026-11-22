@@ -3071,6 +3071,18 @@ test('the message menu offers delete that hides the message only for this accoun
   assert.match(app, /request\('DELETE', `\$\{socialBase\(\)\}\/\$\{cid\}\/messages\/\$\{item\.id\}`\)/);
 });
 
+test('team document links open the exact same-origin workspace and document', async () => {
+  const {studioDocumentHref,studioDocumentFromSearch,studioDocumentHrefInMessage} =
+    await import('../openteamily/static/shell/studio-link.mjs');
+  const workspace = 'a'.repeat(32), id = 'b'.repeat(32), origin = 'https://example.test';
+  const href = studioDocumentHref(workspace,id);
+  assert.deepEqual(studioDocumentFromSearch(href.slice('/space'.length)), {workspace,id});
+  assert.equal(studioDocumentHrefInMessage('讨论 ' + origin + href + '。',origin),href);
+  assert.equal(studioDocumentHrefInMessage('讨论 ' + href,origin),href);
+  assert.equal(studioDocumentHrefInMessage('https://elsewhere.test'+href,origin),'');
+  assert.equal(studioDocumentHrefInMessage(origin+href+'&studio='+id,origin),'');
+});
+
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
   const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
   const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');

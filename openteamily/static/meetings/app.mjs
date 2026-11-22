@@ -1,4 +1,5 @@
 import {mountMeetingAudio} from './audio.mjs';
+import {mountMeetingDiscussion} from './discussion.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
@@ -463,6 +464,7 @@ function mount() {
   const native = servedByDsBot(document);
   let workspaceLoad = 0;
   let viewer = '';
+  let viewerId = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
   let callDraft = null;
@@ -475,6 +477,14 @@ function mount() {
       ? {workspace: workspaceId(), meeting: current} : null,
     historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
       ? workspaceId() : '',
+  });
+  const discussion = mountMeetingDiscussion(document, {
+    request,
+    context: () => native && meetingIdPattern.test(viewerId) && current?.id && current.workspace_id === workspaceId()
+      && !form.hidden && layout?.dataset.view !== 'catalogue'
+      ? {owner: viewerId, workspace: workspaceId(), meeting: current} : null,
+    isDirty: hasUnsavedChanges,
+    openChat: href => document.defaultView.location.assign(href),
   });
   let meetings = [];
   let listCursor = '';
@@ -722,6 +732,7 @@ function mount() {
   }
 
   function syncSavedActions(pending) {
+    discussion.sync(pending);
     const saved = native && Boolean(current?.id);
     for (const {button} of copyDestinations) {
       button.hidden = !saved;
@@ -1617,6 +1628,7 @@ function mount() {
       current = null;
       callDraft = null;
       viewer = '';
+      viewerId = '';
       storedDraft = null;
       stopDraftPoll();
       search.value = '';
@@ -1634,6 +1646,7 @@ function mount() {
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     viewer = session.body.user.username;
+    viewerId = session.body.user.id || '';
     document.getElementById('whoami').textContent = viewer;
     const directory = readWorkspaceChoices(request, '/v1/workspaces?limit=100');
     const detail = eagerDetail ? await eagerDetail : null;

@@ -137,6 +137,11 @@ test('Space activity stays in the owner artifact feature and does not reuse mana
   assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
 });
 
+test('team studio is dispatched to the account runtime with its revision query', () => {
+  const path = `/v1/workspaces/${WS}/studio/documents/${ID}?revision=3`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'studio',path});
+});
+
 test('answers become ordinary responses, downloads keep their name', async () => {
   const json = toResponse({ status: 409, body: { error: { code: 'conflict' } } });
   assert.equal(json.status, 409);

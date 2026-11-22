@@ -133,6 +133,10 @@
         </article>
         <form id="meeting-form" hidden>
           <p id="meeting-call-source" class="note" tabindex="-1" hidden>来自通话</p>
+          <div class="meeting-actions" id="meeting-discussion-entry" hidden>
+            <button type="button" id="meeting-discussion" class="secondary" aria-haspopup="dialog">与个人智能体讨论</button>
+            <p id="meeting-discussion-entry-status" class="note" role="status"></p>
+          </div>
           <div id="meeting-draft-top" role="group" aria-label="纪要草稿" tabindex="-1" hidden>
             <button type="button" id="meeting-draft-review" class="secondary" aria-controls="meeting-draft" hidden>查看草稿</button>
           </div>
@@ -242,6 +246,22 @@
       <p id="meeting-share-sent-status" class="note" role="status"></p>
       <button type="button" class="secondary" id="meeting-share-sent-more" hidden>加载更多分享</button>
     </section>
+  </dialog>
+  <dialog id="meeting-discussion-dialog" aria-labelledby="meeting-discussion-title">
+    <h2 id="meeting-discussion-title">与个人智能体讨论</h2>
+    <form id="meeting-discussion-form">
+      <label for="meeting-discussion-question">想讨论的问题</label>
+      <textarea id="meeting-discussion-question" rows="2" maxlength="1000" required autofocus></textarea>
+      <label class="meeting-discussion-option"><input type="checkbox" id="meeting-discussion-transcript"> 包含已保存的转写 / 正文</label>
+      <label for="meeting-discussion-preview">会议内容预览</label>
+      <textarea id="meeting-discussion-preview" rows="7" readonly></textarea>
+      <p id="meeting-discussion-notice" class="note"></p>
+      <p id="meeting-discussion-status" class="note" role="status"></p>
+      <div class="meeting-actions">
+        <button type="button" class="secondary" id="meeting-discussion-cancel">取消</button>
+        <button type="submit" id="meeting-discussion-submit">打开对话草稿</button>
+      </div>
+    </form>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
