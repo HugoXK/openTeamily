@@ -58,3 +58,52 @@ export function decodeNewActionAttempt(raw) {
       (memory_page_id !== null && !id(memory_page_id))) return null;
   return {key, payload:{title:title.trim(), notes, due_at, memory_page_id}};
 }
+
+export const ACTION_EDIT_FIELDS = ['title', 'notes', 'status', 'due', 'memory_page_id'];
+
+export function decodeActionEdit(raw) {
+  if (typeof raw !== 'string' || raw.length > 16000) return null;
+  let value;
+  try { value = JSON.parse(raw); } catch { return null; }
+  const {base, fields, pending} = value || {};
+  const valid = row => typeof row?.title === 'string' && row.title.length <= 80 &&
+    typeof row.notes === 'string' && row.notes.length <= 2000 &&
+    ['open', 'done'].includes(row.status) &&
+    typeof row.due === 'string' && (row.due === '' || /^\d{4}-\d{2}-\d{2}$/.test(row.due)) &&
+    (row.memory_page_id === '' || id(row.memory_page_id));
+  if (!valid(base) || !valid(fields)) return null;
+  const pick = row => Object.fromEntries(ACTION_EDIT_FIELDS.map(name => [name, row[name]]));
+  const draft = {base:pick(base), fields:pick(fields)};
+  if (Number.isSafeInteger(pending?.revision) && pending.revision > 0 && valid(pending.submitted)) {
+    draft.pending = {revision:pending.revision, submitted:pick(pending.submitted)};
+  }
+  return draft;
+}
+
+export function actionEditCommitted(base, {revision, submitted}, saved, savedRevision) {
+  return savedRevision > revision &&
+    ACTION_EDIT_FIELDS.every(name => base[name] === submitted[name] || saved[name] === submitted[name]);
+}
+
+export function advanceActionEdit(draft, saved, revision) {
+  const {base, fields, pending} = draft;
+  if (!pending || revision <= pending.revision) return draft;
+  if (actionEditCommitted(base, pending, saved, revision)) return {base:pending.submitted, fields};
+  // Retain edits made after submission, including a return to the old saved value.
+  const comparison = {...base};
+  for (const name of ACTION_EDIT_FIELDS) {
+    if (fields[name] !== pending.submitted[name]) comparison[name] = pending.submitted[name];
+  }
+  return {base:comparison, fields};
+}
+
+export function reconcileActionEdit(base, local, saved) {
+  const fields = {...saved};
+  const conflicts = [];
+  for (const name of ACTION_EDIT_FIELDS) {
+    if (local[name] === base[name] || local[name] === saved[name]) continue;
+    if (saved[name] === base[name]) fields[name] = local[name];
+    else conflicts.push(name);
+  }
+  return {fields, conflicts};
+}

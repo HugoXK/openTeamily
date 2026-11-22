@@ -390,6 +390,14 @@
     </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
       <button type="button" id="close-action-editor" class="memory-editor-back">‹ 返回列表</button>
+      <section id="action-edit-conflict" hidden aria-labelledby="action-edit-conflict-heading">
+        <h3 id="action-edit-conflict-heading">核对行动修改</h3>
+        <pre id="action-edit-conflict-preview"></pre>
+        <div class="actions">
+          <button type="button" id="action-edit-keep">保留草稿中的冲突内容</button>
+          <button type="button" id="action-edit-use-saved" class="secondary">采用已保存的冲突内容</button>
+        </div>
+      </section>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
       <label>状态
@@ -411,6 +419,7 @@
         <a id="action-follow-up" class="secondary" target="_blank" rel="noopener" aria-describedby="action-follow-up-status" hidden>跟进自动化</a>
         <button type="button" id="delete-action">删除</button>
       </div>
+      <p id="action-edit-hint" class="note" role="status"></p>
       <p id="action-follow-up-status" class="note" role="status"></p>
       <section id="action-follow-up-history" aria-labelledby="action-follow-up-heading" hidden>
         <h3 id="action-follow-up-heading">已关联的自动化</h3>

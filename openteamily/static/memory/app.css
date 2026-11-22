@@ -323,6 +323,21 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   overflow-wrap: anywhere;
 }
 #action-follow-up-list a:hover { background: var(--ot-bg-accent); }
+#action-edit-hint:empty { display: none; }
+#action-edit-conflict {
+  padding: .7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .55rem;
+  background: var(--ot-bg-accent);
+}
+#action-edit-conflict h3 { margin: 0; font-size: 1rem; }
+#action-edit-conflict-preview {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
 
 #memory-list [aria-current="page"] {
   background: var(--ot-accent-soft);
