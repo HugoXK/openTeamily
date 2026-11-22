@@ -3765,6 +3765,90 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('a meeting discussion draft unlocks thread controls only after its exact first message is saved', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc, el, routes, calls, restore} = fixture;
+  const receipt = Promise.withResolvers();
+  const base = linkBase(linkWork) + linkNativePath;
+  const draft = {...fixture.nativeThread, deferred:true, archived:false, unread_count:0, memory_scope:'off', memory_recall:false};
+  const controls = ['agent-memory-recall','private-thread-rename','private-thread-archive','history-capture-open'];
+  const firstMessage = '根据会议摘要梳理后续行动';
+  let payload;
+  let key;
+  routes.set(linkBase(linkWork) + linkNativeLatest, () => json(200, {agent:fixture.agent, conversation:draft, items:[], cursor:null}));
+  const fetcher = (path, options = {}) => {
+    if (path === base + '/messages' && options.method === 'POST') {
+      payload = JSON.parse(options.body);
+      key = options.headers['Idempotency-Key'];
+      return receipt.promise;
+    }
+    return fixture.fetcher(path, options);
+  };
+  try {
+    await mount(doc, {fetcher});
+    assert.ok(controls.every(id => el(id).hidden));
+    assert.equal(el('chat-body').disabled,false);
+    assert.equal(el('chat-send').disabled,false);
+    assert.match(el('chat-subtitle').textContent,/发送首条消息后保存对话/);
+    await fire(el('agent-memory-recall'),'change');
+    await fire(el('private-thread-archive'),'click');
+    assert.equal(calls.some(call => call.method === 'POST'), false);
+
+    el('chat-body').value = firstMessage;
+    await fire(el('chat-form'),'submit',{preventDefault() {}});
+    await settle();
+    assert.equal(el('chat-body').value,'');
+    assert.equal(payload.body,firstMessage);
+    assert.equal(payload.memory_scope,undefined);
+    assert.ok(controls.every(id => el(id).hidden));
+    const saved = {workspace_id:linkWork,agent_id:linkAgent,conversation_id:linkThread,client_key:key,status:'succeeded',created:20};
+    receipt.resolve(json(201,{message:{...saved,id:linkAgentOlder,role:'user',body:firstMessage},
+      reply:{...saved,id:linkAgentLatest,role:'assistant',body:'第一条回复'}}));
+    await settle();
+    assert.ok(controls.every(id => !el(id).hidden));
+    assert.equal(el('agent-memory-recall').value,'off');
+    assert.equal(el('agent-memory-recall').disabled,false);
+    assert.deepEqual(fixture.messages(),[linkAgentOlder,linkAgentLatest]);
+  } finally {
+    receipt.resolve(json(403,{}));
+    restore();
+  }
+});
+
+test('an exact shared chat and its group sidebar are usable while the personal startup and agent directory wait', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, calls, messages, selected, restore} = fixture;
+  const personal = Promise.withResolvers();
+  const agents = Promise.withResolvers();
+  const scope = linkBase(linkTeam);
+  routes.set(linkPersonalStartup + linkTeam, () => personal.promise);
+  routes.set(scope + linkNativeDirectory, () => agents.promise);
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    await settle();
+    assert.equal(el('workspace').value, linkTeam);
+    assert.equal(selected(), linkSocial);
+    assert.deepEqual(messages(), [linkSocialLatest]);
+    assert.equal(el('chat-body').disabled, false);
+    assert.ok(calls.some(call => call.path === linkPersonalStartup + linkTeam));
+    assert.ok(calls.some(call => call.path === scope + linkNativeDirectory));
+    assert.ok(calls.some(call => call.path === scope + linkSocialDirectory));
+
+    await fixture.navigate(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+    assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest]);
+    personal.resolve(linkedChatSnapshot(fixture));
+    agents.resolve(json(200, {items:[], conversations:[]}));
+    await settle();
+    assert.equal(el('workspace').value, linkWork);
+    assert.equal(selected(), linkThread);
+    assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest]);
+  } finally {
+    personal.resolve(json(503, {}));
+    agents.resolve(json(503, {}));
+    restore();
+  }
+});
+
 test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(

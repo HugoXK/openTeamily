@@ -66,7 +66,7 @@ function meetingDocument() {
   return document;
 }
 
-test('a received meeting revoked during conversation creation cannot become a chat draft', async () => {
+test('a received meeting revoked during draft preparation cannot become a chat draft', async () => {
   const document = meetingDocument();
   const get = id => document.getElementById(id);
   const owner = 'a'.repeat(32), source = 'b'.repeat(32), personal = 'c'.repeat(32), agent = 'd'.repeat(32);
@@ -80,7 +80,7 @@ test('a received meeting revoked during conversation creation cannot become a ch
     removeItem: key => { stored.delete(key); },
   }};
   const checked = '/v1/workspaces/'+source+'/meetings/shared/'+meeting.id;
-  const created = '/v1/workspaces/'+personal+'/agents/'+agent+'/conversations';
+  const prepared = checked+'/discussion';
   const reads = [];
   let sourceReads = 0;
   const discussion = mountMeetingDiscussion(document, {
@@ -96,8 +96,8 @@ test('a received meeting revoked during conversation creation cannot become a ch
         if (++sourceReads === 2) return {status:404,body:{}};
         return {status:200,body:{meeting,viewer_username:'reader',received:true}};
       }
-      assert.deepEqual([method,path,body],['POST',created,{title:'会议讨论 · Received',memory_recall:false}]);
-      return {status:201,body:{conversation:{id:'f'.repeat(32),workspace_id:personal,agent_id:agent}}};
+      assert.deepEqual([method,path,body],['POST',prepared,{revision:2}]);
+      return {status:200,body:{discussion:{id:'f'.repeat(32),workspace_id:personal,agent_id:agent},viewer_username:'reader'}};
     },
   });
   discussion.sync();
@@ -107,7 +107,7 @@ test('a received meeting revoked during conversation creation cannot become a ch
   assert.equal(get('meeting-discussion-transcript-option').hidden,true);
   assert.deepEqual(reads,[]);
   await get('meeting-discussion-form').fire('submit');
-  assert.deepEqual(reads.filter(([method])=>method==='POST'),[['POST',created]]);
+  assert.deepEqual(reads.filter(([method])=>method==='POST'),[['POST',prepared]]);
   assert.deepEqual(reads.at(-1),['GET',checked]);
   assert.match(get('meeting-discussion-status').textContent,/已撤回/);
   assert.equal(get('meeting-discussion-preview').value,'');

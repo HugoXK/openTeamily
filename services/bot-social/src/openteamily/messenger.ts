@@ -141,6 +141,7 @@ export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
 const REPLY_JOB_TIMEOUT = 180_000;
 const REPLY_JOB_ATTEMPTS = 3;
+const DISCRETIONARY_HEAD_START_MS = 2_500;
 const REPLY_PROGRESS_CAPACITY = 512;
 const REPLY_PROGRESS_PAGE = 50;
 const STUDIO_EXCERPT_LIMIT = 2400;
@@ -203,6 +204,16 @@ const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.reply_to AS quote
   LEFT JOIN ot_team_members team ON team.team_id=c.team_id AND team.owner_id=j.owner_id AND team.suspended=0
   LEFT JOIN ot_team_members requester_team ON requester_team.team_id=c.team_id
     AND requester_team.owner_id=src.author_id AND requester_team.suspended=0`;
+
+// Only a claimed turn for this same message can give another owner a reason to
+// wait. The oldest valid claim sets the limit, even if it is still running.
+// Queued jobs, old revisions, and lost membership never hold up a round.
+const DISCRETIONARY_READY_AT = `CASE WHEN j.discretionary=1 THEN COALESCE((
+  SELECT MIN(active.updated_at)+${DISCRETIONARY_HEAD_START_MS} FROM (${REPLY_JOB_SOURCE}) active
+  WHERE active.message_id=j.message_id AND active.owner_id<>j.owner_id AND active.discretionary=1
+    AND active.status='running' AND active.claim_id IS NOT NULL AND active.source_revision=active.current_revision
+    AND active.available AND active.studio_available
+),0) ELSE 0 END`;
 
 function replyJobState(job: ReplyJob, now: number) {
   if ((job.status === "queued" || job.status === "running")
@@ -924,6 +935,14 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
   const inboxWake = agentInboxWake();
   app.addHook("preClose", async () => inboxWake.close());
+
+  function wakeDiscretionaryPeers(messageId: string, ownerId: string) {
+    if (!inboxWake.hasWaiters()) return;
+    const peers = ot.all<{owner_id: string}>(`SELECT DISTINCT owner_id FROM (${REPLY_JOB_SOURCE}) queued
+      WHERE message_id=? AND owner_id<>? AND discretionary=1 AND status='queued' AND available AND updated_at>?`,
+      messageId, ownerId, ot.now() - REPLY_JOB_TIMEOUT);
+    for (const peer of peers) inboxWake.notify(peer.owner_id);
+  }
 
   function legacyWakeOwners(conv: any, seq: number) {
     if (!inboxWake.hasWaiters() || conv.kind !== "group") return [];
@@ -1766,7 +1785,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         400, "invalid_request", "Unexpected fields on a silent completion");
     }
     const claim = replyClaimId(b.claim_id);
-    return ot.tx(() => {
+    let releasedMessage: string | undefined;
+    const receipt = ot.tx(() => {
       const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
       assert(job, 404, "reply_job_not_found", "找不到这次回复。");
       assert(job.attempt === b.attempt, 409, "reply_job_unavailable", "这次回复的状态已更新。");
@@ -1799,6 +1819,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         }
         if (state === "running" && claim !== null && job.claim_id === claim) return replyClaimReceipt(ot, job);
         assert(state === "queued", 409, "reply_job_unavailable", "这次回复的状态已更新。");
+        if (job.discretionary) {
+          const ready = ot.get<{ready_at: number}>(`SELECT ${DISCRETIONARY_READY_AT} AS ready_at
+            FROM ot_agent_reply_jobs j WHERE j.id=?`, job.id);
+          assert(ready && ready.ready_at <= now, 409, "reply_job_unavailable", "请等候同一条消息的上一位智能体。");
+        }
         ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=? WHERE id=?",
           now, job.current_revision, claim, job.id);
       } else if (b.action === "pass") {
@@ -1812,8 +1837,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=? WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);
+      if (job.discretionary && b.action !== "start") releasedMessage = job.message_id;
       return b.action === "start" ? replyClaimReceipt(ot, job) : {ok: true};
     });
+    if (releasedMessage) wakeDiscretionaryPeers(releasedMessage, me.ownerId);
+    return receipt;
   });
 
   app.post("/v1/ot/agent-reply-jobs/:id/progress", {bodyLimit: 32 * 1024}, async (req, reply) => {
@@ -1993,9 +2021,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       }
       return roomNotes.get(cid);
     };
+    const now = ot.now();
     const jobs = managed ? ot.all<ReplyJob & {conversation_id: string; conversation_title: string; seq: number}>(
       REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
-        AND available ORDER BY j.updated_at,j.rowid LIMIT ?`, ownerId, ot.now() - REPLY_JOB_TIMEOUT, Math.min(8, limit),
+        AND available AND ${DISCRETIONARY_READY_AT}<=? ORDER BY j.updated_at,j.rowid LIMIT ?`,
+      ownerId, now - REPLY_JOB_TIMEOUT, now, Math.min(8, limit),
     ).map(job => {
       if (job.direct_grant_id) {
         return {job_id:job.id, attempt:job.attempt, conversation_id:job.conversation_id,
@@ -2045,6 +2075,16 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     return managed ? { cursor, items, jobs } : { cursor, items };
   }
 
+  function nextDiscretionaryWait(ownerId: string, maxWait: number) {
+    const now = ot.now();
+    const next = ot.get<{ready_at: number | null}>(`SELECT MIN(ready_at) AS ready_at FROM (
+      SELECT ${DISCRETIONARY_READY_AT} AS ready_at FROM (${REPLY_JOB_SOURCE}) j
+      WHERE j.owner_id=? AND j.status='queued' AND j.discretionary=1 AND j.updated_at>? AND j.available
+    ) ready`, ownerId, now - REPLY_JOB_TIMEOUT)?.ready_at;
+    // The deadline can pass between the initial inbox read and this lookup.
+    return next == null ? maxWait : Math.max(1, Math.min(maxWait, next - now));
+  }
+
   /** `after` acknowledges legacy messages. Managed jobs are polled by queue state, independent of that cursor. */
   app.get("/v1/ot/agent-inbox", async (req, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -2064,7 +2104,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     }
     // The read and waiter registration are synchronous, so a local transaction
     // cannot commit in between. Re-read SQLite after any signal or timer.
-    const waiting = inboxWake.wait(ownerId, waitMs, reply.raw);
+    const waiting = inboxWake.wait(ownerId, nextDiscretionaryWait(ownerId, waitMs), reply.raw);
     if (!waiting) return current;
     await waiting;
     if (reply.raw.destroyed) return current;
@@ -2079,6 +2119,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const mode = b.mode === "auto" ? "auto" : b.mode === "public" ? "public" : "mention";
     const claim = replyClaimId(b.claim_id);
     assert(claim === null || mode === "mention", 400, "invalid_request", "Invalid reply job claim");
+    let releasedMessage: string | undefined;
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
@@ -2173,9 +2214,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (job) {
         ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
         replyProgress.delete(job.id);
+        if (job.discretionary) releasedMessage = job.message_id;
       }
       return response;
     });
+    if (releasedMessage) wakeDiscretionaryPeers(releasedMessage, me.ownerId);
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
   });
 }

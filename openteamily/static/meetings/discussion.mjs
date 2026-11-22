@@ -192,13 +192,18 @@ export function mountMeetingDiscussion(document, {request, context, isDirty, ope
       const title = ('会议讨论 · ' + meeting.title.trim().replace(/[\u0000-\u001f\u007f]/g, ' ')).slice(0, 120)
         .replace(/[\uD800-\uDBFF]$/, '');
       const scope = [owner, workspace, ...(shared ? ['shared'] : []), meeting.id, meeting.revision, ownWorkspace, agent].join('/');
-      const result = await request('POST', `/v1/workspaces/${ownWorkspace}/agents/${agent}/conversations`,
-        {title, memory_recall: false}, {'Idempotency-Key': retryKey(scope)}, AbortSignal.timeout(12000));
+      const path = shared ? sourcePath + '/discussion' : `/v1/workspaces/${ownWorkspace}/agents/${agent}/conversations`;
+      const payload = shared ? {revision:meeting.revision} : {title, memory_recall:false};
+      const result = await request('POST', path, payload, {'Idempotency-Key': retryKey(scope)}, AbortSignal.timeout(12000));
       if (!current(operation)) return;
-      const conversation = result.body.conversation;
+      if (shared && [403,404,410].includes(result.status)) {
+        return rejectSource(operation, '这份共享纪要已撤回或你没有查看权限。');
+      }
+      const conversation = shared ? result.body.discussion : result.body.conversation;
       if (![200, 201].includes(result.status) || !ID.test(conversation?.id || '') ||
-          conversation?.workspace_id !== ownWorkspace || conversation?.agent_id !== agent) {
-        status.textContent = '未能确认对话已创建。请重试。';
+          conversation?.workspace_id !== ownWorkspace || conversation?.agent_id !== agent ||
+          (shared && result.body.viewer_username !== session.body.user?.username)) {
+        status.textContent = shared ? '未能准备对话草稿。请重试。' : '未能确认对话已创建。请重试。';
         return;
       }
       if (shared) {
