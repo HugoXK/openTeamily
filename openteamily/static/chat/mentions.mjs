@@ -1,4 +1,7 @@
+import {readChatDraftMentions, writeChatDraftMentions} from '../home/runtime-readiness.mjs';
+
 const MAX_MENTIONS = 20;
+const mentionsLimit = room => room?.direct ? 5 : MAX_MENTIONS;
 const agentKey = agent => JSON.stringify([agent.owner_id, agent.id]);
 const availableAgent = agent => Boolean(agent?.name && agent.owner_id && agent.id && !agent.archived);
 
@@ -11,8 +14,10 @@ export function mountAgentMentions(doc, context) {
   const input = doc.getElementById('chat-body');
   const list = doc.getElementById('chat-agent-mention-options');
   const chips = doc.getElementById('chat-agent-mentions');
+  const staleStatus = doc.getElementById('chat-agent-mention-status');
   if (!input || !list || !chips) return {
-    refresh() {}, clear() {}, openPicker() {}, canPick: () => false, keydown: () => false, message: body => ({body}),
+    refresh() {}, clear() {}, forget() {}, openPicker() {}, canPick: () => false, keydown: () => false,
+    restoreDirect: () => false, prepareDirectLink: () => false, message: body => ({body}),
   };
   const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
   const launcher = pickerNode('open');
@@ -24,9 +29,12 @@ export function mountAgentMentions(doc, context) {
   const text = (zh, en) => doc.documentElement?.lang?.startsWith('en') ? en : zh;
 
   let scope = null;
+  let roster;
+  let available = new Map();
   let options = [];
   let active = 0;
   const selected = new Map();
+  const savedSelections = new Map();
   let picking = null;
 
   function close() {
@@ -36,47 +44,92 @@ export function mountAgentMentions(doc, context) {
     options = [];
   }
 
-  function renderSelected() {
-    chips.replaceChildren(...Array.from(selected, ([key, agent]) => {
+  function renderSelected({preserveFocus = false} = {}) {
+    const focusedKey = preserveFocus && doc.activeElement?.dataset?.agentMentionKey;
+    let stale = false;
+    let nextFocus;
+    chips.replaceChildren(...Array.from(selected, ([key]) => {
+      const agent = available.get(key);
       const button = doc.createElement('button');
       button.type = 'button';
-      button.textContent = agent.owner_name ? `@${agent.name} · ${agent.owner_name} ×` : `@${agent.name} ×`;
-      button.setAttribute('aria-label', text(`移除对 ${agent.name}${agent.owner_name ? `（${agent.owner_name}）` : ''} 的提及`,
-        `Remove mention of ${agent.name}${agent.owner_name ? ` (${agent.owner_name})` : ''}`));
+      button.dataset.agentMentionKey = key;
+      if (key === focusedKey) nextFocus = button;
+      if (agent) {
+        const label = agent.owner_name ? `${agent.name} · ${agent.owner_name}` : agent.name;
+        button.textContent = `@${label} ×`;
+        button.setAttribute('aria-label', text(`移除对 ${agent.name}${agent.owner_name ? `（${agent.owner_name}）` : ''} 的提及`,
+          `Remove mention of ${agent.name}${agent.owner_name ? ` (${agent.owner_name})` : ''}`));
+      } else {
+        stale = true;
+        button.textContent = text('智能体已不可用 ×', 'Agent unavailable ×');
+        button.setAttribute('aria-label', text('移除不可用的智能体', 'Remove unavailable agent'));
+      }
       button.addEventListener('click', () => {
         selected.delete(key);
+        remember();
         renderSelected();
         input.focus();
       });
       return button;
     }));
     chips.hidden = selected.size === 0;
+    if (staleStatus) staleStatus.hidden = !stale;
+    if (stale) input.setAttribute('aria-describedby', 'chat-agent-mention-status');
+    else input.removeAttribute('aria-describedby');
+    nextFocus?.focus({preventScroll: true});
+  }
+
+  function remember() {
+    if (!scope) return;
+    const targets = [...selected.values()];
+    if (targets.length) savedSelections.set(scope, targets);
+    else savedSelections.delete(scope);
+    writeChatDraftMentions(doc.defaultView, scope, targets);
+  }
+
+  function restoreTargets(targets) {
+    for (const target of targets) selected.set(agentKey({owner_id: target.owner_id, id: target.agent_id}), target);
   }
 
   function refresh() {
     const group = context();
-    if (launcher) launcher.hidden = !group?.agents.some(availableAgent);
-    if (scope !== group?.scope) {
+    const changedScope = scope !== group?.scope;
+    if (changedScope) {
       scope = group?.scope;
       selected.clear();
-      renderSelected();
+      if (scope) {
+        const targets = savedSelections.get(scope) || readChatDraftMentions(doc.defaultView, scope);
+        restoreTargets(targets);
+      }
       close();
       if (picker?.open) picker.close();
+      list.setAttribute('aria-label', group?.direct ? text('提及私聊智能体', 'Mention chat agents')
+        : text('提及群智能体', 'Mention group agents'));
+      const searchLabel = pickerNode('search-label');
+      if (searchLabel) searchLabel.textContent = group?.direct ? text('搜索私聊智能体', 'Search chat agents')
+        : text('搜索群智能体', 'Search group agents');
     }
+    if (changedScope || roster !== group?.agents) {
+      roster = group?.agents;
+      available = new Map((roster || []).filter(availableAgent).map(agent => [agentKey(agent), agent]));
+      renderSelected({preserveFocus: !changedScope});
+    }
+    if (launcher) launcher.hidden = available.size === 0;
     return group;
   }
 
   function choose(agent) {
     const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!query || !group?.agents.some(candidate => agentKey(candidate) === agentKey(agent) && !candidate.archived) || selected.size >= MAX_MENTIONS) {
+    if (!query || !available.has(agentKey(agent)) || selected.size >= mentionsLimit(group)) {
       close();
       return;
     }
     const end = input.selectionStart;
     input.value = input.value.slice(0, query.start) + input.value.slice(end);
     input.setSelectionRange(query.start, query.start);
-    selected.set(agentKey(agent), agent);
+    selected.set(agentKey(agent), {owner_id: agent.owner_id, agent_id: agent.id});
+    remember();
     renderSelected();
     close();
     input.dispatchEvent?.(new Event('input', {bubbles: true}));
@@ -92,7 +145,7 @@ export function mountAgentMentions(doc, context) {
     if (event?.isComposing) return;
     const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!group || !query || selected.size >= MAX_MENTIONS) { close(); return; }
+    if (!group || !query || selected.size >= mentionsLimit(group)) { close(); return; }
     const needle = query.query.toLowerCase();
     options = group.agents.filter(agent => availableAgent(agent) && !selected.has(agentKey(agent))
       && agent.name.toLowerCase().includes(needle)).slice(0, 8);
@@ -118,9 +171,10 @@ export function mountAgentMentions(doc, context) {
 
   function setPickerCount() {
     const size = picking.choices.size;
-    selectedLabel.textContent = text(`已选 ${size}`, `${size} selected`);
+    selectedLabel.textContent = picking.direct ? text(`已选 ${size} / ${picking.limit}`, `${size} of ${picking.limit} selected`)
+      : text(`已选 ${size}`, `${size} selected`);
     applyButton.disabled = Boolean(picking.reply && !size);
-    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= MAX_MENTIONS;
+    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= picking.limit;
   }
 
   function renderPicker() {
@@ -158,7 +212,8 @@ export function mountAgentMentions(doc, context) {
     if (!picker || picker.open || !group || input.disabled) return false;
     const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
     if (!roster.size) return false;
-    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))), reply, onApply};
+    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))),
+      direct: group.direct, limit: mentionsLimit(group), reply, onApply};
     queryField.value = '';
     pickerNode('quote').hidden = !reply;
     pickerNode('quote-author').textContent = reply?.author || '';
@@ -198,7 +253,11 @@ export function mountAgentMentions(doc, context) {
       return;
     }
     selected.clear();
-    for (const key of choices) selected.set(key, roster.get(key));
+    for (const key of choices) {
+      const agent = roster.get(key);
+      selected.set(key, {owner_id: agent.owner_id, agent_id: agent.id});
+    }
+    remember();
     renderSelected();
     picker.close();
     view.onApply?.();
@@ -210,11 +269,41 @@ export function mountAgentMentions(doc, context) {
     openPicker,
     canPick: () => Boolean(picker && refresh()?.agents.some(availableAgent) && !input.disabled),
     clear() {
+      scope = null;
+      roster = undefined;
+      available.clear();
       selected.clear();
       renderSelected();
       close();
       if (picker?.open) picker.close();
       if (launcher) launcher.hidden = true;
+    },
+    forget(targetScope) {
+      savedSelections.delete(targetScope);
+      writeChatDraftMentions(doc.defaultView, targetScope, []);
+      if (scope !== targetScope) return;
+      selected.clear();
+      renderSelected();
+      close();
+      if (picker?.open) picker.close();
+    },
+    restoreDirect(targets) {
+      if (!refresh()?.direct || selected.size || !Array.isArray(targets)) return false;
+      restoreTargets(targets);
+      remember();
+      renderSelected();
+      return true;
+    },
+    prepareDirectLink({ownerId, agentId}) {
+      const group = refresh();
+      const key = agentKey({owner_id:ownerId,id:agentId});
+      if (!group?.direct || !available.has(key)) return false;
+      if (!selected.size && !input.value.trim()) {
+        restoreTargets([{owner_id:ownerId,agent_id:agentId}]);
+        remember();
+        renderSelected();
+      }
+      return true;
     },
     keydown(event) {
       if (event.isComposing || list.hidden || !options.length) return false;
@@ -232,7 +321,8 @@ export function mountAgentMentions(doc, context) {
     message(body) {
       const group = refresh();
       if (!group || !selected.size) return {body};
-      return {body, agent_mentions: Array.from(selected.values(), agent => ({owner_id: agent.owner_id, agent_id: agent.id}))};
+      if (selected.size > mentionsLimit(group) || [...selected.keys()].some(key => !available.has(key))) return null;
+      return {body, agent_mentions: [...selected.values()], ...(group.direct ? {direct_agent_request: true} : {})};
     },
   };
 }

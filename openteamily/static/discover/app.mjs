@@ -7,6 +7,7 @@ import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const AGENT_COPY_GRANT = /^otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
@@ -484,6 +485,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     ? {handle: requestedAuthor.toLowerCase(), name: '@' + requestedAuthor.toLowerCase()} : null;
   const manageWorkspace = manageParams.get('workspace');
   const manageAgent = manageParams.get('agent');
+  const agentShare = agentsView && nativeCatalog && manageParams.getAll('share').length === 1 &&
+    AGENT_COPY_GRANT.test(manageParams.get('share')) ? manageParams.get('share') : null;
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const catalogSearch = document.getElementById('catalog-query');
@@ -1762,6 +1765,61 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const remixSubmit = document.getElementById('catalog-remix-submit');
   const remixRefresh = document.getElementById('catalog-remix-refresh');
   const remixCancel = document.getElementById('catalog-remix-cancel');
+  const shareSender = document.getElementById('catalog-remix-share-sender');
+  const remixLabel = (zh, en) => document.documentElement?.lang?.startsWith('en') ? en : zh;
+  const receivedShares = document.getElementById('received-agent-shares');
+  const receivedList = document.getElementById('received-agent-shares-list');
+  const receivedStatus = document.getElementById('received-agent-shares-status');
+  const receivedMore = document.getElementById('received-agent-shares-more');
+  let receivedView;
+
+  function renderReceived(state) {
+    receivedList.replaceChildren(...[...state.items.values()].map(grant => {
+      const item = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = grant.agent_name + ' · ' + (grant.sender?.display_name || grant.sender?.handle || '');
+      item.append(label);
+      const action = document.createElement(grant.state === 'active' ? 'a' : 'span');
+      if (grant.state === 'active') {
+        action.href = '/discover?' + new URLSearchParams({tab:'agents', share:grant.id});
+        action.textContent = remixLabel('查看并复制','Review and copy');
+      } else action.textContent = grant.state === 'revoked' ? remixLabel('已撤销','Revoked') : remixLabel('已关闭','Closed');
+      item.append(action);
+      return item;
+    }));
+  }
+
+  async function loadReceived({reset = false} = {}) {
+    if (!nativeCatalog || !currentUser || !receivedShares.open) return;
+    if (reset || !receivedView) {
+      receivedView = {viewer:currentUser, items:new Map(), cursor:''};
+      receivedList.replaceChildren();
+      receivedMore.hidden = true;
+    }
+    const state = receivedView;
+    if (state.loading) return;
+    state.loading = true;
+    const params = new URLSearchParams({direction:'received', limit:'30'});
+    if (state.cursor) params.set('after',state.cursor);
+    receivedMore.disabled = true;
+    receivedStatus.textContent = remixLabel('正在读取收到的分享…','Loading received shares…');
+    const result = await request('GET','/v1/agent-copy-grants?' + params).catch(() => ({status:0}));
+    if (receivedView !== state || currentUser !== state.viewer || !receivedShares.open) return;
+    state.loading = false;
+    receivedMore.disabled = false;
+    if (result.status !== 200) {
+      receivedStatus.textContent = remixLabel('无法读取分享，请重试。','Could not load shares. Try again.');
+      receivedMore.textContent = remixLabel('重试','Try again');
+      receivedMore.hidden = false;
+      return;
+    }
+    for (const grant of result.body.items || []) if (AGENT_COPY_GRANT.test(grant.id)) state.items.set(grant.id,grant);
+    state.cursor = result.body.next_cursor || '';
+    renderReceived(state);
+    receivedMore.textContent = remixLabel('加载更多','Load more');
+    receivedMore.hidden = !state.cursor;
+    receivedStatus.textContent = state.items.size ? '' : remixLabel('还没有收到的分享。','No shares received yet.');
+  }
 
   function currentRemix(entry) {
     return remix === entry && entry.viewer === currentUser && remixDialog.open;
@@ -1770,17 +1828,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   function closeAgentRemix() {
     remix?.read?.abort();
     remix = null;
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
+    document.getElementById('catalog-remix-summary').textContent = '';
     if (remixDialog.open) remixDialog.close();
   }
 
   function updateRemixControls() {
     const pending = Boolean(remix?.pending);
-    remixSubmit.disabled = !remix?.template || !remixWorkspace.value || !remixName.value.trim() || pending;
+    remixSubmit.disabled = !remix?.template || (!remix.shareId && !remixWorkspace.value) || !remixName.value.trim() || pending;
     remixName.disabled = remixWorkspace.disabled = remixCancel.disabled = pending;
     remixSubmit.textContent = pending ? '正在创建…' : '创建副本';
   }
 
   function syncRemixWorkspaces() {
+    if (remix?.shareId) { updateRemixControls(); return; }
     const previous = remixWorkspace.value || workspaceSelect.value;
     remixWorkspace.replaceChildren(...Array.from(workspaceSelect.options, option => {
       const choice = document.createElement('option');
@@ -1799,38 +1862,67 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
+  function renderAgentRemixContent(template) {
+    const instructions = document.getElementById('catalog-remix-instructions');
+    const prompt = template?.instructions || '';
+    document.getElementById('catalog-remix-prompt').textContent = prompt;
+    instructions.hidden = !prompt;
+    instructions.open = false;
+    const quickStarts = Array.isArray(template?.quick_starts)
+      ? template.quick_starts.filter(start => typeof start === 'string' && start.trim()) : [];
+    const quickStartsList = document.getElementById('catalog-remix-quick-starts-list');
+    quickStartsList.replaceChildren(...quickStarts.map(text => {
+      const line = document.createElement('li');
+      line.setAttribute('dir', 'auto');
+      line.textContent = text;
+      return line;
+    }));
+    document.getElementById('catalog-remix-quick-starts').hidden = !quickStarts.length;
+    document.getElementById('catalog-remix-quick-starts-heading').textContent =
+      remixLabel('将复制的快捷开场', 'Quick starts included in the copy');
+    const description = document.getElementById('catalog-remix-description');
+    if (!template) { description.textContent = ''; return; }
+    const instructionsNote = prompt ? (remix?.shareId ? remixLabel('副本包含分享者选择的指令。', 'The copy includes the instructions selected by the sender.')
+      : remixLabel('副本包含发布的指令，可在自己的工作区修改。', 'The copy includes the published instructions. You can edit them in your workspace.'))
+      : remixLabel('创建后可补充自己的指令。', 'You can add your own instructions after creating the copy.');
+    description.textContent = instructionsNote + remixLabel('工具可在新副本中另行配置。', ' Configure tools separately in the new copy.');
+  }
+
   async function readAgentRemix(entry) {
     entry.template = null;
     entry.read?.abort();
     const controller = new AbortController();
     entry.read = controller;
-    const instructions = document.getElementById('catalog-remix-instructions');
-    instructions.hidden = true;
-    instructions.open = false;
-    const description = document.getElementById('catalog-remix-description');
-    description.textContent = '';
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
     remixRefresh.hidden = true;
-    remixStatus.textContent = '正在读取发布内容…';
+    remixStatus.textContent = entry.shareId ? remixLabel('正在读取分享…','Loading share…') : '正在读取发布内容…';
     updateRemixControls();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
     const result = await request('GET', entry.path, undefined, {}, signal).catch(() => ({status: 0}));
     if (!currentRemix(entry) || entry.read !== controller) return;
     const template = result.body?.template;
-    if (result.status !== 200 || !template?.revision || typeof template.name !== 'string') {
-      remixStatus.textContent = messageFor(result.body?.error, '无法读取发布内容，请重试。');
+    const grant = result.body?.grant;
+    if (result.status !== 200 || !template?.revision || typeof template.name !== 'string' ||
+        (entry.shareId && (grant?.id !== entry.shareId || grant?.state !== 'active'))) {
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : messageFor(result.body?.error, entry.shareId ? remixLabel('无法读取分享，请重试。','Could not load the share. Try again.') : '无法读取发布内容，请重试。');
       remixRefresh.textContent = '重新读取';
-      remixRefresh.hidden = result.status === 404;
+      remixRefresh.hidden = [404,410].includes(result.status);
       return;
     }
     if (remixName.value === entry.suggestion) remixName.value = template.name;
     entry.suggestion = template.name;
     entry.template = template;
     document.getElementById('catalog-remix-summary').textContent = template.summary;
-    document.getElementById('catalog-remix-prompt').textContent = template.instructions;
-    instructions.hidden = !template.instructions;
-    description.textContent = template.instructions
-      ? '副本包含发布的指令，可在自己的工作区修改。'
-      : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
+    if (entry.shareId) {
+      const name = grant.sender?.display_name || grant.sender?.handle || '';
+      shareSender.textContent = remixLabel('来自 ' + name, 'Shared by ' + name);
+      shareSender.hidden = false;
+    }
+    renderAgentRemixContent(template);
     remixStatus.textContent = '';
     syncRemixWorkspaces();
   }
@@ -1839,9 +1931,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!canUseCatalogItem(item) || remixDialog.open) return;
     const entry = {path: '/v1/discover/agents/' + item.slug + '/remix', viewer: currentUser,
       suggestion: item.name, keys: new Map()};
+    return showRemix(entry, item.summary);
+  }
+
+  function showRemix(entry, summary = '') {
     remix = entry;
     remixName.value = entry.suggestion;
-    document.getElementById('catalog-remix-summary').textContent = item.summary || '';
+    document.getElementById('catalog-remix-summary').textContent = summary || '';
+    document.getElementById('catalog-remix-title').textContent = entry.shareId
+      ? remixLabel('复制私下分享的智能体','Copy privately shared agent') : remixLabel('复制智能体','Copy agent');
+    document.getElementById('catalog-remix-workspace-field').hidden = Boolean(entry.shareId);
+    remixWorkspace.required = !entry.shareId;
+    const destination = document.getElementById('catalog-remix-personal-destination');
+    destination.hidden = !entry.shareId;
+    destination.textContent = remixLabel('副本会保存到你的个人工作区。','The copy will be saved in your personal workspace.');
     syncRemixWorkspaces();
     remixDialog.showModal();
     return readAgentRemix(entry);
@@ -1851,8 +1954,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     event.preventDefault();
     const entry = remix;
     const name = remixName.value.trim();
-    if (!entry?.template || !currentRemix(entry) || entry.pending || !remixWorkspace.value || !name) return;
-    const payload = {revision: entry.template.revision, workspace_id: remixWorkspace.value, name};
+    if (!entry?.template || !currentRemix(entry) || entry.pending || (!entry.shareId && !remixWorkspace.value) || !name) return;
+    const payload = {revision:entry.template.revision, ...(entry.shareId ? {} : {workspace_id:remixWorkspace.value}), name};
     const stamp = JSON.stringify(payload);
     const key = entry.keys.get(stamp) || reuseKey();
     entry.keys.set(stamp, key);
@@ -1864,7 +1967,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!currentRemix(entry)) return;
     entry.pending = false;
     const agent = result.body?.agent;
-    if ([200, 201].includes(result.status) && agent?.id && agent.workspace_id === payload.workspace_id) {
+    if ([200,201].includes(result.status) && agent?.id && (entry.shareId ? /^[a-f0-9]{32}$/.test(agent.workspace_id) : agent.workspace_id === payload.workspace_id)) {
       entry.template = null;
       updateRemixControls();
       remixStatus.textContent = '已创建副本，正在打开对话…';
@@ -1873,16 +1976,25 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     const error = result.body?.error;
-    if (error?.code === 'listing_changed') {
+    if (error?.code === 'listing_changed' || (entry.shareId && error?.code === 'agent_copy_changed')) {
       entry.template = null;
+      renderAgentRemixContent();
       remixRefresh.textContent = '查看新版本';
       remixRefresh.hidden = false;
       remixStatus.textContent = '发布内容已更新，请先查看新版本。';
       remixRefresh.focus();
     } else {
-      if (result.status === 404) entry.template = null;
+      if ([404,410].includes(result.status)) {
+        entry.template = null;
+        renderAgentRemixContent();
+        shareSender.textContent = '';
+        shareSender.hidden = true;
+        document.getElementById('catalog-remix-summary').textContent = '';
+      }
       const fallback = '暂时无法确认是否已创建副本，可以重试。';
-      remixStatus.textContent = result.status >= 500 ? fallback : messageFor(error, fallback);
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : result.status >= 500 ? fallback : messageFor(error, fallback);
     }
     updateRemixControls();
     if (error?.code === 'name_conflict') {
@@ -2253,6 +2365,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     closeWorkRemix();
     syncCatalogActions();
     closeAgentRemix();
+    receivedView = null;
+    receivedShares.hidden = true;
+    receivedShares.open = false;
+    receivedList.replaceChildren();
     manageRequest++;
     document.getElementById('catalog-manage').hidden = true;
     if (agentsView) {
@@ -2305,6 +2421,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     document.getElementById('catalog-manage').hidden = !agentsView;
+    receivedShares.hidden = !agentsView || !nativeCatalog;
+    const sharedPreview = agentShare ? showRemix({path:`/v1/agent-copy-grants/${agentShare}/remix`, viewer:currentUser,
+      suggestion:'', shareId:agentShare, keys:new Map()}) : null;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0}));
       if (attempt !== sessionRequest) return;
@@ -2324,7 +2443,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     if (teamsView) await loadTeams();
-    await directoryLoad;
+    await Promise.all([directoryLoad, sharedPreview]);
   }
 
   workspaceSelect.addEventListener('change', loadManage);
@@ -2355,6 +2474,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     remixWorkspace.addEventListener('change', updateRemixControls);
     remixRefresh.addEventListener('click', () => remix && readAgentRemix(remix));
     remixCancel.addEventListener('click', closeAgentRemix);
+    document.getElementById('received-agent-shares-label').textContent = remixLabel('收到的智能体分享','Received agent shares');
+    receivedShares.addEventListener('toggle', () => {
+      if (receivedShares.open) void loadReceived({reset:true});
+      else receivedView = null;
+    });
+    receivedMore.addEventListener('click', () => void loadReceived());
     remixDialog.addEventListener('cancel', event => {
       event.preventDefault();
       if (!remix?.pending) closeAgentRemix();

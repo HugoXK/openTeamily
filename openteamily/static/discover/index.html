@@ -185,6 +185,12 @@
     <p id="catalog-creator-filter" class="catalog-creator-row" hidden>
       <span id="catalog-creator-label"></span><button type="button" id="catalog-clear-creator" aria-label="清除创建者筛选">清除</button>
     </p>
+    <details id="received-agent-shares" hidden>
+      <summary id="received-agent-shares-label">收到的智能体分享</summary>
+      <p id="received-agent-shares-status" role="status"></p>
+      <ul id="received-agent-shares-list"></ul>
+      <button type="button" id="received-agent-shares-more" hidden>加载更多</button>
+    </details>
     <section aria-label="公共目录" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
@@ -269,15 +275,21 @@
   </dialog>
   <dialog id="catalog-remix-dialog" class="catalog-dialog" aria-labelledby="catalog-remix-title">
     <h2 id="catalog-remix-title">复制智能体</h2>
+    <p id="catalog-remix-share-sender" class="note" hidden></p>
     <p id="catalog-remix-summary"></p>
     <details id="catalog-remix-instructions" hidden>
       <summary>查看发布的指令</summary>
       <pre id="catalog-remix-prompt"></pre>
     </details>
+    <section id="catalog-remix-quick-starts" aria-labelledby="catalog-remix-quick-starts-heading" hidden>
+      <h3 id="catalog-remix-quick-starts-heading">将复制的快捷开场</h3>
+      <ul id="catalog-remix-quick-starts-list"></ul>
+    </section>
     <p id="catalog-remix-description"></p>
     <form id="catalog-remix-form">
       <label>智能体名称 <input id="catalog-remix-name" type="text" required maxlength="80"></label>
-      <label>复制到 <select id="catalog-remix-workspace" required></select></label>
+      <label id="catalog-remix-workspace-field">复制到 <select id="catalog-remix-workspace" required></select></label>
+      <p id="catalog-remix-personal-destination" class="note" hidden>副本会保存到你的个人工作区。</p>
       <p id="catalog-remix-status" role="status"></p>
       <div class="catalog-dialog-actions">
         <button type="button" id="catalog-remix-cancel">关闭</button>

@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
+import { body, handleKey, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { shareTeam, requireMember } from "./teams.js";
 import { acceptedContact } from "./contacts.js";
 
@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS ot_conversation_members_owner ON ot_conversation_memb
 CREATE TABLE IF NOT EXISTS ot_conversation_agents (
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, agent_ref TEXT NOT NULL,
   owner_id TEXT NOT NULL, name TEXT NOT NULL, auto_reply INTEGER NOT NULL DEFAULT 0,
-  auto_reply_after_seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+  auto_reply_after_seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, direct_grant_id TEXT,
   PRIMARY KEY (conversation_id, agent_ref, owner_id)
 );
 CREATE TABLE IF NOT EXISTS ot_messages (
@@ -98,13 +98,17 @@ CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
   owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','running','failed','replied')),
   attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, source_revision INTEGER,
-  progress_revision INTEGER NOT NULL DEFAULT 0, claim_id TEXT,
+  progress_revision INTEGER NOT NULL DEFAULT 0, claim_id TEXT, direct_grant_id TEXT,
   UNIQUE (message_id, owner_id, agent_ref)
 );
 CREATE INDEX IF NOT EXISTS ot_agent_reply_jobs_queue ON ot_agent_reply_jobs(owner_id, status, updated_at);
 CREATE TABLE IF NOT EXISTS ot_group_agent_message_requests (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
   request_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ot_direct_agent_message_requests (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
+  request_hash TEXT NOT NULL, quote_revision INTEGER
 );
 -- Keep the pin when a revision is removed so a reply cannot silently lose its reference.
 CREATE TABLE IF NOT EXISTS ot_studio_message_references (
@@ -137,17 +141,35 @@ type ReplyJob = {
   conversation_id: string; quoted_message_id: string | null;
   status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
   available: number; source_revision: number | null; current_revision: number; progress_revision: number;
-  claim_id: string | null;
+  claim_id: string | null; direct_grant_id: string | null;
   group_text_only: number; agent_owner_name: string;
   studio_document_id: string | null; studio_revision: number | null; studio_available: number;
 };
 
+// Ordinary direct conversations use the canonical sorted pair and have no team id.
+const directKey = (a: string, b: string) => `(MIN(${a},${b}) || ':' || MAX(${a},${b}))`;
+const directRelationship = (a: string, b: string) => `(
+  EXISTS (SELECT 1 FROM ot_contacts contact WHERE contact.owner_a=MIN(${a},${b})
+    AND contact.owner_b=MAX(${a},${b}) AND contact.status='accepted')
+  OR EXISTS (SELECT 1 FROM ot_team_members access_a JOIN ot_team_members access_b ON access_b.team_id=access_a.team_id
+    WHERE access_a.owner_id=${a} AND access_b.owner_id=${b} AND access_a.suspended=0 AND access_b.suspended=0)
+)`;
+
 const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.reply_to AS quoted_message_id, src.retracted, src.seq, src.revision AS current_revision,
-  c.title AS conversation_title, (src.author_id<>j.owner_id) AS group_text_only,
+  c.title AS conversation_title, (j.direct_grant_id IS NULL AND src.author_id<>j.owner_id) AS group_text_only,
   COALESCE(NULLIF(owner.display_name,''),owner.handle,'') AS agent_owner_name,
-  (src.retracted=0 AND c.kind='group' AND c.group_archived_at IS NULL AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%'
+  (src.retracted=0 AND c.group_archived_at IS NULL AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%'
     AND member.owner_id IS NOT NULL AND requester.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
-    AND (c.team_id IS NULL OR (team.owner_id IS NOT NULL AND requester_team.owner_id IS NOT NULL))
+    AND ((c.kind='group' AND j.direct_grant_id IS NULL
+      AND (c.team_id IS NULL OR (team.owner_id IS NOT NULL AND requester_team.owner_id IS NOT NULL)))
+    OR (c.kind='dm' AND c.team_id IS NULL AND agent.direct_grant_id=j.direct_grant_id
+      AND EXISTS (SELECT 1 FROM ot_conversation_members peer
+        WHERE peer.conversation_id=c.id AND peer.owner_id<>src.author_id
+          AND c.dm_key=${directKey("src.author_id", "peer.owner_id")}
+          AND (j.owner_id=src.author_id OR j.owner_id=peer.owner_id)
+          AND NOT EXISTS (SELECT 1 FROM ot_conversation_members third WHERE third.conversation_id=c.id
+            AND third.owner_id NOT IN (src.author_id,peer.owner_id))
+          AND ${directRelationship("src.author_id", "peer.owner_id")})))
     AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=j.owner_id AND h.message_id=src.id)) AS available,
   ref.document_id AS studio_document_id, ref.revision AS studio_revision,
   CASE WHEN ref.message_id IS NULL THEN 1 ELSE EXISTS (
@@ -191,7 +213,8 @@ function replyJobViews(ot: OtContext, message: any, viewer?: string) {
     const status = !job.studio_available && job.status !== "replied" ? "failed" : replyJobState(job, now);
     return {id: job.id, agent_name: job.agent_name, agent_id: job.agent_ref,
       agent_owner_id: job.owner_id, agent_owner_name: job.agent_owner_name, status, attempt: job.attempt,
-      ...(status === "failed" && !job.available ? {error_code:"group_agent_unavailable"} : {}),
+      ...(status === "failed" && !job.available
+        ? {error_code:job.direct_grant_id ? "direct_agent_unavailable" : "group_agent_unavailable"} : {}),
       can_retry: Boolean(viewer === message.author_id && job.available && job.studio_available
         && status === "failed" && job.attempt < REPLY_JOB_ATTEMPTS)};
   });
@@ -243,6 +266,46 @@ export function requireDirectReach(ot: OtContext, conv: {id: string; kind: strin
   if (!ordinaryDirect(conv)) return;
   const peer = ot.get<{owner_id: string}>("SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>?", conv.id, owner);
   assert(peer && directReachable(ot, owner, peer.owner_id), 403, "not_reachable", "请先建立联系人关系。");
+}
+
+function directAgentPeer(ot: OtContext, conv: {id: string; kind: string; team_id?: string | null; dm_key?: string | null}, owner: string) {
+  if (!ordinaryDirect(conv)) return;
+  const seats = ot.all<{owner_id: string}>("SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? LIMIT 3", conv.id);
+  const peer = seats.find(seat => seat.owner_id !== owner)?.owner_id;
+  if (seats.length === 2 && peer && seats.some(seat => seat.owner_id === owner)
+    && conv.dm_key === [owner, peer].sort().join(":")) return peer;
+}
+
+// Called inside the transaction that checks reachability and creates the DM.
+function getOrCreateDirectConversation(ot: OtContext, owner: string, peer: string) {
+  const key = [owner,peer].sort().join(":");
+  const existing = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key=?",key);
+  if (existing) return {conversation:existing,created:false};
+  const id = newId("otc");
+  const now = ot.now();
+  ot.run(`INSERT INTO ot_conversations(id,kind,dm_key,created_by,created_at,updated_at) VALUES (?,'dm',?,?,?,?)`,id,key,owner,now,now);
+  for (const member of [owner,peer]) {
+    ot.run("INSERT INTO ot_conversation_members(conversation_id,owner_id,created_at) VALUES (?,?,?)",id,member,now);
+  }
+  return {conversation:ot.get<any>("SELECT * FROM ot_conversations WHERE id=?",id),created:true};
+}
+
+function grantDirectAgent(ot: OtContext, conversationId: string, owner: string, ref: string, name: string) {
+  const prior = ot.get<{created_at: number; direct_grant_id: string | null}>(`SELECT created_at,direct_grant_id FROM ot_conversation_agents
+    WHERE conversation_id=? AND agent_ref=? AND owner_id=?`,conversationId,ref,owner);
+  const created = !prior?.direct_grant_id;
+  const at = prior?.direct_grant_id ? prior.created_at : ot.now();
+  ot.run(`INSERT INTO ot_conversation_agents(conversation_id,agent_ref,owner_id,name,created_at,direct_grant_id) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(conversation_id,agent_ref,owner_id) DO UPDATE SET name=excluded.name,auto_reply=0,
+      created_at=excluded.created_at,direct_grant_id=excluded.direct_grant_id
+    WHERE ot_conversation_agents.name<>excluded.name OR ot_conversation_agents.auto_reply<>0
+      OR ot_conversation_agents.direct_grant_id IS NULL`,conversationId,ref,owner,name,at,prior?.direct_grant_id ?? newId("otdag"));
+  return {created,created_at:at};
+}
+
+function removeDirectAgent(ot: OtContext, conversationId: string, owner: string, ref: string) {
+  return ot.run(`DELETE FROM ot_conversation_agents WHERE conversation_id=? AND agent_ref=? AND owner_id=?
+    AND direct_grant_id IS NOT NULL`,conversationId,ref,owner).changes;
 }
 
 export function accountConversation(ot: OtContext, id: string, owner: string) {
@@ -321,8 +384,8 @@ export function workspaceConversation(ot: OtContext, workspace: string, id: stri
 const VISIBLE_MESSAGE = "NOT EXISTS (SELECT 1 FROM ot_hidden_messages hidden WHERE hidden.message_id=m.id AND hidden.owner_id=?)";
 
 function replyOriginal(ot: OtContext, conversationId: string, messageId: string, viewer: string) {
-  return ot.get<{body: string; author_kind: string; author_id: string; agent_name: string | null}>(`
-    SELECT m.body,m.author_kind,m.author_id,m.agent_name FROM ot_messages m
+  return ot.get<{body: string; author_kind: string; author_id: string; agent_name: string | null; revision: number}>(`
+    SELECT m.body,m.author_kind,m.author_id,m.agent_name,m.revision FROM ot_messages m
     WHERE m.id=? AND m.conversation_id=? AND m.retracted=0 AND ${VISIBLE_MESSAGE}`, messageId, conversationId, viewer);
 }
 
@@ -335,6 +398,16 @@ function replyPreview(ot: OtContext, message: any, viewer: string) {
 }
 
 function replyClaimReceipt(ot: OtContext, job: ReplyJob) {
+  const original = job.quoted_message_id && replyOriginal(ot, job.conversation_id, job.quoted_message_id, job.owner_id);
+  if (job.direct_grant_id) {
+    const source = ot.get<{body: string; quote_revision: number | null}>(`SELECT m.body,r.quote_revision
+      FROM ot_messages m JOIN ot_direct_agent_message_requests r ON r.message_id=m.id WHERE m.id=?`, job.message_id);
+    assert(source, 409, "reply_job_unavailable", "这次私聊智能体请求已不可用。");
+    const receipt = {ok: true, direct_text_only: true, direct_prompt: source.body};
+    if (!original || original.revision !== source.quote_revision) return receipt;
+    const author = original.author_kind === "agent" ? original.agent_name : ot.profileView(original.author_id).display_name;
+    return {...receipt, quoted_message: {author: author || "成员", text: original.body.slice(0, 1500).replace(/[\uD800-\uDBFF]$/, "")}};
+  }
   const pinned = job.studio_document_id && ot.get<{title: string; excerpt: string}>(`
     SELECT title,substr(body,1,?) AS excerpt FROM ot_studio_revisions
     WHERE document_id=? AND revision=?`, STUDIO_EXCERPT_LIMIT + 1, job.studio_document_id, job.studio_revision);
@@ -342,7 +415,6 @@ function replyClaimReceipt(ot: OtContext, job: ReplyJob) {
   const chars = pinned ? Array.from(pinned.excerpt) : [];
   const studio = pinned ? {studio_reference: {document_id: job.studio_document_id, revision: job.studio_revision,
     title: pinned.title, excerpt: chars.slice(0, STUDIO_EXCERPT_LIMIT).join(""), truncated: chars.length > STUDIO_EXCERPT_LIMIT}} : {};
-  const original = job.quoted_message_id && replyOriginal(ot, job.conversation_id, job.quoted_message_id, job.owner_id);
   const receipt = {ok: true, ...(job.group_text_only ? {group_text_only: true} : {}), ...studio};
   if (!original) return receipt;
   const author = original.author_kind === "agent" ? original.agent_name : ot.profileView(original.author_id).display_name;
@@ -463,6 +535,35 @@ function registerReplyJobInvalidation(ot: OtContext) {
   }
 }
 
+function registerDirectAgentRevocation(ot: OtContext) {
+  // Closing the last relationship also removes the grants, so reconnecting
+  // two accounts cannot revive a reply from before the closure.
+  const events = [
+    {name:"contact_changed", event:"UPDATE OF status ON ot_contacts WHEN OLD.status='accepted' AND NEW.status<>'accepted'",
+      pair:"first.owner_id=OLD.owner_a AND second.owner_id=OLD.owner_b"},
+    {name:"contact_deleted", event:"DELETE ON ot_contacts WHEN OLD.status='accepted'",
+      pair:"first.owner_id=OLD.owner_a AND second.owner_id=OLD.owner_b"},
+    {name:"team_member_suspended", event:"UPDATE OF suspended ON ot_team_members WHEN OLD.suspended=0 AND NEW.suspended=1",
+      pair:"OLD.owner_id IN (first.owner_id,second.owner_id)"},
+    {name:"team_member_deleted", event:"DELETE ON ot_team_members WHEN OLD.suspended=0",
+      pair:"OLD.owner_id IN (first.owner_id,second.owner_id)"},
+  ];
+  for (const {name,event,pair} of events) {
+    ot.run(`CREATE TRIGGER IF NOT EXISTS ot_direct_agent_grants_after_${name} AFTER ${event} BEGIN
+      DELETE FROM ot_conversation_agents WHERE direct_grant_id IS NOT NULL AND conversation_id IN (
+        SELECT room.id FROM ot_conversations room
+        JOIN ot_conversation_members first ON first.conversation_id=room.id
+        JOIN ot_conversation_members second ON second.conversation_id=room.id AND first.owner_id<second.owner_id
+        WHERE room.kind='dm' AND room.team_id IS NULL AND room.dm_key=${directKey("first.owner_id", "second.owner_id")}
+          AND ${pair} AND NOT ${directRelationship("first.owner_id", "second.owner_id")});
+    END`);
+  }
+  ot.run(`CREATE TRIGGER IF NOT EXISTS ot_direct_agent_grants_after_room_member
+    AFTER DELETE ON ot_conversation_members BEGIN
+      DELETE FROM ot_conversation_agents WHERE direct_grant_id IS NOT NULL AND conversation_id=OLD.conversation_id;
+    END`);
+}
+
 function conversationView(ot: OtContext, c: any, viewer: string, includeManagement = false) {
   const published = publicListing(ot, c);
   const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id).filter(m => publicParticipant(ot, c, m.owner_id));
@@ -471,6 +572,7 @@ function conversationView(ot: OtContext, c: any, viewer: string, includeManageme
   const peer = c.kind === "dm" ? members.find((m) => m.owner_id !== viewer) : undefined;
   const open = !!(published?.listed && published.chat_enabled);
   const directOpen = Boolean(peer && ordinaryDirect(c) && directReachable(ot, viewer, peer.owner_id));
+  const directAgents = directOpen && members.length === 2 && c.dm_key === [viewer, peer.owner_id].sort().join(":");
   const management = includeManagement ? groupManagementView(ot, c, viewer) : undefined;
   const pending = open && !!ot.get(`SELECT 1 FROM ot_messages m
     WHERE m.conversation_id=? AND m.rowseq>? AND m.author_id=? AND m.author_kind='member' AND m.retracted=0
@@ -482,11 +584,13 @@ function conversationView(ot: OtContext, c: any, viewer: string, includeManageme
     ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
     ...(c.kind === "group" && !fixedPublicThread(c) ? {group_agent_requests: true} : {}),
     ...(ordinaryDirect(c) ? {direct: {open: directOpen}} : {}),
+    ...(directAgents ? {direct_agent_requests: true} : {}),
     ...(c.account_group === 1 ? {account_group: true} : {}),
     ...(management ? {group_management:management} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
-    agents: groupReplyAgents(ot, c.id).map(a => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
+    agents: (ordinaryDirect(c) && !directAgents ? [] : conversationAgents(ot, c.id)).map(a => ({ agent_ref: a.agent_ref, name: a.name,
+      auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
     activity_version: contentVersion(c, open || directOpen, hiddenCount(ot, c.id, viewer)),
     last_seq: c.last_seq, read_seq: mine?.read_seq ?? 0, unread: unreadMessages(ot, c, viewer, mine?.read_seq ?? 0),
     pinned: !!mine?.pinned, muted: !!mine?.muted, last_message: last ? messageView(ot, last, viewer) : null, updated_at: c.updated_at,
@@ -522,12 +626,13 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
 
 const agentMentionKey = (ownerId: string, ref: string) => `/agent/${ownerId}/${ref}`;
 
-function groupReplyAgents(ot: OtContext, conversationId: string) {
-  return ot.all<ReplyAgent & {auto_reply: number}>(`
-    SELECT a.agent_ref, a.owner_id, a.name, a.auto_reply FROM ot_conversation_agents a
+function conversationAgents(ot: OtContext, conversationId: string) {
+  return ot.all<ReplyAgent & {auto_reply: number; direct_grant_id: string | null}>(`
+    SELECT a.agent_ref, a.owner_id, a.name, a.auto_reply, a.direct_grant_id FROM ot_conversation_agents a
     JOIN ot_conversations c ON c.id=a.conversation_id
     JOIN ot_conversation_members member ON member.conversation_id=c.id AND member.owner_id=a.owner_id
-    WHERE c.id=? AND (c.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members tm
+    WHERE c.id=? AND (c.kind='group' OR a.direct_grant_id IS NOT NULL)
+      AND (c.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members tm
       WHERE tm.team_id=c.team_id AND tm.owner_id=a.owner_id AND tm.suspended=0))`, conversationId);
 }
 
@@ -538,14 +643,18 @@ function explicitAgentKey(target: any) {
   return agentMentionKey(target.owner_id, target.agent_id);
 }
 
-function groupAgentMessageRequest(b: any, clientKey: string | null, replyTo: string | null) {
-  if (b.group_agent_request === undefined) return null;
-  assert(b.group_agent_request === true && clientKey && (b.direct === undefined || typeof b.direct === "boolean")
+function agentMessageRequest(b: any, clientKey: string | null, replyTo: string | null, scope: "group" | "direct") {
+  const flag = scope === "direct" ? "direct_agent_request" : "group_agent_request";
+  if (b[flag] === undefined) return null;
+  const extra = scope === "direct" ? ["workspace"] : ["workspace", "studio_reference"];
+  assert(b[flag] === true && clientKey && (scope === "direct" ? b.direct === true : b.direct === undefined || typeof b.direct === "boolean")
     && Array.isArray(b.agent_mentions) && b.agent_mentions.length >= 1 && b.agent_mentions.length <= 5
-    && Object.keys(b).every(key => ["body","workspace","direct","agent_mentions","client_key","studio_reference","reply_to","group_agent_request"].includes(key)),
-  400, "invalid_request", "Choose 1 to 5 group agents and provide a request key");
+    && Object.keys(b).every(key => ["body","direct","agent_mentions","client_key","reply_to",flag,...extra].includes(key)),
+  400, "invalid_request", "Choose 1 to 5 conversation agents and provide a request key");
+  if (scope === "direct") assert(b.agent_mentions.every((target: any) => target && typeof target.owner_id === "string"
+    && AGENT_REF.test(target.owner_id) && Object.keys(target).length === 2), 400, "invalid_request", "Invalid direct agent target");
   const agents: string[] = b.agent_mentions.map(explicitAgentKey);
-  assert(new Set(agents).size === agents.length, 400, "invalid_request", "Choose each group agent once");
+  assert(new Set(agents).size === agents.length, 400, "invalid_request", "Choose each conversation agent once");
   const prompt = text(b.body, "body", {min: 1, max: BODY_MAX, multiline: true});
   return createHash("sha256").update(JSON.stringify([prompt, replyTo, agents.sort()])).digest("hex");
 }
@@ -595,12 +704,12 @@ function agentMentioned(mentions: string[], agent: ReplyAgent) {
 }
 
 function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, selectedAgents: unknown,
-  strictRequest = false, studio = false) {
+  scope?: "group" | "direct", studio = false, ordinaryDm = false) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
   for (const m of bodyText.matchAll(/@([a-z0-9._-]{2,40})/gi)) handles.add(handleKey(m[1]));
   const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
-  const agents = groupReplyAgents(ot, convId);
+  const agents = ordinaryDm && scope !== "direct" ? [] : conversationAgents(ot, convId);
   if (selectedAgents === undefined) {
     const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
     const mentions = [...handles].filter(h => members.has(h) || legacy.has(h));
@@ -613,8 +722,9 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
   for (const target of selectedAgents) {
     const key = explicitAgentKey(target);
     const agent = available.get(key);
-    assert(agent, strictRequest ? 409 : studio ? 404 : 400,
-      strictRequest ? "group_agent_unavailable" : studio ? "studio_reference_unavailable" : "invalid_request",
+    assert(agent, scope ? 409 : studio ? 404 : 400,
+      scope === "direct" ? "direct_agent_unavailable" : scope === "group" ? "group_agent_unavailable"
+        : studio ? "studio_reference_unavailable" : "invalid_request",
       "A mentioned agent is no longer available in this conversation");
     targets.set(key, agent.name);
   }
@@ -632,6 +742,76 @@ function replyContext(ot: OtContext, conversationId: string, seq: number, viewer
     ORDER BY m.seq DESC LIMIT 12) ORDER BY seq`, conversationId, seq, viewer).map(m => messageView(ot, m));
 }
 
+function registerAgentAccess(app: FastifyInstance, ot: OtContext) {
+  const root = "/v1/ot/agent-access";
+  const agentId = /^[a-f0-9]{32}$/;
+  const socialId = /^[A-Za-z0-9._-]{1,80}$/;
+  type Peer = {owner_id: string; handle: string; display_name: string};
+  type AccessRow = Peer & {conversation_id: string; created_at: number};
+
+  app.get(root, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const q = query(req);
+    const ref = one(q.agent_id,"agent_id");
+    const after = one(q.after,"after") ?? "";
+    assert(ref && agentId.test(ref) && (!after || socialId.test(after))
+      && Object.keys(q).every(key => ["agent_id","limit","after"].includes(key)),400,"invalid_request","Invalid agent access filters");
+    const limit = Math.max(1,intParam(q.limit,"limit",50,100));
+    const rows = ot.all<AccessRow>(`SELECT a.conversation_id,a.created_at,p.owner_id,p.handle,p.display_name FROM ot_conversation_agents a
+      JOIN ot_conversations room ON room.id=a.conversation_id
+      JOIN ot_conversation_members sender ON sender.conversation_id=room.id AND sender.owner_id=a.owner_id
+      JOIN ot_conversation_members peer ON peer.conversation_id=room.id AND peer.owner_id<>sender.owner_id
+      JOIN ot_profiles p ON p.owner_id=peer.owner_id
+      WHERE a.owner_id=? AND a.agent_ref=? AND a.direct_grant_id IS NOT NULL AND a.conversation_id>?
+        AND room.kind='dm' AND room.team_id IS NULL AND room.group_archived_at IS NULL
+        AND room.dm_key=${directKey("sender.owner_id","peer.owner_id")} AND room.dm_key NOT LIKE 'agent:%'
+        AND NOT EXISTS (SELECT 1 FROM ot_conversation_members other WHERE other.conversation_id=room.id
+          AND other.owner_id NOT IN (sender.owner_id,peer.owner_id)) AND ${directRelationship("sender.owner_id","peer.owner_id")}
+      ORDER BY a.conversation_id LIMIT ?`,ownerId,ref,after,limit+1);
+    return {items:rows.slice(0,limit).map(({conversation_id,created_at,owner_id,handle,display_name})=>({
+      conversation_id,agent_id:ref,owner_id:ownerId,recipient:{owner_id,handle,display_name},created_at,
+    })),next_cursor:rows.length>limit ? rows[limit-1].conversation_id : null};
+  });
+
+  app.post(root, {bodyLimit:2048}, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const b = body(req);
+    assert(Object.keys(query(req)).length === 0 && Object.keys(b).every(key => ["agent_id","name","recipient_owner_id"].includes(key))
+      && typeof b.agent_id === "string" && agentId.test(b.agent_id) && typeof b.recipient_owner_id === "string"
+      && /^[A-Za-z0-9._:-]{1,80}$/.test(b.recipient_owner_id) && b.recipient_owner_id !== ownerId,
+    400,"invalid_request","Choose another person and an agent to share");
+    const name = text(b.name,"name",{min:1,max:40});
+    const ref = b.agent_id;
+    const result = ot.db.transaction(() => {
+      const recipient = ot.get<Peer>("SELECT owner_id,handle,display_name FROM ot_profiles WHERE owner_id=?",b.recipient_owner_id);
+      assert(recipient && directReachable(ot,ownerId,recipient.owner_id),
+        409,"agent_access_recipient_unavailable","这位联系人或队友已不可用。");
+      const {conversation} = getOrCreateDirectConversation(ot,ownerId,recipient.owner_id);
+      assert(conversation.group_archived_at === null && directAgentPeer(ot,conversation,ownerId) === recipient.owner_id,
+        409,"direct_conversation_unavailable","此私聊暂不可用。");
+      const {created,created_at} = grantDirectAgent(ot,conversation.id,ownerId,ref,name);
+      return {created,access:{conversation_id:conversation.id,agent_id:ref,owner_id:ownerId,recipient,created_at}};
+    }).immediate();
+    return reply.status(result.created ? 201 : 200).send(result);
+  });
+
+  app.delete(root+"/:conversation_id/:agent_id", async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const {conversation_id,agent_id} = params(req);
+    assert(socialId.test(conversation_id) && agentId.test(agent_id) && Object.keys(query(req)).length === 0
+      && Object.keys(body(req)).length === 0,400,"invalid_request","Invalid agent access removal");
+    return ot.db.transaction(() => {
+      const conversation = memberOf(ot,conversation_id,ownerId);
+      assert(directAgentPeer(ot,conversation,ownerId) && removeDirectAgent(ot,conversation_id,ownerId,agent_id) === 1,
+        404,"agent_access_not_found","找不到这条智能体访问授权。");
+      return {revoked:true};
+    }).immediate();
+  });
+}
+
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   migrateChatFiles(ot);
   // SQLite lower() folds ASCII only. Filenames can contain Unicode letters.
@@ -646,6 +826,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
   const jobCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_agent_reply_jobs)").map(c => c.name));
+  if (!jobCols.has("direct_grant_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN direct_grant_id TEXT");
   if (!jobCols.has("source_revision")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN source_revision INTEGER");
   if (!jobCols.has("claim_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN claim_id TEXT");
   if (!jobCols.has("progress_revision")) {
@@ -654,29 +835,29 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       ot.run("DROP TRIGGER IF EXISTS ot_agent_reply_jobs_activity_update");
     });
   }
-  registerActivityTriggers(ot);
-  registerReplyJobInvalidation(ot);
-  const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
+  if (!agentCols.has("direct_grant_id")) ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN direct_grant_id TEXT");
+  ot.run(`CREATE INDEX IF NOT EXISTS ot_conversation_agents_direct_owner
+    ON ot_conversation_agents(owner_id,agent_ref,conversation_id) WHERE direct_grant_id IS NOT NULL`);
   if (!agentCols.has("auto_reply_after_seq")) {
     ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
   }
+  registerActivityTriggers(ot);
+  registerReplyJobInvalidation(ot);
+  registerDirectAgentRevocation(ot);
+  registerAgentAccess(app,ot);
+  const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
     if (b.kind === "dm") {
       const peer = ot.ownerByHandle(b.peer);
       assert(peer !== me.ownerId, 400, "invalid_request", "pick another member");
-      assert(directReachable(ot, me.ownerId, peer), 403, "not_reachable", "请先建立联系人关系。");
-      const key = [me.ownerId, peer].sort().join(":");
-      const existing = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
-      if (existing) return reply.status(200).send(conversationView(ot, existing, me.ownerId));
-      const id = newId("otc"); const now = ot.now();
-      ot.tx(() => {
-        ot.run("INSERT INTO ot_conversations(id, kind, dm_key, created_by, created_at, updated_at) VALUES (?, 'dm', ?, ?, ?, ?)", id, key, me.ownerId, now, now);
-        for (const o of [me.ownerId, peer]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
-      });
-      return reply.status(201).send(conversationView(ot, ot.get("SELECT * FROM ot_conversations WHERE id = ?", id), me.ownerId));
+      const {conversation,created} = ot.db.transaction(() => {
+        assert(directReachable(ot,me.ownerId,peer),403,"not_reachable","请先建立联系人关系。");
+        return getOrCreateDirectConversation(ot,me.ownerId,peer);
+      }).immediate();
+      return reply.status(created ? 201 : 200).send(conversationView(ot,conversation,me.ownerId));
     }
     assert(b.kind === "group", 400, "invalid_request", "kind must be dm or group");
     const title = text(b.title ?? "新群聊", "title", { min: 1, max: 80 });
@@ -1042,7 +1223,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const replyTo = optText(b.reply_to, "reply_to", {min: 1, max: 80}) ?? null;
-    const groupRequest = groupAgentMessageRequest(b, clientKey, replyTo);
+    const groupRequest = agentMessageRequest(b, clientKey, replyTo, "group");
+    const directRequest = agentMessageRequest(b, clientKey, replyTo, "direct");
     const studio = studioMessageRequest(b, clientKey, replyTo);
     const msg = ot.tx(() => {
       const direct = b.direct === true;
@@ -1054,11 +1236,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (groupRequest) {
         assert(conv.kind === "group" && !fixedPublicThread(conv), 404, "conversation_not_found", "no such group conversation");
       }
+      const ordinaryDm = ordinaryDirect(conv);
+      if (directRequest) {
+        if (b.workspace !== undefined) workspaceConversation(ot, b.workspace, conv.id, me.ownerId);
+        assert(directAgentPeer(ot, conv, me.ownerId), 404, "conversation_not_found", "no such direct conversation");
+        requireDirectReach(ot, conv, me.ownerId);
+      }
       if (clientKey) {
         const previous = ot.get<any>(
           "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
         );
         if (previous) {
+          if (ordinaryDm) {
+            const requested = ot.get<{request_hash: string}>("SELECT request_hash FROM ot_direct_agent_message_requests WHERE message_id=?", previous.id);
+            assert((requested?.request_hash ?? null) === directRequest, 409,
+              "direct_agent_request_conflict", "这次发送已用于不同的私聊智能体请求。");
+          }
           const requested = ot.get<{request_hash: string}>("SELECT request_hash FROM ot_group_agent_message_requests WHERE message_id=?", previous.id);
           assert((requested?.request_hash ?? null) === groupRequest, 409,
             "group_agent_request_conflict", "这次发送已用于不同的智能体请求。");
@@ -1078,7 +1271,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           assert(sent < MENTION_PER_HOUR, 429, "agent_reply_limit", "本会话发送频率已达上限，请稍后重试。");
         }
       }
-      requireDirectReach(ot, conv, me.ownerId);
+      if (!directRequest) requireDirectReach(ot, conv, me.ownerId);
       const voice = b.voice === undefined ? null : voiceData(b.voice);
       let file = b.attachment === undefined ? null : decodeChatFile(b.attachment);
       if (sourceConversation && sourceMessage) {
@@ -1088,12 +1281,15 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         file = readAttachment(ot, sourceConversation, sourceMessage);
       }
       const bodyText = text(b.body || file?.title || (voice ? "语音消息" : b.body), "body", {min: 1, max: BODY_MAX, multiline: true});
-      if (replyTo) assert(replyOriginal(ot, conv.id, replyTo, me.ownerId), 409, "reply_unavailable", "原消息已不可回复，请取消引用。");
-      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions, Boolean(groupRequest), Boolean(studio));
+      const quote = replyTo ? replyOriginal(ot, conv.id, replyTo, me.ownerId) : undefined;
+      if (replyTo) assert(quote, 409, "reply_unavailable", "原消息已不可回复，请取消引用。");
+      const scope = directRequest ? "direct" : groupRequest ? "group" : undefined;
+      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions, scope, Boolean(studio), ordinaryDm);
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
       if (groupRequest) ot.run("INSERT INTO ot_group_agent_message_requests VALUES (?,?)", m.id, groupRequest);
+      if (directRequest) ot.run("INSERT INTO ot_direct_agent_message_requests VALUES (?,?,?)", m.id, directRequest, quote?.revision ?? null);
       if (studio) ot.run("INSERT INTO ot_studio_message_references VALUES (?,?,?,?)",
         m.id, studio.document_id, studio.revision, studio.fingerprint);
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
@@ -1109,10 +1305,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           for (const recipient of recipients) ot.notify(recipient.owner_id, "artifact.shared", notice);
         }
       }
-      if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {
+      if (directRequest || (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file)) {
         for (const agent of parsed.agents) {
-          ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at)
-            VALUES (?,?,?,?,?,'queued',?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now());
+          ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at,direct_grant_id)
+            VALUES (?,?,?,?,?,'queued',?,?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now(), agent.direct_grant_id);
         }
       }
       for (const h of mentions) {
@@ -1320,16 +1516,27 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     return { ...messageView(ot, updated, me.ownerId), pinned_messages: pinnedMessages(ot, m.conversation_id, me.ownerId) };
   });
 
-  // ---- group agents (executed in their owner's DS-Bot)
+  // ---- conversation agents (executed in their owner's DS-Bot)
   app.put("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     requireOrdinaryGroup(conv);
-    assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
     const ref = params(req).agent;
     assert(AGENT_REF.test(ref), 400, "invalid_request", "agent id is invalid");
     const b = body(req);
     const name = text(b.name, "name", { min: 1, max: 40 });
+    if (ordinaryDirect(conv)) {
+      assert(Object.keys(b).every(key => ["name", "auto_reply", "workspace"].includes(key))
+        && (b.auto_reply === undefined || b.auto_reply === false), 400, "invalid_request", "私聊智能体只响应明确请求。");
+      return ot.tx(() => {
+        if (b.workspace !== undefined) workspaceConversation(ot, b.workspace, conv.id, me.ownerId);
+        assert(directAgentPeer(ot, conv, me.ownerId), 404, "conversation_not_found", "no such direct conversation");
+        requireDirectReach(ot, conv, me.ownerId);
+        grantDirectAgent(ot,conv.id,me.ownerId,ref,name);
+        return conversationView(ot, conv, me.ownerId);
+      });
+    }
+    assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
     ot.run(`INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, auto_reply_after_seq, created_at)
       VALUES (?,?,?,?,?,?,?) ON CONFLICT(conversation_id, agent_ref, owner_id) DO UPDATE SET
         name=excluded.name, auto_reply=excluded.auto_reply,
@@ -1356,6 +1563,19 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     requireOrdinaryGroup(conv);
+    if (ordinaryDirect(conv)) {
+      const peer = directAgentPeer(ot, conv, me.ownerId);
+      assert(peer, 404, "conversation_not_found", "no such direct conversation");
+      const input = query(req);
+      assert(Object.keys(input).every(key => ["owner_id", "workspace"].includes(key)), 400, "invalid_request", "Invalid agent removal");
+      const owner = input.owner_id ?? me.ownerId;
+      assert(owner === me.ownerId || owner === peer, 404, "agent_not_found", "找不到这个私聊智能体。");
+      return ot.tx(() => {
+        if (input.workspace !== undefined) workspaceConversation(ot, text(input.workspace,"workspace",{min:32,max:32}), conv.id, me.ownerId);
+        removeDirectAgent(ot,conv.id,owner,params(req).agent);
+        return conversationView(ot, conv, me.ownerId);
+      });
+    }
     ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, params(req).agent, me.ownerId);
     return conversationView(ot, conv, me.ownerId);
   });
@@ -1368,7 +1588,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(attempt === undefined || (Number.isSafeInteger(attempt) && attempt > 0),
       400, "invalid_request", "Invalid reply job attempt");
     return ot.tx(() => {
-      const conv = memberOf(ot, id, me.ownerId);
+      const conv = b.workspace === undefined ? memberOf(ot, id, me.ownerId)
+        : workspaceConversation(ot, b.workspace, id, me.ownerId).conv;
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
       const original = ot.get<any>(`SELECT * FROM ot_messages WHERE id=? AND conversation_id=? AND author_id=?
         AND author_kind='member' AND retracted=0`, message, id, me.ownerId);
@@ -1404,6 +1625,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (job.group_text_only) {
           assert(b.accept_group_text_turn === true && claim !== null && b.source_revision === job.current_revision,
             409, "reply_job_unavailable", "当前智能体暂时无法安全处理队友请求。");
+        }
+        if (job.direct_grant_id) {
+          assert(b.accept_direct_text_turn === true && claim !== null && b.source_revision === job.current_revision,
+            409, "reply_job_unavailable", "当前智能体暂时无法安全处理私聊请求。");
         }
         if (job.studio_document_id) {
           assert(b.accept_studio_reference === true && claim !== null,
@@ -1465,7 +1690,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const {workspace, id} = params(req);
     const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv : memberOf(ot, id, me.ownerId);
-    assert(conv.kind === "group" && !fixedPublicThread(conv) && (workspace || conv.account_group === 1),
+    const direct = directAgentPeer(ot, conv, me.ownerId);
+    assert(direct || (conv.kind === "group" && !fixedPublicThread(conv) && (workspace || conv.account_group === 1)),
       404, "conversation_not_found", "no such group conversation");
     assert(Object.keys(query(req)).length === 0, 400, "invalid_request", "Unexpected reply progress query");
     const now = ot.now();
@@ -1582,7 +1808,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const limit = Math.max(1, intParam(query(req).limit, "limit", 20, 50));
     const rows = ot.all<any>(`WITH pending AS (
       SELECT m.* FROM ot_messages m JOIN ot_conversations room ON room.id=m.conversation_id
-      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
+      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0 AND room.kind='group'
         AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_studio_message_references r WHERE r.message_id=m.id)
@@ -1613,6 +1839,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
         AND available ORDER BY j.updated_at,j.rowid LIMIT ?`, me.ownerId, ot.now() - REPLY_JOB_TIMEOUT, Math.min(8, limit),
     ).map(job => {
+      if (job.direct_grant_id) {
+        return {job_id:job.id, attempt:job.attempt, conversation_id:job.conversation_id,
+          agent_ref:job.agent_ref, agent_name:job.agent_name, mode:"mention", direct_text_only:true,
+          message:{id:job.message_id, revision:job.current_revision}};
+      }
       const message = ot.get<any>("SELECT * FROM ot_messages WHERE id=?", job.message_id);
       return {job_id: job.id, attempt: job.attempt, conversation_id: job.conversation_id,
         conversation_title: job.conversation_title, agent_ref: job.agent_ref, agent_name: job.agent_name,
@@ -1665,8 +1896,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
+      const ordinaryDm = ordinaryDirect(conv);
       const agent = ot.get<any>("SELECT * FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, ref, me.ownerId);
-      assert(agent, 404, "agent_not_found", "that agent of yours is not in this group");
+      assert(agent, ordinaryDm ? 409 : 404, ordinaryDm ? "reply_job_unavailable" : "agent_not_found", "that agent of yours is not in this conversation");
       if (fixedPublicThread(conv)) {
         const listing = publicListing(ot, conv);
         assert(mode === "public" && listing?.listed && listing.chat_enabled && listing.owner_id === me.ownerId
@@ -1683,8 +1915,14 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const originalId = b.reply_to ? String(b.reply_to) : null;
       const job = originalId && mode !== "public" ? ot.get<ReplyJob>(REPLY_JOB_SOURCE
         + ` WHERE j.message_id=? AND j.owner_id=? AND j.agent_ref=? AND src.conversation_id=?
-          AND (?='mention' OR j.claim_id IS NOT NULL OR src.author_id<>j.owner_id)`,
+          AND (?='mention' OR j.claim_id IS NOT NULL OR src.author_id<>j.owner_id OR j.direct_grant_id IS NOT NULL)`,
       originalId, me.ownerId, ref, conv.id, mode) : undefined;
+      if (ordinaryDm) {
+        assert(Object.keys(b).every(key => ["agent_ref","body","reply_to","mode","client_key","job_id","attempt","claim_id"].includes(key)),
+          400, "invalid_request", "私聊智能体只可回复文字。");
+        assert((b.mode === undefined || b.mode === "mention") && job?.direct_grant_id && job.available && claim !== null,
+          409, "reply_job_unavailable", "私聊智能体只可回复已领取的指定任务。");
+      }
       if (job?.studio_document_id || (!job && originalId && messageStudioReference(ot, originalId, conv.id))) {
         assert(mode === "mention" && job?.studio_document_id && claim !== null,
           409, "reply_job_unavailable", "团队文档只可用于已领取的指定智能体回复。");
@@ -1723,6 +1961,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
       const clientKey = job ? `job:${job.id}` : b.client_key ? text(b.client_key, "client_key", { min: 1, max: 80 }) : null;
       const prior = clientKey && ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?",conv.id,me.ownerId,clientKey);
+      if (ordinaryDm) assert(!prior, 409, "reply_job_unavailable", "私聊智能体回复记录冲突。");
       if (prior) return prior;
       const refs = b.group_memory_ids ?? [];
       assert(Array.isArray(refs) && refs.length<=3 && refs.every(id=>typeof id==="string") && new Set(refs).size===refs.length,

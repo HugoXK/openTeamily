@@ -92,6 +92,33 @@ test('the owner’s native Chat directory and thread detail share the latest sav
   assert.deepEqual((await runtime.request('GET', directory(WORKSPACE))).body.items[0].quick_starts, [])
 })
 
+test('a published copy starts with the recipient model and independently configured capabilities', async t => {
+  const runtime = ownerRuntime(t)
+  const model = 'recipient-model'
+  runtime.bots.main.model = model
+  runtime.bots.main.capabilities = ['recipient-connected-tool']
+  const request = {workspace_id:WORKSPACE, name:'Shared assistant', instructions:'Identify tasks.',
+    quick_starts:['Plan the week'], idempotency_key:'fixture-create-remix'}
+  await assert.rejects(runtime.endpoints.createRemix(request), error => error.status === 404)
+  const {status,agent} = await runtime.endpoints.createRemix(request,{internal:true})
+  assert.equal(status,201)
+  const bot = runtime.bots[agent.native_bot_id]
+  assert.equal(bot.model,model)
+  assert.deepEqual(bot.capabilities,[])
+  assert.deepEqual(agent.quick_starts,['Plan the week'])
+  assert.equal(bot.openteamily.workspace_id,WORKSPACE)
+  assert.equal(runtime.db.prepare('SELECT inherit_capabilities FROM agents WHERE id=?').get(agent.id).inherit_capabilities,0)
+  await assert.rejects(runtime.endpoints.create(request), error => error.status === 409)
+
+  bot.capabilities.push('explicitly-enabled-tool')
+  const replay = await runtime.endpoints.createRemix(request,{internal:true})
+  assert.equal(replay.status,200)
+  assert.equal(replay.agent.id,agent.id)
+  assert.deepEqual(bot.capabilities,['explicitly-enabled-tool'])
+  const ordinary = await createAgent(runtime,WORKSPACE,'My own agent',[])
+  assert.deepEqual(runtime.bots[ordinary.native_bot_id].capabilities,['recipient-connected-tool'])
+})
+
 test('private conversation organization preserves its owner, native session and historical entry', async t => {
   const owner = ownerRuntime(t)
   const agent = await createAgent(owner, WORKSPACE, 'Organizer', [])

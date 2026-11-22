@@ -1,5 +1,6 @@
 // Stream C discover feature maps to the shared catalog routes (fake Bot Social).
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -326,17 +327,19 @@ test('catalog publication is explicit and remix copies the previewed release in 
         return { agent }
       }
       if (endpoint === 'agents/personal-binding') return { workspace_id: workspaceId }
-      assert.equal(endpoint, 'agents/create')
+      assert.equal(endpoint, 'agents/createRemix')
       created.push(payload)
       return { status: 201, agent: { id: 'c'.repeat(32), name: payload.name } }
     },
   }).endpoints
   const publish = '/v1/workspaces/' + workspaceId + '/agents/' + agentId + '/discover'
   const remix = '/v1/discover/agents/writer/remix'
-  const call = (method, path, body) => E.v1({ method, path, body, idempotency_key: 'a-valid-remix-key' })
+  const call = (method, path, body, key = 'a-valid-remix-key') => E.v1({ method, path, body, idempotency_key: key })
   assert.equal((await call('POST', publish, { slug: 'writer' })).status, 200)
   assert.equal(row.snapshot, undefined)
-  assert.equal((await call('GET', remix)).body.template.instructions, '')
+  const blank = (await call('GET', remix)).body.template
+  assert.equal(blank.instructions, '')
+  assert.deepEqual(blank.quick_starts, [])
   const publicStart = '/v1/discover/agents/writer/start'
   const quick = {quick_start:0, quick_start_version:'a'.repeat(64)}
   assert.equal((await call('POST', publicStart, {...quick, body:'Forged'})).status, 400)
@@ -346,6 +349,39 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:true})).body.discover.publish_quick_starts,true)
   assert.deepEqual(JSON.parse(row.snapshot), {version:1, quick_starts:agent.quick_starts})
   assert.equal((await call('GET', publish)).body.discover.publish_quick_starts,true)
+  const withStarts = (await call('GET', remix)).body.template
+  assert.deepEqual(withStarts.quick_starts, ['Preview this plan'])
+  assert.notEqual(withStarts.revision, blank.revision)
+  agent.quick_starts = ['Private change since publication']
+  assert.deepEqual((await call('GET', remix)).body.template, withStarts)
+  assert.equal((await call('POST', remix, { revision:withStarts.revision, workspace_id:workspaceId, name:'Copy with starters',
+    quick_starts:['Unapproved override'], memory:'Private override' }, 'starts-remix-receipt')).status, 201)
+  assert.deepEqual(created[0], { workspace_id:workspaceId, idempotency_key:'starts-remix-receipt', name:'Copy with starters',
+    summary:agent.summary, category:agent.category, instructions:'', quick_starts:['Preview this plan'] })
+  assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:true})).status, 200)
+  assert.equal((await call('POST', remix, {revision:withStarts.revision, workspace_id:workspaceId})).body.error.code, 'listing_changed')
+
+  // Older instructions-only releases keep their existing remix receipt.
+  row.snapshot = JSON.stringify({version:1, instructions:agent.instructions})
+  const expected = {name:agent.name,summary:agent.summary,category:agent.category,instructions:agent.instructions}
+  const legacy = createHash('sha256').update(JSON.stringify([row.id,expected])).digest('hex')
+  assert.deepEqual((await call('GET', remix)).body.template,{...expected,quick_starts:[],revision:legacy})
+  assert.equal((await call('POST', remix, {revision:legacy, workspace_id:workspaceId, name:'Legacy copy'}, 'legacy-remix-receipt')).status, 201)
+  assert.deepEqual(created[1].quick_starts, [])
+
+  row.snapshot = JSON.stringify({version:1, quick_starts:['  Keep   spacing consistent  ', false, 'x'.repeat(81),
+    'private\u0000control', 'Second published starter', 'Outside the published limit'], private_notes:'Never export'})
+  const filtered = (await call('GET', remix)).body.template
+  assert.deepEqual(filtered.quick_starts,['Keep spacing consistent','Second published starter'])
+  assert.doesNotMatch(JSON.stringify(filtered),/private|Outside the published limit|Never export/)
+  assert.equal((await call('POST', remix, {revision:filtered.revision, workspace_id:workspaceId, name:'Filtered copy'},
+    'filtered-remix-receipt')).status,201)
+  assert.deepEqual(created[2].quick_starts,filtered.quick_starts)
+  for (const invalid of ['{broken', JSON.stringify({version:2,quick_starts:['Unsupported release']}),
+    JSON.stringify({quick_starts:['Unknown schema']}), JSON.stringify({version:1,quick_starts:'Invalid field'})]) {
+    row.snapshot = invalid
+    assert.deepEqual((await call('GET', remix)).body.template.quick_starts,[])
+  }
 
   assert.equal((await call('POST', publish, { slug: 'writer', revision: 5, copy_instructions: true })).status, 200)
   assert.equal(row.category, 'design')
@@ -358,16 +394,16 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('POST', remix, {
     revision: template.revision, workspace_id: workspaceId, name: 'My writer', instructions: 'Override ignored',
   })).status, 201)
-  assert.deepEqual(created, [{
+  assert.deepEqual(created[3], {
     workspace_id: workspaceId, idempotency_key: 'a-valid-remix-key', name: 'My writer',
-    summary: agent.summary, category: agent.category, instructions: agent.instructions,
-  }])
+    summary: agent.summary, category: agent.category, instructions: agent.instructions, quick_starts:[],
+  })
   assert.equal((await call('POST', publish, { slug: 'writer', revision: 4, copy_instructions: true })).status, 409)
   assert.equal((await call('POST', publish, { slug: 'writer', copy_instructions: false })).status, 200)
   assert.equal((await call('POST', remix, { revision: template.revision, workspace_id: workspaceId })).status, 409)
   row.listed = false
   assert.equal((await call('GET', remix)).status, 404)
-  assert.equal(created.length, 1)
+  assert.equal(created.length, 4)
 })
 
 test('native public agent starts pass only the selected listing identity and retain stale-listing errors', async () => {

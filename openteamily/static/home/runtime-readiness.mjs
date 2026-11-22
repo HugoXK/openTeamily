@@ -111,18 +111,15 @@ export function chatDraftOwner(scope) {
   return null;
 }
 
-export function readChatDrafts(view, owner) {
-  const drafts = new Map();
+function storedChatDrafts(view, owner) {
   try {
     const stored = JSON.parse(view?.sessionStorage?.getItem(accountDraftPrefix + owner) || '{}');
-    for (const [scope, value] of Object.entries(stored || {})) {
-      if (chatDraftOwner(scope) === owner && typeof value === 'string' && value.length > 0 && value.length <= messageLimit) drafts.set(scope, value);
-    }
+    return new Map(Object.entries(stored || {}).filter(([scope]) => chatDraftOwner(scope) === owner));
   } catch {}
-  return drafts;
+  return new Map();
 }
 
-export function writeChatDrafts(view, owner, drafts) {
+function saveChatDrafts(view, owner, drafts) {
   try {
     const storage = view?.sessionStorage;
     if (!storage) return false;
@@ -131,6 +128,51 @@ export function writeChatDrafts(view, owner, drafts) {
     else storage.removeItem(name);
     return true;
   } catch { return false; }
+}
+
+function chatDraftBody(value) {
+  const body = typeof value === 'string' ? value : value?.body;
+  return typeof body === 'string' && body.length <= messageLimit ? body : '';
+}
+
+function chatDraftMentions(value) {
+  return Array.isArray(value?.agentMentions) ? value.agentMentions.slice(0, 20).filter(target =>
+    typeof target?.owner_id === 'string' && target.owner_id.length > 0 && target.owner_id.length <= 128 &&
+    typeof target?.agent_id === 'string' && target.agent_id.length > 0 && target.agent_id.length <= 128)
+    .map(({owner_id, agent_id}) => ({owner_id, agent_id})) : [];
+}
+
+export function readChatDrafts(view, owner) {
+  const drafts = new Map();
+  for (const [scope, value] of storedChatDrafts(view, owner)) {
+    const body = chatDraftBody(value);
+    if (body) drafts.set(scope, body);
+  }
+  return drafts;
+}
+
+export function writeChatDrafts(view, owner, drafts) {
+  const records = new Map(drafts);
+  for (const [scope, value] of storedChatDrafts(view, owner)) {
+    const agentMentions = chatDraftMentions(value);
+    if (agentMentions.length) records.set(scope, {body: records.get(scope) || '', agentMentions});
+  }
+  return saveChatDrafts(view, owner, records);
+}
+
+export function readChatDraftMentions(view, scope) {
+  return chatDraftMentions(storedChatDrafts(view, chatDraftOwner(scope)).get(scope));
+}
+
+export function writeChatDraftMentions(view, scope, agentMentions) {
+  const owner = chatDraftOwner(scope);
+  if (!owner) return;
+  const drafts = storedChatDrafts(view, owner);
+  const body = chatDraftBody(drafts.get(scope));
+  if (agentMentions.length) drafts.set(scope, {body, agentMentions});
+  else if (body) drafts.set(scope, body);
+  else drafts.delete(scope);
+  saveChatDrafts(view, owner, drafts);
 }
 
 export function takeSignupSession(view, now = Date.now()) {

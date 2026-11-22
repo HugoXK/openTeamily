@@ -9,6 +9,7 @@ import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
 import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
+import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -2672,6 +2673,83 @@ test('a selected group mention sends the chosen owner and agent together', async
   } finally { restore(); }
 });
 
+test('composer mention drafts restore by group and owner, and hold send for a removed teammate', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const restore = installChatGlobals({narrow: true});
+  const {view} = publicOpeningView();
+  const {fetcher: original} = sessionFetcher();
+  const own = {id:'same', name:'研究助手', owner_id:alice, owner_name:'小林'};
+  const peer = {id:'same', name:'研究助手', owner_id:bob, owner_name:'小周'};
+  const posts = [];
+  let peerRemoved = false;
+  async function boot(owner = alice) {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.defaultView = view;
+    const composer = el('chat-body');
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    await mount(doc, {fetcher: async (path, options) => {
+      if (path === '/v1/auth/session') return json(200, {user: {id:owner, username:'account'}});
+      if (path.endsWith('/conv-1/messages') && options.method === 'POST') {
+        posts.push(JSON.parse(options.body));
+        return json(201, {});
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (/\/conv-[12]$/.test(path)) {
+        return json(200, {...body, conversation: {...body.conversation, kind:'group',
+          agent_members: peerRemoved ? [own] : [own, peer]}});
+      }
+      return json(result.status, body);
+    }});
+    const open = id => fire(el('conversation-list'), 'click', {
+      target: sessionRows(el).find(button => button.dataset.conversation === id),
+    });
+    await open('conv-1');
+    return {el, composer, open};
+  }
+  try {
+    const first = await boot();
+    const chips = el => el('chat-agent-mentions').children;
+    for (let index = 0; index < 2; index += 1) {
+      first.composer.value = '@研究';
+      first.composer.setSelectionRange(3, 3);
+      await fire(first.composer, 'input');
+      await fire(first.el('chat-agent-mention-options').children[0], 'click');
+    }
+    first.composer.value = '请一起复查';
+    await fire(first.composer, 'input');
+    t.mock.timers.tick(200);
+    await first.open('conv-2');
+    assert.equal(first.composer.value, '');
+    assert.deepEqual(chips(first.el), []);
+    await first.open('conv-1');
+    assert.equal(first.composer.value, '请一起复查');
+    assert.deepEqual(chips(first.el).map(button => button.textContent), ['@研究助手 · 小林 ×', '@研究助手 · 小周 ×']);
+
+    const otherAccount = await boot(bob);
+    assert.equal(otherAccount.composer.value, '');
+    assert.deepEqual(chips(otherAccount.el), []);
+
+    peerRemoved = true;
+    const reopened = await boot();
+    assert.equal(reopened.composer.value, '请一起复查');
+    assert.deepEqual(chips(reopened.el).map(button => button.textContent), ['@研究助手 · 小林 ×', '智能体已不可用 ×']);
+    assert.equal(reopened.el('chat-agent-mention-status').hidden, false);
+    const send = () => fire(reopened.el('chat-form'), 'submit', {preventDefault() {}});
+    await send();
+    assert.deepEqual(posts, []);
+    assert.equal(reopened.composer.value, '请一起复查');
+    await fire(chips(reopened.el)[1], 'click');
+    assert.equal(reopened.el('chat-agent-mention-status').hidden, true);
+    await send();
+    await settle();
+    assert.deepEqual(posts, [{body:'请一起复查', agent_mentions:[{owner_id:alice, agent_id:own.id}]}]);
+    assert.equal(reopened.composer.value, '');
+    assert.deepEqual(chips(reopened.el), []);
+    assert.equal(reopened.el('chat-agent-picker-open').hidden, false);
+  } finally { restore(); }
+});
+
 test('in-chat search highlights every case-insensitive match without HTML', async () => {
   const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
   assert.deepEqual(highlightParts('Test a test', 'test'), [
@@ -3021,6 +3099,11 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
   try {
     await mount(doc, {fetcher: async (path, options={}) => {
       if (path.endsWith('/agents/a-1/remove')) {posts.push(path);return json(200, {});}
+      if (path.endsWith('/conv-1')) {
+        const result = await original(path, options);
+        const body = await result.json();
+        return json(200, {...body, conversation: {...body.conversation, kind:'group'}});
+      }
       return original(path, options);
     }});
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
@@ -3542,6 +3625,124 @@ test('named team group replies explicitly pin what was previewed and keep drafts
     assert.equal(picker.value, '');
     assert.equal(el('group-studio-excerpt').textContent, '');
   } finally { restore(); }
+});
+
+test('an original-agent link opens the personal direct chat and selects the exact owner pair without sending', async () => {
+  const target = {conversation:linkSocial, ownerId:bob, agentId:linkAgent};
+  const hash = directAgentAccessHref(target).slice('/chat'.length);
+  assert.deepEqual(directAgentAccessFromHash(hash), target);
+  assert.equal(directAgentAccessFromHash(hash + '&access_owner=' + alice), null);
+  const fixture = linkedChatFixture(hash, {narrow:true});
+  const {doc,el,routes,restore} = fixture;
+  const path = linkBase(linkWork) + linkSocialPath;
+  const agent = {id:linkAgent,name:'同名智能体'};
+  routes.set(path, () => json(200,{conversation:{
+    id:linkSocial,workspace_id:linkWork,kind:'dm',title:'队友',
+    direct:{open:true},direct_agent_requests:true,members:[linkMember,{user_id:bob,username:'小周'}],
+    agent_members:[{...agent,owner_id:alice,owner_name:'小林'},{...agent,owner_id:bob,owner_name:'小周'}],
+  },items:[]}));
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    assert.deepEqual(el('chat-agent-mentions').children.map(node => node.dataset.agentMentionKey),
+      [JSON.stringify([bob,linkAgent])]);
+    assert.equal(el('chat-body').value, '');
+    assert.equal(fixture.calls.some(call => call.method === 'POST' && call.path.endsWith('/messages')), false);
+    assert.equal(directAgentAccessFromHash(globalThis.location.hash), null);
+  } finally { restore(); }
+});
+
+test('direct chat uses the personal catalogue and sends or removes only the selected owner pair', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, restore} = fixture;
+  const path = linkBase(linkTeam) + linkSocialPath;
+  const catalogue = linkBase(linkWork) + '/agents?limit=100';
+  const agentName = '相同名称';
+  const own = {id:linkAgent, name:agentName, owner_id:alice, owner_name:'小林', mine:true};
+  const peer = {id:linkAgent, name:agentName, owner_id:bob, owner_name:'小周', mine:false};
+  const normal = {id:linkSocialOlder, body:'普通消息', user_id:alice, seq:2, created:7};
+  const queued = {id:linkSocialLatest, body:'仅发送当前文字', user_id:alice, seq:3, created:8,
+    reply_jobs:[{id:'direct-job', agent_id:linkAgent, agent_owner_id:bob, agent_owner_name:peer.owner_name,
+      agent_name:agentName, status:'queued', attempt:1}]};
+  let roster = [peer];
+  let history = [];
+  const sendPostBodies = [];
+  routes.set(path, () => json(200, {conversation:{id:linkSocial, workspace_id:linkTeam, kind:'dm', title:'私聊同事',
+    direct:{open:true}, direct_agent_requests:true, members:[linkMember,{user_id:bob,username:'小周'}], agent_members:roster}, items:history}));
+  routes.set(catalogue, () => json(200, {items:[own]}));
+  routes.set(path + '/agents', ({body}) => {
+    assert.deepEqual(body, {agent_ids:[linkAgent]});
+    roster = [own, peer];
+    return json(201, {added:1});
+  });
+  routes.set(path + '/messages', ({body}) => {
+    sendPostBodies.push(body);
+    if (sendPostBodies.length === 1) {
+      history = [normal];
+      return json(201, {message:normal});
+    }
+    if (sendPostBodies.length === 2) {
+      history = [normal, queued];
+      return json(201, {message:queued});
+    }
+    roster = [];
+    return json(409, {error:{code:'direct_agent_unavailable'}});
+  });
+  routes.set(path + '/agents/' + linkAgent + '/remove', ({body}) => {
+    assert.deepEqual(body, {owner_id:bob});
+    roster = [own];
+    return json(200, {removed:true});
+  });
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    assert.equal(el('group-agent-action').hidden, false);
+    assert.equal(el('group-agent-form').hidden, true);
+    assert.equal(el('group-studio').hidden, true);
+    assert.equal(el('conversation-agents-label').textContent, '私聊智能体');
+    assert.equal(fixture.calls.some(call => call.path === catalogue), false);
+    const sheet = el('conversation-agents-sheet');
+    sheet.open = true;
+    await fire(sheet, 'toggle');
+    await settle();
+    assert.deepEqual(el('group-agent-add').options.map(option => option.value), [linkAgent]);
+    el('group-agent-add').value = linkAgent;
+    await fire(el('group-agent-add-submit'), 'click');
+    const rosterRows = el('group-agent-chips');
+    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice,bob]);
+
+    const composer = el('chat-body');
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    const send = async text => {
+      composer.value = text;
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      await settle();
+    };
+    const choose = async index => {
+      composer.value = '@相同';
+      composer.setSelectionRange(3, 3);
+      await fire(composer, 'input');
+      await fire(el('chat-agent-mention-options').children[index], 'click');
+    };
+    await send('普通消息');
+    await choose(1);
+    await send('仅发送当前文字');
+    assert.deepEqual(sendPostBodies, [{body:'普通消息'},
+      {body:'仅发送当前文字', agent_mentions:[{owner_id:bob,agent_id:linkAgent}], direct_agent_request:true}]);
+    assert.equal(el('message-list').children.find(row => row.dataset.replyJobId === 'direct-job').children[0].textContent,
+      '相同名称 · 小周 · AI 智能体');
+
+    const removePeer = rosterRows.children[1].children[1];
+    await fire(rosterRows, 'click', {target:removePeer});
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/remove')), false);
+    await fire(rosterRows.children.at(-1).children[2], 'click');
+    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice]);
+    await choose(0);
+    await send('目标在发送前离开了');
+    assert.equal(composer.value, '目标在发送前离开了');
+    assert.equal(el('chat-agent-mention-status').hidden, false);
+    await send(composer.value);
+    assert.equal(sendPostBodies.length,3);
+  } finally {restore();}
 });
 
 test('group requests distinguish the same agent id across owners and retain the draft after roster changes', async t => {

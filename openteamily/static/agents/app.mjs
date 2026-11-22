@@ -1,6 +1,7 @@
 import { createLookAvatar } from '../look/app.mjs';
 import { AGENT_CATEGORIES, AGENT_CATEGORY_SLUGS, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
 import { csrfCookie, canManage, idempotencyKey } from '../shell/chat-utils.mjs';
+import { servedByDsBot } from '../shell/dsbot-api.mjs';
 
 export { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
 export { csrfCookie, canManage, idempotencyKey, statusLabel } from '../shell/chat-utils.mjs';
@@ -127,6 +128,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
   const openCreate = document.getElementById('open-create');
+  const openSharing = document.getElementById('agent-share-open');
+  const openAccess = document.getElementById('agent-access-open');
+  const nativeSharing = servedByDsBot(document);
+  let sharing;
   const directoryStatus = document.getElementById('agent-status');
   let archivedOnly = false;
   let loadedArchived = false;
@@ -153,6 +158,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let teamTemplatesLoaded = false;
 
   function hideDrawer() {
+    sharing?.close();
     currentAgent = null;
     agentSelection += 1;
     createForm.hidden = editForm.hidden = chatPanel.hidden = true;
@@ -210,6 +216,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try { parsed = await response.json(); } catch { parsed = {}; }
     return {status: response.status, body: parsed};
   }
+
+  function shareContext() {
+    if (!nativeSharing || !currentAgent || !currentUser || !canManage(actor)) return null;
+    return {agent:currentAgent, user:currentUser.id, workspace:workspaceId()};
+  }
+
+  async function openSharePanel(access) {
+    const selected = shareContext();
+    if (!selected) return;
+    try {
+      const {mountAgentSharing} = await import('./sharing.mjs');
+      const latest = shareContext();
+      if (!latest || latest.agent !== selected.agent || latest.user !== selected.user || latest.workspace !== selected.workspace) return;
+      sharing ??= mountAgentSharing(document, {request, context:shareContext, idempotencyKey});
+      sharing.open({access});
+    } catch {
+      const latest = shareContext();
+      if (latest?.agent === selected.agent && latest.user === selected.user && latest.workspace === selected.workspace) {
+        show('error', document.documentElement?.lang === 'en' ? 'Could not open sharing. Try again.' : '无法打开分享，请重试。');
+      }
+    }
+  }
+  openSharing?.addEventListener('click', () => void openSharePanel(false));
+  openAccess?.addEventListener('click', () => void openSharePanel(true));
 
   function renderTeamTemplates() {
     const list = document.getElementById('team-template-list');
@@ -539,6 +569,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function fillEdit(agent) {
+    sharing?.close();
     createForm.hidden = true;
     currentAgent = agent;
     editForm.hidden = false;
@@ -558,6 +589,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
     }
     document.getElementById('archive-button').hidden = !writable;
+    if (openSharing) {
+      openSharing.hidden = !nativeSharing || !canManage(actor);
+      const english = document.documentElement?.lang?.startsWith('en');
+      openSharing.textContent = active ? (english ? 'Share privately' : '私下分享')
+        : (english ? 'Manage shares' : '管理分享');
+    }
+    if (openAccess) {
+      openAccess.hidden = !nativeSharing || !canManage(actor);
+      const english = document.documentElement?.lang?.startsWith('en');
+      openAccess.textContent = active ? (english ? 'Authorize chat with original agent' : '授权与原智能体对话')
+        : (english ? 'Manage chat access' : '管理对话授权');
+    }
     editForm.querySelector('button[type="submit"]').hidden = !writable;
     document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';
     chatPanel.hidden = !active;

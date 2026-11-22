@@ -4,7 +4,7 @@ import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { discoverIntentFromHash } from '../shell/discover-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
 import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
-import { socialMessageFromHash } from '../shell/chat-utils.mjs';
+import { socialMessageFromHash, directAgentAccessFromHash, directAgentAccessHref } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
@@ -398,6 +398,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
         const message = socialMessageFromHash(hash);
+        const access = directAgentAccessFromHash(hash);
         if (invite) {
           const destination = '/members' + invite;
           if (await initializePersonalAgent(destination) && view.location.hash === hash) {
@@ -405,6 +406,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
           }
         } else if (message) {
           view.location.replace(message);
+        } else if (access) {
+          view.location.replace(directAgentAccessHref(access));
         } else if (intent) {
           await continuePublicActivity({
             target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,

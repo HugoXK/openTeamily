@@ -15,7 +15,7 @@ import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessi
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
-  chatPathId, socialMessageHref, socialMessageFromHash } from '../shell/chat-utils.mjs';
+  chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -415,6 +415,9 @@ export function groupReplyStatus(reply) {
     ...RUNTIME_WAIT_ERRORS};
   return (labels[reply.status] || '未知状态') + (reply.error_code ? '：' + (errors[reply.error_code] || '请求失败') : '');
 }
+
+const directAgentRoom = conversation => conversation?.kind === 'dm' && conversation.direct_agent_requests === true &&
+  conversation.direct?.open !== false && !conversation.public_agent;
 
 export function composeCreateEnabled(options) {
   const mode = options && options.composeMode;
@@ -828,6 +831,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessions = [];
   let currentAgent = null;
   let personalAgentId = '';
+  let personalWorkspaceId = '';
   const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
@@ -919,9 +923,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     },
   };
   const agentMentions = mountAgentMentions(document, () => {
-    if (!currentUser || currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent ||
-        currentConversation.direct?.open === false) return null;
-    return {scope: sendScope(), agents: currentConversation.agent_members || []};
+    const direct = directAgentRoom(currentConversation);
+    if (!currentUser || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
+        (currentConversation.kind !== 'group' && !direct)) return null;
+    return {scope: sendScope(), agents: currentConversation.agent_members || [], direct};
   });
   function voiceContext() {
     if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -1002,6 +1007,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupReplyDrafts = new Map();
   const groupReplyBusy = new Set();
   let groupReplyFormScope = '';
+  let agentRosterView;
+  const agentRosterSheet = document.getElementById('conversation-agents-sheet');
   let searchSeq = 0;
   let resourceCursor = '';
   let resourceItems = [];
@@ -1366,7 +1373,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bubble.append(status);
     if (progress) bubble.append(progress);
     bubble.append(actions);
-    const job = {key, message, files, previews, progress, bubble, status, actions, retry, failed: false,
+    const job = {key, message, reply, files, previews, progress, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
@@ -1731,17 +1738,119 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return agent.owner_name || agent.owner_handle || uiLabel('群成员', 'Group member');
   }
 
+  function renderAgentRoster(saved, {direct, paired}) {
+    const chips = document.getElementById('group-agent-chips');
+    chips.replaceChildren();
+    for (const agent of saved) {
+      const li = document.createElement('li');
+      li.className = 'agent-chip';
+      const name = document.createElement('span');
+      const fullName = paired ? groupAgentName(agent.name, groupAgentOwnerLabel(agent), agent.owner_id,
+        agent.mine === false ? agent.owner_handle : '') : agent.name;
+      name.textContent = fullName + (agent.archived ? '（已归档）' : '');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = uiLabel('移除', 'Remove');
+      const id = agent.id || agent.agent_id;
+      remove.dataset.removeAgent = id;
+      if (direct) {
+        remove.dataset.agentOwnerId = agent.owner_id;
+        remove.setAttribute('aria-label', uiLabel(`移除 ${fullName}`, `Remove ${fullName}`));
+      }
+      li.append(name);
+      if (direct ? Boolean(agent.owner_id && groupAgentKey(id, agent.owner_id)) : agent.mine !== false) li.append(remove);
+      chips.append(li);
+    }
+  }
+
+  function renderAgentAddition(catalogue, roster, {busy = false, retry = false} = {}) {
+    const add = document.getElementById('group-agent-add');
+    const selected = add.value;
+    add.replaceChildren();
+    const joined = new Set(roster.filter(agent => agent.mine !== false).map(agent => agent.id || agent.agent_id));
+    const available = catalogue.filter(agent => !agent.archived && !agent.native_deleted && !joined.has(agent.id));
+    for (const agent of available) {
+      const option = document.createElement('option');
+      option.value = agent.id;
+      option.textContent = agent.name;
+      add.append(option);
+    }
+    if (available.some(agent => agent.id === selected)) add.value = selected;
+    add.disabled = busy || !available.length;
+    const button = document.getElementById('group-agent-add-submit');
+    button.textContent = retry ? uiLabel('重试', 'Retry') : uiLabel('添加', 'Add');
+    button.disabled = busy || (!retry && !available.length);
+    return available.length;
+  }
+
+  const agentRosterCurrent = view => agentRosterView === view && view?.scope === sendScope() && !sendClosed();
+
+  function directAgentStatus(text) {
+    const node = document.getElementById('direct-agent-status');
+    node.textContent = text;
+    node.hidden = !text;
+  }
+
+  function renderDirectAgentAddition(view) {
+    const count = renderAgentAddition(view.catalogue || [], currentConversation.agent_members || [],
+      {busy: view.busy || view.loading, retry:view.failed === true});
+    if (view.status) directAgentStatus(view.status);
+    else if (view.catalogue && !count) directAgentStatus(uiLabel('暂无可添加的个人智能体。', 'No personal agents available to add.'));
+    else directAgentStatus('');
+  }
+
+  async function loadDirectAgentCatalogue() {
+    const view = agentRosterView;
+    if (!view?.direct || !agentRosterCurrent(view) || !agentRosterSheet.open || view.catalogue || view.loading) return;
+    const personal = personalWorkspaceId || workspaces.find(space => space.kind === 'personal')?.id;
+    view.loading = true;
+    view.failed = false;
+    view.status = uiLabel('正在加载个人智能体…', 'Loading personal agents…');
+    renderDirectAgentAddition(view);
+    const result = personal ? await request('GET', `/v1/workspaces/${personal}/agents?limit=100`)
+      .catch(() => ({status:0,body:{}})) : {status:0,body:{}};
+    if (!agentRosterCurrent(view)) return;
+    view.loading = false;
+    view.failed = result.status !== 200;
+    view.catalogue = view.failed ? null : result.body.items || [];
+    view.status = view.failed ? uiLabel('无法加载个人智能体，请重试。', 'Could not load personal agents. Try again.') : '';
+    renderDirectAgentAddition(view);
+  }
+
   function renderGroupReplyAction(requests) {
     const panel = document.getElementById('group-agent-action');
-    const isGroup = currentSource === 'social' && currentConversation
-      && currentConversation.kind === 'group' && !currentConversation.public_agent;
-    panel.hidden = !isGroup;
-    if (!isGroup) {
+    const isGroup = currentSource === 'social' && currentConversation?.kind === 'group' && !currentConversation.public_agent;
+    const direct = currentSource === 'social' && directAgentRoom(currentConversation);
+    const scope = sendScope();
+    panel.hidden = !isGroup && !direct;
+    if (panel.hidden) {
+      if (agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterView = null;
       setGroupStudio();
       return;
     }
+    if (agentRosterView?.scope !== scope || agentRosterView.direct !== direct) {
+      if (direct || agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterView = {scope, direct};
+    }
+    const label = direct ? uiLabel('私聊智能体', 'Chat agents') : uiLabel('群内智能体', 'Group agents');
+    document.getElementById('conversation-agents-label').textContent = label;
+    document.getElementById('conversation-agents-heading').textContent = label;
+    document.getElementById('group-agent-request-help').hidden = direct;
+    document.getElementById('direct-agent-help').hidden = !direct;
+    document.getElementById('group-agent-form').hidden = direct;
+    const list = document.getElementById('group-agent-requests');
+    list.hidden = direct;
     const saved = currentConversation.agent_members || [];
-    const paired = currentConversation.group_agent_requests === true;
+    const paired = direct || currentConversation.group_agent_requests === true;
+    renderAgentRoster(saved, {direct, paired});
+    if (direct) {
+      setGroupStudio();
+      renderDirectAgentAddition(agentRosterView);
+      return;
+    }
+    directAgentStatus('');
+    renderAgentAddition(agents, saved);
     const choices = new Map();
     const ownKeys = new Map();
     for (const agent of saved) {
@@ -1756,37 +1865,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const active = new Set((requests || []).filter(item => ['queued', 'running'].includes(item.status))
       .map(item => item.agent_owner_id ? groupAgentKey(item.agent_id, paired ? item.agent_owner_id : undefined)
         : ownKeys.get(item.agent_id)));
-    const chips = document.getElementById('group-agent-chips');
-    chips.replaceChildren();
-    for (const agent of saved) {
-      const li = document.createElement('li');
-      li.className = 'agent-chip';
-      const name = document.createElement('span');
-      const fullName = paired ? groupAgentName(agent.name, groupAgentOwnerLabel(agent), agent.owner_id,
-        agent.mine === false ? agent.owner_handle : '') : agent.name;
-      name.textContent = fullName + (agent.archived ? '（已归档）' : '');
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.textContent = '移除';
-      remove.dataset.removeAgent = agent.id || agent.agent_id;
-      li.append(name);
-      if (agent.mine !== false) li.append(remove);
-      chips.append(li);
-    }
-    const add = document.getElementById('group-agent-add');
-    add.replaceChildren();
-    const joined = new Set(saved.filter(agent => agent.mine !== false).map(agent => agent.id || agent.agent_id));
-    const available = agents.filter(agent => !agent.archived && !joined.has(agent.id));
-    for (const agent of available) {
-      const option = document.createElement('option');
-      option.value = agent.id;
-      option.textContent = agent.name;
-      add.append(option);
-    }
-    add.disabled = !available.length;
-    document.getElementById('group-agent-add-submit').disabled = !available.length;
     const holder = document.getElementById('group-agent-choices');
-    const scope = sendScope();
     let draft = groupReplyDraft(scope);
     let checked;
     const focusedKey = document.activeElement?.name === 'group-agent' && document.activeElement.value;
@@ -1841,7 +1920,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const empty = document.getElementById('group-agent-empty');
     empty.hidden = choices.size > 0;
-    const list = document.getElementById('group-agent-requests');
     list.replaceChildren();
     for (const request of requests || []) {
       const item = document.createElement('li');
@@ -3661,7 +3739,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function canWatchGroupReplies() {
-    return servedByDsbot && currentSource === 'social' && currentConversation?.kind === 'group'
+    return servedByDsbot && currentSource === 'social' && (currentConversation?.kind === 'group' || directAgentRoom(currentConversation))
       && !currentConversation.public_agent && socialHistory?.cid === currentConversation.id
       && !socialHistory.readingHistory && !socialHistory.loading
       && canWatchReply() && groupReplyViews.size > 0;
@@ -3800,9 +3878,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     running: ['正在生成回复', 'Writing a reply'],
     failed: ['回复未完成', 'Reply could not be completed'],
   };
-  const groupReplyLabel = (state, job) => state === 'failed' && job?.error_code === 'group_agent_unavailable'
-    ? uiLabel('智能体已无法在此群聊回复', 'This agent is no longer available in the group')
-    : uiLabel(...(groupReplyLabels[state] || groupReplyLabels.queued));
+  function groupReplyLabel(state, job) {
+    if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
+      return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
+    }
+    if (state === 'failed' && job?.error_code === 'group_agent_unavailable') {
+      return uiLabel('智能体已无法在此群聊回复', 'This agent is no longer available in the group');
+    }
+    return uiLabel(...(groupReplyLabels[state] || groupReplyLabels.queued));
+  }
 
   function groupAgentName(name, ownerName, ownerId, ownerHandle) {
     const owner = ownerName || (ownerHandle && '@' + ownerHandle);
@@ -4301,6 +4385,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!session || session.source !== 'social') {
       document.getElementById('social-agent-members').hidden = true;
       document.getElementById('group-agent-action').hidden = true;
+      if (agentRosterView?.direct) {
+        agentRosterSheet.open = false;
+        agentRosterView = null;
+      }
       setGroupStudio();
     }
     const link = document.getElementById('open-agent-dir');
@@ -4773,6 +4861,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       replyDrafts.delete(exactScope);
       publicDraft.forget(exactScope);
+      agentMentions.forget(exactScope);
       attachmentSender?.forget?.(exactScope);
       voiceRecorder.clear();
       lastSocialItems = [];
@@ -5363,7 +5452,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncMuteButton(currentConversation);
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
-    agentNote.hidden = Boolean(currentConversation.public_agent) || !agentNote.textContent;
+    agentNote.hidden = currentConversation.kind !== 'group' || Boolean(currentConversation.public_agent) || !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social', public_agent: currentConversation.public_agent});
@@ -6072,9 +6161,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           return;
         }
       }
+      const requestedAgent = start.directAccess;
+      const available = !requestedAgent || agentMentions.prepareDirectLink(requestedAgent);
       writeHash(start.social ? {workspace: message && !start.workspace ? '' : workspace, social:start.social, message}
         : {workspace, agent:start.agent, conversation:start.conversation, message});
-      show('', '');
+      if (available) show('', '');
+      else show('error',uiLabel('这个智能体已无法在此聊天中调用。','This agent is no longer available in this chat.'));
     } finally {
       if (startupLink === link) startupLink = null;
     }
@@ -6148,7 +6240,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const hash = location.hash;
     const pathname = location.pathname;
     const banner = document.getElementById('onboarding-banner');
-    const start = chatStartFromHash(hash);
+    const start = {...chatStartFromHash(hash), directAccess:directAgentAccessFromHash(hash)};
     const publicIntent = publicAgentIntentFromHash(hash);
     let navigation = socialOpen;
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
@@ -6260,6 +6352,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!bootCurrent()) return;
     const personalWorkspace = personalEntity?.workspace?.id || '';
+    personalWorkspaceId = personalWorkspace;
     personalAgentId = personalEntity?.agent?.id || '';
     personalLook = personalEntity ? chatSettings?.look || personalEntity.look || null : null;
     if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
@@ -6300,13 +6393,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       void loadSessions();
       return;
     }
-    const portableMessage = !start.workspace && socialMessageFromHash(hash);
-    if (portableMessage && (!personalWorkspace || workspaceId() !== personalWorkspace)) {
+    const portableSocialLink = !start.workspace && (start.directAccess || socialMessageFromHash(hash));
+    if (portableSocialLink && (!personalWorkspace || workspaceId() !== personalWorkspace)) {
       show('error', '无法打开此消息所在的会话。');
       void loadSessions();
       return;
     }
-    if (hasLink && (start.workspace || portableMessage)) {
+    if (hasLink && (start.workspace || portableSocialLink)) {
       const snapshot = openLocal && !start.social ? ownedStartingTranscript(local, start.agent, start.conversation) : undefined;
       await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null, snapshot);
       return;
@@ -7430,46 +7523,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
+  agentRosterSheet.addEventListener('toggle', () => void loadDirectAgentCatalogue());
+
+  async function writeAgentRoster(view, suffix, body, adding) {
+    if (!agentRosterCurrent(view) || view.busy) return false;
+    const cid = currentConversation.id;
+    const failure = adding ? uiLabel('无法添加智能体。', 'Could not add the agent.')
+      : uiLabel('无法移除智能体。', 'Could not remove the agent.');
+    view.busy = true;
+    if (view.direct) {
+      view.status = adding ? uiLabel('正在添加…', 'Adding…') : uiLabel('正在移除…', 'Removing…');
+      renderDirectAgentAddition(view);
+    }
+    try {
+      const result = await request('POST', `${socialBase()}/${cid}/agents${suffix}`, body)
+        .catch(() => ({status:0,body:{}}));
+      if (!agentRosterCurrent(view)) return false;
+      if (result.status !== 200 && (!adding || result.status !== 201)) {
+        const text = messageFor(result.body.error, failure);
+        if (view.direct) view.status = text;
+        else show('error', text);
+        return false;
+      }
+      const refreshed = await openSocialConversation(cid, {acknowledge:false});
+      if (!agentRosterCurrent(view)) return false;
+      const text = refreshed ? (adding ? uiLabel('已添加智能体。', 'Agent added.') : uiLabel('已移除智能体。', 'Agent removed.'))
+        : uiLabel('变更已保存，重新打开对话可查看最新成员。', 'Change saved. Reopen the conversation to see the current members.');
+      if (view.direct) view.status = text;
+      else show('ok', text);
+      return true;
+    } finally {
+      view.busy = false;
+      if (view.direct && agentRosterCurrent(view)) renderDirectAgentAddition(view);
+    }
+  }
+
   document.getElementById('group-agent-chips').addEventListener('click', event => {
     const button = event.target.closest('button[data-remove-agent]');
-    if (!button || currentSource !== 'social' || !currentConversation || button.disabled) return;
-    const cid = currentConversation.id, wid = workspaceId(), agentId = button.dataset.removeAgent;
+    const view = agentRosterView;
+    if (!button || button.disabled || !agentRosterCurrent(view) || view.busy) return;
+    const {removeAgent:agentId, agentOwnerId:ownerId} = button.dataset;
+    if (view.direct && (!ownerId || !currentConversation.agent_members?.some(agent => agent.id === agentId && agent.owner_id === ownerId))) return;
     const holder = document.getElementById('group-agent-chips');
     if (holder.querySelector('.agent-remove-confirm')) return;
     const question = document.createElement('span');
     question.className = 'agent-remove-confirm'; question.setAttribute('role', 'alertdialog');
-    question.setAttribute('aria-label', '移除群内智能体确认');
-    const text = document.createElement('span'); text.textContent = '从当前群聊移除此智能体？已有消息会保留。';
-    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认移除';
-    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+    question.setAttribute('aria-label', uiLabel('移除智能体确认', 'Confirm agent removal'));
+    const text = document.createElement('span');
+    text.textContent = view.direct ? uiLabel('从当前私聊移除此智能体？已有消息会保留。', 'Remove this agent from the chat? Existing messages will stay.')
+      : uiLabel('从当前群聊移除此智能体？已有消息会保留。', 'Remove this agent from the group? Existing messages will stay.');
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = uiLabel('确认移除', 'Remove agent');
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = uiLabel('取消', 'Cancel');
     cancel.addEventListener('click', () => { question.remove(); button.focus(); });
     question.addEventListener('keydown', event => { if (event.key === 'Escape') { question.remove(); button.focus(); } });
     confirm.addEventListener('click', async () => {
-      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) { question.remove(); return; }
+      if (!agentRosterCurrent(view)) { question.remove(); return; }
       confirm.disabled = true; cancel.disabled = true;
       try {
-        const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/agents/${agentId}/remove`, {});
-        if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
-        if (result.status !== 200) { show('error', messageFor(result.body.error, '无法移除智能体。')); return; }
-        await openSocialConversation(cid); show('ok', '已移除智能体。');
-      } catch { show('error', '网络错误，智能体未移除。'); }
+        if (await writeAgentRoster(view, `/${encodeURIComponent(agentId)}/remove`, view.direct ? {owner_id:ownerId} : {}, false)) {
+          question.remove();
+          if (agentRosterCurrent(view)) agentRosterSheet.querySelector('summary')?.focus({preventScroll:true});
+        }
+      }
       finally { confirm.disabled = false; cancel.disabled = false; }
     });
     question.append(text, cancel, confirm); holder.append(question); cancel.focus();
   });
 
   document.getElementById('group-agent-add-submit').addEventListener('click', async () => {
-    if (currentSource !== 'social' || !currentConversation) return;
+    const view = agentRosterView;
+    if (!agentRosterCurrent(view) || view.busy) return;
+    if (view.direct && view.failed) { await loadDirectAgentCatalogue(); return; }
     const select = document.getElementById('group-agent-add');
-    if (!select.value) return;
-    const cid = currentConversation.id;
-    const result = await request('POST', `${socialBase()}/${cid}/agents`, {agent_ids: [select.value]});
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法添加智能体。'));
-      return;
-    }
-    await openSocialConversation(cid);
-    show('ok', '已添加智能体。');
+    if (!select.value || (view.direct && !view.catalogue?.some(agent => agent.id === select.value && !agent.archived && !agent.native_deleted))) return;
+    await writeAgentRoster(view, '', {agent_ids: [select.value]}, true);
   });
 
   document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
@@ -7543,6 +7670,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const message = social ? agentMentions.message(field.value) : messagePayload(field.value, chatLanguage);
+    if (!message) {
+      show('error', uiLabel('请先移除不可用的智能体。', 'Remove unavailable agents before sending.'));
+      return;
+    }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
     if (social && !validMessage(message.body)) {
@@ -7586,7 +7717,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       field.value = '';
       publicDraft.persist({now: false});
       field.focus({preventScroll: true});
-      if (social) agentMentions.clear();
+      if (social && message.agent_mentions?.length) agentMentions.forget(scope);
     }
     consumeReplyDraft(scope, reply);
     if (files.length) attachmentSender.clearDraft(scope, files);
@@ -7719,6 +7850,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);
           if (!accepted || !result.body.message?.id) {
             const code = result.body.error?.code;
+            if (isCurrent() && job.message.direct_agent_request && code === 'direct_agent_unavailable') {
+              const refreshed = await openSocialConversation(queue.conversationId, {acknowledge:false});
+              const input = document.getElementById('chat-body');
+              if (refreshed && isCurrent() && !input.value && !replyDrafts.has(queue.scope) &&
+                  agentMentions.restoreDirect(job.message.agent_mentions)) {
+                input.value = job.message.body;
+                publicDraft.persist();
+                if (job.reply) replyDrafts.set(queue.scope, job.reply);
+                renderReplyDraft();
+                removeSendJob(queue, job);
+                show('error', uiLabel('部分智能体已不可用。消息已恢复到输入框。',
+                  'Some agents are unavailable. Your message is back in the composer.'));
+                continue;
+              }
+            }
             if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
               currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};
               showPublicChatState(currentConversation.public_agent);
