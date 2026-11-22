@@ -69,6 +69,7 @@ COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image
 COPY openteamily-web /opt/openteamily/runtime/openteamily-web
 COPY --from=openteamily-static / /opt/openteamily/runtime/openteamily-web/pages/
+RUN node --input-type=module -e 'import {writeChatAssetManifest} from "/opt/openteamily/runtime/openteamily-web/src/pages.js"; await writeChatAssetManifest("/opt/openteamily/runtime/openteamily-web/pages")'
 # Place KaTeX and sharp-libvips notices beside the payloads they describe,
 # in addition to /opt/licenses. Related tracking remains open: issue 3.
 # The web profile (Playwright Codicon fonts) is installed later; the

@@ -126,7 +126,9 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         text:body.body ?? body.text,reply_language:replyLanguage,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
       const project = result => publicPair(result, workspaceId, id)
-      if (body.artifact_id !== undefined || body.sticker_id !== undefined) {
+      const reference = body.artifact_id !== undefined || body.sticker_id !== undefined
+      const acceptText = body.accept_pending === true && body.attachments === undefined && payload.idempotency_key
+      if (reference || acceptText) {
         const staged = Promise.withResolvers()
         const sending = call('send', {...payload,artifact_id:body.artifact_id,artifact_revision:body.artifact_revision,sticker_id:body.sticker_id,
           onAccepted:result => staged.resolve({status:202,body:project(result)})})

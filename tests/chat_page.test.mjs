@@ -3912,7 +3912,8 @@ test('a quick native send clears the draft and applies the saved reply language 
     field.value = 'next draft';
     settings.resolve(json(200, {settings:{values:{chat_language:'es',send_shortcut:'mod_enter'}}}));
     await settle();
-    assert.deepEqual(fixture.calls.filter(call => call.path === sendPath).map(call => call.body), [{body:'hola',chat_language:'es'}]);
+    assert.deepEqual(fixture.calls.filter(call => call.path === sendPath).map(call => call.body),
+      [{body:'hola',chat_language:'es',accept_pending:true}]);
     assert.equal(field.value, 'next draft');
     assert.equal(field.dataset.sendShortcut, 'mod_enter');
     assert.deepEqual(fixture.messages().slice(-2), ['sent','answer']);

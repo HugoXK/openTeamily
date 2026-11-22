@@ -2283,7 +2283,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const heading = document.createElement('p');
       heading.className = 'reply-state';
       heading.setAttribute('role', 'status');
-      heading.textContent = item.status === 'running' ? uiLabel('正在生成回复', 'Writing a reply') : uiLabel('正在准备回复', 'Preparing a reply');
+      heading.textContent = item.status === 'running' && !partial ? uiLabel('正在生成回复', 'Writing a reply')
+        : uiLabel('正在准备回复', 'Preparing a reply');
       bubble.append(heading);
       if (partial) replyView = {bubble, heading, body};
     }
@@ -2315,6 +2316,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pendingKeys = pendingMessageKeys();
     for (const item of lastAgentItems) {
       if (pendingKeys.has(item.client_key)) continue;
+      if (waitingAgentReply(item) && item.client_key && replyWatch?.scope === sendScope() && replyWatch.key === item.client_key) {
+        // Keep the visible preview when the pending message gets its stored ID.
+        const view = replyWatch.view;
+        view.bubble.dataset.messageId = item.id;
+        delete view.bubble.dataset.sendPending;
+        agentReplyViews.set(item.client_key, view);
+        list.append(view.bubble);
+        continue;
+      }
       const {bubble, replyView} = makeAgentMessage(item);
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
@@ -2463,20 +2473,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncReplyProgress() {
     const scope = sendScope();
     const job = pendingSends.get(scope)?.replying;
-    const [key, view] = job ? [job.key, job.replyView] : (agentReplyViews.entries().next().value || []);
+    const activeKey = replyWatch?.scope === scope ? replyWatch.key : null;
+    const activeView = agentReplyViews.get(activeKey) ?? (job?.key === activeKey ? job.replyView : null);
+    const [key, view] = activeView ? [activeKey, activeView]
+      : agentReplyViews.entries().next().value ?? (job ? [job.key, job.replyView] : []);
     if (!servedByDsbot || currentSource !== 'agent' || !currentConversation || !canWatchReply() || readingPrivateContext() || !view) {
       stopReplyProgress();
       return false;
     }
+    const posting = job?.key === key;
     if (replyWatch?.scope === scope && replyWatch.key === key) {
       replyWatch.view = view;
-      replyWatch.posting = Boolean(job);
+      replyWatch.posting = posting;
       if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
       return true;
     }
     stopReplyProgress();
     const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
-    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0, revision:0};
+    replyWatch = {scope, key, view, path, posting, failures: 0, revision:0};
     if (!startReplyStream(replyWatch)) scheduleReplyProgress(replyWatch);
     return true;
   }
@@ -7187,6 +7201,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           let result;
           let anchor;
           const nativePrivate = servedByDsbot && !queue.social;
+          const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
           const receipt = nativePrivate ? Promise.withResolvers() : null;
           job.acceptReceipt = receipt?.resolve;
           try {
@@ -7200,7 +7215,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                     feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
                     beginReply();
                   }
-                }) : request('POST', path, job.message, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+                }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
             if (!progress) beginReply();
             result = receipt
               ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
@@ -7218,7 +7233,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               if (isCurrent()) {
                 const scroller = document.getElementById('message-scroller');
                 anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
-                if (replyWatch?.key === job.key) stopReplyProgress();
+                if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
               }
               queue.replying = null;
               job.replyView?.bubble.remove();

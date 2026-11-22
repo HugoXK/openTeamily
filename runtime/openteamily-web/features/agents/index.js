@@ -97,6 +97,7 @@ export function createAgents({ db, host }) {
     UPDATE agent_messages SET meta=json_remove(meta,'$.nativePending')
     WHERE role='user' AND json_extract(meta,'$.nativePending')=1;`)
   const activeTurns = new Map()
+  const conversationTurns = new Map()
   const liveReplies = new Map()
   let activeReplyStreams = 0
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
@@ -345,11 +346,11 @@ export function createAgents({ db, host }) {
     return {id, textId, find}
   }
 
-  async function trackSend(userId, replyId, perform, onAccepted) {
+  async function trackSend(conversationId, userId, replyId, perform, onAccepted) {
     const progress = {text:'', phase:'preparing', revision:0, waiters:new Set(), ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
     const wake = () => { for (const waiter of progress.waiters) waiter() }
     liveReplies.set(replyId, progress)
-    const promise = perform(text => {
+    const runTurn = () => perform(text => {
       if (typeof text !== 'string') return
       const snapshot = text.slice(0, LIMITS.text)
       if (snapshot === progress.text) return
@@ -362,16 +363,22 @@ export function createAgents({ db, host }) {
       progress.revision += 1
       wake()
     })
+    // A stored follow-up can be acknowledged before its turn. Wait here,
+    // ahead of context assembly, so a slower lookup cannot reorder turns.
+    const previous = conversationTurns.get(conversationId)
+    const promise = previous ? previous.then(runTurn, runTurn) : runTurn()
+    conversationTurns.set(conversationId, promise)
     activeTurns.set(userId, promise)
     try { return await promise } finally {
       liveReplies.delete(replyId)
       activeTurns.delete(userId)
+      if (conversationTurns.get(conversationId) === promise) conversationTurns.delete(conversationId)
       wake()
     }
   }
 
   function runTextReply({agent, convo, userId, replyId, text, userMeta, replyMeta, attempt, extra, returnFailed}) {
-    return trackSend(userId, replyId, async (onProgress, onPhase) => {
+    return trackSend(convo.id, userId, replyId, async (onProgress, onPhase) => {
       try {
         const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, extra)
         const requestId = attempt === 1 ? `ot-agent:${userId}` : `ot-agent:${userId}:retry:${attempt}`
@@ -445,7 +452,7 @@ export function createAgents({ db, host }) {
       run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
-    return trackSend(userId, replyId, async (onProgress, onPhase) => {
+    return trackSend(convo.id, userId, replyId, async (onProgress, onPhase) => {
       let staged = []
       let remaining = 12_000
       const excerpts = []
@@ -869,10 +876,13 @@ export function createAgents({ db, host }) {
       const hash = key && sha(JSON.stringify([text, p.reply_language || '']))
       const userId = key ? sendId('text', 'user', convo.id, key) : newId()
       const replyId = key ? sendId('text', 'reply', convo.id, key) : newId()
+      const accepted = key && typeof p.onAccepted === 'function' ? () => p.onAccepted(sentPair(userId, replyId)) : null
       const prior = key && one('SELECT meta FROM agent_messages WHERE id=?', userId)
       if (prior) {
         if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Send key was used for a different message', 409)
-        return activeTurns.get(userId) || sentPair(userId, replyId)
+        const running = activeTurns.get(userId)
+        if (running) accepted?.()
+        return running || sentPair(userId, replyId)
       }
       if (key) verifySendMode('text', convo.id, key)
       const replyMeta = key ? {clientKey:key,replyAttempt:1} : {}
@@ -889,7 +899,9 @@ export function createAgents({ db, host }) {
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
 
-      return runTextReply({agent,convo,userId,replyId,text,userMeta,replyMeta,attempt:1,extra:p.context,returnFailed:p.return_failed === true})
+      const sending = runTextReply({agent,convo,userId,replyId,text,userMeta,replyMeta,attempt:1,extra:p.context,returnFailed:p.return_failed === true})
+      accepted?.()
+      return sending
     },
     async retryReply(p) {
       const agent = load(ws(p), p.id)
