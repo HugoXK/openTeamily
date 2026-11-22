@@ -439,14 +439,17 @@ const SOURCE_MEETING = 'b'.repeat(32);
 const FOLLOW_UP = 'c'.repeat(32);
 const SOURCE_LINK = `?workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}&action=1&revision=4`;
 const SOURCE_PATH = `/v1/workspaces/${SOURCE_WORKSPACE}/meetings/${SOURCE_MEETING}/action?index=1&revision=4`;
+const SOURCE_LOOKUP = `/v1/workspaces/${SOURCE_WORKSPACE}/automations?meeting=${SOURCE_MEETING}&revision=4&action=1`;
 const SOURCE = {
   meeting: {id: SOURCE_MEETING, workspace_id: SOURCE_WORKSPACE, title: '交付例会', revision: 4, transcript: '会议私有全文'},
   action: {text: '列出待核对的交付项', owner: 'Bob', done: false},
   viewer_username: 'alice',
 };
 const respond = (body, status = 200) => ({status, json: async () => body});
+const SAVED_SOURCE = {meeting_id: SOURCE_MEETING, revision: 4, action_index: 1, title: SOURCE.meeting.title, text: SOURCE.action.text, owner: SOURCE.action.owner};
 
-function mountFollowUp(t, {readSource = () => respond(SOURCE), workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
+function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, saveStatus = 201,
+  workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
   const {doc, elements} = fakeDocument();
   const view = {location: {search: SOURCE_LINK, pathname: '/automations'}, history: {
     replaceState(state, title, url) { view.location.search = new URL(url, 'https://test.local').search; },
@@ -470,9 +473,11 @@ function mountFollowUp(t, {readSource = () => respond(SOURCE), workspaces = [{id
     if (target === '/v1/workspaces?limit=100') return respond({items: workspaces});
     if (target === '/v1/automation-templates') return respond({items: []});
     if (target === SOURCE_PATH) return readSource();
+    if (target === SOURCE_LOOKUP) return respond({automation: lookup, viewer_username: 'alice'});
     if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items: []});
     if (target === `/v1/workspaces/${SOURCE_WORKSPACE}/automations` && method === 'POST') {
-      return respond({automation: {...JSON.parse(body), id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 1}}, 201);
+      if (saveStatus !== 201) return respond({error: {code: 'meeting_source_unavailable'}}, saveStatus);
+      return respond({automation: {...JSON.parse(body), id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 1, source_meeting: SAVED_SOURCE}}, 201);
     }
     throw new Error('unexpected ' + method + ' ' + target);
   }});
@@ -500,29 +505,42 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   form.elements.enabled.checked = true;
   await form.handlers.submit[0]({preventDefault() {}});
   const writes = calls.filter(({method}) => method === 'POST');
-  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 2);
+  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 1);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].target, `/v1/workspaces/${SOURCE_WORKSPACE}/automations`);
   assert.equal(writes[0].body.enabled, false);
   assert.deepEqual(writes[0].body.participants, ['alice']);
   assert.equal(writes[0].body.template_id, 'custom');
+  assert.deepEqual(writes[0].body.source_meeting, {meeting_id: SOURCE_MEETING, revision: 4, action_index: 1});
   assert.match(writes[0].body.prompt, /增加完整性检查/);
   assert.match(writes[0].headers['Idempotency-Key'], /^[a-z0-9_-]{16,64}$/i);
-  assert.equal(elements.get('meeting-action-source').hidden, true);
+  assert.equal(elements.get('meeting-action-source').hidden, false);
   assert.equal(form.elements.enabled.disabled, false);
   assert.equal(elements.get('tick-automation').hidden, false);
   assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
 });
 
 test('meeting follow-up blocks a completed action or changed revision before saving', async t => {
-  let reads = 0;
-  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => ++reads === 1 ? respond(SOURCE) : respond({}, 409)});
+  const {mounted, elements, calls} = mountFollowUp(t, {saveStatus: 409});
   await mounted;
   await elements.get('editor-form').handlers.submit[0]({preventDefault() {}});
-  assert.equal(reads, 2);
-  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 1);
   assert.match(elements.get('status').textContent, /行动项已更新/);
   assert.equal(elements.get('tick-automation').hidden, true);
+});
+
+test('an older exact meeting-action link resumes the saved follow-up even after the meeting changes', async t => {
+  const lookup = {id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 3, enabled: true, title: '跟进原行动项', source_meeting: SAVED_SOURCE};
+  const {mounted, elements, calls, view} = mountFollowUp(t, {lookup, readSource: () => respond({}, 409)});
+  await mounted;
+  assert.equal(elements.get('editor-form').elements.title.value, '跟进原行动项');
+  assert.equal(elements.get('editor-form').elements.enabled.checked, true);
+  assert.equal(elements.get('editor-form').elements.enabled.disabled, false);
+  assert.equal(elements.get('meeting-action-source-text').textContent, SAVED_SOURCE.text);
+  assert.equal(elements.get('tick-automation').hidden, false);
+  assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  await elements.get('cancel-editor').handlers.click[0]();
 });
 
 test('meeting follow-up never asks for a meeting from an unverified workspace', async t => {

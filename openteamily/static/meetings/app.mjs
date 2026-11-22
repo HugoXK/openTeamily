@@ -956,7 +956,7 @@ function mount() {
       });
       const link = document.createElement('a');
       link.className = 'action-followup';
-      link.textContent = '创建跟进自动化';
+      link.textContent = '跟进自动化';
       link.target = '_blank';
       link.rel = 'noopener';
       actionFollowups.push({link, action});

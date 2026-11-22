@@ -83,6 +83,33 @@ test("batch hide is atomic, exact-room scoped and safely replays only for the ac
   assert.equal((await owner.ok("GET", `/v1/ot/conversations/${other.id}/messages`)).messages[0].id, elsewhere.id);
 });
 
+test("an unread entry starts at the first visible unacknowledged sequence and pages forward without marking it read", async () => {
+  const sender = await home(S.base, "unread-sender");
+  const reader = await home(S.base, "unread-reader");
+  const unrelated = await home(S.base, "unread-outsider");
+  const contact = await sender.ok("POST", "/v1/ot/contacts", {handle: reader.handle});
+  await reader.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
+  const group = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
+    title: "Continue reading", members: [reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}`;
+  const sent = [];
+  for (let index = 0; index < 15; index++) sent.push(await sender.ok("POST", room + "/messages", {body: `Message ${index}`}));
+  await reader.ok("POST", room + "/read", {seq: sent[2].seq});
+  await reader.ok("POST", `/v1/ot/messages/${sent[3].id}/hide`, {conversation_id: group.id});
+  const unread = room + "/messages?unread=1&limit=5";
+  const entry = await reader.ok("GET", unread);
+  assert.deepEqual(entry.first_unread, {id: sent[4].id, seq: sent[4].seq});
+  assert.equal(entry.read_seq, sent[2].seq);
+  assert.equal(entry.has_newer, true);
+  assert.deepEqual(entry.messages.map((row: any) => row.id), [sent[1].id, sent[2].id, sent[4].id, sent[5].id, sent[6].id]);
+  const newer = await reader.ok("GET", `${room}/messages?after=${sent[6].seq}&limit=5`);
+  assert.deepEqual(newer.messages.map((row: any) => row.id), sent.slice(7, 12).map(row => row.id));
+  assert.equal((await reader.ok("GET", room)).read_seq, sent[2].seq);
+  assert.equal((await sender.ok("GET", unread)).first_unread, null);
+  assert.equal((await unrelated.call("GET", unread)).status, 404);
+  assert.equal((await reader.call("GET", `${unread}&after=${sent[6].seq}`)).status, 400);
+});
+
 test("groups: members, mentions notify, creator removes, members leave", async () => {
   const A = await home(S.base, "ga");
   const B = await home(S.base, "gb");

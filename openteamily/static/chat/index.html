@@ -662,6 +662,11 @@
         <span id="chat-history-status" class="note" role="status"></span>
       </div>
       <ol id="message-list"></ol>
+      <div id="chat-unread-actions" hidden>
+        <button type="button" id="chat-load-newer" data-ui-text="chat.messages.newer" hidden>加载后续消息</button>
+        <button type="button" id="chat-mark-thread-read" data-ui-text="chat.messages.mark_thread_read" hidden>将此会话标为已读</button>
+        <span id="chat-unread-status" role="status"></span>
+      </div>
       <button type="button" id="chat-back-to-latest" hidden data-ui-text="chat.messages.back_latest">回到最新消息</button>
     </div>
     <p id="public-chat-status" class="note" role="status" hidden></p>

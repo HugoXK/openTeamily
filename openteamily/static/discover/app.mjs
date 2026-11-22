@@ -848,7 +848,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!sameWorkRemix(state) || state.read !== controller) return;
     const template = result.body?.template;
     if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
-        !['document','website','media'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
         !/^[0-9a-f]{64}$/.test(template.revision || '')) {
       workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
       workRemix.refresh.hidden = result.status === 404;

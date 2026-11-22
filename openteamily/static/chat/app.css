@@ -2309,6 +2309,28 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   background: var(--ot-surface);
 }
 
+#message-list > li.chat-unread-divider {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  max-width: none;
+  margin: .5rem 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ot-accent-hover);
+  box-shadow: none;
+  font-size: .8125rem;
+  font-weight: 600;
+}
+.chat-unread-divider::before, .chat-unread-divider::after { content: ''; flex: 1; height: 1px; background: var(--ot-line-strong); }
+#chat-unread-actions:not([hidden]) { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin: .5rem 0; }
+#chat-unread-actions [hidden] { display: none; }
+#chat-unread-actions button { min-height: 2.75rem; font-size: .8125rem; }
+#chat-unread-status { align-self: center; color: var(--ot-muted); font-size: .8125rem; }
+#chat-unread-status:empty { display: none; }
+
 #chat-call-dialog[data-prejoin] { width: min(27rem, calc(100vw - 1.5rem)); }
 #chat-call-conversation:empty, #chat-call-status:empty, #chat-meeting-share-status:empty { display: none; }
 #chat-call-conversation, #chat-call-status, #chat-meeting-share-status {

@@ -7,7 +7,7 @@ import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
   emptyBoard, emptyDashboard, emptySlides, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
-  TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
+  SLIDES_SCHEMA, TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
 import {
@@ -396,6 +396,12 @@ export function remixPublicWork(ctx, {workspace_id:workspace,slug,revision,title
       refuse(400,'invalid','这个公开文件的内容与文件类型不符。')
     }
     return createMedia(ctx,workspace,{title:trimmed,mime,filename,data,key},{receiptHash})
+  }
+  if (source.kind === 'slides' || source.kind === 'whiteboard') {
+    const input = source.kind === 'slides' && source.slides?.schema === SLIDES_SCHEMA ? {slides:source.slides}
+      : source.kind === 'whiteboard' && source.board?.schema === 'openteamily.whiteboard.v1' ? {board:source.board} : null
+    if (!input) refuse(400,'invalid','这个公开版本没有可复制的作品内容。')
+    return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,...input},key,{receiptHash})
   }
   if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
     refuse(400,'invalid','该公开版本无法复制。')

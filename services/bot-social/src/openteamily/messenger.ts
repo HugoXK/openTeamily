@@ -827,9 +827,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const before = intParam(q.before, "before", 0);
     const after = intParam(q.after, "after", 0);
     const around = q.around;
+    const unread = q.unread === "1";
     const term = q.q === undefined ? "" : text(q.q, "q", { min: 1, max: 80 });
     assert(!term || (around === undefined && !after), 400, "invalid_request", "Search supports only an older cursor");
-    assert(Number(Boolean(before)) + Number(Boolean(after)) + Number(around !== undefined) <= 1,
+    assert(q.unread === undefined || (unread && !term), 400, "invalid_request", "Invalid unread cursor");
+    assert(Number(Boolean(before)) + Number(Boolean(after)) + Number(around !== undefined) + Number(unread) <= 1,
       400, "invalid_request", "Choose one message cursor");
     const visible = `FROM ot_messages m WHERE m.conversation_id=? AND ${VISIBLE_MESSAGE}`;
     const scoped = [conv.id, me.ownerId];
@@ -841,7 +843,16 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const cursor = matches.length > limit ? matches[limit - 1].seq : null;
       return { messages: matches.slice(0, limit).map(m => messageView(ot, m, me.ownerId)), next_before: cursor };
     }
-    if (around !== undefined) {
+    const mine = ot.get<{read_seq: number}>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id=? AND owner_id=?", ...scoped)!;
+    const firstUnread = unread && ot.get<{id: string; seq: number}>(`SELECT m.id,m.seq ${visible} AND m.seq>?
+      ORDER BY m.seq LIMIT 1`, ...scoped, mine.read_seq);
+    if (firstUnread) {
+      const preceding = ot.all<any>(`SELECT m.* ${visible} AND m.seq<? ORDER BY m.seq DESC LIMIT ?`,
+        ...scoped, firstUnread.seq, Math.min(6, Math.floor((limit - 1) / 2)));
+      const following = ot.all<any>(`SELECT m.* ${visible} AND m.seq>=? ORDER BY m.seq LIMIT ?`,
+        ...scoped, firstUnread.seq, limit - preceding.length);
+      rows = [...preceding.reverse(), ...following];
+    } else if (around !== undefined) {
       assert(typeof around === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(around), 400, "invalid_request", "Invalid message ID");
       const anchor = ot.get<{seq: number}>(`SELECT m.seq ${visible} AND m.id=?`, ...scoped, around);
       assert(anchor, 404, "message_not_found", "Message not found in this conversation");
@@ -861,10 +872,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const hasOlder = first > 1 && ot.get(`SELECT 1 ${visible} AND m.seq<? LIMIT 1`, ...scoped, first);
     const newest = rows.at(-1)?.seq ?? after;
     const hasNewer = newest < conv.last_seq && Boolean(ot.get(`SELECT 1 ${visible} AND m.seq>? LIMIT 1`, ...scoped, newest));
-    const mine = ot.get<{read_seq: number}>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id=? AND owner_id=?", ...scoped)!;
     return {
       messages: rows.map(m => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq,
       next_before: hasOlder ? first : null, has_newer: hasNewer,
+      ...(unread ? {first_unread: firstUnread || null} : {}),
       ...(q.pins === "1" ? {pinned_messages: pinnedMessages(ot, conv.id, me.ownerId)} : {}),
     };
   });

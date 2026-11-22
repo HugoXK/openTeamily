@@ -12,6 +12,66 @@ import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
 
+test('editable publishing and remix copy only the selected canonical saved work', async () => {
+  const author = await boot()
+  const reader = await boot()
+  const authorSpace = 'd'.repeat(32)
+  const readerSpace = 'e'.repeat(32)
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:authorSpace})
+  reader.features.table['agents/personal-binding'] = async () => ({workspace_id:readerSpace})
+  const original = {schema:'openteamily.slides.v1',slides:[{title:'Discussion',bullets:['Visible point']}]}
+  const local = `/v1/workspaces/${authorSpace}/artifacts`
+  const recorded = await author.call('artifacts','POST',local,{title:'Workshop',kind:'slides',
+    slides:{...original,slides:[{...original.slides[0],speaker_notes:'private note'}]},
+    source:{kind:'agent_task',id:'c'.repeat(32),task_kind:'private-origin'}},'private-slide-origin')
+  assert.equal(recorded.status,201,JSON.stringify(recorded.body))
+  const sourceId = recorded.body.artifact.id
+  assert.equal(recorded.body.artifact.source.task_kind,'private-origin')
+  const publish = `${local}/${sourceId}/discover`
+  const slug = 'workshop-release'
+  const revision = 'c'.repeat(64)
+  let relayPut
+  let available = true
+  setSharedBotSocial({request:async (method,path,payload) => {
+    if (path.startsWith('/v1/ot/teams/by-workspace/')) throw Object.assign(new Error('Not a member'),{status:404})
+    if (path === '/v1/ot/listings/mine') return {listings:[]}
+    if (method === 'PUT') {
+      assert.equal(path,'/v1/ot/listings')
+      relayPut = payload
+      return {slug,listed:true,editable_remix:!!payload.editable_snapshot}
+    }
+    assert.equal(path,`/v1/ot/discover/${slug}/remix?revision=${revision}`)
+    if (!available) throw Object.assign(new Error('Withdrawn'),{status:404})
+    return {template:{kind:'slides',title:'Workshop',revision},source:{kind:'slides',slides:relayPut.editable_snapshot}}
+  }})
+  const opts = {slug,allow_editable_remix:true,revision:1,editable_snapshot:{private:'untrusted request body'}}
+  const originalBinding = author.features.table['agents/personal-binding']
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:'f'.repeat(32)})
+  assert.equal((await author.call('discover','POST',publish,opts)).status,409)
+  assert.equal(relayPut,undefined)
+  author.features.table['agents/personal-binding'] = originalBinding
+  assert.equal((await author.call('discover','POST',publish,{...opts,revision:2})).body.error.code,'artifact_changed')
+  assert.equal((await author.call('discover','POST',publish,{slug})).status,201)
+  assert.equal(relayPut.editable_snapshot,undefined)
+  assert.equal((await author.call('discover','POST',publish,opts)).body.discover.editable_remix,true)
+  assert.deepEqual(relayPut.editable_snapshot,original)
+  assert.doesNotMatch(JSON.stringify(relayPut),/private note|private-origin|untrusted request body/)
+  await author.call('artifacts','POST',local+'/'+sourceId,{revision:1,changes:{slides:{...original,slides:[{title:'Private new work',bullets:[]}]}}})
+  const remix = '/v1/discover/works/'+slug+'/remix'
+  const input = {revision,title:'My own workshop'}
+  const receipt = 'editable-remix-receipt'
+  const copied = await reader.call('discover','POST',remix,input,receipt)
+  assert.equal(copied.status,201,JSON.stringify(copied.body))
+  const copyPath = `/v1/workspaces/${readerSpace}/artifacts/${copied.body.artifact.id}`
+  const owned = (await reader.call('artifacts','GET',copyPath)).body.artifact
+  assert.deepEqual(owned.slides,original)
+  assert.equal(owned.source,undefined)
+  assert.equal((await author.call('artifacts','GET',copyPath)).status,404)
+  available = false
+  assert.equal((await reader.call('discover','POST',remix,input,receipt)).status,200)
+  assert.equal((await reader.call('discover','POST',remix,{...input,title:'Second copy'},'second-remix-receipt')).status,404)
+})
+
 test('private Space media remix imports exact bytes, revalidates signatures and retains committed receipts', async () => {
   const bot = await boot()
   const other = await boot()

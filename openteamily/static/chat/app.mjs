@@ -1845,7 +1845,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, transition};
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
     if (sessionTransition !== transition) return false;
@@ -2835,13 +2835,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupReplyViews = new Map();
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
+  const newerMessages = document.getElementById('chat-load-newer');
+  const markThreadRead = document.getElementById('chat-mark-thread-read');
+  const unreadActions = document.getElementById('chat-unread-actions');
+  const unreadNotice = document.getElementById('chat-unread-status');
   const historyNotice = document.getElementById('chat-history-status');
+  let unreadScrollTimer;
 
   function setSocialHistory(state) {
+    clearTimeout(unreadScrollTimer);
     socialHistory = state;
     if (!state || state.readingHistory) stopGroupReplyProgress();
     if (!state) groupReplyViews.clear();
     if (historyNotice) historyNotice.textContent = '';
+    if (unreadNotice) unreadNotice.textContent = '';
     updateHistoryControls();
   }
 
@@ -2869,6 +2876,83 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (latestMessages) {
       latestMessages.hidden = !state?.readingHistory;
       latestMessages.disabled = Boolean(state?.restoring);
+    }
+    const unread = currentSource === 'social' ? state?.unread : null;
+    if (newerMessages) {
+      newerMessages.hidden = !unread?.after;
+      newerMessages.disabled = Boolean(state?.loading);
+    }
+    if (markThreadRead) {
+      markThreadRead.hidden = !unread || unread.committed >= unread.latest;
+      markThreadRead.disabled = Boolean(unread?.saving);
+    }
+    if (unreadActions) unreadActions.hidden = !unread || (newerMessages.hidden && markThreadRead.hidden);
+  }
+
+  function visibleUnreadView(state) {
+    return state && state === socialHistory && currentSource === 'social' && state.owner === currentUser?.id &&
+      state.wid === workspaceId() && state.cid === currentConversation?.id && viewingSocialMessages() &&
+      document.visibilityState !== 'hidden' && !sessionTransition?.pending;
+  }
+
+  function scheduleUnreadRead() {
+    const state = socialHistory;
+    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleUnreadView(state)) return;
+    clearTimeout(unreadScrollTimer);
+    unreadScrollTimer = setTimeout(() => readVisibleUnread(state), 160);
+  }
+
+  function readVisibleUnread(state) {
+    if (!visibleUnreadView(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
+    const unread = state.unread;
+    const scroller = document.getElementById('message-scroller');
+    const bounds = scroller.getBoundingClientRect();
+    for (const row of document.getElementById('message-list').children) {
+      const seq = Number(row.dataset.messageSeq);
+      if (!seq || seq <= unread.committed) continue;
+      const rect = row.getBoundingClientRect();
+      if (rect.top >= bounds.bottom) break;
+      const visible = Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top);
+      if (visible > 0 && visible >= Math.min(rect.height / 2, 96)) unread.seen.add(seq);
+    }
+    let through = unread.committed;
+    for (const message of lastSocialItems) {
+      if (message.seq <= through) continue;
+      if (!unread.seen.has(message.seq)) break;
+      through = message.seq;
+    }
+    if (through > unread.committed) void commitUnread(state, through);
+  }
+
+  async function commitUnread(state, seq, explicit = false) {
+    const unread = state?.unread;
+    if (!visibleUnreadView(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
+    const latestOnRead = unread.latest;
+    unread.saving = true;
+    updateHistoryControls();
+    try {
+      const result = await request('POST', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/read`,
+        {seq}, undefined, AbortSignal.timeout(8000));
+      if (state !== socialHistory || state.owner !== currentUser?.id || state.wid !== workspaceId() ||
+          state.cid !== currentConversation?.id) return;
+      if (result.status !== 200 || !Number.isSafeInteger(result.body.unread_count) || result.body.unread_count < 0) throw new Error('read');
+      unread.committed = seq;
+      for (const seen of unread.seen) if (seen <= seq) unread.seen.delete(seen);
+      applyOpenedRead('social', currentConversation, result.body.unread_count, null, latestOnRead);
+      if (!unread.after && seq >= unread.latest) {
+        state.readingHistory = false;
+        syncGroupReplyProgress();
+        scheduleSocialPoll(currentConversation);
+      }
+      renderSessions();
+      if (explicit && historyNotice) historyNotice.textContent = uiLabel('已标为已读。', 'Marked as read.');
+      scheduleUnreadRead();
+    } catch {
+      if (state === socialHistory && explicit && unreadNotice) unreadNotice.textContent =
+        uiLabel('未能标为已读，请重试。', 'Could not mark as read. Try again.');
+    } finally {
+      unread.saving = false;
+      if (state === socialHistory) updateHistoryControls();
     }
   }
 
@@ -2965,9 +3049,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
     }
   });
+  function openSocialLatest() {
+    const unread = socialHistory?.unread;
+    const preserveUnread = Boolean(unread && unread.committed < unread.latest);
+    return openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+  }
+
   latestMessages?.addEventListener('click', () => {
-    if (currentSource === 'social' && currentConversation) openSocialConversation(currentConversation.id);
+    if (currentSource === 'social' && currentConversation) openSocialLatest();
     else if (currentSource === 'agent' && privateHistory) void restorePrivateLatest(privateHistory);
+  });
+  markThreadRead?.addEventListener('click', () => {
+    const state = socialHistory;
+    if (unreadNotice) unreadNotice.textContent = '';
+    if (state?.unread) void commitUnread(state, state.unread.latest, true);
+  });
+  document.getElementById('message-scroller')?.addEventListener('scroll', scheduleUnreadRead, {passive: true});
+  newerMessages?.addEventListener('click', async () => {
+    const state = socialHistory;
+    const unread = state?.unread;
+    if (!visibleUnreadView(state) || !unread?.after || state.loading) return;
+    state.loading = true;
+    updateHistoryControls();
+    if (unreadNotice) unreadNotice.textContent = '';
+    try {
+      const result = await historyPage(state, new URLSearchParams({after: unread.after, limit: HISTORY_PAGE_SIZE, scope:'workspace'}));
+      if (!result) return;
+      if (result.status !== 200 || !Array.isArray(result.body.items)) throw new Error('history');
+      const items = result.body.items.filter(message => Number.isSafeInteger(message.seq) && message.seq > unread.after);
+      if (result.body.has_newer && !items.length) throw new Error('history cursor');
+      const anchor = chatHistoryAnchor();
+      if (Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
+      unread.after = result.body.has_newer ? items.at(-1).seq : null;
+      if (items.length) renderSocialMessages([...lastSocialItems, ...items], {anchor});
+    } catch {
+      if (state === socialHistory && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
+    } finally {
+      state.loading = false;
+      if (state === socialHistory) {
+        updateHistoryControls();
+        scheduleUnreadRead();
+      }
+    }
   });
 
   let lastSocialItems = [];
@@ -3311,10 +3434,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
     const pendingKeys = pendingMessageKeys();
+    const unread = socialHistory?.unread;
+    let needsDivider = Boolean(unread?.firstId);
     for (const item of items || []) {
       if (pendingKeys.has(item.client_key)) continue;
+      if (needsDivider && item.seq >= unread.firstSeq) {
+        const divider = document.createElement('li');
+        divider.className = 'chat-unread-divider';
+        divider.id = 'chat-first-unread';
+        divider.textContent = uiLabel('未读消息', 'Unread messages');
+        list.append(divider);
+        needsDivider = false;
+      }
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
+      if (Number.isSafeInteger(item.seq)) li.dataset.messageSeq = String(item.seq);
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
@@ -3703,7 +3837,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function readingSocialContext() {
     const scroller = document.getElementById('message-scroller');
+    const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
+      || (unread && unread.committed < unread.latest)
       || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
@@ -3751,7 +3887,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
-    if (currentSource === 'social' && currentConversation) await openSocialConversation(currentConversation.id);
+    if (currentSource === 'social' && currentConversation) await openSocialLatest();
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   let membersStatus = '', artifactsStatus = '';
@@ -4438,7 +4574,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return stillOpen();
   }
 
-  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent, link, transition} = {}) {
+  async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
+    refresh = false, publicStartCurrent, link, transition} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -4452,7 +4589,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
-    const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
+    const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
+    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
+    const result = await request('GET', path).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -4498,7 +4637,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
-    setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    const shown = result.body.items || [];
+    const lastSeq = shown.at(-1)?.seq;
+    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const first = snapshot?.first;
+    const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
+      Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
+      ? {firstId:first.id, firstSeq:first.seq, committed:snapshot.read_seq, latest:snapshot.last_seq,
+        after:snapshot.has_newer ? lastSeq : null, seen:new Set()}
+      : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
+        ? {committed:0, latest:lastSeq, seen:new Set()} : null;
+    setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
+      readingHistory: Boolean(unread?.firstId), unread});
+    if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
     voiceRecorder.refresh();
@@ -4525,10 +4676,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items, {refresh});
     renderGroupReplyAction(result.body.agent_replies || []);
+    if (unread?.firstId) {
+      const divider = document.getElementById('chat-first-unread');
+      const scroller = document.getElementById('message-scroller');
+      if (divider?.getBoundingClientRect && scroller.getBoundingClientRect) {
+        scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+      }
+      // The rendered conversation becomes interactive after the sidebar transition clears.
+      setTimeout(scheduleUnreadRead, 0);
+    }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    const shown = result.body.items || [];
-    if (acknowledge && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -4672,6 +4831,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
     }
+    if (document.visibilityState === 'visible') scheduleUnreadRead();
     syncGroupReplyProgress();
     if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
       || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
@@ -5180,7 +5340,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, link})
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
       : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
@@ -5466,7 +5626,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') {
-        if (!await openSocialConversation(first.id)) return;
+        if (!await openSocialConversation(first.id, {startUnread: first.unread_count > 0 && first.kind !== 'public'})) return;
       } else {
         const startupSnapshot = firstSnapshot?.row.id === first.id && firstSnapshot.row.agent_id === first.agent_id
           ? firstSnapshot.read : undefined;
@@ -5881,7 +6041,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             setPrivateHistory({...window, jumping: null});
             renderAgentMessages(result.body.items, {followLatest: false});
           } else {
-            setSocialHistory(window);
+            const unread = state.unread;
+            const retained = unread && unread.committed < unread.latest
+              ? {committed: unread.committed, latest: unread.latest, seen: new Set()} : null;
+            setSocialHistory({...window, unread: retained});
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();
@@ -6345,8 +6508,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
     const {source, agent, conversation: cid} = button.dataset;
-    const title = sessions.find(item => item.id === cid && item.source === source)?.title || uiLabel('会话', 'conversation');
-    await openSessionTarget({source, agent, cid, title});
+    const session = sessions.find(item => item.id === cid && item.source === source);
+    const title = session?.title || uiLabel('会话', 'conversation');
+    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {

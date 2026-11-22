@@ -6,6 +6,7 @@
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
 import {structuredArtifactText} from '../../features/artifacts/catalog-search.js'
+import {normalizeBoard,normalizeSlides} from '../../features/artifacts/structured.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -777,19 +778,25 @@ function messengerRoutes(host, wakeReplies) {
     },
     {
       method: 'GET', path: onePath,
-      async handle({ match }) {
+      async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({limit: 100, pins: 1}))
+          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
+            workspace_id: unread && !scope.personal ? match[1] : undefined,
+          }))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
+              has_newer:page.has_newer === true}} : {}),
           }]
         })
       },
@@ -846,11 +853,12 @@ function messengerRoutes(host, wakeReplies) {
           const q = parseQuery(query)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
             workspace_id: !scope.personal && q.get('scope') === 'workspace' ? match[1] : undefined,
-            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
+            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), after: q.get('after'), around: q.get('around'), q: q.get('q'),
           }))
           return [200, {
             items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
             cursor: page.next_before ?? null, has_newer: page.has_newer === true,
+            ...(q.has('after') ? {last_seq:page.last_seq} : {}),
           }]
         })
       },
@@ -1339,7 +1347,8 @@ function discoverRoutes(host) {
     return [200, {items, cursor: next ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
-  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
+  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
       method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
@@ -1389,6 +1398,14 @@ function discoverRoutes(host) {
           const got = await host.call('artifacts/v1', { method: 'GET', path: `/v1/workspaces/${match[1]}/artifacts/${match[2]}` })
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
+          const editable = body?.allow_editable_remix
+          if (editable !== undefined && typeof editable !== 'boolean') {
+            throw new Fault(400,'invalid','请选择是否允许复制可编辑作品。')
+          }
+          if ((editable === true || body?.revision !== undefined) &&
+              (!Number.isSafeInteger(body?.revision) || body.revision !== artifact.revision)) {
+            throw new Fault(409,'artifact_changed','已保存的作品版本已更新，请重新打开后再发布。')
+          }
           const prior = await workListing(bs, match[2])
           const mime = artifact.kind === 'media' ? artifact.media?.mime : undefined
           const mediaKind = mime === GLB_MIME ? 'model3d' : DISCOVER_MEDIA_KINDS.get(mime)
@@ -1396,6 +1413,14 @@ function discoverRoutes(host) {
             throw new Fault(400, 'attachment_type_blocked', '这个文件格式无法公开发布。')
           }
           const kind = mediaKind || artifact.kind
+          let editableSnapshot
+          if (editable) {
+            if (kind !== 'slides' && kind !== 'whiteboard') throw new Fault(400,'invalid','该作品类型无法发布可编辑版本。')
+            const binding = await host.call('agents/personal-binding',{})
+            if (binding?.workspace_id !== match[1]) await teamFor(bs,match[1],'Workspace',env)
+            editableSnapshot = kind === 'slides' ? normalizeSlides(artifact.slides) : normalizeBoard(artifact.board)
+            if (!editableSnapshot) throw new Fault(400,'invalid','这个作品没有可发布的保存版本。')
+          }
           const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
           const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
           let file = {}
@@ -1415,6 +1440,7 @@ function discoverRoutes(host) {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
+            ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
             ...file,
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]

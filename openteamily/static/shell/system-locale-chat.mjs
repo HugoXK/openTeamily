@@ -263,6 +263,8 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.agents.browse": ["浏览智能体", "Browse agents"],
   "chat.nav.open_guide": ["查看功能指引", "View feature guide"],
   "chat.messages.older": ["加载更早的消息", "Load older messages"],
+  "chat.messages.newer": ["加载后续消息", "Load newer messages"],
+  "chat.messages.mark_thread_read": ["将此会话标为已读", "Mark this conversation as read"],
   "chat.messages.back_latest": ["回到最新消息", "Jump to latest messages"],
   "chat.draft.recovered": ["首页草稿已保留", "Homepage draft saved"],
   "chat.draft.recovered_help": ["已有草稿过长。可复制下方的首页草稿，编辑后发送。", "Your current draft is too long to combine. Copy the homepage draft below and edit it before sending."],

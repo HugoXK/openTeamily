@@ -16,18 +16,53 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const flush = () => new Promise((r) => setImmediate(r))
 
-function fixture(turn, at = 1_800_000_000, saveArtifact) {
+function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction) {
   const clock = { now: at }
   const calls = []
   const dbPath = join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')
   const feature = createAutomations({
     personalBinding: async () => ({workspace_id: W}),
     saveArtifact,
+    readMeetingAction,
     db: new DatabaseSync(dbPath), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
   return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
+
+test('meeting follow-up verifies exact source, coalesces concurrent saves, and retains its original action', async () => {
+  const MEETING = 'b'.repeat(32)
+  const reference = { meeting_id: MEETING, revision: 2, action_index: 0 }
+  const snapshot = Promise.withResolvers()
+  const { e, calls } = fixture(undefined, undefined, undefined, async (workspace, ref) => {
+    assert.deepEqual(ref, reference)
+    if (workspace !== W) return {status: 404}
+    return snapshot.promise
+  })
+  const payload = {workspace_id: W, title: '跟进验收记录', participants: ['alice'], template_id: 'custom',
+    schedule: {kind:'now', time_zone:'UTC'}, enabled: true, source_meeting: {...reference, text:'伪造的来源内容'},
+    idempotency_key: 'save-meeting-followup-001'}
+  const create = options => e['automations/create']({...payload, ...options})
+  const first = create()
+  const duplicate = create({title:'另一份草稿', idempotency_key:'save-meeting-followup-002'})
+  snapshot.resolve({status: 200, body: {
+    meeting: {id: MEETING, workspace_id: W, revision: 2, title:'交付例会', transcript:'逐字稿不用于跟进'},
+    action: {text:'核对回执', owner:'Alice', done:false},
+  }})
+  const [saved, replay] = await Promise.all([first, duplicate])
+  assert.equal(saved.status, 201)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.automation.id, saved.automation.id)
+  assert.equal(replay.automation.title, payload.title)
+  assert.equal(saved.automation.enabled, false)
+  assert.deepEqual(saved.automation.source_meeting, {...reference, title:'交付例会', text:'核对回执', owner:'Alice'})
+  assert.deepEqual(e['automations/list']({workspace_id:W}).items, [saved.automation])
+  const item = e['automations/update']({workspace_id:W, id:saved.automation.id, revision:1, changes:{title:'处理验收回执'}}).automation
+  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:W, ...reference}), {automation:item})
+  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:'c'.repeat(32), ...reference}), {automation:null})
+  await assert.rejects(create({workspace_id:'c'.repeat(32)}), {status:404, code:'automations/meeting_source_unavailable'})
+  assert.equal(calls.length, 0)
+})
 
 test('next recurring slot follows local weekdays, month lengths and DST', () => {
   const seconds = iso => Date.parse(iso) / 1000

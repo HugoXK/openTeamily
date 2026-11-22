@@ -60,10 +60,22 @@ export function automationsV1({ endpoints, log, personalBinding }) {
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
+        const fields = ['meeting', 'revision', 'action']
+        if (fields.some(name => req.query.has(name))) {
+          if (req.query.size !== fields.length || fields.some(name => req.query.getAll(name).length !== 1)
+            || !/^[1-9][0-9]*$/.test(req.query.get('revision')) || !/^(?:0|[1-9][0-9]?)$/.test(req.query.get('action'))) {
+            throw new FeatureError(400, 'invalid', '请选择已保存的行动项。')
+          }
+          if (!req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
+          const body = await call('meetingFollowup', { workspace_id: workspaceId, meeting_id: req.query.get('meeting'),
+            revision: Number(req.query.get('revision')), action_index: Number(req.query.get('action')) })
+          return { status: 200, body: { ...body, viewer_username: req.ownerUsername } }
+        }
         return { status: 200, body: await call('list', { workspace_id: workspaceId, q: req.query.get('q') || undefined, category: req.query.get('category') || undefined, username: req.ownerUsername }) }
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()
+        if (Object.hasOwn(body, 'source_meeting') && !req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
         const result = await call('create', { ...body, workspace_id: workspaceId, idempotency_key: req.headers.get('idempotency-key') })
         return { status: result.status ?? 201, body: { automation: result.automation } }
       }

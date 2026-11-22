@@ -202,6 +202,15 @@ function meetingSourceFromResponse(body, target, username) {
   return {target, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : ''};
 }
 
+function savedMeetingSource(item) {
+  const source = item?.source_meeting;
+  if (!source || !/^[0-9a-f]{32}$/.test(source.meeting_id) || !/^[0-9a-f]{32}$/.test(item.workspace_id) ||
+      !Number.isSafeInteger(source.revision) || source.revision < 1 || !Number.isInteger(source.action_index) ||
+      source.action_index < 0 || source.action_index >= 50 || typeof source.title !== 'string' || typeof source.text !== 'string') return null;
+  return {target: {workspace: item.workspace_id, meeting: source.meeting_id, action: source.action_index, revision: source.revision},
+    title: source.title, text: source.text, owner: typeof source.owner === 'string' ? source.owner : ''};
+}
+
 // `/automations?runs=failed` keeps the run-history filter across refresh,
 // back/forward and sharing. One recorded value at a time; anything else is 全部.
 export const RUN_FILTERS = Object.freeze(['all', 'succeeded', 'failed']);
@@ -1083,7 +1092,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const {workspace, meeting} = source.target;
       link.href = '/meetings#' + new URLSearchParams({workspace, meeting});
     } else link.removeAttribute?.('href');
-    form.elements.enabled.disabled = Boolean(source);
+    form.elements.enabled.disabled = Boolean(meetingSource);
   }
 
   function discardMeetingDraft() {
@@ -1125,7 +1134,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.classList.add('is-editing');
     fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
-    renderMeetingSource(source);
+    renderMeetingSource(source || savedMeetingSource(item));
     renderEditorSchedule();
     form.elements.template_id.disabled = Boolean(item?.id);
     const heading = document.getElementById('editor-heading');
@@ -1196,9 +1205,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = ++editorRequest;
     const user = currentUser;
     show('', '正在读取会议行动项…');
-    const result = await readMeetingSource(target);
-    if (seq !== editorRequest || loadSeq !== loadRequest || currentUser !== user ||
-        workspaceId() !== target.workspace || !form.hidden) return;
+    const isCurrent = () => seq === editorRequest && loadSeq === loadRequest && currentUser === user &&
+      workspaceId() === target.workspace && form.hidden;
+    const sourceQuery = new URLSearchParams({meeting: target.meeting, revision: target.revision, action: target.action});
+    const sourceRequest = readMeetingSource(target);
+    const existing = await request('GET', `/v1/workspaces/${target.workspace}/automations?${sourceQuery}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (!isCurrent()) return;
+    const item = existing.body?.automation;
+    const saved = savedMeetingSource(item);
+    if (existing.status === 200 && existing.body.viewer_username === user.username && /^[0-9a-f]{32}$/.test(item?.id || '') &&
+        saved?.target.workspace === target.workspace && saved.target.meeting === target.meeting &&
+        saved.target.action === target.action && saved.target.revision === target.revision) {
+      show('', '');
+      replaceAutomationLink(item);
+      openEditor(item);
+      return true;
+    }
+    const result = await sourceRequest;
+    if (!isCurrent()) return;
     const source = result.status === 200 ? meetingSourceFromResponse(result.body, target, user.username) : null;
     if (source) {
       show('', '');
@@ -1210,6 +1235,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       linkRetry.textContent = '重新打开行动项';
       linkRetry.hidden = obsolete;
     }
+  }
+
+  function replaceAutomationLink(item) {
+    const params = new URLSearchParams({workspace: item.workspace_id, automation: item.id});
+    view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + '?' + params);
   }
 
   function selectCategory(value) {
@@ -1535,20 +1565,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     saveButton.textContent = '保存中…';
     let result;
     try {
-      if (source) {
-        const verified = await readMeetingSource(source.target);
-        if (!isCurrent()) return;
-        if (verified.status !== 200 || !meetingSourceFromResponse(verified.body, source.target, currentUser?.username)) {
-          showMeetingSourceError(verified.status);
-          return;
-        }
-      }
       if (item) {
         result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
       } else {
-        const content = JSON.stringify([workspace, values]);
+        const source_meeting = source && {meeting_id: source.target.meeting, revision: source.target.revision, action_index: source.target.action};
+        const body = {...changes, template_id, ...(source ? {source_meeting} : {})};
+        const content = JSON.stringify([workspace, body]);
         if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
-        result = await request('POST', path, {...changes, template_id}, {'Idempotency-Key': draftSave.key});
+        result = await request('POST', path, body, {'Idempotency-Key': draftSave.key});
       }
     } catch {
       if (isCurrent()) show('error', '暂时无法确认是否保存成功，请重试。');
@@ -1561,6 +1585,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     if (!isCurrent()) return;
+    if (source && result.body.error?.code === 'meeting_source_unavailable') {
+      showMeetingSourceError(result.status);
+      return;
+    }
     if (result.status === 409) {
       show('error', '自动化已在别处更新，请重新打开后再保存。');
       await loadList();
@@ -1573,10 +1601,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = result.body.automation;
     if (source) {
       meetingSource = null;
-      renderMeetingSource(null);
-      const params = new URLSearchParams({workspace, automation: current.id});
-      view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + '?' + params);
+      replaceAutomationLink(current);
     }
+    renderMeetingSource(savedMeetingSource(current));
     if (!item) {
       selectCategory('mine');
       search.value = '';
@@ -1591,7 +1618,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runButton.hidden = false;
     if (runHistoryButton) runHistoryButton.hidden = false;
     renderManualRunNote();
-    show('ok', current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
+    show('ok', source && result.status === 200 ? '已打开这条行动项的现有跟进。'
+      : current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns();
   });
 

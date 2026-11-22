@@ -992,7 +992,7 @@ function groupReplyChat(transport) {
     members: [{user_id: alice, username: 'alice'}],
     agent_members: [{id: 'agent-1', name: '助手一'}, {id: 'agent-2', name: '助手二'}]};
   const fetcher = (url, opts) => url.startsWith(base + '/conv-1')
-    ? transport(url.slice((base + '/conv-1').length), opts, conversation)
+    ? transport(url.slice((base + '/conv-1').length).replace(/^\?start=unread$/, ''), opts, conversation)
     : fallback(url);
   return {doc, el, restore, fetcher};
 }
@@ -3197,7 +3197,8 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
   const fetcher = async (path, options = {}) => {
     const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
-    const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork : path;
+    const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork
+      : path.endsWith(linkSocialPath + '?start=unread') ? path.slice(0, -'?start=unread'.length) : path;
     const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
@@ -3212,7 +3213,7 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
       if (path === base + linkNativeDirectory) return json(200,
         workspace === linkWork ? {items: [agent], conversations: [nativeThread]} : {items: [], conversations: []});
       if (path === base + linkSocialDirectory) return json(200, {items: [socialThread(workspace)]});
-      if (path === base + linkSocialPath) return json(200, {conversation: socialThread(workspace), items: socialRows, cursor: 8});
+      if (compatiblePath === base + linkSocialPath) return json(200, {conversation: socialThread(workspace), items: socialRows, cursor: 8});
       if (path.startsWith(base + linkSocialPath + '/messages?around=')) {
         return json(200, {items: [socialOlder], cursor: null, has_newer: true});
       }
@@ -3262,7 +3263,7 @@ test('a saved pin survives a conversation directory read started before the save
     const row = sessionRows(fixture.el).find(item => item.dataset.conversation === linkSocial);
     assert.equal(row.children[1].children[0].textContent, '置顶 · Linked group');
     assert.equal(fixture.el('group-info-pin').getAttribute('aria-checked'), 'true');
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '?start=unread').length, 1);
   } finally {
     directory.resolve(json(503, {}));
     fixture.restore();
@@ -3964,7 +3965,7 @@ test('a late exact native history cannot overwrite a different workspace and Soc
     await fixture.navigate(newHash);
     await settle();
     assert.equal(fixture.el('workspace').value, linkTeam);
-    assert.equal(fixture.calls.filter(call => call.path === current).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === current + '?start=unread').length, 1);
     assert.equal(fixture.el('chat-title').textContent, 'Linked group');
     assert.deepEqual(fixture.messages(), [linkSocialLatest]);
     assert.deepEqual(fixture.calls.find(call => call.path === current + '/read')?.body, {seq: 8});
@@ -3996,13 +3997,13 @@ for (const target of ['bare agent', 'default']) {
       const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
       await settle();
       assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory));
-      assert.equal(fixture.calls.some(call => [scope + linkNativeLatest, scope + linkSocialPath].includes(call.path)), false);
+      assert.equal(fixture.calls.some(call => [scope + linkNativeLatest, scope + linkSocialPath + '?start=unread'].includes(call.path)), false);
       directory.resolve(json(200, {items: [fixture.agent], conversations: [fixture.nativeThread]}));
       await loading;
       await settle();
       assert.equal(fixture.selected(), target === 'bare agent' ? linkThread : linkSocial);
       assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, target === 'bare agent' ? 1 : 0);
-      assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, target === 'default' ? 1 : 0);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '?start=unread').length, target === 'default' ? 1 : 0);
     } finally {
       directory.resolve(json(200, {items: [], conversations: []}));
       fixture.restore();

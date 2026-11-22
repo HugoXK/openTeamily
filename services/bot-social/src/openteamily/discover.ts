@@ -11,6 +11,7 @@ import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, q
 import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
 import { WORK_SEARCH_SCHEMA, publicWorkText, registerWorkSearch, saveWorkSearch, workBodyCondition, workSearchMatch, workSearchQuery } from "./discover-work-search.js";
 import { PUBLIC_MEDIA_SCHEMA, decodePublishedMedia, downloadName, isMediaWork, publishedMediaView, savePublishedMedia, sendPublishedMedia } from "./discover-media.js";
+import { EDITABLE_WORK_SCHEMA, editableRelease, editableWorkKind, hasEditableRelease } from "./discover-editable.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS ot_listing_models (
 );
 CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
 ${PUBLIC_MEDIA_SCHEMA}
+${EDITABLE_WORK_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_listing_sites (
   listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
   html TEXT NOT NULL
@@ -645,6 +647,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
     const media = decodePublishedMedia(workKind, b);
     if (media && workKind === "media") workKind = media.mime.split("/")[0];
+    const editable = editableRelease(workKind,b.editable_snapshot);
     const site = b.site_html;
     if (site !== undefined) {
       assert(workKind === "website" && typeof site === "string" && site.trim().length > 0,
@@ -694,6 +697,12 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       }
       if (media) savePublishedMedia(ot, id, me.ownerId, media);
       else if (existing && isMediaWork(existing.work_kind)) ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
+      if (editable) {
+        ot.run(`INSERT INTO ot_listing_editable(listing_id,kind,content) VALUES(?,?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET kind=excluded.kind,content=excluded.content`,id,editable.kind,editable.content);
+      } else if (existing && editableWorkKind(existing.work_kind)) {
+        ot.run("DELETE FROM ot_listing_editable WHERE listing_id=?",id);
+      }
       if (site !== undefined) {
         ot.run(`INSERT INTO ot_listing_sites (listing_id, html) VALUES (?,?)
           ON CONFLICT(listing_id) DO UPDATE SET html=excluded.html`, id, site);
@@ -710,7 +719,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
       }
     });
-    return listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true);
+    return {...listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true),
+      ...(editable ? {editable_remix:true} : {})};
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
@@ -721,14 +731,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_editable WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_discover_work_search WHERE listing_id = ?", id);
     });
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
     const me = ot.me(req);
-    const rows = ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId);
-    return { listings: rows.map((l) => ({ ...listingView(ot, l, me.ownerId), ref: l.ref })) };
+    const rows = ot.all<any>(`SELECT l.*,e.listing_id IS NOT NULL AS editable
+      FROM ot_listings l LEFT JOIN ot_listing_editable e ON e.listing_id=l.id AND e.kind=l.work_kind
+      WHERE l.owner_id=? ORDER BY l.updated_at DESC`, me.ownerId);
+    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
+      ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
@@ -777,7 +791,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(work, 404, "listing_not_found", "no such work");
     reply.header("Cache-Control", "no-store");
     const view = listingView(ot, work, me.ownerId);
-    const remixable = view.file_available ? remixBytes(view.file_bytes)
+    const remixable = editableWorkKind(work.work_kind) ? hasEditableRelease(ot,work)
+      : view.file_available ? remixBytes(view.file_bytes)
       : work.work_kind === "model3d" ? Boolean(publicRemixFile(ot,work)) : Boolean(publicRemixSource(ot,work));
     const detail = {
       work: {...view, ...(remixable ? {remix_available:true} : {})},
@@ -806,6 +821,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     return ot.tx(() => {
       const work = listedBySlug(ot, params(req).slug);
       assert(work.kind === "work",404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      if (editableWorkKind(work.work_kind)) {
+        const kind = work.work_kind;
+        assert(hasEditableRelease(ot,work),404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,kind]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind,revision};
+        if (!q.revision) return {template};
+        const release = ot.get<{content: string}>("SELECT content FROM ot_listing_editable WHERE listing_id=? AND kind=?",work.id,kind);
+        assert(release,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind,[kind === "slides" ? "slides" : "board"]:JSON.parse(release.content)}};
+      }
       const file = publicRemixFile(ot,work);
       if (file) {
         const {table,mime,filename,bytes} = file;

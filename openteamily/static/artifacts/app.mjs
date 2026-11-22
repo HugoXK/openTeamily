@@ -469,6 +469,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const main = document.getElementById('main');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
+  const discoverEditable = document.getElementById('discover-editable-remix');
+  const discoverEditableField = document.getElementById('discover-editable-remix-field');
+  const discoverEditableNote = document.getElementById('discover-editable-remix-note');
   const discoverPublicLink = document.getElementById('discover-public-link');
   const publishDiscover = document.getElementById('publish-discover');
   const revokeDiscover = document.getElementById('revoke-discover');
@@ -603,6 +606,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function drawBoard() {
     const canvas = document.getElementById('board-canvas');
     if (!canvas) return;
+    const width = Number.isInteger(boardState.width) && boardState.width >= 100 && boardState.width <= 2000 ? boardState.width : 800;
+    const height = Number.isInteger(boardState.height) && boardState.height >= 100 && boardState.height <= 2000 ? boardState.height : 600;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -637,7 +644,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const box = canvas.getBoundingClientRect();
     const x = (event.clientX - box.left) * (canvas.width / box.width);
     const y = (event.clientY - box.top) * (canvas.height / box.height);
-    return [Math.max(0, Math.min(800, x)), Math.max(0, Math.min(600, y))];
+    return [Math.max(0, Math.min(canvas.width, x)), Math.max(0, Math.min(canvas.height, y))];
   }
 
   let slidesState = {schema: 'openteamily.slides.v1', slides: []};
@@ -2113,7 +2120,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     for (const id of ['share-once', 'share-list', 'version-list']) document.getElementById(id).textContent = '';
     discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
-    if (editor) editor.discoverSlugEdited = false;
+    if (discoverEditable) discoverEditable.checked = false;
+    const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
+    if (discoverEditableField) discoverEditableField.hidden = !canReleaseEditable;
+    if (discoverEditableNote) discoverEditableNote.hidden = !canReleaseEditable;
+    if (editor) {
+      editor.discoverSlugEdited = false;
+      editor.discoverEditableEdited = false;
+    }
     showDiscoverPublicLink('');
     setDiscoverPending(false);
   }
@@ -2216,16 +2230,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (publishDiscover) publishDiscover.disabled = pending;
     if (revokeDiscover) revokeDiscover.disabled = pending;
     if (discoverSlug) discoverSlug.disabled = pending;
+    if (discoverEditable) discoverEditable.disabled = pending;
   }
 
   function renderDiscoverListing(row, updateSlug = true) {
     const slug = typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug) ? row.slug : '';
     const listed = row.listed === true && Boolean(slug);
     if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
+    if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
     if (revokeDiscover) revokeDiscover.hidden = !listed;
     const path = '/w/' + slug;
     showDiscoverPublicLink(listed ? (row.path === '/social' + path ? row.path : path) : '');
-    panelStatus('discover', listed ? '已公开到发现页。' : '尚未公开到发现页。');
+    panelStatus('discover', listed ? (row.editable_remix === true ? '已公开并允许复制可编辑版本。' : '已公开到发现页。') : '尚未公开到发现页。');
   }
 
   async function loadDiscover() {
@@ -2254,13 +2270,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
     const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
-    const result = await request('POST', path, publish ? {slug} : {}, undefined, selection.controller.signal)
+    const payload = publish ? {slug} : {};
+    if (publish && discoverEditableField && !discoverEditableField.hidden) {
+      payload.revision = current.revision;
+      payload.allow_editable_remix = discoverEditable.checked;
+    }
+    const result = await request('POST', path, payload, undefined, selection.controller.signal)
       .catch(() => ({status: 0, body: {}}));
     if (!activeEditor(selection)) return;
     selection.discoverWrite = false;
     setDiscoverPending(false);
     if (result.status === 200 || (publish && result.status === 201)) {
       if (publish) selection.discoverSlugEdited = false;
+      selection.discoverEditableEdited = false;
       if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
       else await loadDiscover();
       if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
@@ -3851,6 +3873,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   // plain group with a button handler (Enter in the slug field publishes too).
   discoverSlug?.addEventListener('input', () => {
     if (activeEditor(editor)) editor.discoverSlugEdited = true;
+  });
+  discoverEditable?.addEventListener('change', () => {
+    if (activeEditor(editor)) editor.discoverEditableEdited = true;
   });
   discoverSlug?.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.isComposing) {

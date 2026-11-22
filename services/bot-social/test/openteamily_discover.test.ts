@@ -65,6 +65,64 @@ test("work remix yields only exact listed document or website snapshots", async 
   }
 });
 
+test("editable work releases require explicit canonical content and keep it out of previews and feeds", async () => {
+  const author = await home(S.base,"editable-release-author");
+  const reader = await home(S.base,"editable-release-reader");
+  const listing = {kind:"work",work_kind:"slides",ref:"slides-release",slug:"slides-editable-release",title:"Release slides",
+    snapshot:"A public outline"};
+  const preview = await author.ok("PUT","/v1/ot/listings",listing);
+  const path = "/v1/ot/discover/"+listing.slug;
+  assert.equal((await reader.ok("GET",path+"/detail")).work.remix_available,undefined);
+  assert.equal((await reader.call("GET",path+"/remix")).status,404);
+  const slides = {schema:"openteamily.slides.v1",slides:[{title:"First slide",bullets:Array(10).fill("b".repeat(200))}]};
+  const injected = {...slides,slides:[{title:"First slide",bullets:["Approved"],private_notes:"Should not be public"}]};
+  assert.equal((await author.call("PUT","/v1/ot/listings",{...listing,editable_snapshot:injected})).status,400);
+  assert.equal((await reader.call("GET",path+"/remix")).status,404);
+  const optedIn = await author.ok("PUT","/v1/ot/listings",{...listing,editable_snapshot:slides});
+  assert.equal(optedIn.id,preview.id);
+  assert.equal(optedIn.editable_remix,true);
+  assert.equal((await author.ok("GET","/v1/ot/listings/mine")).listings.find((row: any) => row.id === preview.id).editable_remix,true);
+  const feed = (await reader.ok("GET","/v1/ot/discover?kind=work&q=Release%20slides")).items[0];
+  assert.equal(feed.editable_snapshot,undefined);
+  assert.equal(feed.editable_remix,undefined);
+  const guest = await fetch(S.base+"/w/"+listing.slug+"?view=preview",{headers:{accept:"application/json"}}).then(r=>r.json());
+  assert.equal(guest.preview,listing.snapshot);
+  assert.equal(guest.source,undefined);
+  const detail = (await reader.ok("GET",path+"/detail")).work;
+  assert.equal(detail.remix_available,true);
+  assert.equal(detail.editable_snapshot,undefined);
+  const template = await reader.ok("GET",path+"/remix");
+  assert.deepEqual(Object.keys(template),["template"]);
+  assert.equal(template.template.kind,"slides");
+  const after = (revision: string) => reader.call("GET",path+"/remix?revision="+revision);
+  assert.deepEqual((await after(template.template.revision)).data.source,{kind:"slides",slides});
+
+  const next = {...slides,slides:[{title:"New content",bullets:["Another revision"]}]};
+  await author.ok("PUT","/v1/ot/listings",{...listing,editable_snapshot:next});
+  const stale = await after(template.template.revision);
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"listing_changed");
+  await author.ok("PUT","/v1/ot/listings",listing);
+  assert.equal((await reader.call("GET",path+"/remix")).status,404);
+  assert.equal((await reader.ok("GET",path+"/detail")).work.remix_available,undefined);
+
+  const board = {schema:"openteamily.whiteboard.v1",width:800,height:600,strokes:[
+    {id:"draw-path-1",type:"path",color:"#123456",width:3,points:[[10,15],[25,40]]},
+    {id:"draw-text-1",type:"text",color:"#abcdef",x:40,y:85,size:18,text:"公开板书"},
+  ]};
+  const canvas = {kind:"work",work_kind:"whiteboard",ref:"board-release",slug:"board-editable-release",title:"Release board"};
+  const published = await author.ok("PUT","/v1/ot/listings",{...canvas,editable_snapshot:board});
+  assert.equal((await author.call("PUT","/v1/ot/listings",{...canvas,editable_snapshot:{...board,strokes:[{...board.strokes[0],private_url:"hidden"}]}})).status,400);
+  assert.equal((await author.call("PUT","/v1/ot/listings",{...canvas,editable_snapshot:{...board,strokes:[board.strokes[0],board.strokes[0]]}})).status,400);
+  const boardPath = "/v1/ot/discover/"+canvas.slug+"/remix";
+  const {template: boardTemplate} = await reader.ok("GET",boardPath);
+  const response = await reader.ok("GET",boardPath+"?revision="+boardTemplate.revision);
+  assert.deepEqual(response.source,{kind:"whiteboard",board});
+  await author.ok("DELETE","/v1/ot/listings/"+published.id);
+  assert.equal((await reader.call("GET",boardPath+"?revision="+boardTemplate.revision)).status,404);
+  assert.equal(S.platform.db.prepare("SELECT 1 FROM ot_listing_editable WHERE listing_id=?").get(published.id),undefined);
+});
+
 test("media remix exposes metadata until confirmation and rejects a same-timestamp file replacement", async (t) => {
   const sameTime = Date.now();
   const server = await startServer({...bulkAuth,now:() => sameTime});

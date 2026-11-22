@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,7 +33,8 @@ test('image matches the compose manager contract (UID 1000, port 8080, healthche
   const docker = read('Dockerfile')
   assert.match(docker, /^\s*USER 1000:1000\s*$/m)
   assert.match(docker, /^\s*EXPOSE 8080\s*$/m)
-  assert.match(docker, /^\s*HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --start-interval=1s --retries=5 /m)
+  assert.match(docker, /^\s*HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --start-interval=500ms --retries=5 /m)
+  assert.ok(docker.includes('CMD ["sh", "/opt/openteamily/runtime/flybot-image/healthcheck.sh"]'))
   assert.match(docker, /DSH_LISTEN_PORT=8080/)
   assert.match(docker, /flybot-image\/entrypoint\.sh/)
   const engine = readFileSync(join(repo, 'openteamily', 'manager', 'engine.py'), 'utf8')
@@ -38,6 +42,26 @@ test('image matches the compose manager contract (UID 1000, port 8080, healthche
   assert.match(engine, /'user': '1000:1000'/)
   assert.match(engine, /'read_only': True/)
   assert.match(engine, /'target': '\/data'/)
+})
+
+test('the shell health probe accepts a ready DSH listener and fails on an unavailable service', async (t) => {
+  let status = 401
+  const server = createServer((_req, res) => res.writeHead(status).end())
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => server.close())
+  const port = String(server.address().port)
+  const hosts = []
+  server.on('request', request => hosts.push(request.headers.host))
+  const probe = () => new Promise(resolve => execFile('sh', [join(root, 'healthcheck.sh')], {
+    env: {...process.env, DSH_LISTEN_PORT:port, http_proxy:'http://127.0.0.1:1'},
+  }, error => resolve(error?.code ?? 0)))
+  assert.equal(await probe(), 0)
+  status = 200
+  assert.equal(await probe(), 0)
+  status = 503
+  assert.equal(await probe(), 1)
+  assert.equal(hosts.length, 3)
 })
 
 test('entrypoint is non-root and keeps the workspace on /data', () => {
