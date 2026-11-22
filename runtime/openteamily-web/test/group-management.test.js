@@ -84,3 +84,38 @@ test('the native room reuses its existing projection and a stale read cannot res
   assert.deepEqual(removed,['native-1'])
   assert.equal(sessions,1)
 })
+
+test('a saved group stays visible in the plugin while the native room projection retries', async () => {
+  const conversation = group('New group', 1)
+  const other = {...group('Existing group', 1), id: 'otc_other'}
+  let sessions = 0
+  let writes = 0
+  let projectionAvailable = false
+  const rt = {
+    state:{rooms:{}},roomOf(id) { return this.state.rooms[id] },
+    createSession:async () => `native-${++sessions}`,
+    async save() {}, mobileEndpoint() {}, sendUser() {}, updateRoom() {}, deleteRoom() {},
+  }
+  const raw = {
+    async get(path) {
+      if (path.includes(room) && !projectionAvailable) throw new Error('Announcement unavailable')
+      return {announcement:{body:''}}
+    },
+    async request(method,path) {
+      if (method === 'POST') { writes++; return conversation }
+      if (path === '/v1/ot/conversations') return {conversations:[conversation, other]}
+      return conversation
+    },
+  }
+  const client = nativeGroupClient({currentRuntime:() => ({rt})}, raw)
+  const path = '/v1/ot/conversations'
+  assert.deepEqual(await client.post(path,{kind:'group',title:conversation.title}), conversation)
+  const {conversations} = await client.get(path)
+  assert.deepEqual(conversations[0], conversation)
+  assert.equal(conversations[1].native_room_id, 'native-1')
+  assert.deepEqual(await client.get(`${path}/${room}`), conversation)
+  projectionAvailable = true
+  assert.equal((await client.get(`${path}/${room}`)).native_room_id, 'native-2')
+  assert.equal((await client.get(`${path}/${room}`)).native_room_id, 'native-2')
+  assert.deepEqual([writes, sessions], [1, 2])
+})

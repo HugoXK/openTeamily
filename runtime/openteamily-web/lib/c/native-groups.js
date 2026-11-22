@@ -151,6 +151,13 @@ export function nativeGroupClient(host, raw) {
     return api
   }
   void install().catch(error => host.log?.('Native shared-group hooks unavailable: ' + String(error.code || 'error')))
+  const syncForPlugin = async (api, conversation) => {
+    try { return await api.sync(conversation) }
+    catch {
+      host.log?.('Native group projection will retry when opened.')
+      return conversation
+    }
+  }
   const request = async (method, path, body, options) => {
     const result = await raw.request(method, path, body, options)
     if (!path.startsWith('/v1/ot/conversations')) return result
@@ -160,13 +167,15 @@ export function nativeGroupClient(host, raw) {
       if (result?.left === true && result.conversation_id) {
         void api.archive(result.conversation_id, body?.revision).catch(() => host.log?.('Native group archive will need to be retried.'))
       } else if (result?.conversation?.kind === 'group') {
-        try { return {...result,conversation:await api.sync(result.conversation)} }
-        catch { host.log?.('Native group projection will retry when opened.') }
+        return {...result,conversation:await syncForPlugin(api, result.conversation)}
       }
       return result
     }
-    if (Array.isArray(result?.conversations)) return { ...result, conversations: await Promise.all(result.conversations.map(api.sync)) }
-    if (result?.kind === 'group' && result.id) return api.sync(result)
+    if (Array.isArray(result?.conversations)) {
+      const conversations = await Promise.all(result.conversations.map(conversation => syncForPlugin(api, conversation)))
+      return { ...result, conversations }
+    }
+    if (result?.kind === 'group' && result.id) return syncForPlugin(api, result)
     return result
   }
   return { ...raw, request, get: (path,options) => request('GET',path,undefined,options), post: (path,b={}) => request('POST',path,b), put: (path,b={}) => request('PUT',path,b), patch: (path,b={}) => request('PATCH',path,b), del: path => request('DELETE',path) }
