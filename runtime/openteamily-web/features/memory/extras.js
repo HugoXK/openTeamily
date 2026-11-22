@@ -14,12 +14,23 @@ const validDue = (v) => v === null || (Number.isInteger(v) && v >= 0 && v <= 2 *
 const validRef = (v) => v === null || (typeof v === 'string' && HEX.test(v))
 
 // ---- actions ----
-function actionView(store, row, includeNotes = true, user = usernames(store)) {
+export function actionView(store, row, includeNotes = true, user = usernames(store)) {
   const page = row.memory_page_id ? store.get('SELECT title FROM memory_pages WHERE id=?', row.memory_page_id) : null
   const data = { id: row.id, workspace_id: row.workspace_id, title: row.title, status: row.status, due_at: row.due_at,
     memory_page_id: row.memory_page_id, memory_page_title: page?.title ?? null, revision: row.revision,
     created: row.created, updated: row.updated, created_by: user(row.created_by), updated_by: user(row.updated_by) }
-  if (includeNotes) data.notes = row.notes
+  if (includeNotes) {
+    data.notes = row.notes
+    const source = store.get(`SELECT workspace_id, share_id, revision, action_index
+      FROM memory_shared_meeting_action_sources WHERE action_id=?`, row.id)
+    if (source) data.source = {kind:'shared_meeting', ...source}
+    const chat = store.get(`SELECT kind,workspace_id,conversation_id,message_id,agent_id,revision
+      FROM memory_chat_action_sources WHERE action_id=?`, row.id)
+    if (chat) {
+      const {agent_id,revision,...reference} = chat
+      data.source_chat = {...reference, ...(agent_id ? {agent_id} : {}), ...(revision ? {revision} : {})}
+    }
+  }
   return data
 }
 const loadAction = (store, ws, id) => store.get('SELECT * FROM memory_actions WHERE id=? AND workspace_id=?', id, ws)
@@ -28,6 +39,27 @@ function resolvePage(store, ws, pageId) {
   if (!validRef(pageId)) refuse(400, 'invalid', 'Provide a valid linked memory page')
   if (!loadPage(store, ws, pageId)) refuse(400, 'invalid', 'Linked memory page not found in this workspace')
   return pageId
+}
+
+export function createAction(req, ws, body, keyHash) {
+  const store = req.store
+  const notes = body.notes ?? ''
+  const due = 'due_at' in body ? body.due_at : null
+  const ref = 'memory_page_id' in body ? body.memory_page_id : null
+  if (!validTitle(body.title) || !validNotes(notes) || !validDue(due) || !validRef(ref)) refuse(400, 'invalid', 'Provide a memory action title')
+  const title = body.title.trim()
+  const pageId = resolvePage(store, ws, ref)
+  const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: pageId }))
+  const prior = store.get('SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', ws, keyHash)
+  if (prior) {
+    if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+    return { status: 200, action: actionView(store, prior) }
+  }
+  if (store.get('SELECT COUNT(*) AS n FROM memory_actions WHERE workspace_id=?', ws).n >= LIMITS.actions) refuse(429, 'quota', 'Memory action capacity reached')
+  const id = newId()
+  const user = actor(req)
+  store.run('INSERT INTO memory_actions VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)', id, ws, title, notes, 'open', due, pageId, req.now, req.now, user, user, keyHash, requestHash)
+  return { status: 201, action: actionView(store, loadAction(store, ws, id)) }
 }
 
 async function actions(req, ws, targetId, removing) {
@@ -47,26 +79,10 @@ async function actions(req, ws, targetId, removing) {
   }
   if (!targetId && req.method === 'POST' && !req.queryString) {
     const body = requireBodyKeys(await req.json(), ['title', 'notes', 'due_at', 'memory_page_id'])
-    const notes = body.notes ?? ''
-    const due = 'due_at' in body ? body.due_at : null
-    const ref = 'memory_page_id' in body ? body.memory_page_id : null
-    if (!validTitle(body.title) || !validNotes(notes) || !validDue(due) || !validRef(ref)) refuse(400, 'invalid', 'Provide a memory action title')
-    const title = body.title.trim()
-    const pageId = resolvePage(store, ws, ref)
     const key = idempotencyKey(req.headers)
-    const keyHash = digest('memory-action:' + key)
-    const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: pageId }))
-    const user = actor(req)
     return store.transaction(() => {
-      const prior = store.get('SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', ws, keyHash)
-      if (prior) {
-        if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-        return { body: { action: actionView(store, prior) } }
-      }
-      if (store.get('SELECT COUNT(*) AS n FROM memory_actions WHERE workspace_id=?', ws).n >= LIMITS.actions) refuse(429, 'quota', 'Memory action capacity reached')
-      const id = newId()
-      store.run('INSERT INTO memory_actions VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)', id, ws, title, notes, 'open', due, pageId, req.now, req.now, user, user, keyHash, requestHash)
-      return { status: 201, body: { action: actionView(store, loadAction(store, ws, id)) } }
+      const {status, action} = createAction(req, ws, body, digest('memory-action:' + key))
+      return { status, body: { action } }
     })
   }
   if (!targetId) refuse(400, 'invalid', 'Invalid memory action request')
@@ -86,17 +102,22 @@ async function actions(req, ws, targetId, removing) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((k) => !['title', 'notes', 'status', 'due_at', 'memory_page_id'].includes(k))) refuse(400, 'invalid', 'Unknown memory action field')
-  if (revision !== row.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, row))
-  let { title, notes, status, due_at: due, memory_page_id: pageId } = row
-  if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory action title'); title = changes.title.trim() }
-  if ('notes' in changes) { if (!validNotes(changes.notes)) refuse(400, 'invalid', 'Provide valid memory action notes'); notes = changes.notes }
-  if ('status' in changes) { if (!validStatus(changes.status)) refuse(400, 'invalid', 'Status must be open or done'); status = changes.status }
-  if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
-  if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
-  if (title === row.title && notes === row.notes && status === row.status && due === row.due_at && pageId === row.memory_page_id) return { body: { action: actionView(store, row) } }
-  store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
-    title, notes, status, due, pageId, row.revision + 1, req.now, actor(req), row.id)
-  return { body: { action: actionView(store, loadAction(store, ws, row.id)) } }
+  return store.transaction(() => {
+    const current = loadAction(store, ws, targetId)
+    if (!current) refuse(404, 'not_found', 'Memory action not found')
+    if (revision !== current.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, current))
+    let { title, notes, status, due_at: due, memory_page_id: pageId } = current
+    if ('title' in changes) { if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a memory action title'); title = changes.title.trim() }
+    if ('notes' in changes) { if (!validNotes(changes.notes)) refuse(400, 'invalid', 'Provide valid memory action notes'); notes = changes.notes }
+    if ('status' in changes) { if (!validStatus(changes.status)) refuse(400, 'invalid', 'Status must be open or done'); status = changes.status }
+    if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
+    if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
+    if (title === current.title && notes === current.notes && status === current.status && due === current.due_at &&
+        pageId === current.memory_page_id) return { body: { action: actionView(store, current) } }
+    store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
+      title, notes, status, due, pageId, current.revision + 1, req.now, actor(req), current.id)
+    return { body: { action: actionView(store, loadAction(store, ws, current.id)) } }
+  })
 }
 
 // ---- links and graph ----

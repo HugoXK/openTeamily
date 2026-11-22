@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { teamInviteCode, teamInviteFromHash, teamInviteUrl } from '../openteamily/static/shell/team-invite-link.mjs';
 import {
   addableRoles, canAdd, canChange, canInvite, canRemove, mount,
-  readAccept, readAddMember, readInvite,
+  readAccept, readAddMember, readInvite, workspaceFromHash,
 } from '../openteamily/static/members/app.mjs';
 
 test('permission helpers follow the documented role defaults', () => {
@@ -63,6 +64,7 @@ class FakeElement {
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   removeEventListener() {}
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   getAttribute(name) { return this.attributes[name]; }
   appendChild(child) {
     child.parentElement = this;
@@ -140,6 +142,7 @@ function makeApi({members, invites = [], forbiddenPaths = [], notFoundPaths = []
     const method = options.method || 'GET';
     calls.push({method, path, body: options.body ? JSON.parse(options.body) : undefined, headers: options.headers || {}});
     if (path === '/v1/auth/session') return jsonResponse(200, {user: {id: 'u-me', username: 'alice'}});
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
     if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: [{id: 'w1', name: 'W1'}]});
     if (path === '/v1/workspaces/w1/members' && method === 'GET') {
       return jsonResponse(200, {items: members.map(item => ({...item}))});
@@ -352,6 +355,8 @@ test('invite approval option and state labels', async () => {
   assert.equal(inviteState({revoked: 0, frozen: true}), '已冻结');
   assert.equal(inviteState({revoked: 0, requires_approval: true}), '有效 · 需审批');
   assert.equal(inviteState({revoked: 0}), '有效');
+  assert.equal(inviteState({expires: 40}, 40), '已过期');
+  assert.equal(inviteState({expires: 50, max_uses: 1, use_count: 1}, 40), '使用次数已用完');
 });
 
 test('suspend permission mirrors the server rules', async () => {
@@ -462,4 +467,242 @@ test('发消息 reports an error when the conversation cannot be opened', async 
   await settle();
   assert.equal(assigned.length, 0);
   assert.equal(status.textContent, '无法创建会话');
+});
+test('invitation links are fragment-only and belong to the current instance', () => {
+  const token = 'abc_123-next-test'.repeat(2);
+  const origin = 'https://workspace.test';
+  const link = teamInviteUrl(token, origin);
+  assert.equal(link, origin + '/login#team-invite=' + token);
+  assert.equal(teamInviteCode(link, origin), token);
+  assert.equal(teamInviteCode('  ' + token + ' ', origin), token);
+  assert.equal(teamInviteCode(link, 'https://other.test'), '');
+  assert.equal(teamInviteCode(origin + '/login?source=unsafe#team-invite=' + token, origin), '');
+  assert.equal(teamInviteFromHash('#team-invite=' + token + '&redirect=/chat'), '');
+});
+
+const teamA = 'a'.repeat(32);
+const teamB = 'b'.repeat(32);
+const self = {id: 'u-me', username: 'alice'};
+const workspaceListing = [{id: teamA, name: '团队甲'}, {id: teamB, name: '团队乙'}];
+
+function setView(doc, hash = '') {
+  doc.defaultView = {
+    location: new URL('https://example.test/members' + hash),
+    history: {replaceState(_state, _title, next) { doc.defaultView.location = new URL(next, doc.defaultView.location); }},
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
+  };
+}
+
+test('an exact members fragment selects only the accessible team and inaccessible links do not fall back', async t => {
+  assert.equal(workspaceFromHash('#workspace=' + teamB), teamB);
+  assert.equal(workspaceFromHash('#workspace=' + teamB + '&workspace=' + teamA), '');
+  assert.equal(workspaceFromHash('#team-invite=sample'), null);
+  for (const id of [teamB, 'f'.repeat(32)]) await t.test(id[0], async () => {
+    const {doc, elements} = fakeDocument();
+    setView(doc, '#workspace=' + id);
+    const rosterReads = [];
+    await mount(doc, {fetcher: async path => {
+      if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+      if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: workspaceListing});
+      if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+      if (path.endsWith('/members')) {
+        rosterReads.push(path);
+        return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+      }
+      throw new Error(path);
+    }});
+    if (id === teamB) {
+      assert.equal(elements.get('workspace').value, teamB);
+      assert.deepEqual(rosterReads, [`/v1/workspaces/${teamB}/members`]);
+    } else {
+      assert.equal(elements.get('workspace').value, '');
+      assert.equal(elements.get('member-workspace-field').hidden, false);
+      assert.match(elements.get('status').textContent, /无法打开此工作区/);
+      assert.deepEqual(rosterReads, []);
+    }
+  });
+});
+
+test('same-tab workspace fragments change the roster and hide a foreign team before validation', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const rosterReads = [];
+  const refreshed = Promise.withResolvers();
+  let hold = false;
+  await mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') {
+      if (hold) await refreshed.promise;
+      return jsonResponse(200, {items: workspaceListing});
+    }
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+    if (path.endsWith('/members')) {
+      rosterReads.push(path);
+      return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+    }
+    throw new Error(path);
+  }});
+  const view = doc.defaultView;
+  view.location.hash = '#workspace=' + teamB;
+  await view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + teamB);
+
+  hold = true;
+  view.location.hash = '#workspace=' + 'f'.repeat(32);
+  const change = view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').hidden, true);
+  assert.equal(elements.get('member-list').children.length, 0);
+  refreshed.resolve();
+  await change;
+  assert.equal(elements.get('workspace').value, '');
+  assert.match(elements.get('status').textContent, /无法打开此工作区/);
+  assert.deepEqual(rosterReads, [`/v1/workspaces/${teamA}/members`, `/v1/workspaces/${teamB}/members`]);
+});
+
+test('joining pins the verified team and a newer manual switch wins during acceptance', async t => {
+  const invited = 'c'.repeat(32);
+  const token = 'browser-invite-with-access';
+  for (const manual of [false, true]) await t.test(manual ? 'manual switch' : 'newly joined team', async () => {
+    const {doc, elements} = fakeDocument();
+    setView(doc);
+    const accept = Promise.withResolvers();
+    const issued = Promise.withResolvers();
+    let joined = false;
+    const original = globalThis.FormData;
+    globalThis.FormData = class { get(name) { return name === 'token' ? token : null; } };
+    try {
+      await mount(doc, {fetcher: async path => {
+        if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+        if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {
+          items: joined ? [...workspaceListing, {id: invited, name:'新加入的团队'}] : workspaceListing,
+        });
+        if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+        if (path === '/v1/invites/preview') return jsonResponse(200, {invitation: {team_name: '新加入的团队',role: 'member'}});
+        if (path === '/v1/invites/accept') {
+          issued.resolve();
+          await accept.promise;
+          joined = true;
+          return jsonResponse(200, {workspace: {id: invited}});
+        }
+        if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+        throw new Error(path);
+      }});
+      const form = elements.get('accept-form');
+      const submit = () => form.handlers.submit[0]({preventDefault() {}, currentTarget: form});
+      await submit();
+      const response = submit();
+      await issued.promise;
+      if (manual) {
+        const select = elements.get('workspace');
+        select.value = teamB;
+        await select.handlers.change[0]();
+      }
+      accept.resolve();
+      await response;
+      const expected = manual ? teamB : invited;
+      assert.equal(elements.get('workspace').value, expected);
+      assert.equal(doc.defaultView.location.hash, '#workspace=' + expected);
+      assert.equal(elements.get('workspace-chat').hidden, false);
+      assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + expected);
+    } finally {
+      globalThis.FormData = original;
+    }
+  });
+});
+
+test('applicant refresh reads the durable decision and opens only an accessible approved team', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc);
+  const pending = {id: 'otjr_pending', workspace_id: teamB, team_name: '团队乙', role: 'member', status: 'pending'};
+  const rejected = {id: 'otjr_rejected', workspace_id: 'f'.repeat(32), team_name: '未加入的团队', role: 'admin', status: 'rejected'};
+  let approved = false;
+  await mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: approved ? workspaceListing : workspaceListing.slice(0, 1)});
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: [approved ? {...pending, status: 'approved'} : pending, rejected]});
+    if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+    throw new Error(path);
+  }});
+  const rows = elements.get('my-join-request-list');
+  assert.equal(rowWithText(rows, '团队乙').children[1].textContent, '等待审批');
+  assert.equal(rowWithText(rows, '未加入的团队').children[1].textContent, '未获批准');
+  assert.equal(rowButton(rowWithText(rows, '团队乙'), '打开工作区'), undefined);
+  approved = true;
+  await elements.get('refresh-my-join-requests').handlers.click[0]();
+  const accepted = rowWithText(rows, '团队乙');
+  assert.equal(accepted.children[1].textContent, '已批准');
+  assert.equal(rowButton(rowWithText(rows, '未加入的团队'), '打开工作区'), undefined);
+  await rowButton(accepted, '打开工作区').handlers.click[0]();
+  assert.equal(elements.get('workspace').value, teamB);
+  assert.equal(doc.defaultView.location.hash, '#workspace=' + teamB);
+  assert.equal(doc.activeElement, elements.get('members-heading'));
+});
+
+test('late invite and approval reads cannot populate another workspace', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const invites = Promise.withResolvers();
+  const queue = Promise.withResolvers();
+  const m = mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: workspaceListing});
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+    if (path === `/v1/workspaces/${teamA}/members`) return jsonResponse(200, {items: [ALICE]});
+    if (path === `/v1/workspaces/${teamA}/invites`) return invites.promise;
+    if (path === `/v1/workspaces/${teamA}/join-requests`) return queue.promise;
+    if (path === `/v1/workspaces/${teamA}/directory`) return jsonResponse(200, {listing: {listed: false}});
+    if (path === `/v1/workspaces/${teamB}/members`) return jsonResponse(200, {items: [{...ALICE, role: 'member'}, BOB]});
+    throw new Error(path);
+  }});
+  await settle();
+  const picker = elements.get('workspace');
+  assert.equal(picker.value, teamA);
+  picker.value = teamB;
+  await picker.handlers.change[0]();
+  invites.resolve(jsonResponse(200, {items: [{id: 'otiv_old', role: 'member'}]}));
+  queue.resolve(jsonResponse(200, {items: [{id: 'otjr_old', role: 'member', username: 'old-team-applicant'}]}));
+  await m;
+  assert.equal(picker.value, teamB);
+  assert.equal(elements.get('role-note').textContent, '当前角色：成员');
+  assert.ok(rowWithText(elements.get('member-list'), 'bob'));
+  assert.equal(elements.get('invites-panel').hidden, true);
+  assert.equal(elements.get('invite-list').children.length, 0);
+  assert.equal(elements.get('join-requests-panel').hidden, true);
+  assert.equal(elements.get('join-request-list').children.length, 0);
+});
+
+test('admins cannot approve administrator applications and one pending member decision sends one request', async () => {
+  const {doc, elements} = fakeDocument();
+  const pending = [{id: 'otjr_admin', role: 'admin', username: 'admin-applicant'},
+    {id: 'otjr_member', role: 'member', username: 'member-applicant'}];
+  const decision = Promise.withResolvers();
+  const sent = [];
+  await mount(doc, {fetcher: async (path, {method}) => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: workspaceListing});
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+    if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'admin'}]});
+    if (path.endsWith('/invites')) return jsonResponse(200, {items: [{id: 'otinv_admin', role: 'admin'}]});
+    if (path.endsWith('/join-requests')) return jsonResponse(200, {items: pending});
+    if (method === 'POST') { sent.push(path); return decision.promise; }
+    throw new Error(path);
+  }});
+  const queue = elements.get('join-request-list');
+  const admin = rowWithText(queue, 'admin-applicant');
+  const member = rowWithText(queue, 'member-applicant');
+  assert.equal(rowButton(admin, '批准'), undefined);
+  assert.ok(rowButton(admin, '拒绝'));
+  assert.equal(rowButton(elements.get('invite-list').children[0], '撤销'), undefined);
+  const approve = rowButton(member, '批准');
+  const reject = rowButton(member, '拒绝');
+  const first = approve.handlers.click[0]();
+  assert.equal(reject.disabled, true);
+  await reject.handlers.click[0]();
+  pending.pop();
+  decision.resolve(jsonResponse(200, {}));
+  await first;
+  assert.deepEqual(sent, [`/v1/workspaces/${teamA}/join-requests/otjr_member/approve`]);
+  assert.equal(rowWithText(queue, 'member-applicant'), undefined);
+  assert.equal(elements.get('status').textContent, '已批准，对方已加入。');
 });

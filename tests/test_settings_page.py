@@ -1,5 +1,6 @@
 """Settings page serving tests. In-process WSGI only; not browser E2E."""
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ class RawClient:
     def __init__(self, app, peer='127.0.0.1'):
         self.app, self.peer = app, peer
 
-    def call(self, method, path, origin=ORIGIN, host='management.test', site='', query=''):
+    def call(self, method, path, origin=ORIGIN, host='management.test', site='', query='', if_none_match=None):
         env = {'REQUEST_METHOD': method, 'PATH_INFO': path, 'QUERY_STRING': query,
                'HTTP_HOST': host, 'REMOTE_ADDR': self.peer, 'CONTENT_LENGTH': '0',
                'wsgi.input': io.BytesIO()}
@@ -22,6 +23,8 @@ class RawClient:
             env['HTTP_ORIGIN'] = origin
         if site:
             env['HTTP_SEC_FETCH_SITE'] = site
+        if if_none_match is not None:
+            env['HTTP_IF_NONE_MATCH'] = if_none_match
         result = {}
         def start(status, values):
             result['status'], result['headers'] = int(status.split()[0]), dict(values)
@@ -45,7 +48,7 @@ class SettingsPageTests(unittest.TestCase):
         page = self.raw.call('GET', '/settings')
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
-        self.assertIn('<h1>设置</h1>', html)
+        self.assertIn('<h1 data-ui-text="shell.settings">设置</h1>', html)
         self.assertIn('id="settings-index"', html)
         self.assertIn('账户与资料', html)
         self.assertIn('AI 与智能体设置', html)
@@ -62,6 +65,67 @@ class SettingsPageTests(unittest.TestCase):
         head = self.raw.call('HEAD', '/settings')
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
+
+    def test_static_validators_revalidate_get_and_head_without_a_body(self):
+        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs'):
+            first = self.raw.call('GET', path)
+            self.assertEqual(first['status'], 200)
+            self.assertEqual(first['headers']['Cache-Control'], 'private, no-cache')
+            tag = first['headers']['ETag']
+            self.assertRegex(tag, r'^W/"sha256-[0-9a-f]{64}"$')
+            head = self.raw.call('HEAD', path)
+            self.assertEqual(head['headers']['Content-Length'], str(len(first['body'])))
+            self.assertEqual(head['headers']['ETag'], tag)
+            self.assertEqual(head['body'], b'')
+            for method in ('GET', 'HEAD'):
+                for candidate in (tag, tag[2:], '"old,tag",\t' + tag, '*'):
+                    with self.subTest(path=path, method=method, candidate=candidate):
+                        cached = self.raw.call(method, path, if_none_match=candidate)
+                        self.assertEqual(cached['status'], 304)
+                        self.assertEqual(cached['headers']['ETag'], tag)
+                        self.assertEqual(cached['headers']['Cache-Control'], 'private, no-cache')
+                        self.assertNotIn('Content-Length', cached['headers'])
+                        self.assertEqual(cached['body'], b'')
+            for candidate in ('"outdated"', '"prefix,' + tag[3:-1] + '"', '*, ' + tag):
+                self.assertEqual(self.raw.call('GET', path, if_none_match=candidate)['status'], 200)
+
+    def test_static_validator_changes_when_only_contents_change(self):
+        self.app.root = Path(self.temp.name) / 'package'
+        file = self.app.root / 'shell' / 'app.css'
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b'a{}')
+        tag = self.raw.call('GET', '/shell/app.css')['headers']['ETag']
+        info = file.stat()
+        file.write_bytes(b'b{}')
+        os.utime(file, ns=(info.st_atime_ns, info.st_mtime_ns))
+        updated = self.raw.call('GET', '/shell/app.css', if_none_match=tag)
+        self.assertEqual(updated['status'], 200)
+        self.assertNotEqual(updated['headers']['ETag'], tag)
+        self.assertEqual(updated['body'], b'b{}')
+        file.unlink()
+        missing = self.raw.call('GET', '/shell/app.css', if_none_match='*')
+        self.assertEqual(missing['status'], 503)
+        self.assertEqual(missing['headers']['Cache-Control'], 'no-store')
+        self.assertNotIn('ETag', missing['headers'])
+
+    def test_static_validators_do_not_bypass_request_checks_or_apply_to_pages(self):
+        path = '/shell/app.css'
+        for method, url, status, options in (
+                ('GET', path, 403, {'origin': 'https://evil.test'}),
+                ('GET', path, 403, {'host': 'evil.test'}),
+                ('GET', path, 403, {'site': 'cross-site'}),
+                ('POST', path, 405, {}),
+                ('GET', path, 400, {'query': 'v=1'}),
+                ('GET', '/shell/missing.css', 404, {}),
+                ('GET', '/shell/../settings_page.py', 404, {}),
+                ('GET', '/settings', 200, {}),
+                ('GET', '/login', 200, {}),
+                ('GET', '/v1/auth/session', 401, {})):
+            with self.subTest(path=url, method=method, options=options):
+                result = self.raw.call(method, url, if_none_match='*', **options)
+                self.assertEqual(result['status'], status)
+                self.assertEqual(result['headers']['Cache-Control'], 'no-store')
+                self.assertNotIn('ETag', result['headers'])
 
     def test_composer_deep_links_pass_only_known_queries(self):
         for kind in ('document', 'website', 'slides', 'dashboard', 'whiteboard'):
@@ -108,13 +172,62 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/settings/../settings.py')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
 
-    def test_wrapper_still_exposes_the_settings_api(self):
-        response = self.client.call('GET', '/v1/settings')
-        self.assertEqual(response['status'], 200)
-        self.assertEqual(response['body']['settings']['revision'], 0)
-        saved = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})
-        self.assertEqual(saved['status'], 200)
-        self.assertEqual(saved['body']['settings']['values']['appearance'], 'dark')
+    def test_team_studio_page_accepts_only_exact_document_links(self):
+        workspace, document = 'a' * 32, 'b' * 32
+        query = f'workspace={workspace}&studio={document}'
+        for route in ('/space', '/artifacts'):
+            page = self.raw.call('GET', route, query=query)
+            self.assertEqual(page['status'], 200)
+            for bad in (query + f'&studio={document}', query + f'&artifact={document}', 'studio=' + document):
+                self.assertEqual(self.raw.call('GET', route, query=bad)['status'], 400)
+
+        for script in ('/artifacts/shared-studio.mjs', '/shell/studio-link.mjs'):
+            self.assertEqual(self.raw.call('GET', script)['status'], 200)
+            self.assertEqual(self.raw.call('GET', script, query=query)['status'], 400)
+
+    def test_discover_page_accepts_supported_filtered_links(self):
+        for kind in ('document', 'whiteboard', 'dashboard', 'spreadsheet'):
+            with self.subTest(kind=kind):
+                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&work=public-preview'
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
+        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
+
+    def test_discover_agent_and_team_catalogues_can_restore_public_search(self):
+        for query in ('tab=agents&category=education&q=%E8%AF%BE%E7%A8%8B',
+                      'tab=agents&section=groups&q=research', 'tab=agents&creator=author.home'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
+        for query in ('tab=agents&q=one&q=two', 'tab=agents&q=%0A', 'tab=agents&category=unknown',
+                      'tab=agents&section=groups&category=education', 'tab=agents&feed=following',
+                      'tab=agents&creator=../author', 'tab=agents&creator=one&creator=two',
+                      'tab=agents&section=groups&creator=author.home'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
+
+    def test_discover_can_play_media_from_its_own_origin(self):
+        headers = self.raw.call('GET', '/discover')['headers']
+        self.assertIn("media-src 'self'", headers['Content-Security-Policy'])
+        self.assertNotIn('blob:', headers['Content-Security-Policy'].split('media-src ', 1)[1])
+        self.assertIn('microphone=()', headers['Permissions-Policy'])
+
+    def test_discover_3d_engine_can_load_from_the_public_shell(self):
+        asset = self.raw.call('GET', '/shell/model3d-engine-0.187.0.mjs')
+        self.assertEqual(asset['status'], 200)
+        self.assertIn('javascript', asset['headers']['Content-Type'])
+        self.assertGreater(len(asset['body']), 256 * 1024)
+
+    def test_chat_entry_can_load_from_the_platform_shell(self):
+        asset = self.raw.call('GET', '/chat/app.mjs')
+        self.assertEqual(asset['status'], 200)
+        self.assertIn('javascript', asset['headers']['Content-Type'])
+        self.assertIn(b'startChatReads', asset['body'])
+
+    def test_platform_settings_api_stays_retired_without_disabling_login(self):
+        self.assertEqual(self.client.call('GET', '/v1/settings')['status'], 410)
+        update = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})
+        self.assertEqual(update['status'], 410)
         login = Client(self.app, peer='127.0.0.2')
         again = login.call('POST', '/v1/auth/login', {'username': 'alice', 'password': PASSWORD})
         self.assertEqual(again['status'], 200)
@@ -143,7 +256,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="whoami"', html)
         self.assertIn('href="/members"', html)
         self.assertIn('技能配置', html)
-        self.assertIn('不用积分', html)
+        self.assertIn('无需填写个人 API 密钥', html)
         self.assertNotIn('id="settings-usage-card"', html)
         self.assertNotIn('id="settings-upgrade"', html)
         self.assertNotIn('id="group-creator"', html)
@@ -167,15 +280,14 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('href="#model-api"', html)
         self.assertIn('href="/settings/skill-configuration"', html)
         self.assertIn('href="/settings/connectors"', html)
-        self.assertIn('href="/runtimes"', html)
+        self.assertNotIn('href="/runtimes"', html)
         language = html.find('href="/settings/language"')
         channels = html.find('href="/settings/channels"')
         agent_api = html.find('href="/settings/agent-access"')
         model_api = html.find('href="#model-api"')
         skills = html.find('href="/settings/skill-configuration"')
         connectors = html.find('href="/settings/connectors"')
-        runtimes = html.find('href="/runtimes"')
-        self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
+        self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors)
         self.assertIn('href="/settings/appearance"', html)
         self.assertIn('href="/settings/shortcuts"', html)
         self.assertIn('href="/settings/message-folding"', html)
@@ -308,7 +420,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('系统语言', language)
         self.assertIn('聊天语言', language)
         self.assertIn('自动翻译消息', language)
-        self.assertIn('跟随界面语言', language)
+        self.assertIn('根据消息语言回复', language)
         self.assertIn('class="settings-field"', language)
 
         folding = self.raw.call('GET', '/settings/message-folding')['body'].decode()

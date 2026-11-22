@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { boot, key, WS } from './helpers.js'
+import { boot, bootMemory, deliverBundle, key, WS } from './helpers.js'
+import { digest } from '../featurekit/http.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 // The search path should read the native agent ledger without starting a model turn.
@@ -14,7 +15,7 @@ function seedChat(bot, workspace = WS, prefix = 'a') {
   try {
     db.prepare(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, revision, created,
       updated, key_hash, request_hash) VALUES (?, ?, '周报助手', ?, '', '', 1, 1, 1, ?, ?)`).run(agent, workspace, agent, agent, agent)
-    db.prepare('INSERT INTO agent_conversations VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
+    db.prepare('INSERT INTO agent_conversations (id,agent_id,title,created,updated) VALUES (?,?,?,?,?)').run(conversation, agent, '周报助手', 1, 1)
     const insert = db.prepare(`INSERT INTO agent_messages (id, conversation_id, role, text, status, created)
       VALUES (?, ?, ?, ?, 'succeeded', ?)`)
     for (const [i, text] of ['帮我写周报', '好的，周报草稿见 https://example.com/report。', '谢谢'].entries()) {
@@ -34,7 +35,9 @@ test('the session directory lists only the selected workspace conversations with
     workspace_id: WS, agent_ids: [local.agent, other.agent, local.agent],
   })
   assert.equal(result.ok, true, JSON.stringify(result))
-  assert.deepEqual(result.value.items, [{id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1}])
+  assert.deepEqual(result.value.items, [{
+    id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1, archived_at:null, archived:false, title_edited:false,
+  }])
 })
 
 test('message search runs in DS-Bot over this owner\'s own conversations', async () => {
@@ -49,9 +52,13 @@ test('message search runs in DS-Bot over this owner\'s own conversations', async
   assert.equal(found.body.items[0].agent_id, agent)
   assert.equal(found.body.items[0].title, '周报助手')
   assert.equal(found.body.items[0].created, 1800000000)
+  assert.equal(found.body.items[0].role, 'user')
+  assert.equal(found.body.items[0].agent_name, undefined)
   assert.equal(found.body.cursor, ids[0])
   const next = await call(`/v1/workspaces/${WS}/search/messages?q=周报&limit=1&cursor=${ids[0]}`)
   assert.deepEqual(next.body.items.map((item) => item.message_id), [ids[1]])
+  assert.equal(next.body.items[0].role, 'assistant')
+  assert.equal(next.body.items[0].agent_name, '周报助手')
   assert.deepEqual((await call(`/v1/workspaces/${WS}/search/messages?q=周报&conversation_id=${conversation}`))
     .body.items.map(item => item.message_id), ids.slice(0, 2))
   assert.equal((await call(`/v1/workspaces/${WS}/search/messages?q=周报&conversation_id=${'f'.repeat(32)}`)).body.items.length, 0)
@@ -108,7 +115,17 @@ test('saving an authorized chat message creates one private versioned document w
   const bot = await boot()
   const local = seedChat(bot)
   const foreign = seedChat(bot, 'b'.repeat(32), 'b')
-  const saveAgent = `/v1/workspaces/${WS}/agents/${local.agent}/conversations/${local.conversation}/messages/`
+  const convoPath = `/v1/workspaces/${WS}/agents/${local.agent}/conversations/${local.conversation}`
+  const saveAgent = convoPath + '/messages/'
+  const receiptPath = saveAgent + local.ids[1] + '/artifact'
+  assert.equal((await bot.call('agents', 'GET', receiptPath)).status, 404)
+  const impostor = {
+    title:'Manual creation',body:'Not the actual reply',kind:'document',
+    source:{kind:'agent_message',id:local.ids[1],agent_id:local.agent,conversation_id:local.conversation},
+  }
+  assert.equal((await bot.call('artifacts', 'POST', `/v1/workspaces/${WS}/artifacts`, impostor, key())).status, 403)
+  assert.equal((await bot.endpoint('artifacts/create', {...impostor,workspace_id:WS,idempotency_key:key()})).ok, false)
+  assert.equal((await bot.call('agents', 'GET', receiptPath)).status, 404)
   assert.equal((await bot.call('agents', 'POST', saveAgent + foreign.ids[1] + '/artifact', {})).status, 404)
   const first = await bot.call('agents', 'POST', saveAgent + local.ids[1] + '/artifact', {title: 'Private note'})
   assert.equal(first.status, 201, JSON.stringify(first.body))
@@ -122,6 +139,25 @@ test('saving an authorized chat message creates one private versioned document w
   assert.equal(duplicate.status, 200)
   assert.equal(duplicate.body.artifact.id, privateArtifact.id)
   assert.equal(duplicate.body.artifact.title, 'Private note')
+
+  const receipt = {id:privateArtifact.id,title:'Private note'}
+  assert.deepEqual((await bot.call('agents', 'GET', receiptPath)).body, {artifact:receipt})
+  assert.equal((await bot.call('agents', 'GET', saveAgent + foreign.ids[1] + '/artifact')).status, 404)
+  assert.equal((await bot.call('agents', 'GET', receiptPath.replace(WS, 'b'.repeat(32)))).status, 404)
+  assert.equal((await bot.endpoint('artifacts/savedChatWorks', {
+    workspace_id:WS, agent_id:local.agent, conversation_id:local.conversation,
+  })).ok, false)
+  // Archived conversations remain readable without attaching the native roster.
+  await bot.call('agents', 'POST', convoPath, {action:'archive'})
+  const history = await bot.call('agents', 'GET', convoPath + '?limit=3&around=' + local.ids[1])
+  assert.equal(history.status, 200)
+  assert.deepEqual(history.body.items.filter(item => item.saved_work).map(item => [item.id,item.saved_work]),
+    [[local.ids[1],receipt]])
+  const rename = await bot.call('artifacts', 'POST', `/v1/workspaces/${WS}/artifacts/${privateArtifact.id}`, {
+    revision:privateArtifact.revision, changes:{title:'Renamed document'},
+  })
+  assert.equal(rename.status, 200)
+  assert.deepEqual((await bot.call('agents', 'GET', receiptPath)).body.artifact, {...receipt,title:'Renamed document'})
 
   const sharedId = 'otm_history_1', oldId = 'otm_old_copy', sharedConversation = 'otc_product'
   let revision = 2
@@ -161,10 +197,34 @@ test('saving an authorized chat message creates one private versioned document w
   const docs = `/v1/workspaces/${WS}/artifacts`
   assert.equal((await bot.call('artifacts', 'GET', docs)).body.items.length, 3)
   assert.equal((await other.call('artifacts', 'GET', docs + '/' + privateArtifact.id)).status, 404)
+  assert.equal((await other.call('agents', 'GET', receiptPath)).status, 404)
+  assert.equal((await bot.call('artifacts', 'POST', docs + '/' + privateArtifact.id + '/remove', {})).status, 200)
+  assert.equal((await bot.call('agents', 'GET', receiptPath)).status, 404)
+  const afterDelete = await bot.call('agents', 'GET', convoPath + '?limit=3')
+  assert.ok(afterDelete.body.items.every(item => !item.saved_work))
+
+  const migrated = {id:'7'.repeat(32),title:'Legacy private document'}
+  const tables = {
+    artifacts:JSON.stringify([{...migrated,workspace_id:WS,title_hash:digest(migrated.title),kind:'document',
+      body:privateArtifact.body,revision:1,created:1,updated:1,created_by:'owner',updated_by:'owner',
+      key_hash:digest('legacy-save'),request_hash:digest('legacy-request'),
+    }]),
+    artifact_chat_sources:JSON.stringify([{artifact_id:migrated.id,workspace_id:WS,agent_id:local.agent,
+      conversation_id:local.conversation,message_id:local.ids[1],created:1,
+    }]),
+  }
+  const manifest = Object.fromEntries(Object.entries(tables).map(([name, body]) => [name,{rows:1,sha256:digest(body)}]))
+  deliverBundle(bot.vol,'legacy-private-work.bundle',JSON.stringify({
+    format:'openteamily-dsbot-import',version:1,feature:'artifacts',tables,manifest,
+  }))
+  const restored = await boot(bot.vol)
+  assert.deepEqual((await restored.call('agents','GET',receiptPath)).body.artifact,migrated)
+  assert.equal((await restored.call('agents','POST',receiptPath,{title:'Retry imported'})).body.artifact.id,migrated.id)
+
 })
 
 test('search/all spans memory and meetings in this DS-Bot', async () => {
-  const bot = await boot()
+  const bot = await bootMemory()
   await bot.call('memory', 'POST', `/v1/workspaces/${WS}/memory`, { title: '季度目标', body: '增长 20%' }, key())
   await bot.call('meetings', 'POST', `/v1/workspaces/${WS}/meetings`, { title: '季度复盘', summary: '回顾目标' }, key())
   const all = await bot.endpoint('search/all', { q: '季度' })

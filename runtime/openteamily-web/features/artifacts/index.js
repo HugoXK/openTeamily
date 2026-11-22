@@ -5,14 +5,16 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, remixPublicWork, search, uniqueTitle, view } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, TITLE_MAX, validBody, validTitle } from './model.js'
 import { sniffMime } from './render.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
+import { artifactContextExcerpt } from './catalog-search.js'
 
 function generatedMedia(ctx, input, call, type, mime, extension, limit) {
   if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
@@ -42,10 +44,29 @@ export default defineFeature({
   endpoints: (context) => {
     const ctx = { ...context, featureDir: context.host.featureDir() }
     return {
+    async remixPublicWork(payload, call) {
+      if (!call?.internal) refuse(404,'not_found','Internal endpoint')
+      return remixPublicWork(ctx,payload ?? {})
+    },
     async create(payload) {
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
       return { artifact: result.body.artifact }
+    },
+    async saveMeetingNote(payload, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, meeting_id: id, revision, title, body} = payload ?? {}
+      if (!HEX32.test(workspace ?? '') || !HEX32.test(id ?? '') || !Number.isSafeInteger(revision)
+          || revision < 1 || typeof title !== 'string') refuse(400, 'invalid', '无效的纪要版本。')
+      if (!validBody(body)) refuse(413, 'too_large', '摘要和行动项超出资料空间的文档长度上限，请导出 Markdown。')
+      const key = 'meeting-note-' + id + '-' + revision
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+      if (saved) return {status: 200, artifact: view(load(ctx.store, workspace, saved.id))}
+      const ending = ' · 纪要 v' + revision
+      const candidate = title.slice(0, TITLE_MAX - ending.length).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + ending
+      const name = uniqueTitle(ctx.store, workspace, candidate, digest(key))
+      const result = createArtifact(ctx, workspace, {title: name, kind: 'document', body}, key)
+      return {status: result.status, artifact: result.body.artifact}
     },
     async generatedImage(input, call) {
       return generatedMedia(ctx, input, call, 'image', 'image/png', 'png', MAX_MEDIA_BYTES)
@@ -56,6 +77,36 @@ export default defineFeature({
     async generatedMusic(input, call) {
       return generatedMedia(ctx, input, call, 'music', 'audio/mpeg', 'mp3', MAX_MEDIA_BYTES)
     },
+    async generatedModel3d(input, call) {
+      return generatedMedia(ctx, input, call, 'model3d', GLB_MIME, 'glb', MAX_GLB_BYTES)
+    },
+    async generatedWebsite(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, job_id: id, title, body} = input ?? {}
+      if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400, 'invalid', 'Invalid generation')
+      const key = 'website-' + id
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+      if (saved || body === undefined) return saved
+      if (!validTitle(title)) refuse(400, 'invalid', 'Invalid website title')
+      const name = uniqueTitle(ctx.store, workspace, title.trim(), id)
+      const result = createArtifact(ctx, workspace, {kind: 'website', title: name, body}, key)
+      return {id: result.body.artifact.id}
+    },
+    async savedChatWorks(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, agent_id: agent, conversation_id: conversation, message_id: message} = input ?? {}
+      if (![workspace, agent, conversation].every(id => typeof id === 'string' && HEX32.test(id))
+          || (message !== undefined && (typeof message !== 'string' || !HEX32.test(message)))) {
+        refuse(400, 'invalid', 'Invalid chat work receipt request')
+      }
+      const rows = ctx.store.all(`SELECT source.message_id, work.id, work.title
+        FROM artifact_chat_sources source
+        CROSS JOIN artifacts work ON work.id=source.artifact_id AND work.workspace_id=source.workspace_id
+        WHERE source.workspace_id=? AND source.agent_id=? AND source.conversation_id=?
+        ${message !== undefined ? 'AND source.message_id=?' : ''}`,
+      workspace, agent, conversation, ...(message !== undefined ? [message] : []))
+      return {items: rows}
+    },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')
       const { workspace_id: workspace, conversation_id, message_id, agent_id, conversation_title, body } = input
@@ -64,6 +115,17 @@ export default defineFeature({
       const key = agent_id ? 'msg-save-' + digest(message_id).slice(0, 48)
         : ('msg-save-' + message_id).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
       const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, key, {reuseChatSource: true})
+      return {status: result.status, artifact: result.body.artifact}
+    },
+    async saveAutomationRun(input, call) {
+      if (!call?.internal) refuse(403, 'forbidden', 'Save results from their automation run')
+      const { workspace_id: workspace, automation_id, automation_title, run_id, body } = input ?? {}
+      if (![workspace, automation_id, run_id].every(id => typeof id === 'string' && HEX32.test(id)) || !validTitle(automation_title)) {
+        refuse(400, 'invalid', 'Invalid automation result')
+      }
+      const source = {kind: 'automation_run', id: run_id, automation_id, automation_title}
+      const title = uniqueTitle(ctx.store, workspace, `${automation_title} · 运行结果`, run_id)
+      const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, 'automation-run-' + run_id, {reuseSource: true})
       return {status: result.status, artifact: result.body.artifact}
     },
     async chatAttachment(input, call) {
@@ -80,8 +142,14 @@ export default defineFeature({
         : current
       if (!row) refuse(404, 'not_found', '该版本已不可发送，请刷新作品列表。')
       let kind = fromVersion ? row.kind : publicKind(row)
-      if (fromVersion && kind === 'document') kind = decodeStructured(row.body)[0] || kind
+      let structure
+      if (fromVersion && kind === 'document') {
+        const [savedKind, savedStructure] = decodeStructured(row.body)
+        kind = savedKind || kind
+        structure = savedStructure
+      }
       const officeFormat = {document:'docx', slides:'pptx', dashboard:'xlsx', spreadsheet:'xlsx'}[kind]
+      const contextExcerpt = officeFormat ? artifactContextExcerpt(row, kind, structure) : ''
       let file
       if (officeFormat) {
         const result = exportOffice(row, officeFormat, fromVersion)
@@ -91,7 +159,7 @@ export default defineFeature({
           mime: 'application/json', extension: 'json'}
       } else {
         const result = exportBytes(row, ctx.featureDir, workspace, fromVersion)
-        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3'}
+        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3', [GLB_MIME]: 'glb'}
         const extension = extensions[result.contentType] || result.contentType.split('/').at(-1)
         file = {payload: result.payload, mime: kind === 'website' ? 'text/plain' : result.contentType,
           extension: kind === 'website' ? 'txt' : extension}
@@ -99,8 +167,9 @@ export default defineFeature({
       const bytes = Buffer.from(file.payload)
       if (bytes.length > 8 * 1024 * 1024) refuse(413, 'attachment_too_large', '附件不能超过 8 MB。')
       const title = row.title.replace(/[.\/\\]/g, '_').trim()
-      return {body: `${row.title} · 版本 ${revision}`, attachment: {
+      return {body: `${row.title} · 版本 ${revision}`, ...(contextExcerpt ? {context_excerpt:contextExcerpt} : {}), attachment: {
         title: `${title}-v${revision}.${file.extension}`, mime: file.mime, data: bytes.toString('base64'),
+        resource: {kind,title:row.title,revision},
       }}
     },
     async files(payload) {

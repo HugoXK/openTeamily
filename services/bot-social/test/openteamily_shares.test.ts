@@ -12,7 +12,7 @@ test("a teammate can read a shared run snapshot; outsiders and non-owners cannot
   const A = await home(S.base, "owner");
   const B = await home(S.base, "mate");
   const X = await home(S.base, "outsider");
-  const team = await A.ok("POST", "/v1/ot/teams", { name: "Share team" });
+  const team = await A.ok("POST", "/v1/ot/workspaces", { name: "Share team", idempotency_key: "fixture-share-snapshot-workspace" });
   const { code } = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, {});
   await B.ok("POST", "/v1/ot/invites/accept", { code });
   const shared = await A.ok("PUT", `/v1/ot/teams/${team.id}/shared-runs`, {
@@ -23,7 +23,13 @@ test("a teammate can read a shared run snapshot; outsiders and non-owners cannot
   assert.equal(shared.snapshot.steps[0].instruction, undefined);
   assert.equal(shared.snapshot.steps[0].error_code, undefined);
   assert.equal((await B.ok("GET", `/v1/ot/teams/${team.id}/shared-runs`)).runs.length, 1);
-  assert.ok((await B.ok("GET", "/v1/ot/notifications")).notifications.some((n: any) => n.kind === "team.run_shared" && n.data.title === "Q3 plan"));
+  const summary = (await B.ok("GET", `/v1/ot/teams/${team.id}/shared-runs?summary=1`)).runs[0];
+  assert.equal(summary.id, shared.id);
+  assert.equal(summary.goal, undefined);
+  assert.equal(summary.snapshot, undefined);
+  const notices = await B.ok("GET", `/v1/ot/notifications?workspace_id=${team.workspace_id}`);
+  assert.ok(notices.notifications.some((n: any) => n.kind === "team.run_shared" && n.data.title === "Q3 plan"
+    && n.data.workspace_id === team.workspace_id));
   assert.equal((await X.call("GET", `/v1/ot/teams/${team.id}/shared-runs`)).status, 404);
   assert.equal((await B.call("DELETE", `/v1/ot/teams/${team.id}/shared-runs/${shared.id}`)).status, 403);
   await A.ok("DELETE", `/v1/ot/teams/${team.id}/shared-runs/${shared.id}`);

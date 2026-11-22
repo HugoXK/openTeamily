@@ -67,6 +67,34 @@ CREATE TABLE memory_capture_groups (
   membership INTEGER NOT NULL, cursor INTEGER NOT NULL, next_scan INTEGER NOT NULL,
   PRIMARY KEY(workspace_id,conversation_id));
 CREATE INDEX memory_capture_groups_due ON memory_capture_groups(next_scan);
+`, `
+CREATE TABLE memory_action_draft_saves (
+  workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL,
+  request_hash TEXT NOT NULL, action_ids TEXT NOT NULL,
+  PRIMARY KEY (workspace_id,owner_id,key_hash));
+`, `
+CREATE INDEX IF NOT EXISTS memory_page_workspace_recent ON memory_pages(workspace_id, updated DESC, id);
+`, `
+CREATE TABLE memory_meeting_sources (
+  workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL,
+  page_id TEXT NOT NULL UNIQUE REFERENCES memory_pages(id) ON DELETE CASCADE,
+  meeting_revision INTEGER NOT NULL, page_revision INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id, meeting_id));
+`, `
+CREATE TABLE memory_shared_meeting_action_sources (
+  action_id TEXT PRIMARY KEY REFERENCES memory_actions(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL, share_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL);
+CREATE INDEX memory_shared_meeting_action_receipt
+  ON memory_shared_meeting_action_sources(workspace_id, share_id, revision);
+`, `
+CREATE TABLE IF NOT EXISTS memory_chat_action_sources (
+  action_id TEXT PRIMARY KEY REFERENCES memory_actions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('agent','social')),
+  workspace_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  agent_id TEXT,
+  revision INTEGER);
 `]
 
 export const IMPORT_TABLES = {
