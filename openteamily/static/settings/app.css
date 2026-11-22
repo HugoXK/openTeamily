@@ -703,6 +703,21 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 #privacy #save:enabled:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
 #settings-panel .page-top h1 { font-size: 1.125rem; }
 
+#settings-panel #model-api-form > .settings-card { margin: 0; padding: .875rem 1rem; }
+#model-effective { margin: 0; font-size: .9375rem; line-height: 1.45; overflow-wrap: anywhere; }
+#model-platform-ready { margin: .375rem 0 0; font-size: .8125rem; }
+#model-api-override > summary { cursor: pointer; font-size: .875rem; font-weight: 600; }
+#model-api-fields { margin: .75rem 0 0; padding: 0; border: 0; box-shadow: none; }
+[data-settings-page="model-api"] fieldset { min-inline-size: 0; }
+[data-settings-page="model-api"] fieldset label { display: grid; gap: .375rem; font-size: .8125rem; }
+[data-settings-page="model-api"] :is(input, select) { box-sizing: border-box; width: 100%; min-width: 0; }
+[data-settings-page="model-api"] input[type="url"] {
+  padding: .52rem .7rem; border: 1px solid var(--ot-line); border-radius: var(--ot-radius-sm);
+  background: var(--ot-surface); color: var(--ot-ink); font: inherit;
+}
+#model-api-fields .note { margin: 0; font-size: .8125rem; }
+.model-api-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
 /* Skill configuration subpage (recorded /settings/skill-configuration). */
 #settings-panel [data-settings-page="skill-configuration"] { max-width: 36rem; margin: 0 auto; }
 #settings-panel .skill-banner {

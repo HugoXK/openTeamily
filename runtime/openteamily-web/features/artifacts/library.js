@@ -3,16 +3,18 @@
 // page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
+import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_SELECT, SHARE_CSP, sourceView,
-  TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
+  emptyBoard, emptyDashboard, emptySlides, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
+  SLIDES_SCHEMA, TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
 import {
   applyBoardOperations, boardJson, dashboardJson, decodeBoard, decodeDashboard, decodeSlides, decodeStructured,
   normalizeBoard, normalizeDashboard, normalizeSlides, slidesJson,
 } from './structured.js'
-import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, sniffMime } from './render.js'
+import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, savedMediaFilename, sniffMime } from './render.js'
 import { exportOffice } from './office.js'
 import {decodeWorkbook,emptyWorkbook,normalizeWorkbook} from './workbook.js'
 export const PER_WORKSPACE = 50
@@ -38,26 +40,99 @@ export function load(store, workspaceId, id) {
   return row && named(row, usernames(store))
 }
 
-function searchPage(store, workspaceId, cursor, limit, needle) {
+function matchesFileTypes(row, kind, types) {
+  if (types.has('messages') && row.chat_message_id) return true
+  if (kind === 'document' && row.chat_message_id) return false
+  if (kind !== 'media') return types.has(kind)
+  if (row.media_mime === GLB_MIME) return types.has('model3d')
+  return types.has(row.media_mime.split('/', 1)[0])
+}
+
+function filteredPage(store, { boundary, bindings, order, metadata }, limit, filters, user) {
+  const { needle, scope, kind, owner, ownerUsername, favorites, types, creators, sessions } = filters
+  const columns = metadata
+    ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime, md.filename AS media_filename,
+       b.board <> '' AS board_json, sl.deck <> '' AS slides_json, d.dashboard <> '' AS dashboard_json,
+       x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id, cs.conversation_id
+       ${ROW_JOINS} LEFT JOIN ot_users u ON u.id=a.created_by `
+    : `SELECT a.id, a.title, md.mime AS media_mime, md.filename AS media_filename
+       FROM artifacts a LEFT JOIN artifact_media md ON md.artifact_id=a.id `
+  const candidates = store.all(columns + boundary + order, ...bindings)
+  const matches = new Map()
   const ids = []
-  const candidates = store.all('SELECT id, title FROM artifacts WHERE workspace_id=? AND id>? ORDER BY id', workspaceId, cursor)
-  for (const { id, title } of candidates) {
-    if (!title.toLocaleLowerCase('en-US').includes(needle)) continue
-    ids.push(id)
+  for (const row of candidates) {
+    if (scope === 'favorites' && !favorites.has(row.id)) continue
+    if (scope === 'mine' && row.created_by !== owner && !row.is_owner &&
+        (!ownerUsername || row.username !== ownerUsername)) continue
+    if (scope === 'memory' && (row.chat_message_id || row.source_kind !== 'agent_task')) continue
+    const artifactKind = kind !== 'all' || types.size ? publicKind(row) : null
+    if (kind === 'messages' ? !row.chat_message_id : kind !== 'all' && artifactKind !== kind) continue
+    if (types.size && !matchesFileTypes(row, artifactKind, types)) continue
+    if (creators.size && !creators.has(user(row.created_by))) continue
+    if (sessions.size && !sessions.has(row.conversation_id)) continue
+    if (needle) {
+      let match = catalogMatch('title', row.title, needle) || catalogMatch('filename', row.media_filename, needle)
+      if (!match && !row.media_mime) {
+        // Decode content only for candidates that survive the catalog filters
+        // and do not already match their cheap title or filename projection.
+        const content = store.get(ROW_SELECT + 'WHERE a.workspace_id=? AND a.id=?', bindings[0], row.id)
+        match = catalogContentMatch(content, needle)
+      }
+      if (!match) continue
+      matches.set(row.id, match)
+    }
+    ids.push(row.id)
     if (ids.length >= limit) break
   }
   if (!ids.length) return []
   const placeholders = ids.map(() => '?').join(',')
-  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders}) ORDER BY a.id`, workspaceId, ...ids)
+  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders})` + order, bindings[0], ...ids)
+    .map(row => needle ? { ...row, match: matches.get(row.id) } : row)
 }
 
-export function listing(store, workspaceId, cursor, limit, needle = '') {
-  const rows = needle
-    ? searchPage(store, workspaceId, cursor || '', limit, needle)
-    : store.all(ROW_SELECT + 'WHERE a.workspace_id=? AND a.id>? ORDER BY a.id LIMIT ?', workspaceId, cursor || '', limit)
+export function listing(store, workspaceId, cursor, limit, filters) {
+  let boundary = 'WHERE a.workspace_id=?'
+  const bindings = [workspaceId]
+  const order = filters.recent ? ' ORDER BY a.updated DESC, a.id' : ' ORDER BY a.id'
+  if (cursor && filters.recent) {
+    const anchor = store.get('SELECT updated FROM artifacts WHERE workspace_id=? AND id=?', workspaceId, cursor)
+    if (!anchor) return []
+    boundary += ' AND (a.updated<? OR (a.updated=? AND a.id>?))'
+    bindings.push(anchor.updated, anchor.updated, cursor)
+  } else if (cursor) {
+    boundary += ' AND a.id>?'
+    bindings.push(cursor)
+  }
+  if (filters.since !== null) {
+    boundary += ' AND a.updated>=?'
+    bindings.push(filters.since)
+  }
+  if (filters.before !== null) {
+    boundary += ' AND a.updated<?'
+    bindings.push(filters.before)
+  }
+  const metadata = filters.scope !== 'all' || filters.kind !== 'all' ||
+    filters.types.size || filters.creators.size || filters.sessions.size
+  const names = filters.creators.size ? usernames(store) : null
+  const rows = filters.needle || metadata
+    ? filteredPage(store, {boundary, bindings, order, metadata}, limit, filters, names)
+    : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
   if (!rows.length) return rows
-  const user = usernames(store)
+  const user = names || usernames(store)
   return rows.map((row) => named(row, user))
+}
+
+export function catalogFacets(store, workspaceId) {
+  const user = usernames(store)
+  const authors = store.all('SELECT DISTINCT created_by FROM artifacts WHERE workspace_id=?', workspaceId)
+  const creators = [...new Set(authors.map(row => user(row.created_by)))].sort()
+  const sources = store.all(`SELECT cs.conversation_id, cs.conversation_title FROM artifact_chat_sources cs
+    JOIN artifacts a ON a.id=cs.artifact_id WHERE a.workspace_id=? ORDER BY a.updated DESC, a.id`, workspaceId)
+  const sessions = new Map()
+  for (const { conversation_id: id, conversation_title: title } of sources) {
+    if (id && !sessions.has(id)) sessions.set(id, {id, label: title?.trim() || '对话'})
+  }
+  return { creators, sessions: [...sessions.values()] }
 }
 
 export function view(row, includeBody = true, { favorited } = {}) {
@@ -79,6 +154,7 @@ export function view(row, includeBody = true, { favorited } = {}) {
   if (!includeBody) {
     const thumb = preview(row, { decodeBoard, decodeSlides, decodeDashboard })
     if (thumb != null) data.preview = thumb
+    if (row.match) data.match = row.match
   }
   if (favorited !== undefined) data.favorited = favorited
   return data
@@ -116,7 +192,7 @@ function attachWorkbook(store,id,workbook) {
     DO UPDATE SET workbook=excluded.workbook`,id,JSON.stringify(workbook))
 }
 
-export function recordVersion(store, row) {
+function versionSnapshot(row) {
   const kind = publicKind(row)
   const storedKind = ['slides','dashboard','spreadsheet'].includes(kind) ? 'document' : kind
   let body = ''
@@ -124,14 +200,17 @@ export function recordVersion(store, row) {
   else if (kind === 'dashboard') body = row.dashboard_json || dashboardJson(emptyDashboard()) || ''
   else if (kind === 'spreadsheet') body = row.spreadsheet_json
   else if (kind === 'document' || kind === 'website') body = row.body ?? ''
+  return {kind:storedKind,body,board:kind === 'whiteboard' ? row.board_json : null,
+    mime:kind === 'media' ? row.media_mime : null,byte_count:kind === 'media' ? row.media_bytes : null,
+    sha256:kind === 'media' ? row.media_sha256 : null,filename:kind === 'media' ? row.media_filename : null}
+}
+
+export function recordVersion(store, row) {
+  const snapshot = versionSnapshot(row)
   store.run(
     'INSERT OR IGNORE INTO artifact_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-    row.id, row.revision, row.title, storedKind, body,
-    kind === 'whiteboard' ? row.board_json : null,
-    kind === 'media' ? row.media_mime : null,
-    kind === 'media' ? row.media_bytes : null,
-    kind === 'media' ? row.media_sha256 : null,
-    kind === 'media' ? row.media_filename : null,
+    row.id, row.revision, row.title, snapshot.kind, snapshot.body,
+    snapshot.board, snapshot.mime, snapshot.byte_count, snapshot.sha256, snapshot.filename,
     row.updated, row.updated_by,
   )
 }
@@ -217,12 +296,16 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false, receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
   const content = input.body ?? ''
   const kind = input.kind ?? 'document'
+  const source = input.source
+  if (source?.kind === 'agent_message' && source.agent_id && !reuseChatSource) {
+    refuse(403, 'forbidden', 'Save private replies from their conversation')
+  }
   let board, slides, dashboard, spreadsheet
   if (kind === 'media') refuse(400, 'invalid', 'Upload media as multipart form data')
   if (kind === 'whiteboard') {
@@ -249,9 +332,8 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   if (dashboard) payload.dashboard = dashboard
   if (spreadsheet) payload.spreadsheet = spreadsheet
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
-    const source = input.source
     const already = existingSource(store, workspaceId, source)
     // Saved source snapshots survive later edits and title changes.
     if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
@@ -289,7 +371,100 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   })
 }
 
-export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }) {
+export function remixPublicWork(ctx, {workspace_id:workspace,slug,revision,title,idempotency_key:key,source} = {}) {
+  if (typeof workspace !== 'string' || !HEX32.test(workspace) || typeof slug !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) || typeof revision !== 'string' || !/^[0-9a-f]{64}$/.test(revision)
+      || !validTitle(title) || /[\x00-\x1f\x7f]/.test(title) || typeof key !== 'string' || !KEY.test(key)) {
+    refuse(400,'invalid','请填写副本名称并选择公开作品的版本。')
+  }
+  const trimmed = title.trim()
+  const receiptHash = digest(stableJson({public_work:slug,revision,title:trimmed}))
+  const prior = ctx.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',workspace,digest('artifact:' + key))
+  if (prior) {
+    if (prior.request_hash !== receiptHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
+    return {status:200,body:{artifact:view(load(ctx.store,workspace,prior.id))}}
+  }
+  if (ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?',workspace,titleHash(trimmed))) {
+    refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+  }
+  if (!source) return null
+  if (source.kind === 'media') {
+    const {mime, filename, bytes} = source
+    const maximum = mime === GLB_MIME ? MAX_GLB_BYTES : MAX_MEDIA_OBJECT_BYTES
+    if (!MEDIA_MIMES.has(mime) || typeof filename !== 'string' || !filename.trim() ||
+        !Number.isSafeInteger(bytes) || bytes < 12 || bytes > maximum || typeof source.data !== 'string' ||
+        source.data.length !== Math.ceil(bytes / 3) * 4) refuse(400,'invalid','这个公开文件的格式或大小不受支持。')
+    const data = Buffer.from(source.data,'base64')
+    if (data.length !== bytes || data.toString('base64') !== source.data || sniffMime(data) !== mime) {
+      refuse(400,'invalid','这个公开文件的内容与文件类型不符。')
+    }
+    return createMedia(ctx,workspace,{title:trimmed,mime,filename,data,key},{receiptHash})
+  }
+  if (source.kind === 'slides' || source.kind === 'whiteboard') {
+    const input = source.kind === 'slides' && source.slides?.schema === SLIDES_SCHEMA ? {slides:source.slides}
+      : source.kind === 'whiteboard' && source.board?.schema === 'openteamily.whiteboard.v1' ? {board:source.board} : null
+    if (!input) refuse(400,'invalid','这个公开版本没有可复制的作品内容。')
+    return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,...input},key,{receiptHash})
+  }
+  if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
+    refuse(400,'invalid','该公开版本无法复制。')
+  }
+  return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,body:source.body},key,{receiptHash})
+}
+
+export function duplicateArtifact({store, owner, featureDir}, workspaceId, {artifact_id: sourceId, revision, title}, key) {
+  if (typeof sourceId !== 'string' || !HEX32.test(sourceId) || !Number.isSafeInteger(revision) || revision < 1 || !validTitle(title)
+      || /[\x00-\x1f\x7f]/.test(title)) refuse(400, 'invalid', '请选择已保存的版本并输入副本名称。')
+  if (!KEY.test(key ?? '')) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+  const trimmed = title.trim()
+  const hash = titleHash(trimmed)
+  const keyHash = digest('artifact:' + key)
+  const requestHash = digest(stableJson({duplicate_from:sourceId, revision, title:trimmed}))
+  return store.transaction(() => {
+    const prior = store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (prior) {
+      if (prior.request_hash !== requestHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
+      return {status:200,body:{artifact:view(load(store,workspaceId,prior.id))}}
+    }
+    const source = store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', sourceId,workspaceId)
+    if (!source) refuse(404,'not_found','找不到要复制的作品。')
+    const current = source.revision === revision
+    const snapshot = current ? versionSnapshot(source)
+      : store.get('SELECT kind,body,board,mime,byte_count,sha256,filename FROM artifact_versions WHERE artifact_id=? AND revision=?',source.id,revision)
+    if (!snapshot) refuse(404,'version_not_found','这个保存版本已不可用。')
+    if (store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) {
+      refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+    }
+    if (store.get('SELECT COUNT(*) AS n FROM artifacts WHERE workspace_id=?', workspaceId).n >= PER_WORKSPACE) {
+      refuse(429,'quota','该资料空间已达到作品容量上限。')
+    }
+    const sourceKind = publicKind(source)
+    let kind = current ? sourceKind : snapshot.kind
+    let structured = null
+    if (snapshot.kind === 'document' && sourceKind !== 'document') {
+      const [decodedKind, decoded] = decodeStructured(snapshot.body)
+      if (decodedKind) { kind = decodedKind; structured = decoded }
+      else if (current && kind !== 'document') refuse(409,'version_unavailable','该作品的保存内容暂时无法复制。')
+    }
+    if (kind === 'media') {
+      try { readMediaBytes(featureDir,workspaceId,snapshot.sha256,snapshot.byte_count,snapshot.mime) }
+      catch { refuse(409,'version_unavailable','该版本的媒体文件暂时无法复制。') }
+    }
+    const body = kind === 'website' || kind === 'document' ? snapshot.body : ''
+    const id = newId(), now = nowSeconds()
+    store.run('INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+      id,workspaceId,trimmed,hash,'document',body,now,now,owner,owner,keyHash,requestHash)
+    attachKind(store,id,kind,{
+      board:kind === 'whiteboard' ? decodeBoard(snapshot.board) ?? emptyBoard() : undefined,
+      slides:kind === 'slides' ? structured : undefined, dashboard:kind === 'dashboard' ? structured : undefined,
+    })
+    if (kind === 'spreadsheet') attachWorkbook(store,id,structured)
+    if (kind === 'media') attachMedia(store,id,snapshot.mime,snapshot.byte_count,snapshot.sha256,snapshot.filename)
+    return saved(store,workspaceId,id,201)
+  })
+}
+
+export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }, {receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   if (!validTitle(title)) refuse(400, 'invalid', 'Provide a document title and body')
@@ -300,11 +475,11 @@ export function createMedia(ctx, workspaceId, { title, data, filename, mime, key
     refuse(400, 'invalid', 'Upload a supported media file')
   }
   const used = sniffed
-  const name = cleanFilename(filename)
+  const name = savedMediaFilename(filename)
   const sha = createHash('sha256').update(data).digest('hex')
   const payload = { title: trimmed, kind: 'media', sha256: sha, mime: used, filename: name }
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
@@ -386,7 +561,7 @@ export function updateArtifact(ctx, row, changes, revision) {
     guardVersions(store, row.id)
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     store.run('UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
       title, hash, content, row.revision + 1, nowSeconds(), owner, row.id)
@@ -411,11 +586,11 @@ export function replaceMedia(ctx, row, { title, data, filename, mime, revision }
   }
   const sniffed = sniffMime(data)
   if (!sniffed || !MEDIA_MIMES.has(sniffed)) refuse(400, 'invalid', 'Upload a supported media file')
-  const name = cleanFilename(filename)
+  const name = savedMediaFilename(filename)
   return store.transaction(() => {
     const hash = titleHash(newTitle)
     if (newTitle !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     guardVersions(store, row.id)
     let digestHex
@@ -449,7 +624,7 @@ export function restoreArtifact(ctx, row, revision, to) {
     const title = snapshot.title
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     let kind = snapshot.kind
     let structured = null
@@ -495,7 +670,8 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
     const filename = fromVersion ? row.filename : row.media_filename
     const expected = fromVersion ? row.byte_count : row.media_bytes
     const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected, mime)
-    return { payload, contentType: mime, filename: exportFilename(title, kind, revision, filename), headers: exportHeaders(mime, exportFilename(title, kind, revision, filename)) }
+    const name = exportFilename(title, kind, revision, filename)
+    return { payload, contentType: mime, filename: name, headers: exportHeaders(mime, name) }
   }
   let structuredKind = null, structured = null
   if (kind === 'slides') { structuredKind = 'slides'; structured = decodeSlides(row.slides_json) }
@@ -556,13 +732,15 @@ export function parseExportFormat(query) {
 
 export function opaque() { return randomBytes(32).toString('base64url') }
 
-export function shareView(row, { includeToken = false, token = null, store } = {}) {
+export function shareView(row, { includeToken = false, token = null, store, now = null } = {}) {
   const user = store ? usernames(store) : () => null
+  const revoked = Boolean(row.revoked && row.revocation_confirmed_at != null)
   const data = {
     id: row.id, artifact_id: row.artifact_id, workspace_id: row.workspace_id, prefix: row.token_prefix,
     created: row.created, created_by: row.created_by_username ?? user(row.created_by),
-    expires: row.expires, revoked: Boolean(row.revoked), scope: 'read',
+    expires: row.expires, revoked, revocation_pending: Boolean(row.revoked && !revoked), scope: 'read',
   }
+  if (now != null) data.expired = row.expires != null && row.expires <= now
   if (includeToken && token) { data.token = token; data.path = '/share/' + token }
   return data
 }
@@ -577,20 +755,26 @@ export function createShare(store, row, owner, now, expiresIn) {
     if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 2592000) refuse(400, 'invalid', 'expires_in must be 1..2592000 seconds')
     expires = now + expiresIn
   }
-  const active = store.get('SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=? AND revoked=0 AND (expires IS NULL OR expires>?)', row.id, now).n
+  const active = store.get(`SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=?
+    AND revocation_confirmed_at IS NULL AND (expires IS NULL OR expires>?)`, row.id, now).n
   if (active >= MAX_SHARES) refuse(429, 'quota', 'Share capacity reached')
   const token = opaque()
   const id = newId()
-  store.run('INSERT INTO artifact_shares VALUES(?,?,?,?,?,?,?,?,0,NULL)',
+  store.run(`INSERT INTO artifact_shares
+    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at)
+    VALUES(?,?,?,?,?,?,?,?,0,NULL)`,
     id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires)
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', id, row.id)
   return { status: 201, body: { share: shareView(item, { includeToken: true, token, store }) } }
 }
 
-export function revokeShare(store, artifactId, shareId, now) {
+export function revokeShare(store, artifactId, shareId, now, { confirmed = false } = {}) {
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', shareId, artifactId)
   if (!item) refuse(404, 'not_found', 'Share not found')
   store.run('UPDATE artifact_shares SET revoked=1, revoked_at=? WHERE id=? AND revoked=0', now, item.id)
+  if (confirmed) {
+    store.run('UPDATE artifact_shares SET revocation_confirmed_at=? WHERE id=? AND revocation_confirmed_at IS NULL', now, item.id)
+  }
   return { status: 200, body: { share: shareView(store.get('SELECT * FROM artifact_shares WHERE id=?', shareId), { store }) } }
 }
 
@@ -599,13 +783,13 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
   if (kind === 'media' && !asPreview) {
     try {
       const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
-      const name = cleanFilename(row.media_filename || 'file')
+      const name = savedMediaFilename(row.media_filename)
       return {
         status: 200, raw: payload, inline: true,
         headers: {
           'content-type': row.media_mime,
           'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'",
-          'content-disposition': 'inline; filename="' + name + '"',
+          'content-disposition': 'inline; filename="' + cleanFilename(name) + '"',
         },
         filename: name,
       }

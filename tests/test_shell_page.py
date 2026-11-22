@@ -75,7 +75,7 @@ class ShellPageTests(unittest.TestCase):
         self.assertIn('javascript', script['headers']['Content-Type'])
         for response in (css, script):
             self.assertIn("default-src 'none'", response['headers']['Content-Security-Policy'])
-            self.assertEqual(response['headers']['Cache-Control'], 'no-store')
+            self.assertEqual(response['headers']['Cache-Control'], 'private, no-cache')
             self.assertEqual(response['headers']['X-Content-Type-Options'], 'nosniff')
             self.assertLessEqual(len(response['body']), 262144)
         self.assertIn(b'--ot-measure', css['body'])

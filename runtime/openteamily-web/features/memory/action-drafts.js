@@ -1,6 +1,7 @@
 import { digest, idempotencyKey, refuse, requireBodyKeys, stableJson } from '../../featurekit/http.js'
 import { actor, casefold, loadPage, validTitle } from './common.js'
 import { actionView, createAction } from './extras.js'
+import { requireMemoryWorkspace } from './access.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const MAX_SOURCES = 5
@@ -11,15 +12,6 @@ const CACHE_SECONDS = 300
 const MAX_RUNNING = 4
 const draftsByStore = new WeakMap()
 const validRevision = value => Number.isSafeInteger(value) && value >= 1
-
-async function requireWorkspace(req, workspace) {
-  const personal = await req.host.call('agents/personal-binding', {}).catch(() => null)
-  if (personal?.workspace_id === workspace) return
-  const teams = await req.host.call('teams/activeWorkspaces', {}).catch(() => [])
-  if (!Array.isArray(teams) || !teams.some(team => team?.id === workspace)) {
-    refuse(404, 'not_found', '无法访问此工作区。')
-  }
-}
 
 function pageRevision(store, workspace, id, revision) {
   const page = loadPage(store, workspace, id)
@@ -84,7 +76,7 @@ async function getDraft(req, workspace) {
   const {sources: input} = requireBodyKeys(await req.json(8192), ['sources'])
   const sources = readSources(input)
   const key = idempotencyKey(req.headers)
-  await requireWorkspace(req, workspace)
+  await requireMemoryWorkspace(req.host, workspace)
   const pages = sources.map(({id, revision}) => pageRevision(req.store, workspace, id, revision))
   const scope = workspace + ':' + actor(req)
   const lookup = scope + ':' + key
@@ -114,7 +106,7 @@ async function getDraft(req, workspace) {
     throw error
   }
   entry.completed ??= Math.floor(Date.now() / 1000)
-  await requireWorkspace(req, workspace)
+  await requireMemoryWorkspace(req.host, workspace)
   for (const {id, revision} of sources) pageRevision(req.store, workspace, id, revision)
   return {body:result}
 }
@@ -135,7 +127,7 @@ async function saveDraft(req, workspace) {
   }
   const keyHash = digest('memory-action-draft:' + idempotencyKey(req.headers))
   const requestHash = digest(stableJson(selected))
-  await requireWorkspace(req, workspace)
+  await requireMemoryWorkspace(req.host, workspace)
   const owner = actor(req)
   const store = req.store
   return store.transaction(() => {

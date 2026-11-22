@@ -1,5 +1,6 @@
 """In-process WSGI/SQLite tests. No listening socket, Docker or actual credentials."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from http.cookies import SimpleCookie
 import io
@@ -70,11 +71,34 @@ class ManagementTests(unittest.TestCase):
         registered = self.client.register('Alice')
         self.assertEqual(registered['status'], 201)
         self.assertEqual(registered['body']['user']['username'], 'alice')
+        self.assertNotIn('personal_chat', registered['body'])
         self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
         self.assertEqual(self.client.call('POST', '/v1/auth/logout')['body'], {'logged_out': True})
         self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 401)
         response = self.client.call('POST', '/v1/auth/login', {'username': 'ALICE', 'password': PASSWORD})
         self.assertEqual(response['status'], 200)
+
+    def test_session_and_runtime_readiness_are_read_only_during_another_write(self):
+        owner = self.client.register()['body']['user']['id']
+        with self.store.transaction():
+            session = self.client.call('GET', '/v1/auth/session')
+            ready = self.client.call('GET', '/v1/auth/runtime-readiness')
+        self.assertEqual(session['status'], 200)
+        self.assertEqual(session['body']['user']['id'], owner)
+        self.assertEqual(ready['status'], 200)
+        self.assertEqual(ready['body'], {'state': 'unmanaged', 'user_id': owner})
+        self.assertEqual(Client(self.app).call('GET', '/v1/auth/runtime-readiness')['status'], 401)
+
+    def test_registration_hashes_the_password_before_acquiring_the_write_lock(self):
+        from openteamily.security import password_hash
+
+        def hash_while_db_is_available(password):
+            with closing(sqlite3.connect(self.store.path, timeout=0)) as other:
+                other.execute('BEGIN IMMEDIATE')
+            return password_hash(password)
+
+        with patch('openteamily.app.password_hash', side_effect=hash_while_db_is_available):
+            self.assertEqual(self.client.register()['status'], 201)
 
     def test_cookies_are_host_bound_secure_and_session_is_httponly(self):
         response = self.client.register()

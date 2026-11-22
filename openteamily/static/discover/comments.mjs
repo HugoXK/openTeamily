@@ -31,7 +31,7 @@ function failure(status, fallback) {
   return fallback;
 }
 
-export function mountWorkComments(document, {request, onCount}) {
+export function mountWorkComments(document, {request, onCount, loginHref}) {
   const get = suffix => document.getElementById('feed-comments-' + suffix);
   const dialog = get('dialog');
   const title = get('title');
@@ -442,7 +442,7 @@ export function mountWorkComments(document, {request, onCount}) {
       dialog.dataset.slug = item.slug;
       workLink.textContent = item.title || item.slug;
       workLink.href = '/w/' + item.slug;
-      login.href = '/login#work-comments=' + item.slug;
+      login.href = loginHref(item.slug);
       if (!dialog.open) dialog.showModal();
       render(state);
       return readPage(state);

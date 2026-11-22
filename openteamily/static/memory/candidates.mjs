@@ -1,4 +1,8 @@
 export function sourceHref(workspace, source) {
+  if (source?.kind === 'meeting') {
+    if (![workspace, source.meeting_id].every(id => /^[0-9a-f]{32}$/.test(id || ''))) return '';
+    return '/meetings#' + new URLSearchParams({workspace, meeting:source.meeting_id});
+  }
   if (source?.kind === 'group') {
     const valid = /^[0-9a-f]{32}$/.test(workspace) &&
       [source.conversation_id,source.message_id].every(id => /^[A-Za-z0-9._-]{1,80}$/.test(id || ''));

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {appConnectionState, realitySummary} from '../openteamily/static/onboarding/app.mjs';
+import {appConnectionState} from '../openteamily/static/onboarding/app.mjs';
 
 // Step 2 used to print ' · 未连接' for every app no matter what the workspace
 // actually had. These tests pin the mapping from the real reads to the words a
@@ -42,13 +42,6 @@ test('a failed Composio sync says 状态未知 instead of inventing 未连接', 
   const state = appConnectionState({key: 'gmail'}, {connections: [], readable: true, sync: 'failed'});
   assert.equal(state.label, '状态未知');
   assert.match(state.title, /同步失败/);
-});
-
-test('the page repeats the real agent and runtime counts it read', () => {
-  assert.match(realitySummary({agents: 3, runtimes: 2, online: 1}), /3 个智能体/);
-  assert.match(realitySummary({agents: 3, runtimes: 2, online: 1}), /1 个运行时连接在线/);
-  assert.match(realitySummary({agents: 1, runtimes: 0, online: 0}), /1 个智能体/);
-  assert.equal(realitySummary({agents: 0, runtimes: 0, online: 0}), '');
 });
 
 test('the recorded step-2 copy no longer claims app connections are unimplemented', () => {
