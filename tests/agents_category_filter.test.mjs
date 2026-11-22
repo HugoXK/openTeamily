@@ -237,7 +237,7 @@ test('a ?category= deep link filters on first load', async () => {
 
 test('an exact agent link opens the authorized workspace and never falls back to personal', async () => {
   await withLocation('?category=operations', async () => {
-    const personal = {id: 'a'.repeat(32), name: 'Personal', owner_id: 'user-1'};
+    const personal = {id: 'a'.repeat(32), name: 'Personal', kind:'personal', role:'owner'};
     const team = {id: 'b'.repeat(32), name: 'Team', owner_id: 'user-1'};
     const agent = {id: 'c'.repeat(32), workspace_id: team.id, revision: 1, name: '团队智能体', category: 'operations'};
     const requests = [];
@@ -249,6 +249,8 @@ test('an exact agent link opens the authorized workspace and never falls back to
       if (path === '/v1/personal-agent') return json(200, {});
       if (path === base) return json(404, {});
       if (path === base + '/members') return json(200, {items: [{user_id:'user-1',role:'owner'}]});
+      if (path === '/v1/workspaces/' + personal.id + '/members') return json(404, {});
+      if (path === '/v1/workspaces/' + personal.id + '/agents?limit=100') return json(200, {items: []});
       if (path === base + '/agents?limit=100') return json(200, {items: [agent]});
       if (path === base + '/agents/' + agent.id) return json(200, {agent});
       if (path.endsWith('/api-keys')) return json(200, {items: []});
@@ -274,6 +276,11 @@ test('an exact agent link opens the authorized workspace and never falls back to
     assert.equal(denied.el('open-create').hidden, true);
     assert.equal(denied.el('manage-drawer').hidden, true);
     assert.ok(!requests.some(path => /^\/v1\/workspaces\/[^/]+/.test(path)));
+    globalThis.location.hash = '#workspace=' + personal.id;
+    const own = fakeDocument();
+    own.doc.querySelector = exact.doc.querySelector;
+    await mount(own.doc, {fetcher});
+    assert.equal(own.el('open-create').hidden, false);
   });
 });
 

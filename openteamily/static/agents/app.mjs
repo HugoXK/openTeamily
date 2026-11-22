@@ -627,8 +627,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const self = members.status === 200
         ? (members.body.items || []).find(row => row.user_id === currentUser.id)
         : null;
-      actor = self ? self.role : (workspace.owner_id === currentUser.id &&
-        (!nativeSharing || workspace.kind === 'personal') ? 'owner' : 'member');
+      actor = self?.role || (nativeSharing ? workspace.role || 'member'
+        : workspace.owner_id === currentUser.id ? 'owner' : 'member');
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
