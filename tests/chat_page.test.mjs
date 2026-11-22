@@ -2315,6 +2315,10 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationSummary(task), '小林 分享了协作结果「评审纪要」');
   assert.equal(notificationTarget({...task, path: taskPath}, workspace), taskPath);
   assert.equal(notificationTarget(task, other), null);
+  const ownership = {kind: 'team.owner_transferred', workspace_id: workspace, team_name: '设计组'};
+  assert.equal(notificationSummary(ownership), '你已成为「设计组」的所有者');
+  assert.equal(notificationTarget(ownership, workspace), '/members#workspace=' + workspace);
+  assert.equal(notificationTarget(ownership, other), null);
   assert.equal(notificationTarget({...task, path: taskPath + '&run=' + share}, workspace), null);
 });
 

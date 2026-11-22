@@ -65,7 +65,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/(?:team-runs/[0-9a-f]{32}/share|shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?)$'), 'shares'),
     (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend|transfer-ownership))?)?$'), 'members'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
     (re.compile(r'^/v1/invites/(?:group/)?(?:accept|preview)$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
@@ -758,7 +758,16 @@ __DSBOT_LOCATIONS__
       rewrite ^ /_ot_discover_guest$uri last;
     }
 __GUEST_DISCOVER_FEEDS__
+__WORKSPACE_LOGIN_REWRITE__
     return 302 /login;
+  }
+  location = /_ot_workspace_login {
+    internal;
+    limit_except GET HEAD { deny all; }
+    proxy_pass http://__PLATFORM__/login;
+    proxy_set_header Host $host;
+    proxy_set_header Sec-Fetch-Site "";
+    proxy_set_header X-OT-Gateway-Key "";
   }
   location ^~ /_ot_discover_guest/ {
     internal;
@@ -869,9 +878,21 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
     social = social_location(bot_social) if bot_social else ''
     guest_feeds = ('    rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;'
                    if bot_social else '')
+    private_pages = sorted(routes['moved_pages'] - {'home', 'discover'})
+    private_paths = [f"(?:{'|'.join(private_pages)})/?"] if private_pages else []
+    for page, path in (('artifacts', 'space'), ('profile', 'profile/edit/?'),
+                       ('settings', 'settings/[a-z0-9][a-z0-9-]{0,40}/?')):
+        if page in private_pages:
+            private_paths.append(path)
+    # Render the login form at the original address. The browser retains both
+    # the query string and the fragment, which the gateway never sees.
+    workspace_login = ('    if ($http_sec_fetch_mode = navigate) {\n'
+                       f'      rewrite "^/(?:{"|".join(private_paths)})$" /_ot_workspace_login? last;\n'
+                       '    }' if private_paths else '')
     configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
-            .replace('__SOCIAL_LOCATION__', social).replace('__GUEST_DISCOVER_FEEDS__', guest_feeds))
+            .replace('__SOCIAL_LOCATION__', social).replace('__GUEST_DISCOVER_FEEDS__', guest_feeds)
+            .replace('__WORKSPACE_LOGIN_REWRITE__', workspace_login))
     if not bot_social_socket:
         return configuration
     if not bot_social:

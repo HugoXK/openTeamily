@@ -226,10 +226,41 @@ export function detailExcerpt(preview) {
   return kept;
 }
 
+function creatorHandle(item) {
+  const handle = item?.creator?.handle;
+  return typeof handle === 'string' && CREATOR_HANDLE.test(handle) ? handle.toLowerCase() : '';
+}
+
+function authorName(item) {
+  return item.creator?.name || item.author || creatorHandle(item);
+}
+
+function creatorDirectoryHref(handle, directory = 'works') {
+  const params = new URLSearchParams();
+  if (directory === 'agents') params.set('tab', 'agents');
+  if (handle) params.set('creator', handle);
+  return '/discover' + (params.size ? '?' + params : '');
+}
+
+function workAuthorLink(document, item) {
+  const link = document.createElement('a');
+  link.className = 'work-author-link';
+  link.href = creatorDirectoryHref(creatorHandle(item));
+  link.textContent = authorName(item);
+  link.setAttribute('aria-label', '查看 ' + link.textContent + ' 的公开作品');
+  return link;
+}
+
+function sameWorkCreator(first, second) {
+  const handle = creatorHandle(first);
+  const other = creatorHandle(second);
+  return handle || other ? Boolean(handle && handle === other) : Boolean(first.author && first.author === second.author);
+}
+
 export function detailMetaText(item) {
   return [
     item.kind_label || KIND_LABELS[item.kind] || item.kind || '',
-    item.author || '',
+    authorName(item),
     formatFeedTime(item.updated),
   ].filter(Boolean).join(' · ');
 }
@@ -271,7 +302,34 @@ function appendMatch(document, target, {text, start, end}) {
   target.append(text.slice(0, start), mark, text.slice(end));
 }
 
-export function renderFeedCard(document, item, {legacyImage = false} = {}) {
+function renderFeedByline(document, item, {linkAuthor = false} = {}) {
+  const meta = document.createElement('p');
+  meta.className = 'meta feed-byline';
+  const mark = document.createElement('span');
+  mark.className = 'feed-author-mark avatar';
+  mark.setAttribute('aria-hidden', 'true');
+  const author = authorName(item);
+  mark.dataset.tone = String(catalogTone(author || item.title || ''));
+  mark.textContent = catalogMonogram(author || item.title || '');
+  const who = document.createElement('span');
+  const when = formatFeedTime(item.updated);
+  if (linkAuthor) {
+    who.append(workAuthorLink(document, item));
+    if (when) who.append(' · ' + when);
+  } else {
+    who.textContent = [author, when].filter(Boolean).join(' · ');
+  }
+  meta.append(mark, who);
+  if (item.likes != null) {
+    const likes = document.createElement('span');
+    likes.className = 'feed-likes';
+    likes.textContent = '♡ ' + (item.likes || 0);
+    meta.append(likes);
+  }
+  return meta;
+}
+
+export function renderFeedCard(document, item, {legacyImage = false, includeByline = true} = {}) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = publicWorkPath(item) || '/discover';
@@ -304,22 +362,6 @@ export function renderFeedCard(document, item, {legacyImage = false} = {}) {
   const titleMatch = match?.kind === 'title' && match.text === item.title;
   if (titleMatch) appendMatch(document, title, match);
   else title.textContent = item.title || '';
-  const meta = document.createElement('p');
-  meta.className = 'meta';
-  const mark = document.createElement('span');
-  mark.className = 'feed-author-mark avatar';
-  mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
-  mark.textContent = catalogMonogram(item.author || item.title || '');
-  const who = document.createElement('span');
-  const when = formatFeedTime(item.updated);
-  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
-  meta.append(mark, who);
-  if (item.likes != null) {
-    const likes = document.createElement('span');
-    likes.className = 'feed-likes';
-    likes.textContent = '♡ ' + (item.likes || 0);
-    meta.append(likes);
-  }
   card.append(cover, kind, title);
   if (match && !titleMatch) {
     const excerpt = document.createElement('p');
@@ -327,7 +369,7 @@ export function renderFeedCard(document, item, {legacyImage = false} = {}) {
     appendMatch(document, excerpt, match);
     card.append(excerpt);
   }
-  card.append(meta);
+  if (includeByline) card.append(renderFeedByline(document, item));
   return card;
 }
 
@@ -428,7 +470,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let cursor = '';
   let activeQuery = '';
   let activeCategory = categoryFromSearch(location?.search);
-  let activeCreator = null;
   let remix = null;
   let manageRequest = 0;
   let catalogRequest = 0;
@@ -438,6 +479,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const joiningTeams = new Set();
   const agentsView = isAgentsCatalog(location);
   const manageParams = new URLSearchParams(location?.search || '');
+  const requestedAuthor = agentsView && manageParams.get('creator');
+  let activeCreator = CREATOR_HANDLE.test(requestedAuthor || '')
+    ? {handle: requestedAuthor.toLowerCase(), name: '@' + requestedAuthor.toLowerCase()} : null;
   const manageWorkspace = manageParams.get('workspace');
   const manageAgent = manageParams.get('agent');
   const teamsView = isTeamsCatalog(location);
@@ -482,6 +526,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (on) node.setAttribute('aria-current', 'page');
     else if (typeof node.removeAttribute === 'function') node.removeAttribute('aria-current');
     else if (node.attributes) delete node.attributes['aria-current'];
+  }
+
+  function setCreatorDirectoryTabs(handle) {
+    const feed = document.getElementById('catalog-tab-feed');
+    const agents = document.getElementById('catalog-tab-agents');
+    if (feed) feed.href = creatorDirectoryHref(handle);
+    if (agents) agents.href = creatorDirectoryHref(handle, 'agents');
   }
 
   function applyCatalogChrome() {
@@ -738,7 +789,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setWorkView(true);
     initialView.scrollTop = 0;
     detail.title.textContent = item?.title || '作品详情';
-    detail.meta.textContent = item ? detailMetaText(item) : '';
+    renderWorkMeta(item);
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
     detail.actions.hidden = true;
@@ -795,10 +846,23 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return result;
   }
 
+  function renderWorkMeta(work) {
+    if (!work || !creatorHandle(work)) {
+      detail.meta.textContent = work ? detailMetaText(work) : '';
+      return;
+    }
+    const type = work.kind_label || KIND_LABELS[work.kind] || work.kind || '';
+    const when = formatFeedTime(work.updated);
+    detail.meta.replaceChildren();
+    if (type) detail.meta.append(type + ' · ');
+    detail.meta.append(workAuthorLink(document, work));
+    if (when) detail.meta.append(' · ' + when);
+  }
+
   function showWork(entry, work, inlinePreview) {
     entry.item = work;
     detail.title.textContent = work.title || work.slug;
-    detail.meta.textContent = detailMetaText(work);
+    renderWorkMeta(work);
     detail.open.href = publicWorkPath(work);
     const file = workMediaPath(work, !nativeCatalog);
     detail.download.hidden = !file;
@@ -979,7 +1043,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.item[flag] = changes[flag] ?? enabled;
       if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
       for (const item of feedState.items) {
-        if (item.slug === entry.slug || (action === 'follow' && entry.item.author && item.author === entry.item.author)) {
+        if (item.slug === entry.slug || (action === 'follow' && sameWorkCreator(entry.item, item))) {
           item[flag] = entry.item[flag];
           if (action === 'like') item.likes = entry.item.likes;
         }
@@ -988,7 +1052,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
       }
       if (action === 'follow' && !enabled && feedState.tab === 'following') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && (!entry.item.author || item.author !== entry.item.author));
+        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && !sameWorkCreator(entry.item, item));
       }
       renderFeed();
     }
@@ -1077,6 +1141,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       popularButton.hidden = feedState.tab !== 'activity' || Boolean(feedState.creator);
       setFeedCategory(popularButton, popular);
     }
+    setCreatorDirectoryTabs(feedState.creator);
     const creatorFilter = document.getElementById('feed-creator-filter');
     if (creatorFilter) {
       creatorFilter.hidden = !feedState.creator;
@@ -1473,13 +1538,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
-      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog});
+      const linkedAuthor = Boolean(creatorHandle(item));
+      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog, includeByline: !linkedAuthor});
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
       const entry = document.createElement('article');
       entry.className = 'feed-entry';
       entry.dataset.slug = item.slug || '';
       entry.append(card);
+      if (linkedAuthor) entry.append(renderFeedByline(document, item, {linkAuthor: true}));
       const actions = document.createElement('div');
       actions.className = 'feed-card-actions';
       if (validSlug(item.slug)) {
@@ -1646,6 +1713,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogFilters() {
+    setCreatorDirectoryTabs(activeCreator?.handle);
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.setAttribute('aria-pressed', String(chip.dataset.catalogCategory === activeCategory));
     }
@@ -1930,16 +1998,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         tag.textContent = categoryLabel(item.category);
         if (tag.textContent) meta.append(tag);
       }
-      if (item.creator?.handle) {
-        const creator = document.createElement('button');
-        creator.type = 'button';
+      const handle = creatorHandle(item);
+      if (handle) {
+        const creator = document.createElement('a');
         creator.className = 'catalog-author';
-        creator.textContent = item.creator.name || item.creator.handle;
-        creator.title = '查看此创建者的智能体';
-        creator.addEventListener('click', () => {
-          activeCreator = item.creator;
-          loadCatalog();
-        });
+        const filters = new URLSearchParams(location?.search);
+        filters.set('creator', handle);
+        creator.href = '/discover?' + filters.toString();
+        creator.textContent = item.creator.name || handle;
+        creator.setAttribute('aria-label', '查看 ' + creator.textContent + ' 的公开智能体');
         meta.append(creator);
       }
       if (meta.childElementCount) copy.append(meta);
@@ -1993,6 +2060,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalog.push(item);
       }
       cursor = listed.body.cursor || '';
+      if (activeCreator) {
+        const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
+        if (author) {
+          activeCreator.name = author.creator.name || activeCreator.name;
+          applyCatalogFilters();
+        }
+      }
       renderCatalog(catalog, start);
       more.hidden = !cursor;
       document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
@@ -2270,6 +2344,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('catalog-category-close').addEventListener('click', () => categoryDialog.close());
     document.getElementById('catalog-clear-creator').addEventListener('click', () => {
       activeCreator = null;
+      const params = new URLSearchParams(location?.search);
+      params.delete('creator');
+      history?.replaceState?.(null, '', '/discover?' + params.toString());
+      syncLoginLink();
       loadCatalog();
     });
     document.getElementById('catalog-remix-form').addEventListener('submit', submitRemix);

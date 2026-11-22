@@ -1,4 +1,4 @@
-import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, signupDraftScope, waitForRuntime, writeChatDrafts} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -129,7 +129,8 @@ export function mountRuntimeStarting(document, {
         draftPanel.hidden = true;
       }
       // The login page confirms the same-tab signup and presents its manual login form on a mismatch.
-      view.location.replace('/login' + (view.location.hash || ''));
+      const continuation = state === 'signed-out' ? workspaceLoginHash(workspacePageTarget(view.location)) : '';
+      view.location.replace('/login' + (continuation || view.location.hash || ''));
       return;
     }
     if (state === 'ready') {

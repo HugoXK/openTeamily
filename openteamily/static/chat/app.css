@@ -1477,6 +1477,22 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 }
 #message-list li > button { height: 1.5rem; min-height: 0; padding: 0 .5rem; margin: .25rem .25rem 0 0; border: 0; border-radius: 999px; background: transparent; color: var(--ot-muted); font-size: .75rem; box-shadow: none; }
 #message-list li > button:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+#message-list li > .saved-agent-work {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  max-width: 100%;
+  margin: .3rem 0 0;
+  padding: .125rem .55rem;
+  border-radius: .45rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-ink);
+  font-size: .8rem;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  #message-list li > .saved-agent-work { min-height: 2.75rem; }
+}
 #message-list .body[data-forwarded] { border-left: 0; padding: .375rem .625rem; border-radius: .625rem; background: color-mix(in srgb, var(--ot-ink) 4%, transparent); box-shadow: inset 0 0 0 1px var(--ot-line); }
 #compose-dialog fieldset { padding: .5rem .75rem; }
 

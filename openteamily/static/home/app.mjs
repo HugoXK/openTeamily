@@ -7,7 +7,7 @@ import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.m
 import { socialMessageFromHash } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
-import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime } from './runtime-readiness.mjs';
+import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -344,17 +344,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     try {
       const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
       const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
+      const isLogin = view.location?.pathname === '/login';
+      const originalPage = workspacePageTarget(view.location);
+      const returnTo = originalPage || (isLogin ? workspaceLoginTarget(view.location.hash) : '');
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
         if (whoami) whoami.textContent = '';
         document.body?.classList.remove('home-signed-in');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        const hash = view.location?.pathname === '/login' ? view.location.hash : '';
+        const hash = isLogin ? view.location.hash : '';
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
-        const continuation = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
+        const continuation = workspaceLoginHash(returnTo) || teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
           (intent ? publicAgentContinuation(intent) : work?.continuation || discover?.continuation);
         const register = loginPanel.querySelector?.('.login-register-button');
         if (register) register.href = '/register' + (continuation || '');
@@ -363,11 +366,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
           back.hidden = !discover;
           if (discover) back.href = discover.target;
         }
-        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
+        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError :
+          returnTo ? '登录后会返回你刚打开的页面。' : '');
         return;
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
+        return;
+      }
+      if (returnTo) {
+        if (originalPage) view.location.reload();
+        else view.location.replace(returnTo);
         return;
       }
       let meeting = meetingFromLink;
@@ -382,7 +391,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         return;
       }
       try { view.sessionStorage.removeItem(pendingKey); } catch {}
-      if (view.location?.pathname === '/login') {
+      if (isLogin) {
         const hash = view.location.hash;
         const invite = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash));
         const intent = publicAgentIntentFromHash(hash);

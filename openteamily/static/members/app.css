@@ -132,7 +132,7 @@ body.app-workspace #main-panel {
 }
 
 .requests-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-block-end: .4rem; }
-#my-join-requests .requests-heading h2, #join-requests-panel .requests-heading h2 { margin: 0; }
+#members-panel .requests-heading h2, #my-join-requests .requests-heading h2, #join-requests-panel .requests-heading h2 { margin: 0; }
 .requests-heading button, #my-join-request-list button, #join-request-list button { min-height: 2.75rem; }
 #my-join-request-list:empty, #join-request-list:empty, :is(#my-join-requests-status, #join-requests-status):empty { display: none; }
 #my-join-request-list .role-pill[data-state="approved"] { color: var(--ot-success, #147044); }
@@ -204,6 +204,10 @@ body.app-workspace #main-panel {
   background: transparent;
 }
 
+@media (pointer: coarse) {
+  #member-list li button { min-height: 2.75rem; }
+}
+
 #join-request-list li button:first-of-type {
   background: var(--ot-accent);
   color: #fff;
@@ -211,7 +215,7 @@ body.app-workspace #main-panel {
 }
 
 #join-request-list li button + button,
-#member-list li button[data-row-action="remove"],
+#member-list li button:is([data-row-action="remove"], [data-row-action="transfer"]),
 #invite-list li button[data-row-action="revoke"] {
   background: transparent;
   color: var(--ot-danger);

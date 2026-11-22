@@ -4,7 +4,7 @@ import {publicWorkIntentFromHash} from '../shell/public-work-link.mjs';
 import {discoverIntentFromHash} from '../shell/discover-link.mjs';
 import {teamInviteFromHash, teamInviteHash} from '../shell/team-invite-link.mjs';
 import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
-import {rememberSignupSession, signupSessionError} from '../home/runtime-readiness.mjs';
+import {rememberSignupSession, signupSessionError, workspaceLoginHash, workspaceLoginTarget} from '../home/runtime-readiness.mjs';
 const MESSAGES = {
   registration_closed: '本实例尚未开放注册，请联系实例管理员。',
   conflict: '此用户名不可用，请选择其他用户名。',
@@ -71,7 +71,8 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const password = document.getElementById('register-password');
   const hash = document.defaultView?.location?.hash;
   const work = publicWorkIntentFromHash(hash);
-  const continuation = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
+  const continuation = workspaceLoginHash(workspaceLoginTarget(hash)) ||
+    teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
     work?.continuation || publicAgentContinuation(publicAgentIntentFromHash(hash)) || discoverIntentFromHash(hash)?.continuation;
   const login = document.querySelector?.('a[href="/login"]');
   if (login && continuation) login.href = '/login' + continuation;

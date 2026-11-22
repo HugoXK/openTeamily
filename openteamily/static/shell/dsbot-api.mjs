@@ -57,7 +57,7 @@ export const MOVED = [
   [/^\/v1\/skills\/runs\/[0-9a-f]{32}\/(?:cancel|artifact)$/, 'skills'],
   [/^\/v1\/workspaces$/, 'teams'],
   [/^\/v1\/teams$/, 'teams'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/members(?:\/[A-Za-z0-9._-]{1,80}(?:\/(?:remove|suspend|unsuspend))?)?$/, 'members'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/members(?:\/[A-Za-z0-9._-]{1,80}(?:\/(?:remove|suspend|unsuspend|transfer-ownership))?)?$/, 'members'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/invites(?:\/[A-Za-z0-9._-]{1,80}\/(?:revoke|freeze|unfreeze))?$/, 'invites'],
   [/^\/v1\/invites\/(?:group\/)?(?:accept|preview)$/, 'invites'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/join-requests(?:\/[A-Za-z0-9._-]{1,80}\/(?:approve|reject))?$/, 'invites'],

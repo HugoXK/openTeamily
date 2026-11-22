@@ -181,6 +181,7 @@ function workItem(row) {
     kind,
     kind_label: WORK_LABELS[kind] || kind,
     author: usernameOf(row.creator) || row.creator?.display_name || '',
+    ...(row.creator?.handle ? {creator: {handle: row.creator.handle, name: row.creator.display_name || usernameOf(row.creator)}} : {}),
     updated: unix(row.updated_at),
     path: row.path || ('/w/' + row.slug),
     likes: row.likes ?? 0,
@@ -240,6 +241,8 @@ function rethrow(error) {
     meeting_ended: 'meeting_ended',
     group_management_conflict: 'group_management_conflict',
     group_owner_transfer_required: 'group_owner_transfer_required',
+    ownership_changed: 'ownership_changed',
+    member_suspended: 'member_suspended',
     member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
@@ -330,14 +333,15 @@ function membersRoutes(host) {
       },
     },
     {
-      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/members\/([A-Za-z0-9._-]{1,80})\/(remove|suspend|unsuspend)$/,
+      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/members\/([A-Za-z0-9._-]{1,80})\/(remove|suspend|unsuspend|transfer-ownership)$/,
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
           const team = await teamFor(bs, match[1], 'Workspace', env)
-          const me = await meOf(bs, env)
           const action = match[3]
           const path = `/v1/ot/teams/${seg(team.id, 'team_id')}/members/${seg(match[2], 'handle')}`
+          if (action === 'transfer-ownership') return [200, await bs.post(path + '/transfer-ownership', {})]
+          const me = await meOf(bs, env)
           if (action === 'remove') {
             await bs.del(path)
             return [200, {}]

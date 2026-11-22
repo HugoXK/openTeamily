@@ -100,6 +100,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/transfer-ownership`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites/oti_01/revoke`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget('/v1/invites/accept', ORIGIN).feature, 'invites');

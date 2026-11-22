@@ -1483,7 +1483,10 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #artifact-draft-details summary { align-content: center; cursor: pointer; }
 #artifact-draft-copy { display: block; width: 100%; box-sizing: border-box; }
 
-#artifact-live-load { min-height: 2.75rem; }
+.artifact-live-actions { display: flex; flex-wrap: wrap; gap: .25rem .75rem; }
+#artifact-live-load,
+#artifact-live-compare { min-height: 2.75rem; }
+#artifact-live-compare:not([hidden]) { display: inline-flex; align-items: center; }
 
 #main-panel.is-meetings #artifact-list {
   display: grid;
@@ -1599,11 +1602,15 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #sheet-grid input:focus { outline: 2px solid var(--ot-accent); outline-offset: -2px; position: relative; z-index: 1; }
 #sheet-status:empty { display: none; }
 
-#main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
-  display: none;
+@media (width > 700px) {
+  #main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
+    display: none;
+  }
+  body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
+    grid-row: 1 / -1;
+  }
 }
 body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
-  grid-row: 1 / -1;
   grid-template-columns: minmax(0,1fr);
   max-width: min(66rem, 100%);
   min-width: 0;

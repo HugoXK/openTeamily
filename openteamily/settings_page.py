@@ -233,7 +233,8 @@ class SettingsPage:
                 if 'section' in filters:
                     return (filters['section'] == 'groups' and filters.keys() <= {'tab', 'section', 'q'}
                             and len(text) <= 60 and not any(ord(ch) < 32 for ch in text))
-                return (filters.keys() <= {'tab', 'category', 'q'}
+                return (filters.keys() <= {'tab', 'category', 'q', 'creator'}
+                        and ('creator' not in filters or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', filters['creator']))
                         and ('category' not in filters or filters['category'] in discover.AGENT_CATEGORY_SLUGS)
                         and len(text) <= 80 and not any(ord(ch) < 32 for ch in text))
             # Feed filters and work detail links use the same management page.

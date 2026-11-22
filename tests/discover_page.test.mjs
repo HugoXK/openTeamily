@@ -1357,6 +1357,24 @@ function detailFetcher(item, previewResult) {
   return {fetcher, requests};
 }
 
+test('public work bylines link to canonical creator directories from cards and details', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const creator = {handle: 'writer.home', name: '作者'};
+  const {fetcher} = detailFetcher(detailFixture({creator}));
+  await mount(doc, {fetcher, location: {search: ''}});
+
+  const [entry] = doc.getElementById('feed-grid').children;
+  assert.equal(classHits(entry.children[0], 'work-author-link').length, 0);
+  const [author] = classHits(entry, 'work-author-link');
+  assert.equal(author.textContent, creator.name);
+  assert.equal(author.href, '/discover?creator=writer.home');
+
+  await classHits(entry, 'feed-detail-toggle')[0].handlers.click();
+  const [detailAuthor] = classHits(doc.getElementById('work-detail-meta'), 'work-author-link');
+  assert.equal(detailAuthor.href, author.href);
+});
+
 test('the 3D detail exposes an explicit preview and direct download without prefetching the file', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();

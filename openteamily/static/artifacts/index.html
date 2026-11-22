@@ -324,7 +324,10 @@
       <p id="editor-meta" class="note"></p>
       <div id="artifact-live-update" hidden>
         <p id="artifact-live-message" role="status"></p>
-        <button type="button" id="artifact-live-load">读取服务器版本</button>
+        <div class="artifact-live-actions">
+          <button type="button" id="artifact-live-load">切换到服务器版本</button>
+          <a id="artifact-live-compare" target="_blank" rel="noopener">在新标签页查看</a>
+        </div>
       </div>
       <section id="artifact-draft-recovery" class="artifact-draft-recovery" aria-label="草稿恢复" hidden>
         <div class="artifact-draft-heading">

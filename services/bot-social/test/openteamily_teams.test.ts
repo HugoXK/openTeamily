@@ -84,6 +84,50 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: "x".repeat(32) })).status, 404);
 });
 
+test("team ownership transfers atomically to an active member, then the former owner can leave", async () => {
+  const [owner, successor, other] = await Promise.all([
+    home(S.base, "transfer-owner"), home(S.base, "transfer-successor"), home(S.base, "transfer-other"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {name: "Ownership handoff", idempotency_key: "test-ownership-handoff"});
+  const path = `/v1/ot/teams/${team.id}`;
+  const member = (person: typeof owner) => path + "/members/" + person.handle;
+  const transfer = (person: typeof owner) => member(person) + "/transfer-ownership";
+  await owner.ok("POST", path + "/members", {handle: successor.handle, role: "admin"});
+  assert.equal((await successor.call("POST", transfer(owner), {})).status, 403);
+  assert.equal((await other.call("POST", transfer(successor), {})).status, 404);
+  assert.equal((await owner.call("POST", transfer(other), {})).status, 404);
+  await owner.ok("PATCH", member(successor), {suspended: true});
+  assert.equal((await owner.call("POST", transfer(successor), {})).data.error.code, "member_suspended");
+  await owner.ok("PATCH", member(successor), {suspended: false});
+  const adminInvite = await owner.ok("POST", path + "/invites", {role: "admin"});
+  const memberInvite = await owner.ok("POST", path + "/invites", {role: "member"});
+
+  S.platform.db.exec(`CREATE TRIGGER fixture_reject_ownership_transfer
+    BEFORE INSERT ON ot_notifications WHEN NEW.kind='team.owner_transferred'
+    BEGIN SELECT RAISE(ABORT, 'fixture disabled notification'); END`);
+  try {
+    assert.equal((await owner.call("POST", transfer(successor), {})).status, 500);
+    assert.equal((await owner.ok("GET", path)).role, "owner");
+    assert.equal((await successor.ok("GET", path)).role, "admin");
+    assert.equal((await other.ok("POST", "/v1/ot/invites/preview", {code: adminInvite.code})).usable, true);
+  } finally {
+    S.platform.db.exec("DROP TRIGGER fixture_reject_ownership_transfer");
+  }
+
+  assert.deepEqual(await owner.ok("POST", transfer(successor), {}), {transferred: true});
+  assert.equal((await owner.call("POST", transfer(successor), {})).status, 403);
+  assert.equal((await owner.ok("GET", path)).role, "member");
+  assert.equal((await successor.ok("GET", path)).owner.handle, successor.handle);
+  const roster = (await successor.ok("GET", path + "/members")).members;
+  assert.deepEqual(roster.map((row: any) => [row.handle, row.role]), [[successor.handle, "owner"], [owner.handle, "member"]]);
+  assert.equal((await other.call("POST", "/v1/ot/invites/accept", {code: adminInvite.code})).status, 410);
+  assert.equal((await other.ok("POST", "/v1/ot/invites/accept", {code: memberInvite.code})).status, "member");
+  assert.equal((await successor.call("DELETE", member(successor))).status, 409);
+  await owner.ok("DELETE", member(owner));
+  assert.equal((await owner.call("GET", path)).status, 404);
+  assert.equal((await successor.ok("GET", "/v1/ot/teams/by-workspace/" + team.workspace_id)).role, "owner");
+});
+
 test("approval invites and the team directory queue join requests for owners and admins", async () => {
   const A = await home(S.base, "lead");
   const B = await home(S.base, "joiner");

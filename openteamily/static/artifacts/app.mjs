@@ -518,6 +518,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
   });
+  const liveBanner = document.getElementById('artifact-live-update');
+  const liveMessage = document.getElementById('artifact-live-message');
+  const liveLoad = document.getElementById('artifact-live-load');
+  const liveCompare = document.getElementById('artifact-live-compare');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
   const discoverEditable = document.getElementById('discover-editable-remix');
@@ -1147,9 +1151,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     const source = document.getElementById('editor-source');
     if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
-      const {conversation_id: id, agent_id, conversation_title} = item.source;
+      const {conversation_id: id, agent_id, conversation_title, id: message_id} = item.source;
       const link = document.createElement('a');
-      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id});
+      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id, message_id});
       link.textContent = conversation_title || '打开会话';
       source.hidden = false;
       source.textContent = '来源会话：';
@@ -2294,6 +2298,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.inert = false;
     editorLoading.hidden = true;
     listPanel.hidden = false;
+    liveLoad.disabled = false;
+    liveCompare.removeAttribute('href');
     if (mobileMenu) mobileMenu.open = false;
     setSaving(false);
   }
@@ -2632,22 +2638,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         restore.type = 'button';
         restore.textContent = '恢复为新修订';
         restore.addEventListener('click', async () => {
-          if (!activeEditor(selection) || current.id !== artifact.id) return;
-          persistDraft();
-          const revision = current.revision;
-          const result = await request('POST', editorPath(selection, artifact.id) + '/restore', {revision, to: item.revision})
-            .catch(() => ({status: 0, body: {}}));
-          if (!activeEditor(selection) || current.revision !== revision) return;
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '恢复失败。'));
+          if (!activeEditor(selection) || current.id !== artifact.id || selection.saving || form.inert) return;
+          if (hasEditorDraft()) {
+            show('error', '请先保存当前草稿，再恢复历史版本。');
             return;
           }
-          current = result.body.artifact;
-          catalog = null;
-          fillEditor(current);
-          readEditorRecovery();
-          show('ok', `已恢复为修订 ${current.revision}。`);
-          await loadVersions();
+          const revision = current.revision;
+          selection.saving = true;
+          form.inert = true;
+          setSaving(true);
+          try {
+            const result = await request('POST', editorPath(selection, artifact.id) + '/restore',
+              {revision, to: item.revision}, undefined, selection.controller.signal)
+              .catch(() => ({status: 0, body: {}}));
+            if (!activeEditor(selection) || current.revision !== revision) return;
+            if (revealRevisionConflict(result)) {
+              show('error', '恢复遇到新版本，请先查看服务器版本。');
+              return;
+            }
+            if (result.status !== 200) {
+              show('error', messageFor(result.body.error, '恢复失败。'));
+              return;
+            }
+            current = result.body.artifact;
+            catalog = null;
+            fillEditor(current);
+            readEditorRecovery();
+            liveBanner.hidden = true;
+            show('ok', `已恢复为修订 ${current.revision}。`);
+            await loadVersions();
+          } finally {
+            selection.saving = false;
+            if (activeEditor(selection)) {
+              form.inert = false;
+              setSaving(false);
+            }
+          }
         });
         row.appendChild(restore);
       }
@@ -2698,53 +2724,128 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return loadList({background: true, signal});
       }
       if (catalog?.state === 'ready' && catalog.activityVersion !== snapshot.version) catalog.state = 'stale';
-      if (!activeEditor(snapshot.selection) || snapshot.artifact !== current?.id || snapshot.selection.saving) return snapshot.version;
-      const banner = document.getElementById('artifact-live-update');
-      const message = document.getElementById('artifact-live-message');
-      const readLatest = document.getElementById('artifact-live-load');
-      const missing = snapshot.revision === null;
-      banner.hidden = !missing && snapshot.revision === current.revision;
-      if (readLatest) readLatest.hidden = missing;
-      const text = missing ? '这件作品已无法访问。此处仍保留你的草稿。' : '作品有新版本。你可以继续编辑，或读取服务器版本。';
-      if (message && message.textContent !== text) message.textContent = text;
+      const selection = snapshot.selection;
+      if (!activeEditor(selection) || snapshot.artifact !== current?.id || selection.saving || selection.loadingRevision) {
+        return snapshot.version;
+      }
+      if (snapshot.revision === null) displayEditorUpdate({missing: true});
+      else if (snapshot.revision === current.revision) liveBanner.hidden = true;
+      else if (snapshot.revision > current.revision) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) displayEditorUpdate({dirty});
+        else {
+          const outcome = await loadEditorRevision(selection, {revision: snapshot.revision, signal});
+          if (outcome === 'failed') return false;
+        }
+      }
       return snapshot.version;
     },
   });
   document.addEventListener?.('visibilitychange', activity.resume);
   activityRetry?.addEventListener('click', activity.check);
 
-  document.getElementById('artifact-live-load')?.addEventListener('click', async () => {
-    const selection = editor;
-    const artifact = current?.id;
-    if (!activeEditor(selection) || !artifact || selection.saving ||
-        !globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？')) return;
-    const button = document.getElementById('artifact-live-load');
-    if (button.disabled) return;
-    button.disabled = true;
-    form.inert = true;
-    try {
-      const signal = AbortSignal.any([selection.controller.signal, AbortSignal.timeout(6000)]);
-      const result = await request('GET', editorPath(selection), undefined, undefined, signal)
-        .catch(() => ({status: 0, body: {}}));
-      if (!activeEditor(selection) || current?.id !== artifact) return;
-      if (result.status !== 200 || result.body.artifact?.id !== artifact ||
-          (result.body.artifact.workspace_id && result.body.artifact.workspace_id !== selection.workspace)) {
-        show('error', '服务器作品暂不可读取，已保留你的草稿。');
+  function canRefreshEditor() {
+    // Replacing the editor can move the caret, interrupt a stroke or reset media.
+    return !form.inert && !drawing && !websiteInteractive && current.kind !== 'media' &&
+      !document.activeElement?.closest?.('#editor-form :is(input,textarea,select,[contenteditable="true"])');
+  }
+
+  function displayEditorUpdate({missing = false, dirty = false, failed = false} = {}) {
+    const message = missing ? '这件作品已无法访问，当前内容仍保留在此页。'
+      : failed ? '暂未读取到服务器版本，请重试。'
+      : dirty ? '服务器有新版本，当前草稿仍保留。'
+      : '服务器有新版本。';
+    if (liveMessage.textContent !== message) liveMessage.textContent = message;
+    liveLoad.hidden = missing || Boolean(dirty && !draftKey());
+    liveCompare.hidden = missing;
+    if (!missing) liveCompare.href = worksPath() + '?workspace=' + editor.workspace + '&artifact=' + current.id;
+    liveBanner.hidden = false;
+  }
+
+  async function loadEditorRevision(selection, {revision, signal, manual = false} = {}) {
+    if (!activeEditor(selection) || !current?.id || selection.saving || selection.loadingRevision || form.inert) return;
+    const prior = current;
+    const isCurrent = () => activeEditor(selection) && current === prior && !selection.saving;
+    // A separate tab remains available when the current draft cannot be recovered here.
+    if (manual && hasEditorDraft()) {
+      persistDraft();
+      const entry = readDraft(draftKey());
+      if (entry?.revision !== prior.revision ||
+          entry.title !== form.elements.title.value || entry.body !== form.elements.body.value) {
+        displayEditorUpdate({dirty: true});
+        liveLoad.hidden = true;
+        liveCompare.focus();
         return;
       }
-      persistDraft();
-      current = result.body.artifact;
+      if (!document.defaultView?.confirm?.('切换后，可以在草稿恢复区查看并复制当前草稿。继续？')) return;
+    }
+    selection.loadingRevision = true;
+    if (manual) {
+      liveLoad.disabled = true;
+      form.inert = true;
+    }
+    try {
+      const signals = [selection.controller.signal, AbortSignal.timeout(6000)];
+      if (signal) signals.push(signal);
+      const result = await request('GET', editorPath(selection), undefined, undefined, AbortSignal.any(signals))
+        .catch(() => ({status: 0, body: {}}));
+      if (!isCurrent() || signal?.aborted) return;
+      if (result.status === 404) {
+        displayEditorUpdate({missing: true});
+        return;
+      }
+      const latest = result.body.artifact;
+      if (result.status !== 200 || latest?.id !== prior.id || latest.workspace_id !== selection.workspace ||
+          !Number.isSafeInteger(latest.revision) || latest.revision < (revision ?? prior.revision + 1)) {
+        displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+        return 'failed';
+      }
+      const tools = editorTools(latest);
+      if (tools && !tools.instance) await tools.prepare();
+      if (!isCurrent() || signal?.aborted) return;
+      if (!manual) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) {
+          displayEditorUpdate({dirty});
+          return;
+        }
+      }
+      current = latest;
       fillEditor(current);
       readEditorRecovery();
-      document.getElementById('artifact-live-update').hidden = true;
+      liveBanner.hidden = true;
+      if (manual) {
+        form.inert = false;
+        form.elements.title.focus({preventScroll: true});
+        show('ok', '已切换到服务器版本。');
+      }
       for (const [name, panel] of editorPanels) {
         if (panel.open) void panelLoads[name]();
       }
+    } catch {
+      if (!isCurrent() || signal?.aborted) return;
+      displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+      return 'failed';
     } finally {
-      if (activeEditor(selection)) form.inert = false;
-      button.disabled = false;
+      selection.loadingRevision = false;
+      if (manual && activeEditor(selection)) {
+        form.inert = false;
+        liveLoad.disabled = false;
+      }
     }
-  });
+  }
+
+  liveLoad.addEventListener('click', () => void loadEditorRevision(editor, {manual: true}));
+
+  function revealRevisionConflict(result) {
+    const latest = result.body.error?.current;
+    if (result.status !== 409 || !current?.id || latest?.id !== current.id ||
+        latest.workspace_id !== editor.workspace || !Number.isSafeInteger(latest.revision) ||
+        latest.revision <= current.revision) return false;
+    persistDraft();
+    displayEditorUpdate({dirty: hasEditorDraft()});
+    return true;
+  }
 
   function listStatus(text = '', retry = false) {
     document.getElementById('artifact-list-status').hidden = !text;
@@ -3436,7 +3537,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const selection = editor;
-    if (!activeEditor(selection) || !current || form.hidden || selection.saving) return;
+    if (!activeEditor(selection) || !current || form.hidden || selection.saving || form.inert) return;
     if (websiteInteractive) renderWebsitePreview();
     selection.saving = true;
     setSaving(true);
@@ -3551,8 +3652,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     }
     if (!activeEditor(selection)) return;
-    if (result.status === 409) {
-      show('error', '文档已在别处更新，或标题已被占用，请重新打开后再保存。');
+    if (revealRevisionConflict(result)) {
+      show('error', '保存遇到新版本，请先查看服务器版本。');
+      return;
+    }
+    if (result.body.error?.code === 'title_conflict' ||
+        result.body.error?.message === 'A document with this title already exists') {
+      show('error', '这个工作区已有同名作品，请修改标题后保存。');
+      form.inert = false;
+      form.elements.title.focus();
       return;
     }
     if (result.status !== 200 && result.status !== 201) {

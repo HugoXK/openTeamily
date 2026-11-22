@@ -563,6 +563,7 @@ export function notificationSummary(item) {
     const organizer = item.organizer || '会议组织者';
     return `${organizer} 分享了纪要` + (item.title ? `「${item.title}」` : '');
   }
+  if (item.kind === 'team.owner_transferred') return `你已成为「${item.team_name || '工作区'}」的所有者`;
   if (item.kind === 'team.run_shared') {
     return `${item.actor_username || '成员'} 分享了协作结果` + (item.title ? `「${item.title}」` : '');
   }
@@ -739,10 +740,14 @@ const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
 const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
 const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
-const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder']);
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder', 'team.owner_transferred']);
 
 export function notificationTarget(item, workspace) {
   if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === 'team.owner_transferred') {
+    if (!NOTIFICATION_ID.test(workspace || '') || item.workspace_id !== workspace) return null;
+    return '/members#' + new URLSearchParams({workspace});
+  }
   if (item?.kind === 'team.run_shared') {
     if (!NOTIFICATION_ID.test(workspace || '') || item.workspace_id !== workspace || !TEAM_RUN_SHARE.test(item.share_id || '')) return null;
     const target = '/team-runs#' + new URLSearchParams({workspace, shared: item.share_id});
@@ -2356,7 +2361,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sources = memorySources(item);
     if (sources) bubble.append(sources);
     if (item.role === 'assistant' && saveableAgentMessage(item)) {
-      bubble.append(saveMessageButton(item, currentAgent.id));
+      const link = savedAgentWorkLink(item.saved_work);
+      bubble.append(link || saveMessageButton(item, currentAgent.id));
     }
     if (failed) addPrivateReplyRetry(bubble, item);
     return {bubble, replyView};
@@ -2953,14 +2959,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       reminderNotice(result.status, result.body));
   }
 
+  function savedAgentWorkLink(work) {
+    if (!/^[0-9a-f]{32}$/.test(work?.id || '')) return null;
+    const link = document.createElement('a');
+    link.className = 'saved-agent-work';
+    link.href = spaceHref(workspaceId(), work.id);
+    const label = uiLabel('打开已保存文档', 'Open saved document');
+    link.textContent = work.title ? label + ' · ' + work.title : label;
+    return link;
+  }
+
+  function showSavedAgentWork(target, artifact) {
+    const link = savedAgentWorkLink(artifact);
+    if (!link) return false;
+    // A refresh started before the document was saved must not undo its receipt.
+    privateRefresh += 1;
+    lastAgentItems = lastAgentItems.map(item => item.id === target.message
+      ? {...item, saved_work:{id:artifact.id, title:artifact.title}} : item);
+    const button = document.getElementById('message-list').querySelector(`[data-save="${target.message}"]`);
+    if (!button) return false;
+    button.replaceWith(link);
+    link.focus({preventScroll:true});
+    return true;
+  }
+
   function openSaveMessage(item, agentId) {
     if (!currentConversation) return;
     const workspace = workspaceId(), conversation = currentConversation.id;
     const path = agentId ? agentSavePath(workspace, agentId, conversation, item.id)
       : socialSavePath(workspace, conversation, item.id);
-    saveMessageTarget = {workspace, path, revision: agentId ? null : item.revision || 1};
+    saveMessageTarget = {workspace, path, scope:sendScope(), message:item.id,
+      revision:agentId ? null : item.revision || 1};
     document.getElementById('save-message-title').value = defaultSaveTitle(item.body);
     document.getElementById('save-message-error').hidden = true;
+    document.getElementById('save-message-submit').disabled = false;
     saveMessageDialog.showModal();
     document.getElementById('save-message-title').focus();
   }
@@ -2973,41 +3005,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.addEventListener('click', () => openSaveMessage(item, agentId));
     return button;
   }
-  saveMessageDialog?.addEventListener('close', () => { saveMessageTarget = null; });
-  const saveMessageCancel = document.getElementById('save-message-cancel');
-  if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
+  saveMessageDialog?.addEventListener('close', () => {
+    if (!saveMessageDialog.open) saveMessageTarget = null;
+  });
+  document.getElementById('save-message-cancel')?.addEventListener('click', () => saveMessageDialog.close());
   const saveMessageForm = document.getElementById('save-message-form');
-  if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
+  saveMessageForm?.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!saveMessageTarget) return;
     const target = saveMessageTarget;
+    const current = () => saveMessageDialog.open && saveMessageTarget === target && sendScope() === target.scope;
+    if (!target || !current()) return;
     const button = document.getElementById('save-message-submit');
-    const error = document.getElementById('save-message-error');
     if (button.disabled) return;
-    button.disabled = true; error.hidden = true;
+    const error = document.getElementById('save-message-error');
+    button.disabled = true;
+    error.hidden = true;
     try {
-      const body = {title: document.getElementById('save-message-title').value.trim()};
+      const body = {title:document.getElementById('save-message-title').value.trim()};
       if (target.revision !== null) body.revision = target.revision;
-      const result = await request('POST', target.path, body);
-      if (saveMessageTarget !== target || workspaceId() !== target.workspace) return;
-      if (result.status !== 200 && result.status !== 201) {
-        error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
+      let result = await request('POST', target.path, body, undefined, AbortSignal.timeout(12000))
+        .catch(() => ({status:0, body:{}}));
+      if (!current()) return;
+      const committed = result => [200, 201].includes(result.status)
+        && /^[0-9a-f]{32}$/.test(result.body?.artifact?.id || '');
+      const uncertain = !result.status || result.status === 408 || result.status >= 500
+        || ([200, 201].includes(result.status) && !committed(result));
+      if (uncertain && target.revision === null) {
+        const receipt = await request('GET', target.path, undefined, undefined, AbortSignal.timeout(4500)).catch(() => null);
+        if (!current()) return;
+        if (receipt?.status === 200 && committed(receipt)) result = receipt;
       }
-      saveMessageDialog.close(); saveMessageTarget = null;
+      if (!committed(result)) {
+        error.textContent = uncertain
+          ? uiLabel('暂时无法确认保存结果，可以重试。', 'Couldn’t confirm the save. You can try again.')
+          : messageFor(result.body.error, uiLabel('消息未保存，请重试。', 'Couldn’t save the message. Try again.'));
+        error.hidden = false;
+        return;
+      }
+      saveMessageDialog.close();
+      saveMessageTarget = null;
       const artifact = result.body.artifact;
-      show('ok', result.status === 201 ? '已保存到资料空间。' : '资料空间里已有这条消息的副本。');
-      if (artifact?.id) {
-        const link = document.createElement('a');
-        link.href = spaceHref(target.workspace, artifact.id);
-        link.textContent = '打开文档';
+      const shown = target.revision === null && showSavedAgentWork(target, artifact);
+      const copy = result.status === 201
+        ? uiLabel('已保存到资料空间。', 'Saved to Space.')
+        : uiLabel('资料空间已有这条消息的副本。', 'This message already has a copy in Space.');
+      show('ok', copy, {announceOnly:shown});
+      if (!shown) {
+        const link = savedAgentWorkLink(artifact);
         status.append(document.createTextNode(' '), link);
       }
-    } catch {
-      if (saveMessageTarget !== target) return;
-      error.textContent = '无法确认保存结果，请重试。';
-      error.hidden = false;
+    } finally {
+      if (saveMessageTarget === target) button.disabled = false;
     }
-    finally { button.disabled = false; }
   });
 
   const HISTORY_PAGE_SIZE = '50';

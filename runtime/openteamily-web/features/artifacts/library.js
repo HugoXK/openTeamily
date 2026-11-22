@@ -302,6 +302,10 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const title = input.title
   const content = input.body ?? ''
   const kind = input.kind ?? 'document'
+  const source = input.source
+  if (source?.kind === 'agent_message' && source.agent_id && !reuseChatSource) {
+    refuse(403, 'forbidden', 'Save private replies from their conversation')
+  }
   let board, slides, dashboard, spreadsheet
   if (kind === 'media') refuse(400, 'invalid', 'Upload media as multipart form data')
   if (kind === 'whiteboard') {
@@ -330,7 +334,6 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const keyHash = digest('artifact:' + key)
   const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
-    const source = input.source
     const already = existingSource(store, workspaceId, source)
     // Saved source snapshots survive later edits and title changes.
     if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
@@ -558,7 +561,7 @@ export function updateArtifact(ctx, row, changes, revision) {
     guardVersions(store, row.id)
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     store.run('UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
       title, hash, content, row.revision + 1, nowSeconds(), owner, row.id)
@@ -587,7 +590,7 @@ export function replaceMedia(ctx, row, { title, data, filename, mime, revision }
   return store.transaction(() => {
     const hash = titleHash(newTitle)
     if (newTitle !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     guardVersions(store, row.id)
     let digestHex
@@ -621,7 +624,7 @@ export function restoreArtifact(ctx, row, revision, to) {
     const title = snapshot.title
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     let kind = snapshot.kind
     let structured = null

@@ -1578,6 +1578,52 @@ test('an authorized direct link opens editable content with the catalog and opti
   assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
 });
 
+test('Space follows a saved revision while idle and keeps an edit typed during the next read', async () => {
+  const activityPath = linkedCatalog + '/activity?artifact=' + linkedArtifact;
+  const stale = {...linkedRecord, revision: 2, body: '另一会话已保存'};
+  const newer = {...linkedRecord, revision: 3, body: '更新的服务器内容'};
+  const pending = deferred();
+  const requested = deferred();
+  let remote = linkedRecord;
+  const page = linkFixture((path, options) => {
+    if (path === linkedCatalog) return reply({body: {items: []}});
+    if (path === activityPath) return reply({body: {version: String(remote.revision).repeat(64), revision: remote.revision}});
+    if (path === linkedDetail && options.method === 'POST') {
+      return reply({status: 409, body: {error: {code: 'conflict', current: remote}}});
+    }
+    if (path === linkedDetail && remote === newer) {
+      requested.finish();
+      return pending.promise;
+    }
+    if (path === linkedDetail) return reply({body: {artifact: remote}});
+  });
+  await page.mounted;
+  const retry = page.elements.get('workspace-events-retry');
+  remote = stale;
+  await retry.dispatch('click');
+  assert.equal(page.form.elements.body.value, stale.body);
+  assert.equal(page.elements.get('artifact-live-update').hidden, true);
+
+  remote = newer;
+  const checking = retry.dispatch('click');
+  await requested.promise;
+  page.form.elements.body.value = '本地未保存内容';
+  pending.finish(reply({body: {artifact: remote}}));
+  await checking;
+  assert.equal(page.form.elements.body.value, '本地未保存内容');
+  assert.equal(page.elements.get('artifact-live-update').hidden, false);
+  assert.equal(page.elements.get('artifact-live-compare').href, '/space' + linkedSearch);
+
+  const reads = page.calls.filter(call => call.path === linkedDetail && call.method === 'GET').length;
+  await retry.dispatch('click');
+  assert.equal(page.calls.filter(call => call.path === linkedDetail && call.method === 'GET').length, reads);
+  await page.form.dispatch('submit');
+  const saved = page.calls.find(call => call.path === linkedDetail && call.method === 'POST');
+  assert.equal(JSON.parse(saved.body).revision, stale.revision);
+  assert.match(page.elements.get('status').textContent, /保存遇到新版本/);
+  assert.equal(page.form.elements.body.value, '本地未保存内容');
+});
+
 test('an unauthorized direct link reports its error while the authorized catalog is pending', async () => {
   const directory = deferred();
   const page = linkFixture(path => {

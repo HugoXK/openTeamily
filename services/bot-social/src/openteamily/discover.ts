@@ -54,6 +54,7 @@ ${WORK_COMMENTS_SCHEMA}
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
 export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.(otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})\.([a-f0-9]{24})$/;
@@ -149,6 +150,10 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
 
 function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
+  const creatorHandle = view.creator?.handle;
+  const author = CREATOR_HANDLE.test(creatorHandle || "")
+    ? `<a href="/discover?creator=${encodeURIComponent(creatorHandle)}">${escapeHtml(creator)}</a>`
+    : escapeHtml(creator);
   const title = String(view.title || view.slug);
   const site = l.kind === "work" && view.site_available === true;
   const media = view.file_available ? view.file_mime.split("/")[0] : null;
@@ -204,7 +209,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;
 .comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
 </head><body${site ? ' class="interactive-work"' : ""}>
-<p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
+<p class="meta">作品${creator ? " · " + author : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 <nav class="work-nav" aria-label="浏览公开作品">
 ${adjacent(previous, "prev", "上一件")}
@@ -323,7 +328,7 @@ h2,h3,p{margin:0}
 <section class="profile" aria-labelledby="profile-title">
 <div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
 <h1 id="profile-title">${escapeHtml(title)}</h1>
-${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+${creator ? `<p class="creator">发布者 · ${author}</p>` : ""}
 <div id="public-agent-share" class="profile-share" data-profile-path="${profilePath}">
   <button type="button" data-copy-profile disabled hidden>复制主页链接</button>
   <details data-copy-profile-fallback>
@@ -400,7 +405,7 @@ function publicWorkPreview(ot: OtContext, slug: string) {
     listingView(ot, work, null);
   const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
   return {
-    slug, title, kind: work_kind || "document", author,
+    slug, title, kind: work_kind || "document", author, creator: {handle: creator.handle, name: creator.display_name || author},
     updated: Math.floor(updated_at > 1e12 ? updated_at / 1000 : updated_at),
     path, likes, collections, comment_count, site_available,
     ...(file_available ? {file_available, file_mime, file_bytes} : {}),
@@ -482,6 +487,7 @@ function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
       chat_enabled:card.chat_enabled, creator:{handle:creator.handle, name:creator.display_name || author}};
   }
   return {slug, title, kind:card.work_kind || "document", author, updated, path:card.path,
+    creator:{handle:creator.handle, name:creator.display_name || author},
     likes:card.likes, collections:card.collections, comment_count:card.comment_count,
     ...(card.site_available ? {site_available:true} : {}),
     ...(card.file_available ? {file_available:true, file_mime:card.file_mime, file_bytes:card.file_bytes} : {}),
