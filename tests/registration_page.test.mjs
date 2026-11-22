@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerAccount, mountRegistration} from '../openteamily/static/register/app.mjs';
+import {takeSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
 
 const synthetic = 'synthetic fixture only';
 test('registration posts JSON only to same-origin existing API', async () => {
@@ -30,19 +31,58 @@ test('failure text never echoes response/exception credentials', async () => {
 });
 function elements(valid = true) {
   const ids = ['register-form', 'register-submit', 'register-status', 'register-username', 'register-password'];
-  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', disabled: false, focus() {}}]));
+  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', dataset: {}, disabled: false, focus() {}}]));
   all['register-form'].reportValidity = () => valid;
   all['register-form'].addEventListener = (_, fn) => { all.submit = fn; };
   return {all, document: {getElementById: id => all[id]}};
 }
-test('successful form clears password and navigates only to fixed home destination with a verified session', async () => {
+test('successful form clears the password and opens private Chat directly', async () => {
   const {all, document} = elements();
+  const user = {id: 'a'.repeat(32), username: synthetic};
+  const personal_chat = {workspace_id: 'b'.repeat(32), agent_id: 'c'.repeat(32)};
   let destination;
-  mountRegistration(document, path => { destination = path; }, async url => url==='/v1/auth/register'?{status:201}:{status:200,json:async()=>({user:{id:'fixture-id',username:synthetic}})});
+  mountRegistration(document, path => { destination = path; }, async url => url === '/v1/auth/register'
+    ? {status: 201, json: async () => ({user, personal_chat})}
+    : {status: 200, json: async () => ({user})});
   await all.submit({preventDefault() {}});
-  assert.equal(destination, '/');
+  assert.equal(destination, `/chat#workspace=${personal_chat.workspace_id}&agent=${personal_chat.agent_id}`);
   assert.equal(all['register-password'].value, '');
-  assert.equal(all['register-submit'].disabled, false);
+  assert.equal(all['register-submit'].disabled, true);
+});
+
+test('unmanaged signup and invalid targets keep the Home fallback', async () => {
+  for (const personal_chat of [undefined, {workspace_id: 'https://outside.invalid', agent_id: 'c'.repeat(32)}]) {
+    const {all, document} = elements();
+    const user = {id: 'a'.repeat(32), username: synthetic};
+    let destination;
+    mountRegistration(document, path => { destination = path; }, async url => url === '/v1/auth/register'
+      ? {status: 201, json: async () => ({user, personal_chat})}
+      : {status: 200, json: async () => ({user})});
+    await all.submit({preventDefault() {}});
+    assert.equal(destination, '/');
+  }
+});
+
+test('signup with a valid invitation resumes the login continuation while retaining the expected account', async () => {
+  const {all, document} = elements();
+  const hash = '#team-invite=validSyntheticInvite';
+  const values = new Map();
+  document.defaultView = {
+    location: {hash}, sessionStorage: {
+      setItem: (key, value) => values.set(key, value),
+      getItem: key => values.get(key),
+      removeItem: key => values.delete(key),
+    },
+  };
+  const id = 'a'.repeat(32);
+  let destination;
+  mountRegistration(document, path => { destination = path; }, async url => {
+    assert.equal(url, '/v1/auth/register');
+    return {status: 201, json: async () => ({user: {id, username: synthetic}})};
+  });
+  await all.submit({preventDefault() {}});
+  assert.equal(destination, '/login' + hash);
+  assert.equal(takeSignupSession(document.defaultView), id);
 });
 test('invalid forms do not send and failure does not navigate', async () => {
   for (const valid of [false, true]) {
@@ -62,4 +102,38 @@ test('201 without actual session is not claimed as a successful login',async()=>
   const result=await registerAccount('synthetic',synthetic,async url=>url==='/v1/auth/register'?{status:201}:response);
   assert.equal(result.ok,false);assert.equal(result.created,true);assert.ok(!JSON.stringify(result).includes(synthetic));
  }
+});
+
+test('registration hands off cookie confirmation without a duplicate session read when the tab can carry the account ID', async () => {
+  const values = new Map();
+  const view = {sessionStorage: {
+    setItem: (key, value) => values.set(key, value), getItem: key => values.get(key), removeItem: key => values.delete(key),
+  }};
+  const id = 'a'.repeat(32);
+  const result = await registerAccount('SYNTHETIC', synthetic, async url => {
+    assert.equal(url, '/v1/auth/register');
+    return {status: 201, json: async () => ({user: {id, username: 'synthetic'}})};
+  }, view);
+  assert.deepEqual(result, {ok: true, pendingSession: true});
+  assert.doesNotMatch([...values.values()].join(''), /synthetic/);
+  assert.equal(takeSignupSession(view), id);
+  assert.equal(takeSignupSession(view), null);
+});
+
+test('denied tab storage or missing signup identity keeps the same-origin cookie confirmation', async () => {
+  for (const [view, user] of [
+    [{get sessionStorage() { throw new Error('storage denied'); }}, {id: 'a'.repeat(32), username: 'synthetic'}],
+    [{sessionStorage: {setItem() { assert.fail('an invalid identity must not be carried'); }}}, {username: 'synthetic'}],
+  ]) {
+    const reads = [];
+    const result = await registerAccount('synthetic', synthetic, async url => {
+      reads.push(url);
+      return url === '/v1/auth/register'
+        ? {status: 201, json: async () => ({user})}
+        : {status: 401, json: async () => ({})};
+    }, view);
+    assert.equal(result.created, true);
+    assert.equal(result.ok, false);
+    assert.deepEqual(reads, ['/v1/auth/register', '/v1/auth/session']);
+  }
 });

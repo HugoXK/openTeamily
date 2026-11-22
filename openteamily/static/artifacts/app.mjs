@@ -1,19 +1,31 @@
-import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
-// Authorized saved-result links select a real workspace and fetch the actual editor record.
+import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
+import { mountActionMenus } from '../shell/action-menu.mjs';
+import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
+import { mountSharedStudio } from './shared-studio.mjs';
+import { mountStudioCopy } from './studio-copy.mjs';
+// A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
-  const params=new URLSearchParams(search||'');
-  if(!params.has('workspace')&&!params.has('artifact'))return null;
-  const workspace=params.get('workspace'),artifact=params.get('artifact');
-  if([...params.keys()].some(key=>!['workspace','artifact'].includes(key))||params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
-  return {workspace,artifact};
+  const params = new URLSearchParams(search || '');
+  if (!params.has('workspace') && !params.has('artifact')) return null;
+  const id = /^[0-9a-f]{32}$/;
+  const workspace = params.get('workspace');
+  const artifact = params.get('artifact');
+  if ([...params.keys()].some(key => !['workspace', 'artifact'].includes(key))
+    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
+    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))) return {invalid: true};
+  return artifact ? {workspace, artifact} : {workspace};
 }
 
-import { bindDocumentEditor } from '../shell/rich-editor.mjs';
-import { renderThumb } from '../shell/thumb.mjs';
+import { mountArtifactNotifications } from './notifications.mjs';
+import {
+  artifactKindLabel as kindLabel, renderThumb,
+  websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
+  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch, conversationChatHref,
+} from '../shell/thumb.mjs';
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
-const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', whiteboard: 'new-board'};
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board'};
 export function newKindFromSearch(search) {
   const value = new URLSearchParams(search || '').get('new') || '';
   return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
@@ -31,13 +43,49 @@ export function csrfCookie(raw) {
   return '';
 }
 
-export function listQuery(search) {
+const DRAFT_STORAGE_PREFIX = 'ot-space-draft-v1:';
+const DRAFT_MAX_ENTRIES = 16;
+const DRAFT_MAX_AGE = 24 * 60 * 60 * 1000;
+const DRAFT_MAX_BODY = 32_000;
+const CATALOG_PAGE_SIZE = 20;
+const CATALOG_READ_LIMIT = 100;
+const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
+const CATALOG_SEARCH_DELAY = 180;
+
+const FILE_TYPES = {
+  云文档: 'document',
+  电子表格: 'spreadsheet',
+  幻灯片: 'slides',
+  看板: 'dashboard',
+  网页: 'website',
+  图片: 'image',
+  视频: 'video',
+  音频: 'audio',
+  '3D 模型': 'model3d',
+  白板: 'whiteboard',
+  消息: 'messages',
+};
+
+export const FILE_TYPE_LABELS = Object.keys(FILE_TYPES);
+
+export function listQuery(search, {
+  kind = 'all', scope = 'all', types = [], creators = [], sessions = [], updated = {},
+} = {}) {
   const needle = (search || '').trim();
-  return needle ? ('?q=' + encodeURIComponent(needle)) : '';
+  const parameters = [];
+  if (needle) parameters.push('q=' + encodeURIComponent(needle));
+  if (kind !== 'all') parameters.push('kind=' + encodeURIComponent(kind));
+  if (scope !== 'all') parameters.push('scope=' + encodeURIComponent(scope));
+  const filterTypes = types.filter(label => Object.hasOwn(FILE_TYPES, label)).map(label => FILE_TYPES[label]);
+  for (const [name, values] of [['type', filterTypes], ['creator', creators], ['session', sessions]]) {
+    for (const value of [...new Set(values)].sort()) parameters.push(name + '=' + encodeURIComponent(value));
+  }
+  if (Number.isSafeInteger(updated.since)) parameters.push('updated_since=' + updated.since);
+  if (Number.isSafeInteger(updated.before)) parameters.push('updated_before=' + updated.before);
+  return parameters.length ? '?' + parameters.join('&') : '';
 }
 
-export const FILE_TYPE_LABELS = ['云文档', 'Markdown', 'DOCX', 'PDF', '电子表格', '幻灯片',
-  'Web 应用', '网页', '图片', '视频', '音频', '白板', '消息'];
+const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
 
 export function artifactMatchesType(item, type) {
   const mime = String((item && item.media && item.media.mime) || '');
@@ -46,25 +94,80 @@ export function artifactMatchesType(item, type) {
   if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
+  if (type === '3D 模型') return isModel3d(item);
   if (type === '白板') return item.kind === 'whiteboard';
+  if (type === '电子表格') return item.kind === 'spreadsheet';
   if (type === '幻灯片') return item.kind === 'slides';
+  if (type === '看板') return item.kind === 'dashboard';
   if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
   return false;
 }
 
-export function artifactMatchesModified(item, window, now = Date.now()) {
-  if (!window || window === 'any' || window === 'custom') return true;
-  const updated = Number(item && item.updated ? item.updated : 0) * 1000;
-  if (!updated) return false;
-  const day = 24 * 60 * 60 * 1000;
+function localDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const [year, month, day] = match.slice(1).map(Number);
+  if (year < 1) return null;
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+}
+
+function localDayAfter(date) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 0, 0, 0);
+  return next.getTime() / 1000;
+}
+
+export function artifactModifiedBounds(window, now = Date.now(), {start, end} = {}) {
+  if (window === 'custom') {
+    const from = localDate(start);
+    const through = localDate(end);
+    if (!from || !through || through < from) return null;
+    return {since: from.getTime() / 1000, before: localDayAfter(through)};
+  }
   if (window === 'today') {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
-    return updated >= start.getTime();
+    return {since: start.getTime() / 1000, before: localDayAfter(start)};
   }
   const days = {d7: 7, d30: 30, d90: 90};
-  if (days[window]) return updated >= now - days[window] * day;
-  return true;
+  return Object.hasOwn(days, window) ? {since: Math.ceil(now / 1000 - days[window] * 86400)} : {};
+}
+
+function artifactWithinBounds(item, {since, before}) {
+  if (since == null && before == null) return true;
+  const updated = Number(item?.updated);
+  return item?.updated != null && Number.isFinite(updated) &&
+    (since == null || updated >= since) && (before == null || updated < before);
+}
+
+function artifactSearchMatch(item) {
+  const match = item.match;
+  if (!match || !['title', 'body', 'filename'].includes(match.kind)
+      || typeof match.text !== 'string' || match.text.length > 220
+      || !Number.isInteger(match.start) || !Number.isInteger(match.end)
+      || match.start < 0 || match.end <= match.start || match.end > match.text.length
+      || /[\uDC00-\uDFFF]/u.test(match.text[match.start])
+      || /[\uDC00-\uDFFF]/u.test(match.text[match.end])) return null;
+  return match;
+}
+
+function appendArtifactHighlight(document, parent, match, excerpt = false) {
+  const before = match.text.slice(0, match.start);
+  const after = match.text.slice(match.end);
+  const leading = excerpt ? [...before].slice(-16).join('') : before;
+  const trailing = excerpt ? [...after].slice(0, 44).join('') : after;
+  const mark = document.createElement('mark');
+  mark.textContent = match.text.slice(match.start, match.end);
+  parent.append(document.createTextNode((leading === before ? '' : '…') + leading), mark,
+    document.createTextNode(trailing + (trailing === after ? '' : '…')));
+}
+
+export function artifactMatchesModified(item, window, now = Date.now(), range) {
+  return artifactWithinBounds(item, artifactModifiedBounds(window, now, range) || {});
 }
 
 export function visibleArtifacts(items, options = {}) {
@@ -72,10 +175,9 @@ export function visibleArtifacts(items, options = {}) {
   const scope = options.scope || 'all';
   const username = options.username || '';
   const types = options.types || [];
-  const modified = options.modified || 'any';
   const creators = options.creators || [];
   const sessions = options.sessions || [];
-  const now = options.now == null ? Date.now() : options.now;
+  const updated = options.updated ?? artifactModifiedBounds(options.modified, options.now ?? Date.now(), options.range) ?? {};
   if (kind === 'meetings') return [];
   let rows = [...(items || [])];
   if (scope === 'favorites') rows = rows.filter(item => item.favorited);
@@ -93,7 +195,7 @@ export function visibleArtifacts(items, options = {}) {
   if (types.length) {
     rows = rows.filter((item) => types.some((type) => artifactMatchesType(item, type)));
   }
-  rows = rows.filter((item) => artifactMatchesModified(item, modified, now));
+  rows = rows.filter((item) => artifactWithinBounds(item, updated));
   if (creators.length) rows = rows.filter((item) => creators.includes(item.created_by));
   if (sessions.length) {
     rows = rows.filter((item) => item.source && sessions.includes(item.source.conversation_id));
@@ -119,7 +221,6 @@ export function meetingTimeLabel(epochSeconds) {
     + `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Meetings come from GET /v1/workspaces/<wid>/meetings; the page only lists them, newest first. */
 export function meetingRows(items) {
   const rows = (items || []).filter((item) => item && typeof item.title === 'string');
   rows.sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0));
@@ -128,6 +229,7 @@ export function meetingRows(items) {
     title: item.title,
     started_at: Number(item.started_at) || 0,
     actionLabel: meetingActionLabel(item.action_count, item.done_count),
+    ...(item.shared === true ? {shared: true, organizer: item.organizer} : {}),
   }));
 }
 
@@ -136,7 +238,9 @@ export function meetingsForScope(items, {scope = 'all', username = '', userId = 
   if (scope !== 'joined') return rows;
   const name = (username || '').trim().toLowerCase();
   return rows.filter((row) => {
-    if (userId && row.created_by === userId) return true;
+    if (row.shared === true) return true;
+    // The single-owner DS-Bot uses this marker when its platform user ID is unavailable.
+    if (userId && (row.created_by === userId || row.created_by === 'owner')) return true;
     const attendees = Array.isArray(row.attendees) ? row.attendees : [];
     return Boolean(name) && attendees.some((item) => String(item).trim().toLowerCase() === name);
   });
@@ -184,12 +288,10 @@ export function artifactDeletePrompt(artifact) {
   };
 }
 
-export function savableTaskArtifacts(tasks) {
-  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
-    const result = task && task.result;
-    const text = result && (typeof result.text === 'string' ? result.text : result.echo);
-    return Boolean(task) && task.status === 'succeeded' && typeof text === 'string' && text.trim() !== '';
-  });
+export function savableTaskArtifacts(runs) {
+  return (Array.isArray(runs) ? runs : []).filter(run =>
+    run?.verified === true && /^[a-f0-9]{32}$/.test(run.task?.id || '')
+  ).map(run => run.task);
 }
 
 export function taskArtifactTitle(task) {
@@ -217,6 +319,47 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
+function bindMobileCatalogToolbar(document, closePopovers) {
+  const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
+  const panel = document.getElementById('main-panel');
+  const toolbar = document.getElementById('catalog-quick-actions');
+  const title = document.getElementById('space-title');
+  const directory = document.getElementById('artifact-dir');
+  const catalog = document.getElementById('list-panel');
+  const controls = [
+    document.getElementById('new-menu-button')?.parentElement,
+    document.getElementById('artifact-notify'),
+    document.getElementById('search')?.parentElement,
+    document.getElementById('filter-button')?.parentElement,
+  ];
+  if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
+    return () => {};
+  }
+  // Move the original controls so focus order follows their visual order and
+  // there is still only one search, workspace context, and set of popovers.
+  const original = controls.map(node => ({node, parent: node.parentElement, next: node.nextElementSibling}));
+  let catalogView = false;
+  let compact = false;
+
+  function sync() {
+    const next = catalogView && viewport.matches;
+    if (next === compact) return;
+    compact = next;
+    closePopovers();
+    const focus = document.activeElement;
+    const restoreFocus = controls.some(node => node.contains(focus));
+    if (compact) toolbar.append(...controls);
+    else for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+    panel.classList.toggle('is-compact-catalog', compact);
+    title.classList.toggle('visually-hidden', !compact);
+    directory.hidden = !compact && catalog.classList.contains('dir-collapsed');
+    if (restoreFocus && !focus.closest('[hidden]')) focus.focus({preventScroll: true});
+  }
+
+  viewport.addEventListener?.('change', sync);
+  return enabled => { catalogView = enabled; sync(); };
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -230,6 +373,8 @@ function idempotencyKey() {
   return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+const DISCOVER_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+
 export function suggestedDiscoverSlug(title) {
   const slug = String(title || '')
     .toLowerCase()
@@ -237,11 +382,11 @@ export function suggestedDiscoverSlug(title) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 30)
     .replace(/-+$/g, '');
-  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
+  return DISCOVER_SLUG.test(slug) ? slug : '';
 }
 
 export function kindBadge(kind) {
-  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
+  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', spreadsheet: 'XLSX', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
 }
 
 export function artifactTime(seconds, now = Date.now()) {
@@ -261,7 +406,7 @@ export function applyArtifactLayout(list, layout) {
 }
 
 export function canSendArtifactToChat(item) {
-  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard'].includes(item.kind));
+  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard','spreadsheet'].includes(item.kind));
 }
 
 export function conversationLabel(item) {
@@ -273,46 +418,209 @@ export function conversationLabel(item) {
   return item.kind === 'dm' ? '单聊' : '群聊';
 }
 
-export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+function agentConversations(directory, {includeArchived = false} = {}) {
+  const agents = new Map((directory.items || []).filter(agent => includeArchived || (!agent.archived && !agent.native_deleted))
+    .map(agent => [agent.id, agent]));
+  return (directory.conversations || []).filter(row => agents.has(row.agent_id)).map(row => {
+    const agent = agents.get(row.agent_id);
+    const title = (row.title || '').trim();
+    const label = title && title !== agent.name ? agent.name + ' · ' + title : agent.name;
+    return {...row, source: 'agent', label};
+  });
+}
+
+const validActivityVersion = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
+export function createArtifactActivity({read, apply, report, visible,
+  setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, interval = 8000}) {
+  let scope = '', version = '', timer, controller, failures = 0;
+
+  function pause() {
+    clearTimer(timer);
+    timer = undefined;
+    controller?.abort();
+    controller = undefined;
+  }
+
+  function schedule(delay) {
+    if (!scope || !visible()) return;
+    clearTimer(timer);
+    timer = setTimer(() => void check(), delay);
+    timer?.unref?.();
+  }
+
+  async function check() {
+    if (!scope || !visible() || controller) return;
+    clearTimer(timer);
+    const workspace = scope;
+    const active = new AbortController();
+    controller = active;
+    const current = () => controller === active && workspace === scope && visible();
+    const timeout = setTimer(() => active.abort(), 6000);
+    timeout?.unref?.();
+    try {
+      const snapshot = await read(workspace, active.signal);
+      if (!current()) return;
+      if (active.signal.aborted || !validActivityVersion(snapshot?.version)) throw new Error('Invalid activity version');
+      const applied = await apply(snapshot, {
+        workspace, changed: version !== snapshot.version, signal: active.signal,
+      });
+      if (!current()) return;
+      if (applied === false) throw new Error('Could not apply activity update');
+      if (applied !== 'defer') version = validActivityVersion(applied) ? applied : snapshot.version;
+      failures = 0;
+      report('ready');
+    } catch {
+      if (!current()) return;
+      failures += 1;
+      report('error');
+    } finally {
+      clearTimer(timeout);
+      if (controller === active) {
+        controller = undefined;
+        schedule(Math.min(45000, interval * 2 ** Math.min(failures, 3)));
+      }
+    }
+  }
+
+  return {
+    setScope(workspace) {
+      if (scope === workspace) return;
+      pause();
+      scope = workspace;
+      version = '';
+      failures = 0;
+      report('idle');
+      schedule(interval);
+    },
+    seed(workspace, baseline) {
+      if (scope !== workspace || version || !validActivityVersion(baseline)) return;
+      version = baseline;
+      report('ready');
+    },
+    resume() {
+      if (!visible()) pause();
+      else void check();
+    },
+    check,
+  };
+}
+
+export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), activityTimers} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('editor-form');
   const listPanel = document.getElementById('list-panel');
+  const editorLoading = document.getElementById('editor-loading');
+  const main = document.getElementById('main');
+  const actionMenus = mountActionMenus(document);
+  const newMenuButton = document.getElementById('new-menu-button');
+  const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
+  const compactToolbar = bindMobileCatalogToolbar(document, () => {
+    actionMenus.close({focus: true});
+    closeFilterPanel({focus: true});
+  });
+  const liveBanner = document.getElementById('artifact-live-update');
+  const liveMessage = document.getElementById('artifact-live-message');
+  const liveLoad = document.getElementById('artifact-live-load');
+  const liveCompare = document.getElementById('artifact-live-compare');
+  const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
+  const discoverSlug = document.getElementById('discover-slug');
+  const discoverEditable = document.getElementById('discover-editable-remix');
+  const discoverEditableField = document.getElementById('discover-editable-remix-field');
+  const discoverEditableNote = document.getElementById('discover-editable-remix-note');
+  const discoverPublicLink = document.getElementById('discover-public-link');
+  const publishDiscover = document.getElementById('publish-discover');
+  const revokeDiscover = document.getElementById('revoke-discover');
+  const mobileMenu = document.getElementById('mobile-editor-menu');
+  const mobileMore = document.getElementById('mobile-editor-more');
+  const mobileMarkdown = document.getElementById('mobile-editor-markdown');
+  const mobileDelete = document.getElementById('mobile-editor-delete');
+  const mobileSave = document.getElementById('mobile-editor-save');
+  const mobilePanels = new Map([...editorPanels.keys()].map(name => [name, document.getElementById('mobile-editor-' + name)]));
+  const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save', 'mobile-editor-save']
+    .map(id => document.getElementById(id)).filter(Boolean);
   const workspaceSelect = document.getElementById('workspace');
+  const workspacePending = document.getElementById('workspace-pending');
+  const createButtons = [newMenuButton, ...[
+    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
+    'resume-draft-document', 'resume-draft-website',
+  ].map(id => document.getElementById(id))].filter(Boolean);
   const search = document.getElementById('search');
+  const clearSearch = document.getElementById('clear-artifact-search');
+  const nativeCatalog = servedByDsBot(document);
+  const pageMore = document.getElementById('more-artifacts');
+  const pageFooter = document.getElementById('artifact-pagination');
+  const pageNote = document.getElementById('artifact-pagination-note');
+  const filterButton = document.getElementById('filter-button');
+  const filterPanel = document.getElementById('filter-panel');
+  const filterReset = document.getElementById('filter-reset');
+  const filterDates = document.getElementById('custom-range');
+  const dateStart = document.getElementById('filter-date-start');
+  const dateEnd = document.getElementById('filter-date-end');
+  const dateMessage = document.getElementById('filter-date-message');
+  const duplicateDialog = document.getElementById('duplicate-artifact-dialog');
+  const duplicateForm = document.getElementById('duplicate-artifact-form');
+  const duplicateTitle = document.getElementById('duplicate-artifact-title');
+  const duplicateSource = document.getElementById('duplicate-artifact-source');
+  const duplicateStatus = document.getElementById('duplicate-artifact-status');
+  const duplicateCancel = document.getElementById('duplicate-artifact-cancel');
+  const duplicateSubmit = document.getElementById('duplicate-artifact-submit');
+  let duplicateState = null;
   let currentUser = null;
-  let workspaces = [];
+  let workspaceResolved = false;
+  let studioWorkspaces = [];
+  let workspaceLoad = 0;
   let current = null;
+  let editor = null;
+  let catalog = null;
+  let searchTimer = null;
   let draftKind = 'document';
   let catalogKind = 'all';
   let catalogScope = 'all';
   let catalogLayout = 'grid';
   let meetingScope = 'all';
   let filterTypes = [];
-  let filterModified = 'any';
+  let filterUpdated = {};
   let filterCreators = [];
   let filterSessions = [];
+  let facets = null;
   let allItems = [];
   let meetingItems = [];
   let meetingError = '';
   let meetingLoadedFor = '';
   let meetingLoading = false;
+  let meetingRequest = 0;
+  let meetingSharedCursor = '';
+  let bookmarkRevision = 0;
+  const pendingBookmarks = new Set();
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
+
+  form.elements.title.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    form.requestSubmit?.();
+  });
+  form.elements.title.addEventListener('input', () => {
+    const title = form.elements.title;
+    if (/[\r\n]/.test(title.value)) title.value = title.value.replace(/[\r\n]+/g, ' ');
+  });
 
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal, keepalive = false) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal, keepalive,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -322,6 +630,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function canCreateInWorkspace() {
+    return Boolean(currentUser && workspaceResolved && workspaceId());
+  }
+
+  function syncWorkspaceCreation() {
+    const enabled = canCreateInWorkspace();
+    for (const button of createButtons) button.disabled = !enabled;
+    if (!enabled) newMenu.close();
+  }
+
+  const notifications = mountArtifactNotifications(document, {
+    request: (method, path, body, options = {}) =>
+      request(method, path, body, undefined, options.signal, options.keepalive),
+  });
+  const studio = mountSharedStudio(document, {
+    request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+    onClose() {
+      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    },
+  });
+  const studioCopy = mountStudioCopy(document, {
+    source: () => ({
+      selection: editor, item: current,
+      team: nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+    }),
+    ready(selection) {
+      if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
+      if (selection.saving) return '作品正在保存，请稍候。';
+      if (hasEditorDraft()) return '请先保存修改，再预览要复制的版本。';
+      return '';
+    },
+    request: (selection, id, review) =>
+      request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
+    show,
+  });
+
+  function syncStudioWorkspace() {
+    studio?.setWorkspace(nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+      currentUser?.id);
+    studioCopy?.update();
   }
 
   async function renderProviders() {
@@ -346,15 +696,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function kindLabel(kind) {
-    if (kind === 'website') return '网站';
-    if (kind === 'media') return '媒体';
-    if (kind === 'whiteboard') return '白板';
-    if (kind === 'slides') return '幻灯片';
-    if (kind === 'dashboard') return '看板';
-    return '文档';
-  }
-
   function strokeId() {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -368,6 +709,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function drawBoard() {
     const canvas = document.getElementById('board-canvas');
     if (!canvas) return;
+    const width = Number.isInteger(boardState.width) && boardState.width >= 100 && boardState.width <= 2000 ? boardState.width : 800;
+    const height = Number.isInteger(boardState.height) && boardState.height >= 100 && boardState.height <= 2000 ? boardState.height : 600;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -402,24 +747,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const box = canvas.getBoundingClientRect();
     const x = (event.clientX - box.left) * (canvas.width / box.width);
     const y = (event.clientY - box.top) * (canvas.height / box.height);
-    return [Math.max(0, Math.min(800, x)), Math.max(0, Math.min(600, y))];
+    return [Math.max(0, Math.min(canvas.width, x)), Math.max(0, Math.min(canvas.height, y))];
   }
 
   let slidesState = {schema: 'openteamily.slides.v1', slides: []};
+  let slideEditCount = 0;
+  let pendingSlideDraft = null;
+  const slideDraft = document.getElementById('slide-draft');
+  const slidePrompt = document.getElementById('slide-prompt');
+  const slideDraftStatus = document.getElementById('slide-draft-status');
+  const slideDraftSubmit = document.getElementById('slide-draft-submit');
+  const slideContext = document.getElementById('slide-context');
+  const slideContextOption = document.getElementById('slide-context-option');
+  const slideContextTitle = document.getElementById('slide-context-title');
+  const sendSlides = document.getElementById('send-saved-slides');
+  const downloadSlides = document.getElementById('download-slides');
 
   function slidesDeck() {
     return {
       schema: 'openteamily.slides.v1',
       slides: slidesState.slides.map(slide => ({
         title: String(slide.title || '').trim(),
-        bullets: (slide.bullets || []).map(value => String(value).trim()).filter(Boolean).slice(0, 10),
+        bullets: (slide.bullets || []).map(value => String(value).trim()).filter(Boolean),
       })),
     };
   }
 
-  function renderSlidesEditor() {
+  function renderSlidesEditor(focusIndex) {
     const list = document.getElementById('slide-list');
     if (!list) return;
+    let focusTarget;
     list.replaceChildren();
     slidesState.slides.forEach((slide, index) => {
       const li = document.createElement('li');
@@ -429,33 +786,121 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const label = document.createElement('span');
       label.className = 'slide-index';
       label.textContent = '第 ' + (index + 1) + ' 页';
+      const actions = document.createElement('div');
+      actions.className = 'slide-card-actions';
+      for (const [offset, text, name] of [[-1, '↑', '上移'], [1, '↓', '下移']]) {
+        const move = document.createElement('button');
+        const to = index + offset;
+        move.type = 'button';
+        move.textContent = text;
+        move.setAttribute('aria-label', name + label.textContent);
+        move.disabled = to < 0 || to >= slidesState.slides.length;
+        move.addEventListener('click', () => {
+          slidesState.slides[index] = slidesState.slides[to];
+          slidesState.slides[to] = slide;
+          slideEditCount++;
+          renderSlidesEditor(to);
+        });
+        actions.append(move);
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
+      remove.setAttribute('aria-label', '删除' + label.textContent);
       remove.addEventListener('click', () => {
         slidesState.slides.splice(index, 1);
-        renderSlidesEditor();
+        slideEditCount++;
+        renderSlidesEditor(Math.min(index, slidesState.slides.length - 1));
       });
-      head.append(label, remove);
+      actions.append(remove);
+      head.append(label, actions);
       const title = document.createElement('input');
       title.type = 'text';
       title.maxLength = 120;
       title.placeholder = '页标题';
+      title.setAttribute('aria-label', label.textContent + '标题');
       title.value = slide.title || '';
-      title.addEventListener('input', () => { slide.title = title.value; });
+      title.addEventListener('input', () => {
+        slide.title = title.value;
+        slideEditCount++;
+      });
       const bullets = document.createElement('textarea');
       bullets.rows = 4;
       bullets.maxLength = 4000;
       bullets.placeholder = '每行一条要点（最多 10 条）';
+      bullets.setAttribute('aria-label', label.textContent + '要点');
       bullets.value = (slide.bullets || []).join('\n');
       bullets.addEventListener('input', () => {
-        slide.bullets = bullets.value.split('\n').map(value => value.trim()).filter(Boolean).slice(0, 10);
+        slide.bullets = bullets.value.split('\n');
+        slideEditCount++;
       });
       li.append(head, title, bullets);
       list.append(li);
+      if (index === focusIndex) focusTarget = title;
     });
+    const count = document.getElementById('slides-count');
+    if (count) count.textContent = slidesState.slides.length + ' / 30 页';
     const add = document.getElementById('add-slide');
     if (add) add.disabled = slidesState.slides.length >= 30;
+    if (focusIndex !== undefined) (focusTarget || add)?.focus();
+  }
+
+  if (slideDraftSubmit && slidePrompt && slideDraftStatus) {
+    form.elements.title.addEventListener?.('input', () => {
+      if (current?.kind === 'slides') slideEditCount++;
+    });
+    slideDraftSubmit.addEventListener('click', async () => {
+      const prompt = slidePrompt.value.trim();
+      if (pendingSlideDraft || current?.kind !== 'slides' || current.id || !workspaceId()) return;
+      if (!prompt) {
+        slideDraftStatus.textContent = '请填写幻灯片主题或素材。';
+        slidePrompt.focus();
+        return;
+      }
+      if (slidesDeck().slides.some(slide => slide.title || slide.bullets.length)) {
+        slideDraftStatus.textContent = '已有幻灯片内容。请新建一份空白幻灯片后起草。';
+        return;
+      }
+      const artifact = current;
+      const wid = workspaceId();
+      const edits = slideEditCount;
+      const token = pendingSlideDraft = {};
+      const active = () => pendingSlideDraft === token && !form.hidden && current === artifact && workspaceId() === wid;
+      const origin = artifactSendOrigin;
+      const body = {prompt};
+      if (slideContext?.checked && origin?.allowed && origin.item === artifact && origin.wid === wid) {
+        body.conversation_id = origin.conversation;
+      }
+      slideDraftSubmit.disabled = true;
+      slideDraftSubmit.textContent = '正在生成…';
+      slideDraftStatus.textContent = '智能体正在起草幻灯片。';
+      try {
+        const result = await request('POST', `/v1/workspaces/${wid}/artifacts/slides/draft`, body);
+        if (!active()) return;
+        if (slideEditCount !== edits || form.inert) {
+          slideDraftStatus.textContent = '已保留你的编辑。需要起草时请重新生成。';
+          return;
+        }
+        if (result.status !== 200 || !result.body.slides?.slides?.length) {
+          slideDraftStatus.textContent = messageFor(result.body.error, '无法生成幻灯片草稿，请重试。');
+          return;
+        }
+        slidesState = result.body.slides;
+        if (!form.elements.title.value.trim()) form.elements.title.value = result.body.title || '';
+        slideDraft.open = false;
+        slideDraft.querySelector?.('summary')?.focus();
+        renderSlidesEditor();
+        slideDraftStatus.textContent = '草稿已生成。可编辑后保存。';
+      } catch {
+        if (active()) slideDraftStatus.textContent = '无法生成幻灯片草稿，请重试。';
+      } finally {
+        if (pendingSlideDraft === token) {
+          pendingSlideDraft = null;
+          slideDraftSubmit.disabled = false;
+          slideDraftSubmit.textContent = '生成草稿';
+        }
+      }
+    });
   }
 
   let dashboardState = {schema: 'openteamily.dashboard.v1', widgets: []};
@@ -576,26 +1021,139 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (add) add.disabled = dashboardState.widgets.length >= 20;
   }
 
-  const richDocument = bindDocumentEditor(document, form);
+  function lazyEditor(initialize) {
+    let pending;
+    let instance;
+    return {
+      get instance() { return instance; },
+      prepare() {
+        pending ??= initialize().then(tool => {
+          instance = tool;
+        }).catch(error => {
+          pending = undefined;
+          throw error;
+        });
+        return pending;
+      },
+    };
+  }
+
+  const richDocument = lazyEditor(async () => {
+    const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
+    return bindDocumentEditor(document, form);
+  });
+  const spreadsheet = lazyEditor(async () => {
+    const { mountSpreadsheet } = await import('./spreadsheet.mjs');
+    return mountSpreadsheet(document, {
+      async onDraft(prompt) {
+        const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
+        if (result.status !== 200 || !result.body.spreadsheet) {
+          throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
+        }
+        return result.body;
+      },
+      onTitle(title) {
+        if (!form.elements.title.value.trim()) form.elements.title.value = title;
+      },
+    });
+  });
+  const sendSpreadsheet = document.getElementById('send-saved-spreadsheet');
+  const downloadSpreadsheet = document.getElementById('download-spreadsheet');
+  const model3dPanel = document.getElementById('media-model3d');
+  const model3dDownload = document.getElementById('media-model3d-download');
+  const model3dPreview = lazyEditor(async () => {
+    const { bindModel3dPreview } = await import('../shell/model3d-preview.mjs');
+    return bindModel3dPreview(document.getElementById('media-model3d-toggle'),
+      document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
+  });
+
+  function editorTools(item) {
+    if (item?.kind === 'document') return richDocument;
+    if (item?.kind === 'spreadsheet') return spreadsheet;
+    if (isModel3d(item)) return model3dPreview;
+    return null;
+  }
+
+  const websitePreview = document.getElementById('website-preview');
+  const websiteControls = document.getElementById('website-preview-controls');
+  const websiteToggle = document.getElementById('website-preview-toggle');
+  const websiteStatus = document.getElementById('website-preview-status');
+  let websiteSource = '';
+  let websiteRevision = null;
+  let websiteInteractive = false;
+
+  function renderWebsitePreview(interactive = false) {
+    websiteInteractive = interactive && websiteRevision !== null;
+    websitePreview.hidden = !websiteSource;
+    websitePreview.setAttribute('sandbox', websiteInteractive ? 'allow-scripts' : '');
+    if (websiteSource) websitePreview.src = websiteInteractive ? websiteSource + '?revision=' + websiteRevision : websiteSource;
+    else websitePreview.removeAttribute('src');
+    if (websiteControls) websiteControls.hidden = websiteRevision === null;
+    if (websiteToggle) {
+      websiteToggle.textContent = websiteInteractive ? '关闭互动预览' : '打开互动预览';
+      websiteToggle.setAttribute('aria-pressed', String(websiteInteractive));
+    }
+    if (websiteStatus) {
+      websiteStatus.textContent = websiteInteractive ? `正在预览已保存的版本 ${websiteRevision}。` : '';
+      websiteStatus.hidden = !websiteInteractive;
+    }
+  }
+
+  function setWebsitePreview(item = null) {
+    const eligible = item?.kind === 'website' && item.id && workspaceId();
+    websiteSource = eligible ? `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/preview` : '';
+    websiteRevision = eligible && servedByDsBot(document) && item.body?.trim()
+      && Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : null;
+    renderWebsitePreview();
+  }
+
+  websiteToggle?.addEventListener('click', () => renderWebsitePreview(!websiteInteractive));
+
+  function updateEditorMeta(item, kind) {
+    const meta = document.getElementById('editor-meta');
+    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', spreadsheet: '新电子表格', document: '新文档'};
+    if (item && item.id) {
+      meta.textContent = `${kindLabel(kind, item.media?.mime)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
+    } else {
+      meta.textContent = labels[kind] || '新文档';
+    }
+  }
 
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
-    richDocument.load(form.elements.body.value, kind === 'document');
-    const meta = document.getElementById('editor-meta');
-    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', document: '新文档'};
-    if (item && item.id) {
-      meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
-    } else {
-      meta.textContent = labels[kind] || '新文档';
-    }
+    richDocument.instance?.load(form.elements.body.value, kind === 'document');
+    updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
     document.getElementById('slides-editor').hidden = kind !== 'slides';
     document.getElementById('dashboard-editor').hidden = kind !== 'dashboard';
+    const spreadsheetEditor = document.getElementById('spreadsheet-editor');
+    if (spreadsheetEditor) spreadsheetEditor.hidden = kind !== 'spreadsheet';
+    for (const button of [sendSpreadsheet, downloadSpreadsheet]) {
+      if (button) button.hidden = kind !== 'spreadsheet' || !item?.id;
+    }
+    if (kind === 'spreadsheet') spreadsheet.instance.load(item?.spreadsheet, item?.id, !item?.id);
+    for (const button of [sendSlides, downloadSlides]) {
+      if (button) button.hidden = kind !== 'slides' || !item?.id;
+    }
+    pendingSlideDraft = null;
     if (kind === 'slides') {
+      if (slideDraft) {
+        slideDraft.hidden = Boolean(item?.id);
+        slideDraft.open = false;
+      }
+      if (slidePrompt) slidePrompt.value = '';
+      if (slideContext) slideContext.checked = false;
+      if (slideContextOption) slideContextOption.hidden = true;
+      if (slideContextTitle) slideContextTitle.hidden = true;
+      if (slideDraftStatus) slideDraftStatus.textContent = '';
+      if (slideDraftSubmit) {
+        slideDraftSubmit.disabled = false;
+        slideDraftSubmit.textContent = '生成草稿';
+      }
       slidesState = item && item.slides ? item.slides : {schema: 'openteamily.slides.v1', slides: []};
       if (!Array.isArray(slidesState.slides)) slidesState = {schema: 'openteamily.slides.v1', slides: []};
       if (!slidesState.slides.length) slidesState.slides.push({title: '', bullets: []});
@@ -611,6 +1169,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const audio = document.getElementById('media-audio');
     const video = document.getElementById('media-video');
     const mediaMeta = document.getElementById('media-meta');
+    const model3d = Boolean(item?.id && isModel3d(item));
+    const picker = document.getElementById('media-file-picker');
+    if (picker) picker.hidden = model3d;
+    if (kind === 'media') document.getElementById('media-file').value = '';
+    if (model3dPanel) model3dPanel.hidden = !model3d;
+    let model3dSource = '';
     image.hidden = true; audio.hidden = true; video.hidden = true;
     image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
     if (kind === 'media') {
@@ -620,16 +1184,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
         else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
         else if ((item.media.mime || '').startsWith('video/')) { video.hidden = false; video.src = src; }
+        else if (model3d) {
+          model3dSource = src;
+          if (model3dDownload) model3dDownload.href = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/export`;
+        }
       } else {
         mediaMeta.textContent = '选择一张图片或一段音视频，大小不超过 2 MB。';
       }
     }
+    model3dPreview.instance?.setSource(model3dSource);
     if (kind === 'whiteboard') {
       boardState = item && item.board ? item.board : {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
       drawBoard();
     }
     const source = document.getElementById('editor-source');
-    if (item && item.source) {
+    if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
+      const {conversation_id: id, agent_id, conversation_title, id: message_id} = item.source;
+      const link = document.createElement('a');
+      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id, message_id});
+      link.textContent = conversation_title || '打开会话';
+      source.hidden = false;
+      source.textContent = '来源会话：';
+      source.append(link);
+    } else if (item && item.source) {
       source.hidden = false;
       const from = item.source.kind === 'agent_message' ? '对话消息'
         : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
@@ -639,24 +1216,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       source.hidden = true;
       source.textContent = '';
     }
-    const preview = document.getElementById('website-preview');
-    if (kind === 'website' && item && item.id && workspaceId()) {
-      preview.hidden = false;
-      preview.setAttribute('sandbox', '');
-      preview.removeAttribute('srcdoc');
-      preview.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/preview`;
-    } else {
-      preview.hidden = true;
-      preview.removeAttribute('src');
-      preview.removeAttribute('srcdoc');
-    }
+    setWebsitePreview(item);
+    if (editor) editor.cleanDraft = editorDraft();
   }
 
   function closeNewMenu() {
-    const menu = document.getElementById('new-menu');
-    const button = document.getElementById('new-menu-button');
-    if (menu) menu.hidden = true;
-    if (button) button.setAttribute('aria-expanded', 'false');
+    newMenu.close();
   }
 
   function worksPath() {
@@ -665,17 +1230,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return trimmed === '/artifacts' ? '/artifacts' : '/space';
   }
 
+  const spaceHistoryId = idempotencyKey();
+  let spaceAddress;
+  let restoringAddress = false;
+  let approvedBack = false;
+
+  function spaceLocation() {
+    const location = document.defaultView?.location;
+    return location ? location.pathname + (location.search || '') + (location.hash || '') : '';
+  }
+
+  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView} = {}) {
+    const history = document.defaultView?.history;
+    if (!history?.replaceState || (push && !history.pushState)) return;
+    const entry = {
+      session: spaceHistoryId, position: (spaceAddress?.entry.position ?? 0) + Number(push),
+      fromCatalog, catalogView,
+    };
+    const state = {...history.state, openTeamilySpace:entry};
+    history[push ? 'pushState' : 'replaceState'](state, '', url);
+    spaceAddress = {url, state, entry};
+  }
+
+  function recordEditorAddress(selection, item) {
+    if (!/^[0-9a-f]{32}$/.test(selection?.workspace || '') || !/^[0-9a-f]{32}$/.test(item?.id || '')) return;
+    const target = artifactTargetFromSearch(document.defaultView?.location?.search);
+    if (target?.workspace === selection.workspace && target.artifact === item.id) return;
+    const fromCatalog = Boolean(selection.catalogView);
+    if (fromCatalog) writeSpaceAddress(spaceLocation(), {catalogView:selection.catalogView});
+    writeSpaceAddress(worksPath() + '?workspace=' + selection.workspace + '&artifact=' + item.id,
+      {push:fromCatalog, fromCatalog:fromCatalog || Boolean(spaceAddress?.entry.fromCatalog)});
+    selection.catalogView = null;
+  }
+
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const url = worksPath() + queryForView(catalogKind, catalogScope);
-    view.history.replaceState({}, '', url);
+    const fragment = catalogKind === 'meetings' && workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
+    const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
+    writeSpaceAddress(url);
   }
 
   function applyView(kind, scope, {sync = true} = {}) {
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
+    compactToolbar(catalogKind !== 'meetings');
+    const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
+    search.placeholder = searchLabel;
+    search.setAttribute('aria-label', searchLabel);
     for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
       if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
@@ -688,21 +1291,108 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderCatalog();
   }
 
-  function closeFilterPanel() {
-    const panel = document.getElementById('filter-panel');
-    const button = document.getElementById('filter-button');
-    if (panel) panel.hidden = true;
-    if (button) button.setAttribute('aria-expanded', 'false');
+  function closeFilterPanel({focus = false} = {}) {
+    if (!filterPanel || filterPanel.hidden) return;
+    filterPanel.hidden = true;
+    filterButton?.setAttribute('aria-expanded', 'false');
+    if (focus) filterButton?.focus();
   }
 
-  function readFilters() {
-    filterTypes = [...document.querySelectorAll('input[name="file-type"]:checked')].map((input) => input.value);
-    const modified = document.querySelector('input[name="modified"]:checked');
-    filterModified = modified ? modified.value : 'any';
-    const customNote = document.getElementById('custom-range-note');
-    if (customNote) customNote.hidden = filterModified !== 'custom';
-    filterCreators = [...document.querySelectorAll('input[name="creator"]:checked')].map((input) => input.value);
-    filterSessions = [...document.querySelectorAll('input[name="session"]:checked')].map((input) => input.value);
+  const dateMode = () => document.querySelector('#filter-panel input[name="modified"]:checked')?.value || 'any';
+  const appliedFilters = () => filterTypes.length + filterCreators.length + filterSessions.length +
+    Number(filterUpdated.since != null || filterUpdated.before != null);
+
+  function renderFilterControls() {
+    const count = appliedFilters();
+    if (filterButton) filterButton.textContent = count ? `筛选 · ${count}` : '筛选';
+    if (filterReset) filterReset.disabled = !count && dateMode() === 'any';
+  }
+
+  function readFilterDates() {
+    const mode = dateMode();
+    const start = dateStart?.value;
+    const end = dateEnd?.value;
+    const bounds = artifactModifiedBounds(mode, Date.now(), {start, end});
+    const invalid = mode === 'custom' && Boolean(start && end && !bounds);
+    if (filterDates) filterDates.hidden = mode !== 'custom';
+    for (const field of [dateStart, dateEnd]) {
+      if (invalid) field?.setAttribute('aria-invalid', 'true');
+      else field?.removeAttribute('aria-invalid');
+    }
+    if (dateMessage) dateMessage.textContent = invalid ? '请选择有效日期，结束日期不能早于开始日期。' :
+      bounds ? '包含开始和结束日期。' : '选好开始和结束日期后应用筛选。';
+    if (bounds) filterUpdated = bounds;
+  }
+
+  function clearFilters() {
+    for (const input of document.querySelectorAll('#filter-panel input[type="checkbox"]')) input.checked = false;
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) input.checked = input.value === 'any';
+    if (dateStart) dateStart.value = '';
+    if (dateEnd) dateEnd.value = '';
+    filterTypes = [];
+    filterCreators = [];
+    filterSessions = [];
+    filterUpdated = {};
+    readFilterDates();
+    renderFilterControls();
+  }
+
+  function refreshFilters(previous) {
+    renderFilterControls();
+    if (nativeCatalog && catalogQuery() !== previous) return loadList({reuse: true});
+    if (!nativeCatalog) renderCatalog({preserve: true});
+  }
+
+  function applyFilters({dates = false} = {}) {
+    const previous = catalogQuery();
+    const selected = name => [...document.querySelectorAll(`#filter-panel input[name="${name}"]:checked`)].map(input => input.value);
+    filterTypes = selected('file-type');
+    filterCreators = selected('creator');
+    filterSessions = selected('session');
+    if (dates) readFilterDates();
+    return refreshFilters(previous);
+  }
+
+  function matchingArtifacts() {
+    if (catalog && !sameSelection(catalog)) return [];
+    if (nativeCatalog) {
+      if (catalogKind === 'meetings') return [];
+      return catalogScope === 'favorites' ? allItems.filter(item => item.favorited) : allItems;
+    }
+    return visibleArtifacts(allItems, {
+      kind: catalogKind, scope: catalogScope,
+      username: currentUser?.username,
+      types: filterTypes, updated: filterUpdated, creators: filterCreators, sessions: filterSessions,
+    });
+  }
+
+  function renderFacetInputs(box, name, choices, selected) {
+    if (!box) return;
+    const signature = JSON.stringify(choices);
+    if (box.dataset.choiceSignature === signature) {
+      for (const label of box.children) {
+        const input = label.children[0];
+        input.checked = selected.includes(input.value);
+      }
+      return;
+    }
+    const focused = document.activeElement?.name === name ? document.activeElement.value : null;
+    const nodes = choices.map(({id, label}) => {
+      const row = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = name;
+      input.value = id;
+      input.checked = selected.includes(id);
+      row.appendChild(input);
+      row.appendChild(document.createTextNode(' ' + label));
+      return row;
+    });
+    box.replaceChildren(...nodes);
+    box.dataset.choiceSignature = signature;
+    if (focused !== null) {
+      nodes.find(row => row.children[0].value === focused)?.children[0].focus();
+    }
   }
 
   function renderFilterChoices() {
@@ -710,59 +1400,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const creatorEmpty = document.getElementById('filter-creator-empty');
     const sessionBox = document.getElementById('filter-session-list');
     const sessionEmpty = document.getElementById('filter-session-empty');
-    const names = [...new Set((allItems || []).map((item) => item.created_by).filter(Boolean))].sort();
-    if (creatorBox) {
-      creatorBox.replaceChildren();
-      for (const name of names) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'creator';
-        input.value = name;
-        input.checked = filterCreators.includes(name);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + name));
-        creatorBox.appendChild(label);
-      }
-    }
+    const currentFacets = facets?.workspace === workspaceId() && facets.account === currentUser ? facets : null;
+    const loadedNames = allItems.map(item => item.created_by).filter(Boolean);
+    const names = [...new Set([...(currentFacets?.creators || []), ...loadedNames, ...filterCreators])].sort();
+    renderFacetInputs(creatorBox, 'creator', names.map(id => ({id, label: id})), filterCreators);
     if (creatorEmpty) creatorEmpty.hidden = names.length > 0;
-    const sessions = sessionFilterChoices(allItems);
-    if (sessionBox) {
-      sessionBox.replaceChildren();
-      for (const session of sessions) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'session';
-        input.value = session.id;
-        input.checked = filterSessions.includes(session.id);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + session.label));
-        sessionBox.appendChild(label);
-      }
+    const sessions = currentFacets?.sessions?.slice() ?? sessionFilterChoices(allItems);
+    for (const id of filterSessions) {
+      if (!sessions.some(session => session.id === id)) sessions.push({id, label: '对话'});
     }
+    renderFacetInputs(sessionBox, 'session', sessions, filterSessions);
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
   }
 
-  async function loadMeetings() {
-    const id = workspaceId();
-    meetingItems = [];
-    meetingError = '';
-    meetingLoadedFor = id;
-    if (!id) return;
-    meetingLoading = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=50`);
-    meetingLoading = false;
-    if (listed.status !== 200) {
-      meetingItems = [];
-      meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
-      show('error', meetingError);
+  async function loadFacets() {
+    const workspace = workspaceId();
+    if (!nativeCatalog || !workspace || !currentUser ||
+        (facets?.workspace === workspace && facets.account === currentUser)) return;
+    const pending = {workspace, account: currentUser};
+    facets = pending;
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts?facets=1`).catch(() => null);
+    if (facets !== pending || workspace !== workspaceId() || pending.account !== currentUser) return;
+    if (result?.status !== 200) {
+      facets = null;
       return;
     }
-    meetingItems = listed.body.items || [];
+    pending.creators = Array.isArray(result.body.creators) ? result.body.creators : [];
+    pending.sessions = Array.isArray(result.body.sessions) ? result.body.sessions : [];
+    renderFilterChoices();
+  }
+
+  async function loadMeetings({appendShared = false} = {}) {
+    const id = workspaceId();
+    if (!id || (appendShared ? !meetingSharedCursor || meetingLoading : meetingLoadedFor === id)) return;
+    const seq = ++meetingRequest;
+    if (!appendShared) {
+      meetingItems = [];
+      meetingSharedCursor = '';
+    }
     meetingError = '';
+    meetingLoadedFor = id;
+    meetingLoading = true;
+    renderCatalog();
+    const base = `/v1/workspaces/${id}/meetings`;
+    const get = path => request('GET', path).catch(() => ({status: 0, body: {}}));
+    const query = new URLSearchParams({limit: '100'});
+    if (appendShared) query.set('cursor', meetingSharedCursor);
+    const [listed, shared] = await Promise.all([
+      appendShared ? null : get(base + '?limit=100'),
+      servedByDsBot(document) ? get(base + '/shared?' + query) : null,
+    ]);
+    if (seq !== meetingRequest || workspaceId() !== id) return;
+    meetingLoading = false;
+    if (listed?.status === 200) {
+      meetingItems = listed.body.items || [];
+    } else if (listed) {
+      meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
+    }
+    if (shared?.status === 200) {
+      const ids = new Set(meetingItems.filter(item => item.shared === true).map(item => item.id));
+      for (const item of shared.body.items || []) {
+        if (ids.has(item.id)) continue;
+        meetingItems.push({...item, shared: true});
+        ids.add(item.id);
+      }
+      const cursor = shared.body.cursor;
+      meetingSharedCursor = typeof cursor === 'string' && cursor !== meetingSharedCursor ? cursor : '';
+    } else if (shared && !meetingError) {
+      meetingError = appendShared ? '无法加载更多共享纪要，请重试。' : '无法读取收到的共享纪要。';
+    }
+    if (meetingError) meetingLoadedFor = '';
+    if (catalogKind === 'meetings') renderCatalog();
   }
 
   function renderMeetings() {
@@ -770,7 +1478,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('list-empty');
     const emptyMeetings = document.getElementById('empty-meetings');
     const errorBox = document.getElementById('meetings-error');
-    const rows = meetingRows(meetingsForScope(meetingItems, {
+    const needle = search.value.trim().toLocaleLowerCase();
+    const matches = meetingItems.filter(item => [item.title, item.organizer, ...(item.attendees || [])]
+      .some(value => String(value || '').toLocaleLowerCase().includes(needle)));
+    const rows = meetingRows(meetingsForScope(matches, {
       scope: meetingScope,
       username: currentUser && currentUser.username,
       userId: currentUser && currentUser.id,
@@ -778,7 +1489,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const caption = document.getElementById('meetings-caption');
     if (caption) {
       caption.textContent = meetingScope === 'joined'
-        ? '你出席或创建的会议纪要，最新的在前。'
+        ? '你参与、创建或收到的会议纪要，最新的在前。'
         : '这个工作区的会议纪要，最新的在前。';
     }
     list.textContent = '';
@@ -788,38 +1499,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const emptyKind = document.getElementById('empty-kind');
     if (emptyKind) emptyKind.hidden = true;
-    if (emptyMeetings) emptyMeetings.hidden = Boolean(meetingError) || rows.length > 0 || meetingLoading;
-    if (empty) empty.hidden = Boolean(meetingError) || rows.length > 0;
+    const waiting = document.getElementById('meetings-loading');
+    if (waiting) waiting.hidden = !meetingLoading;
+    const noMatch = document.getElementById('meetings-no-match');
+    const filtered = Boolean(needle) || meetingScope === 'joined';
+    if (noMatch) noMatch.hidden = !filtered || Boolean(meetingError) || meetingLoading || rows.length > 0;
+    if (emptyMeetings) emptyMeetings.hidden = filtered || Boolean(meetingError) || rows.length > 0 || meetingLoading || !workspaceId();
+    if (empty) empty.hidden = !meetingError && rows.length > 0;
+    const retry = document.getElementById('retry-meetings');
+    if (retry) retry.hidden = !meetingError;
+    const more = document.getElementById('more-shared-meetings');
+    if (more) {
+      more.hidden = !meetingSharedCursor;
+      more.disabled = meetingLoading;
+      more.textContent = meetingLoading ? '正在加载…' : '加载更多共享纪要';
+    }
+    const create = document.getElementById('new-meeting-in-space');
+    if (create) {
+      create.hidden = !workspaceId();
+      create.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
+    }
     for (const row of rows) {
       const item = document.createElement('li');
-      item.className = 'artifact-item';
+      item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
+      const link = document.createElement('a');
+      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), [row.shared ? 'shared' : 'meeting']: row.id});
       const title = document.createElement('span');
       title.className = 'meeting-title';
-      title.textContent = row.title;
+      title.append(document.createTextNode(row.title));
+      if (row.shared) {
+        item.dataset.meetingShared = 'true';
+        const badge = document.createElement('span');
+        badge.className = 'meeting-share-badge';
+        badge.textContent = '共享纪要';
+        title.append(badge);
+      }
       const when = document.createElement('span');
       when.className = 'note';
       when.textContent = meetingTimeLabel(row.started_at);
       const actions = document.createElement('span');
       actions.className = 'note meeting-actions';
-      actions.textContent = row.actionLabel;
-      item.append(title, when, actions);
+      actions.textContent = [row.shared && row.organizer ? row.organizer + ' 分享' : '', row.actionLabel].filter(Boolean).join(' · ');
+      link.append(title, when, actions);
+      item.appendChild(link);
       list.appendChild(item);
     }
     return rows;
   }
 
-  function renderCatalog() {
-    const username = currentUser && currentUser.username;
-    const items = visibleArtifacts(allItems, {
-      kind: catalogKind, scope: catalogScope, username,
-      types: filterTypes, modified: filterModified, creators: filterCreators, sessions: filterSessions,
-    });
+  function renderCatalog({preserve = false} = {}) {
+    const items = matchingArtifacts();
+    if (clearSearch) clearSearch.hidden = !search.value;
+    const busy = catalogKind === 'meetings' ? meetingLoading
+      : searchTimer !== null || (sameSelection(catalog) && catalog.state === 'loading' && !catalog.background);
+    document.getElementById('artifact-list').setAttribute('aria-busy', String(Boolean(busy)));
+    renderPageFooter(items.length);
+    renderDraftResume();
     if (catalogKind === 'meetings') renderMeetings();
     else {
-      renderList(items, (item) => openEditor(item));
+      renderList(items, {preserve});
       const meetingsErrorBox = document.getElementById('meetings-error');
       if (meetingsErrorBox) meetingsErrorBox.hidden = true;
+      const moreMeetings = document.getElementById('more-shared-meetings');
+      if (moreMeetings) moreMeetings.hidden = true;
     }
     // The meetings list owns its own empty and error rows; the artifact empty states stay out of it.
     if (catalogKind === 'meetings') {
@@ -833,6 +1576,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const emptyStarred = document.getElementById('empty-starred');
     const emptyMemory = document.getElementById('empty-memory');
     const emptyKind = document.getElementById('empty-kind');
+    const emptyMatches = document.getElementById('empty-no-match');
     const emptyMeetings = document.getElementById('empty-meetings');
     const emptyMessage = document.getElementById('list-empty-message');
     const newWebsite = document.getElementById('new-website');
@@ -842,20 +1586,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const layoutNote = document.getElementById('layout-note');
     if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
-    const isEmpty = items.length === 0;
+    const isEmpty = items.length === 0 && searchTimer === null &&
+      (!catalog || (sameSelection(catalog) && catalog.state === 'ready' && !catalog.cursor));
     empty.hidden = !isEmpty;
     if (!isEmpty) return;
     const noWorkspace = emptyMessage && emptyMessage.textContent === '还没有工作区。';
+    const noMatches = !noWorkspace && Boolean(search.value.trim() || appliedFilters());
     const showMeetings = catalogKind === 'meetings' && !noWorkspace;
-    const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace;
-    const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace;
+    const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace && !noMatches;
+    const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace && !noMatches;
     const showAllEmpty = (catalogKind === 'all' && (catalogScope === 'all' || catalogScope === 'mine')
-      && !showStarred && !showMemory && !noWorkspace);
+      && !showStarred && !showMemory && !noWorkspace && !noMatches);
     if (emptyAll) emptyAll.hidden = !showAllEmpty;
     if (emptyStarred) emptyStarred.hidden = !showStarred;
     if (emptyMemory) emptyMemory.hidden = !showMemory;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
-    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace;
+    if (emptyMatches) emptyMatches.hidden = !noMatches;
+    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
     if (emptyKind && !emptyKind.hidden) {
@@ -873,116 +1620,331 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendEmpty = document.getElementById('send-to-chat-empty');
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
+  const sendConfirm = document.getElementById('send-to-chat-confirm');
+  const sendCancel = document.getElementById('send-to-chat-cancel');
+  const sendNew = document.getElementById('send-to-chat-new');
+  const sendAgent = document.getElementById('send-to-chat-agent');
+  const sendNote = document.getElementById('send-to-chat-note');
   let sendingArtifact = null;
-  let sendPending = false, sendKeys = new Map();
+  let artifactSendOrigin = null;
 
-  function closeSendDialog() {
-    if (!sendDialog) return;
-    sendDialog.hidden = true;
-    sendingArtifact = null;
-  }
-
-  async function openSendDialog(item) {
-    if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
-    sendingArtifact = item;
-    sendKeys = new Map();
-    sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
-    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = false;
-      sendEmpty.textContent = '正在读取会话…';
-    }
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
-    if (sendingArtifact !== item) return;
-    if (listed.status !== 200) {
-      if (sendEmpty) {
-        sendEmpty.hidden = false;
-        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
-      }
+  async function revealSlideContext(origin) {
+    if (!slideContext || !slideContextOption || !slideContextTitle || !slideDraftSubmit) return;
+    const {wid, conversation, item} = origin;
+    const path = `/v1/workspaces/${wid}/social/conversations/${encodeURIComponent(conversation)}`;
+    slideDraftSubmit.disabled = true;
+    slideContextTitle.textContent = '正在确认原会话…';
+    slideContextTitle.hidden = false;
+    const data = await request('GET', path, undefined, undefined, AbortSignal.timeout(5000)).catch(() => null);
+    if (artifactSendOrigin !== origin || current !== item || workspaceId() !== wid || form.hidden) return;
+    slideDraftSubmit.disabled = false;
+    const source = data?.body.conversation;
+    if (data?.status !== 200 || source?.id !== conversation || source.public_agent || source.direct?.open === false) {
+      slideContextTitle.textContent = '无法读取原会话。仍可根据主题或素材起草。';
       return;
     }
-    const items = listed.body.items || [];
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = items.length > 0;
-      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    origin.allowed = true;
+    slideContext.checked = true;
+    slideContextOption.hidden = false;
+    slideContextTitle.textContent = '会话：' + conversationLabel(source);
+  }
+
+  function sendStatus(message = '') {
+    if (!sendError) return;
+    sendError.textContent = message;
+    sendError.hidden = !message;
+  }
+
+  const sendCurrent = state => sendingArtifact === state && workspaceId() === state.wid && currentUser?.id === state.owner;
+
+  function closeSendDialog({force = false, restoreFocus = true} = {}) {
+    if (!sendDialog || (!force && sendingArtifact?.pending)) return;
+    const trigger = sendingArtifact?.trigger;
+    sendDialog.hidden = true;
+    sendingArtifact = null;
+    if (restoreFocus && trigger?.isConnected) trigger.focus({preventScroll: true});
+  }
+
+  function chooseSendDestination(state, destination, button) {
+    if (!sendCurrent(state) || state.pending) return;
+    state.destination = destination;
+    for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
+    if (button) sendAgent.value = '';
+    sendConfirm.disabled = !destination;
+    sendLead.textContent = state.lead + (destination?.source === 'agent' ? '智能体会读取这份附件。' : '');
+    sendStatus();
+  }
+
+  sendAgent?.addEventListener('change', () => {
+    const state = sendingArtifact;
+    if (!state) return;
+    const agent = state.agents?.get(sendAgent.value);
+    chooseSendDestination(state, agent ? {source:'agent', agent_id:agent.id, label:agent.name} : null);
+  });
+
+  async function openSendDialog(item, trigger) {
+    if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
+    const wid = workspaceId();
+    const state = {item:{...item}, owner:currentUser?.id, wid, trigger, destination:null,
+      pending:false, keys:new Map(), threads:new Map()};
+    sendingArtifact = state;
+    sendDialog.hidden = false;
+    sendConfirm.textContent = '确认发送';
+    sendConfirm.disabled = true;
+    sendNote.value = '';
+    sendNote.disabled = false;
+    sendNew.hidden = true;
+    sendNew.open = false;
+    sendAgent.disabled = false;
+    sendAgent.replaceChildren();
+    if (sendCancel) sendCancel.disabled = false;
+    const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
+      slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
+    state.lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
+    sendLead.textContent = state.lead + '请选择接收会话。';
+    sendStatus();
+    sendList.replaceChildren();
+    sendEmpty.hidden = false;
+    sendEmpty.textContent = '正在读取会话…';
+    sendCancel?.focus();
+    const native = servedByDsBot(document);
+    const base = `/v1/workspaces/${wid}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, directory] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      native ? get('/agents?limit=100&include=conversations') : null,
+    ]);
+    if (!sendCurrent(state)) return;
+    const socialItems = social.status === 200 ? (social.body.items || [])
+      .filter(row => !row.public_agent && row.direct?.open !== false)
+      .map(row => ({...row, source: 'social', label: conversationLabel(row)})) : [];
+    const privateItems = directory?.status === 200 ? agentConversations(directory.body) : [];
+    const items = [...socialItems, ...privateItems].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    state.agents = new Map((directory?.status === 200 ? directory.body.items || [] : [])
+      .filter(agent => /^[a-f0-9]{32}$/.test(agent.id) && !agent.archived && !agent.native_deleted)
+      .map(agent => [agent.id, agent]));
+    if (state.agents.size) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '请选择智能体';
+      sendAgent.append(placeholder);
+      for (const agent of state.agents.values()) {
+        const option = document.createElement('option');
+        option.value = agent.id;
+        option.textContent = agent.name;
+        sendAgent.append(option);
+      }
+      sendAgent.value = '';
+      sendNew.hidden = false;
+      sendNew.open = !items.length;
+      if (sendNew.open && document.activeElement === sendCancel) sendAgent.focus({preventScroll:true});
     }
+    const incomplete = social.status !== 200 || (native && (directory?.status !== 200 || !Array.isArray(directory.body.conversations)));
+    if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
+      state.destination = socialItems.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
+      sendConfirm.disabled = !state.destination;
+    }
+    sendEmpty.hidden = items.length > 0 || state.agents.size > 0;
+    sendEmpty.textContent = incomplete ? '无法读取可发送的会话，请稍后重试。' : '这个工作区还没有可发送的会话。';
+    if (items.length && incomplete) sendStatus('部分会话无法加载。');
     for (const conversation of items) {
       const row = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = conversationLabel(conversation);
-      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
-      row.appendChild(button);
-      sendList.appendChild(row);
+      button.dataset.chatSource = conversation.source;
+      button.textContent = conversation.source === 'agent' ? '智能体 · ' + conversation.label : conversation.label;
+      button.setAttribute('aria-pressed', String(state.destination === conversation));
+      button.addEventListener('click', () => chooseSendDestination(state, conversation, button));
+      row.append(button);
+      sendList.append(row);
     }
   }
 
-  async function sendArtifactToConversation(item, conversation) {
-    if (!workspaceId() || !item || !conversation || !conversation.id) return;
-    if (sendPending) return;
-    sendPending = true;
-    const wid = workspaceId();
-    const key = sendKeys.get(conversation.id) || idempotencyKey();
-    sendKeys.set(conversation.id, key);
+  sendConfirm?.addEventListener('click', async () => {
+    const state = sendingArtifact;
+    if (!state?.destination || state.pending || !sendCurrent(state)) return;
+    const {wid, item, destination, keys} = state;
+    const isAgent = destination.source === 'agent';
+    const collection = isAgent ? `agents/${destination.agent_id}/conversations` : 'social/conversations';
+    const base = `/v1/workspaces/${wid}/${collection}`;
+    const note = sendNote.value.trim();
+    if (note.length > 2000) { sendStatus('附言不能超过 2000 个字符。'); return; }
+    const requestKey = fingerprint => {
+      if (!keys.has(fingerprint)) keys.set(fingerprint, idempotencyKey());
+      return keys.get(fingerprint);
+    };
+    state.pending = true;
+    sendConfirm.disabled = true;
+    sendConfirm.textContent = '正在发送…';
+    sendAgent.disabled = sendNote.disabled = true;
+    if (sendCancel) sendCancel.disabled = true;
+    sendStatus();
     try {
-    const result = await request(
-      'POST',
-      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id, artifact_revision: item.revision},
-      {'Idempotency-Key': key},
-    );
-    if (workspaceId() !== wid || sendingArtifact !== item) return;
-    if (result.status !== 200 && result.status !== 201) {
-      if (sendError) {
-        sendError.hidden = false;
-        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      let conversationId = destination.id || state.threads.get(base);
+      if (isAgent && !conversationId) {
+        const opened = await request('POST', base, {title:[...item.title].slice(0, 40).join('')},
+          {'Idempotency-Key':requestKey('new:' + base)});
+        if (!sendCurrent(state)) return;
+        const thread = opened.body.conversation;
+        if (![200, 201].includes(opened.status) || !/^[a-f0-9]{32}$/.test(thread?.id || '') ||
+            thread.workspace_id !== wid || thread.agent_id !== destination.agent_id) {
+          sendStatus(messageFor(opened.body.error, '无法创建智能体对话，请重试。'));
+          return;
+        }
+        conversationId = thread.id;
+        state.threads.set(base, conversationId);
       }
-      show('error', messageFor(result.body.error, '发送到聊天失败。'));
+      const path = `${base}/${conversationId}/messages`;
+      const result = await request('POST', path, {artifact_id:item.id, artifact_revision:item.revision, ...(note ? {body:note} : {})},
+        {'Idempotency-Key':requestKey(JSON.stringify([path,note]))});
+      if (!sendCurrent(state)) return;
+      const accepted = isAgent ? [201, 202].includes(result.status) && result.body?.message?.id
+        : [200, 201].includes(result.status);
+      if (!accepted) {
+        sendStatus(messageFor(result.body.error, '发送失败，请重试。'));
+        return;
+      }
+      state.pending = false;
+      closeSendDialog({restoreFocus:false});
+      show('ok', '已发送到「' + destination.label + '」。');
+      const receipt = document.createElement('a');
+      receipt.className = 'send-chat-receipt';
+      receipt.href = conversationChatHref(wid, {...destination,id:conversationId,message_id:result.body.message?.id});
+      receipt.textContent = '在聊天中查看';
+      status.append(receipt);
+      receipt.focus({preventScroll:true});
+    } catch {
+      if (sendCurrent(state)) sendStatus('未能确认发送结果，请保留当前附言和接收会话重试。');
+    } finally {
+      state.pending = false;
+      if (sendingArtifact === state || !sendingArtifact) {
+        sendConfirm.textContent = '确认发送';
+        sendConfirm.disabled = !sendingArtifact?.destination;
+        sendAgent.disabled = sendNote.disabled = false;
+        if (sendCancel) sendCancel.disabled = false;
+      }
+    }
+  });
+
+  sendCancel?.addEventListener('click', () => closeSendDialog());
+  sendDialog?.addEventListener('click', event => {
+    if (event.target === sendDialog) closeSendDialog();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.defaultPrevented && !sendDialog?.hidden) closeSendDialog();
+  });
+
+  function itemMenuOpen() {
+    return actionMenus.activeButton?.classList.contains('artifact-more');
+  }
+  function closeItemMenu() {
+    if (itemMenuOpen()) actionMenus.close();
+  }
+
+  function canDuplicate(item) {
+    return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
+      Number.isSafeInteger(item.revision) && item.revision > 0;
+  }
+
+  function setDuplicateStatus(text, kind = '') {
+    duplicateStatus.hidden = !text;
+    duplicateStatus.dataset.kind = kind;
+    duplicateStatus.textContent = text;
+  }
+
+  function closeDuplicateDialog({focus = false} = {}) {
+    const previous = duplicateState;
+    duplicateState = null;
+    if (duplicateDialog?.open) duplicateDialog.close();
+    if (focus && previous?.trigger?.isConnected) previous.trigger.focus();
+  }
+
+  function suggestedDuplicateTitle(title) {
+    const used = new Set(allItems.map(item => item.title.toLocaleLowerCase('en-US')));
+    const stem = title.replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+    for (let index = 1; ; index += 1) {
+      const suffix = index === 1 ? ' · 副本' : ' · 副本 ' + index;
+      const candidate = stem.slice(0,80 - suffix.length).replace(/[\uD800-\uDBFF]$/, '') + suffix;
+      if (!used.has(candidate.toLocaleLowerCase('en-US'))) return candidate;
+    }
+  }
+
+  function openDuplicateDialog(item, trigger) {
+    if (!currentUser || !workspaceId() || !canDuplicate(item) || duplicateDialog.open) return;
+    duplicateState = {source:item, account:currentUser, workspace:workspaceId(), trigger, keys:new Map()};
+    duplicateSource.textContent = `「${item.title}」的修订 ${item.revision}`;
+    duplicateTitle.value = suggestedDuplicateTitle(item.title);
+    duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = false;
+    duplicateSubmit.textContent = '创建副本';
+    duplicateCancel.textContent = '取消';
+    setDuplicateStatus('');
+    duplicateDialog.showModal();
+    duplicateTitle.focus();
+    duplicateTitle.select();
+  }
+
+  duplicateDialog?.addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!duplicateState?.pending) closeDuplicateDialog({focus:true});
+  });
+  duplicateCancel?.addEventListener('click', () => closeDuplicateDialog({focus:true}));
+  duplicateForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = duplicateState;
+    if (!state || state.pending) return;
+    const {source,workspace,account} = state;
+    if (workspace !== workspaceId() || account !== currentUser) return;
+    const openCopy = () => openEditor(state.created,{workspace,saved:true,notice:{kind:'ok',text:'已创建副本。'}});
+    if (state.created) { await openCopy(); return; }
+    const title = duplicateTitle.value.trim();
+    if (!title) { setDuplicateStatus('请输入新作品名称。','error'); duplicateTitle.focus(); return; }
+    let key = state.keys.get(title);
+    if (!key) { key = idempotencyKey(); state.keys.set(title,key); }
+    state.pending = true;
+    duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = true;
+    duplicateSubmit.textContent = '正在创建…';
+    setDuplicateStatus('');
+    const result = await request('POST',`/v1/workspaces/${workspace}/artifacts`,
+      {title,duplicate_from:{artifact_id:source.id,revision:source.revision}}, {'Idempotency-Key':key},
+      AbortSignal.timeout(12000)).catch(() => ({status:0,body:{}}));
+    if (duplicateState !== state || currentUser !== account || workspaceId() !== workspace) return;
+    state.pending = false;
+    const copied = result.body.artifact;
+    if (![200,201].includes(result.status) || !canDuplicate(copied) || copied.workspace_id !== workspace || copied.id === source.id) {
+      duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = false;
+      duplicateSubmit.textContent = result.status === 0 || result.status >= 500 ? '重试' : '创建副本';
+      setDuplicateStatus(messageFor(result.body.error,'暂时无法确认副本是否创建成功，可以重试。'),'error');
+      if (result.body.error?.code === 'title_conflict') { duplicateTitle.focus(); duplicateTitle.select(); }
       return;
     }
-    closeSendDialog();
-    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
-    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
-    finally { sendPending = false; }
-  }
-
-  if (document.getElementById('send-to-chat-cancel')) {
-    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
-  }
-  if (sendDialog) {
-    sendDialog.addEventListener('click', event => {
-      if (event.target === sendDialog) closeSendDialog();
-    });
-  }
-
-  let openItemMenu = null;
-  function closeItemMenu() {
-    if (!openItemMenu) return;
-    openItemMenu.menu.hidden = true;
-    openItemMenu.button.setAttribute('aria-expanded', 'false');
-    openItemMenu = null;
-  }
-  document.addEventListener('click', event => {
-    if (openItemMenu && !openItemMenu.menu.contains(event.target) && event.target !== openItemMenu.button) closeItemMenu();
+    state.created = copied;
+    catalog = null;
+    facets = null;
+    duplicateSubmit.disabled = duplicateCancel.disabled = false;
+    duplicateSubmit.textContent = '打开副本';
+    duplicateCancel.textContent = '返回原作品';
+    setDuplicateStatus('副本已创建，你可以继续编辑原作品。','ok');
+    if (!editor?.saving && !hasEditorDraft()) await openCopy();
+    else duplicateSubmit.focus();
   });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeItemMenu(); });
 
-  function itemMenu(item, onOpen) {
+  function itemMenu(item, onOpen, inScope, path) {
     const wrap = document.createElement('span');
     wrap.className = 'artifact-more-wrap';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'artifact-more';
+    button.id = 'artifact-more-' + item.id;
     button.setAttribute('aria-haspopup', 'menu');
     button.setAttribute('aria-expanded', 'false');
     button.setAttribute('aria-label', item.title + '：更多操作');
     button.textContent = '⋯';
     const menu = document.createElement('div');
     menu.className = 'artifact-item-menu';
+    menu.id = 'artifact-item-actions-' + item.id;
     menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-labelledby', button.id);
+    button.setAttribute('aria-controls', menu.id);
     menu.hidden = true;
     const send = document.createElement('button');
     send.type = 'button';
@@ -991,14 +1953,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.textContent = '发送到聊天';
     if (canSendArtifactToChat(item)) {
       send.disabled = false;
-      send.title = '把这件媒体作品发到一个群或单聊';
+      send.title = '把此作品的保存版本发到会话';
       send.addEventListener('click', () => {
-        closeItemMenu();
-        openSendDialog(item);
+        if (inScope()) void openSendDialog(item, button);
       });
     } else {
       send.disabled = true;
-      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+      send.title = '请先保存作品再发送';
     }
     const rename = document.createElement('button');
     rename.type = 'button';
@@ -1006,10 +1967,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     rename.textContent = '重命名';
     rename.title = '打开文档并编辑标题';
     rename.addEventListener('click', async () => {
-      closeItemMenu();
-      await onOpen(item);
-      const title = form.elements.title;
-      if (title) { title.focus(); title.select(); }
+      if (await onOpen(item)) {
+        const title = form.elements.title;
+        title?.focus();
+        title?.select();
+      }
     });
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -1017,64 +1979,130 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     remove.className = 'artifact-menu-danger';
     remove.textContent = '删除';
     remove.addEventListener('click', async () => {
-      closeItemMenu();
-      if (!workspaceId() || !item.id) return;
+      if (!inScope() || !item.id) return;
       if (typeof globalThis.confirm === 'function' && !globalThis.confirm('删除「' + item.title + '」？')) return;
-      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/remove`, {});
+      const result = await request('POST', path + '/remove', {}).catch(() => ({status: 0, body: {}}));
+      if (!inScope()) return;
       if (result.status !== 200) {
         show('error', messageFor(result.body.error, '删除失败。'));
         return;
       }
       show('ok', '已删除。');
+      const keepFocus = document.activeElement === button;
       await loadList();
+      if (keepFocus && document.activeElement === document.body) newMenuButton?.focus({preventScroll: true});
     });
-    menu.append(send, rename, remove);
-    button.addEventListener('click', event => {
-      event.stopPropagation();
-      const wasOpen = openItemMenu && openItemMenu.menu === menu;
-      closeItemMenu();
-      if (wasOpen) return;
-      menu.hidden = false;
-      button.setAttribute('aria-expanded', 'true');
-      openItemMenu = {menu, button};
+    menu.append(send, rename);
+    if (canDuplicate(item)) {
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.setAttribute('role', 'menuitem');
+      copy.textContent = '复制为新作品';
+      copy.addEventListener('click', () => {
+        if (inScope()) openDuplicateDialog(item,button);
+      });
+      menu.append(copy);
+    }
+    menu.append(remove);
+    actionMenus.bind(button, menu, {
+      onOpen() {
+        document.body.appendChild(menu);
+        const anchor = button.getBoundingClientRect();
+        const viewport = document.defaultView;
+        const height = viewport?.visualViewport?.height || viewport?.innerHeight || 800;
+        const width = viewport?.visualViewport?.width || viewport?.innerWidth || 400;
+        const top = anchor.bottom + menu.offsetHeight + 8 > height ? anchor.top - menu.offsetHeight - 4 : anchor.bottom + 4;
+        menu.style.top = Math.max(8, Math.min(height - menu.offsetHeight - 8, top)) + 'px';
+        menu.style.left = Math.max(8, Math.min(width - menu.offsetWidth - 8, anchor.right - menu.offsetWidth)) + 'px';
+      },
+      onClose: () => menu.remove(),
     });
-    wrap.append(button, menu);
+    wrap.append(button);
     return wrap;
   }
 
-  function renderList(items, onOpen) {
+  const renderedArtifactRows = new WeakMap();
+
+  function renderList(items, {preserve = false} = {}) {
+    const workspace = workspaceId();
+    const account = currentUser;
+    const inScope = () => !!account && currentUser === account && workspaceId() === workspace;
+    const onOpen = item => inScope() && openEditor(item, {workspace});
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
-    list.textContent = '';
-    closeItemMenu();
+    const previousRows = preserve ? [...list.children] : [];
+    const byId = new Map(previousRows.filter(row => row.dataset.artifactId).map(row => [row.dataset.artifactId, row]));
+    const scroller = preserve ? [list.closest?.('.artifact-main'), listPanel, main].find(node => Number(node?.scrollTop) > 0) : null;
+    const active = preserve ? document.activeElement : null;
+    const focusedRow = active?.closest?.('.artifact-item');
+    const viewport = scroller?.getBoundingClientRect();
+    const focusedBounds = viewport && focusedRow?.getBoundingClientRect();
+    const anchor = !viewport ? null
+      : focusedBounds && focusedBounds.bottom > viewport.top && focusedBounds.top < viewport.bottom
+        ? focusedRow
+        : previousRows.find(row => row.dataset.artifactId && row.getBoundingClientRect().bottom > viewport.top);
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const focusSelector = active?.matches?.('.artifact-bookmark') ? '.artifact-bookmark'
+      : active?.matches?.('.link') ? '.link' : '.artifact-more';
+    if (!preserve) {
+      list.textContent = '';
+      closeItemMenu();
+    }
     applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
+    const nextRows = [];
     if (items.length) {
-      const head = document.createElement('li');
-      head.className = 'artifact-list-head';
-      head.setAttribute('aria-hidden', 'true');
-      for (const label of ['名称', '来源', '创建时间', '最近动态']) {
-        const cell = document.createElement('span');
-        cell.textContent = label;
-        head.append(cell);
+      let head = previousRows.find(row => row.classList.contains('artifact-list-head'));
+      if (!head) {
+        head = document.createElement('li');
+        head.className = 'artifact-list-head';
+        head.setAttribute('aria-hidden', 'true');
+        for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+          const cell = document.createElement('span');
+          cell.textContent = label;
+          head.append(cell);
+        }
       }
-      list.appendChild(head);
+      nextRows.push(head);
     }
     for (const item of items) {
+      const prior = byId.get(item.id);
+      const rendered = prior && renderedArtifactRows.get(prior);
+      if (rendered === item) {
+        nextRows.push(prior);
+        continue;
+      }
+      const path = `/v1/workspaces/${workspace}/artifacts/${item.id}`;
       const row = document.createElement('li');
       row.className = 'artifact-item';
+      row.dataset.artifactId = item.id;
       row.dataset.kind = item.kind || '';
+      renderedArtifactRows.set(row, item);
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'link';
-      open.textContent = item.title;
+      const match = search.value.trim() ? artifactSearchMatch(item) : null;
+      const titleMatch = match?.kind === 'title' && match.text === item.title && match.start < 16;
+      if (titleMatch) appendArtifactHighlight(document, open, match);
+      else open.textContent = item.title;
       open.addEventListener('click', () => onOpen(item));
       const meta = document.createElement('span');
       meta.className = 'note';
       const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
-      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
+      meta.textContent = `${kindLabel(item.kind, item.media?.mime)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
+      if (match && !titleMatch) {
+        const context = document.createElement('span');
+        context.className = 'artifact-search-context';
+        const label = document.createElement('span');
+        label.className = 'artifact-search-context-label';
+        label.textContent = {title: '标题 · ', body: '正文 · ', filename: '文件名 · '}[match.kind];
+        context.appendChild(label);
+        appendArtifactHighlight(document, context, match, true);
+        row.dataset.searchContext = 'true';
+        row.appendChild(context);
+      }
       const cover = document.createElement('span');
       cover.className = 'artifact-cover';
       cover.setAttribute('aria-hidden', 'true');
@@ -1083,22 +2111,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (thumb) {
         cover.classList.add('has-thumb');
         cover.append(thumb);
-      } else if (item.kind === 'media' && /^image\//.test(mime) && item.id && workspaceId()) {
+      } else if (item.kind === 'media' && /^image\//.test(mime) && item.id && workspace) {
         const img = document.createElement('img');
         img.className = 'artifact-cover-img';
         img.alt = '';
         img.loading = 'lazy';
-        img.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+        img.src = path + '/file';
         cover.classList.add('has-thumb');
         cover.append(img);
       } else {
-        cover.textContent = kindLabel(item.kind);
+        cover.textContent = kindLabel(item.kind, mime);
       }
       row.appendChild(cover);
       const badge = document.createElement('span');
       badge.className = 'artifact-kind';
       badge.setAttribute('aria-hidden', 'true');
-      badge.textContent = kindBadge(item.kind);
+      badge.textContent = isModel3d(item) ? '3D' : kindBadge(item.kind);
       row.appendChild(badge);
       const bookmark = document.createElement('button');
       bookmark.type = 'button';
@@ -1108,16 +2136,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       bookmark.setAttribute('aria-pressed', String(!!item.favorited));
       bookmark.addEventListener('click', async event => {
         event.stopPropagation();
-        const wid = workspaceId();
+        if (!inScope() || pendingBookmarks.has(path)) return;
+        pendingBookmarks.add(path);
+        bookmarkRevision += 1;
         bookmark.disabled = true;
         try {
-          const result = await request('POST', `/v1/workspaces/${wid}/artifacts/${item.id}/favorite`, {enabled: !item.favorited});
-          if (workspaceId() !== wid) return;
+          const result = await request('POST', path + '/favorite', {enabled: !item.favorited});
+          if (!inScope()) return;
           if (result.status !== 200) { show('error', messageFor(result.body.error, '收藏未保存。')); return; }
-          item.favorited = result.body.favorited;
-          renderCatalog();
-        } catch { show('error', '网络错误，收藏未保存。'); }
-        finally { bookmark.disabled = false; }
+          allItems = allItems.map(row => row.id === item.id ? {...row, favorited: result.body.favorited} : row);
+          if (!listPanel.hidden) renderCatalog({preserve: true});
+        } catch {
+          if (inScope()) show('error', '网络错误，收藏未保存。');
+        } finally {
+          pendingBookmarks.delete(path);
+          bookmarkRevision += 1;
+          bookmark.disabled = false;
+        }
       });
       bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
       row.appendChild(bookmark);
@@ -1127,107 +2162,548 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const updated = document.createElement('span');
       updated.className = 'artifact-updated';
       updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
-      row.append(created, updated, itemMenu(item, onOpen));
-      list.appendChild(row);
+      row.append(created, updated, itemMenu(item, onOpen, inScope, path));
+      nextRows.push(row);
+    }
+    if (!preserve) {
+      for (const row of nextRows) list.appendChild(row);
+      return;
+    }
+    const keep = new Set(nextRows);
+    for (const row of previousRows) if (!keep.has(row)) row.remove();
+    nextRows.forEach((row, index) => {
+      if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+    });
+    if (focusedRow && !list.contains(active)) {
+      const replacement = nextRows.find(row => row.dataset.artifactId === focusedRow.dataset.artifactId);
+      (replacement?.querySelector(focusSelector) || search)?.focus({preventScroll: true});
+    } else if (focusedRow && document.activeElement !== active) {
+      active.focus({preventScroll: true});
+    }
+    if (anchor) {
+      const replacement = nextRows.find(row => row.dataset.artifactId === anchor.dataset.artifactId);
+      if (replacement) scroller.scrollTop += replacement.getBoundingClientRect().top - anchorTop;
     }
   }
 
-  async function openEditor(item) {
+  function activeEditor(selection) {
+    return !!selection && editor === selection && selection.account === currentUser && selection.workspace === workspaceId();
+  }
+
+  function editorDraft() {
+    const kind = current?.kind || draftKind;
+    if (kind === 'document') richDocument.instance?.flush();
+    let content;
+    if (kind === 'document' || kind === 'website') content = form.elements.body.value;
+    if (kind === 'spreadsheet') content = spreadsheet.instance?.value();
+    if (kind === 'slides') content = slidesDeck();
+    if (kind === 'dashboard') content = dashboardValue();
+    if (kind === 'whiteboard') content = boardState;
+    return {
+      content: JSON.stringify([kind, form.elements.title.value, content]),
+      file: kind === 'media' ? document.getElementById('media-file')?.files?.[0] : undefined,
+    };
+  }
+
+  const recovery = document.getElementById('artifact-draft-recovery');
+  const recoveryMessage = document.getElementById('artifact-draft-message');
+  const recoveryDetails = document.getElementById('artifact-draft-details');
+  const recoveryCopy = document.getElementById('artifact-draft-copy');
+  let draftTimer;
+
+  function draftKey(selection = editor, item = current) {
+    const actor = selection?.account?.id;
+    if (!actor || selection.account !== currentUser || !selection.workspace ||
+        !['document', 'website'].includes(item?.kind)) return '';
+    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, item.id || null]);
+  }
+
+  function readDraft(key) {
+    if (!key) return null;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      const entry = JSON.parse(bin.getItem(key));
+      if (entry && typeof entry.title === 'string' && entry.title.length <= 80 &&
+          typeof entry.body === 'string' && entry.body.length <= DRAFT_MAX_BODY &&
+          (entry.revision === null || Number.isSafeInteger(entry.revision) && entry.revision > 0) &&
+          Number.isFinite(entry.updated) && Date.now() - entry.updated < DRAFT_MAX_AGE) return entry;
+      if (entry) bin.removeItem(key);
+    } catch {}
+    return null;
+  }
+
+  function removeDraft(key) {
+    if (!key) return;
+    try { document.defaultView.sessionStorage.removeItem(key); } catch {}
+  }
+
+  function renderDraftResume() {
+    const resume = document.getElementById('artifact-draft-resume');
+    if (!resume) return;
+    const scope = {account:currentUser, workspace:workspaceId()};
+    let visible = false;
+    for (const kind of ['document', 'website']) {
+      const button = document.getElementById('resume-draft-' + kind);
+      if (!button) continue;
+      button.hidden = !readDraft(draftKey(scope, {kind}));
+      visible ||= !button.hidden;
+    }
+    resume.hidden = catalogKind === 'meetings' || !visible;
+  }
+
+  function persistDraft() {
+    clearTimeout(draftTimer);
+    const key = draftKey();
+    if (!key || form.hidden || !editor?.cleanDraft) return;
+    const previous = readDraft(key);
+    const revision = current.revision ?? null;
+    // A draft based on an older revision stays available for copying.
+    if (previous && previous.revision !== revision) return;
+    if (!hasEditorDraft()) {
+      removeDraft(key);
+      if (recovery) recovery.hidden = true;
+      return;
+    }
+    const {title, body} = form.elements;
+    if (body.value.length > DRAFT_MAX_BODY || (previous?.title === title.value && previous.body === body.value)) return;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      if (!previous) {
+        const entries = Object.keys(bin).filter(name => name.startsWith(DRAFT_STORAGE_PREFIX))
+          .map(name => ({name, updated:readDraft(name)?.updated})).filter(entry => entry.updated != null)
+          .sort((left, right) => left.updated - right.updated);
+        for (const entry of entries.slice(0, Math.max(0, entries.length - DRAFT_MAX_ENTRIES + 1))) {
+          bin.removeItem(entry.name);
+        }
+      }
+      bin.setItem(key, JSON.stringify({revision, title:title.value, body:body.value, updated:Date.now()}));
+    } catch {}
+  }
+
+  function readEditorRecovery({restore = false} = {}) {
+    if (!recovery) return;
+    recovery.hidden = true;
+    recoveryDetails.hidden = true;
+    recoveryDetails.open = false;
+    recoveryCopy.value = '';
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    if (entry.title === (current.title || '') && entry.body === (current.body || '')) {
+      removeDraft(key);
+      return;
+    }
+    const conflict = entry.revision !== (current.revision ?? null);
+    if (restore && !conflict) {
+      form.elements.title.value = entry.title;
+      form.elements.body.value = entry.body;
+      richDocument.instance?.load(entry.body, current.kind === 'document');
+    }
+    if (!restore && !conflict) return;
+    recoveryMessage.textContent = conflict
+      ? '作品已有新版本。你可以查看并复制先前草稿。'
+      : '已恢复未保存的草稿。保存后会更新这件作品。';
+    recovery.hidden = false;
+    recoveryDetails.hidden = !conflict;
+    if (conflict) recoveryCopy.value = entry.title + '\n\n' + entry.body;
+  }
+
+  function scheduleDraft(event) {
+    if (!draftKey()) return;
+    const target = event.target;
+    if (event.type === 'input' && target !== form.elements.title && target !== form.elements.body &&
+        !target.closest?.('#document-rich, #document-source')) return;
+    if (event.type === 'click' && !target.closest?.('[data-doc-format]')) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(persistDraft, 200);
+  }
+
+  form.addEventListener('input', scheduleDraft);
+  form.addEventListener('click', scheduleDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistDraft();
+  });
+  document.defaultView?.addEventListener?.('pagehide', persistDraft);
+  document.getElementById('artifact-draft-discard')?.addEventListener('click', () => {
+    if (!activeEditor(editor) || editor.saving) return;
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    removeDraft(key);
+    if (entry.revision === (current.revision ?? null)) fillEditor(current);
+    else persistDraft();
+    readEditorRecovery();
+    form.elements.title.focus();
+  });
+
+  function editorDraftChanged(saved, draft = editorDraft()) {
+    return saved && (saved.content !== draft.content || saved.file !== draft.file);
+  }
+
+  function hasEditorDraft() {
+    return Boolean(current && !form.hidden && editor?.cleanDraft && editorDraftChanged(editor.cleanDraft));
+  }
+
+  function canLeaveEditor() {
+    if (editor?.saving) {
+      show('loading', '作品正在保存，请稍候。');
+      return false;
+    }
+    if (!hasEditorDraft()) return true;
+    const browser = document.defaultView;
+    const discard = (browser?.confirm || globalThis.confirm)?.call(browser,
+      '这个作品有未保存的修改。要放弃修改并离开吗？') === true;
+    if (discard) {
+      const key = draftKey();
+      if (readDraft(key)?.revision === (current.revision ?? null)) removeDraft(key);
+      clearTimeout(draftTimer);
+    }
+    return discard;
+  }
+
+  function warnBeforeLeavingSpace(event) {
+    if (!editor?.saving && !hasEditorDraft()) return;
+    persistDraft();
+    const entry = readDraft(draftKey());
+    if (!editor?.saving && entry?.revision === (current.revision ?? null) &&
+        entry.title === form.elements.title.value && entry.body === form.elements.body.value) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
+  function setSaving(saving) {
+    for (const button of saveButtons) button.disabled = saving;
+    if (mobileSave) mobileSave.textContent = saving ? '保存中…' : '保存';
+  }
+
+  function updateMobileActions() {
+    const saved = Boolean(current?.id);
+    const isDocument = current?.kind === 'document';
+    if (mobileMenu) mobileMenu.hidden = false;
+    if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
+    if (mobileDelete) mobileDelete.hidden = !saved;
+    for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+    studioCopy?.update();
+  }
+
+  function hideEditor() {
     if (pendingDeleteCancel) pendingDeleteCancel();
+    closeDuplicateDialog();
+    studioCopy?.close();
+    editor?.controller.abort();
+    document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
+    editor = null;
+    current = null;
+    clearCreatedShare();
+    clearTimeout(draftTimer);
+    if (recovery) recovery.hidden = true;
+    if (recoveryCopy) recoveryCopy.value = '';
+    artifactSendOrigin = null;
+    closeSpaceActionDialog();
+    if (agentTaskDialog) closeAgentTaskDialog();
+    sendingArtifact = null;
+    sendDialog.hidden = true;
+    for (const id of ['media-image', 'media-audio', 'media-video']) {
+      const media = document.getElementById(id);
+      if (media.getAttribute('src')) {
+        media.removeAttribute('src');
+        media.load?.();
+      }
+    }
+    model3dPreview.instance?.setSource('');
+    setWebsitePreview();
+    form.hidden = true;
+    form.inert = false;
+    editorLoading.hidden = true;
+    listPanel.hidden = false;
+    liveLoad.disabled = false;
+    liveCompare.removeAttribute('href');
+    if (mobileMenu) mobileMenu.open = false;
+    setSaving(false);
+  }
+
+  function resetEditorPanels() {
+    for (const [name, panel] of editorPanels) {
+      panel.open = false;
+      panel.hidden = !current?.id;
+      document.getElementById(name + '-status').hidden = true;
+    }
+    for (const id of ['share-once', 'share-empty', 'version-empty', 'revoke-discover', 'artifact-live-update']) {
+      document.getElementById(id).hidden = true;
+    }
+    for (const id of ['share-list', 'version-list']) document.getElementById(id).textContent = '';
+    clearCreatedShare();
+    document.getElementById('create-share').disabled = false;
+    document.getElementById('share-expires').value = '';
+    discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
+    if (discoverEditable) discoverEditable.checked = false;
+    const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
+    if (discoverEditableField) discoverEditableField.hidden = !canReleaseEditable;
+    if (discoverEditableNote) discoverEditableNote.hidden = !canReleaseEditable;
+    if (editor) {
+      editor.discoverSlugEdited = false;
+      editor.discoverEditableEdited = false;
+    }
+    showDiscoverPublicLink('');
+    setDiscoverPending(false);
+  }
+
+  function showCatalog({preserve = false} = {}) {
+    renderFilterChoices();
+    renderCatalog({preserve});
+  }
+
+  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
+    if (!canCreateInWorkspace() || workspaceId() !== workspace) return;
+    if (!canLeaveEditor()) return false;
+    const target = artifactTargetFromSearch(document.defaultView?.location?.search);
+    const catalogView = !listPanel.hidden && !target?.artifact ? {
+      workspace, kind:catalogKind, scope:catalogScope, scroll:main?.scrollTop ?? 0, focus:item?.id,
+    } : null;
+    hideEditor();
     closeNewMenu();
-    current = item;
+    show('', '');
+    const selection = {workspace, account: currentUser, controller: new AbortController(), reads: new Map(), catalogView, focusTitle};
+    editor = selection;
     listPanel.hidden = true;
-    form.hidden = false;
-    if (item && item.id && workspaceId()) {
-      const seen = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}`);
-      if (seen.status !== 200) {
-        current=null;form.hidden=true;listPanel.hidden=false;
+    if (main) main.scrollTop = 0;
+    if (item?.id && !saved) {
+      editorLoading.hidden = false;
+      // The catalog can identify the editor before the exact record arrives.
+      void editorTools(item)?.prepare().catch(() => {});
+      const seen = await request('GET', `/v1/workspaces/${workspace}/artifacts/${item.id}`, undefined, undefined, selection.controller.signal)
+        .catch(() => ({status: 0, body: {}}));
+      if (!activeEditor(selection)) return;
+      if (seen.status !== 200 || seen.body.artifact?.id !== item.id ||
+          (seen.body.artifact.workspace_id && seen.body.artifact.workspace_id !== workspace)) {
+        hideEditor();
+        showCatalog();
         show('error', messageFor(seen.body.error, '无法打开文档。'));
         return;
       }
-      current = seen.body.artifact;
+      item = seen.body.artifact;
     }
+    const tools = editorTools(item);
+    if (tools && !tools.instance) {
+      // Chat-linked creation captures the draft during the new button's click.
+      if (!item?.id) current = item;
+      editorLoading.hidden = false;
+      try {
+        await tools.prepare();
+      } catch {
+        if (!activeEditor(selection)) return;
+        hideEditor();
+        showCatalog();
+        show('error', '无法加载编辑器，请刷新页面后重试。');
+        return;
+      }
+      if (!activeEditor(selection)) return;
+    }
+    current = item;
     fillEditor(current);
-    document.getElementById('remove-artifact').hidden = !current || !current.id;
-    const sharePanel = document.getElementById('share-panel');
-    sharePanel.hidden = !current || !current.id;
-    document.getElementById('share-once').hidden = true;
-    document.getElementById('share-once').textContent = '';
-    const versionPanel = document.getElementById('version-panel');
-    versionPanel.hidden = !current || !current.id;
-    const discoverPanel = document.getElementById('discover-panel');
-    if (discoverPanel) discoverPanel.hidden = !current || !current.id;
-    if (current && current.id) {
-      await loadShares();
-      await loadVersions();
-      await loadDiscover();
-    } else {
-      document.getElementById('share-list').textContent = '';
-      document.getElementById('version-list').textContent = '';
-    }
+    readEditorRecovery({restore:true});
+    resetEditorPanels();
+    updateMobileActions();
+    document.getElementById('remove-artifact').hidden = !current?.id;
+    editorLoading.hidden = true;
+    form.hidden = false;
+    document.defaultView?.addEventListener?.('beforeunload', warnBeforeLeavingSpace);
+    if (current?.id) recordEditorAddress(selection, current);
+    if (notice) show(notice.kind, notice.text);
+    if (focusTitle) form.elements.title?.focus({preventScroll: true});
+    return true;
+  }
+
+  function editorPath(selection, id = current.id) {
+    return `/v1/workspaces/${selection.workspace}/artifacts/${id}`;
+  }
+
+  function panelStatus(name, text) {
+    const node = document.getElementById(name + '-status');
+    node.hidden = !text;
+    node.textContent = text;
+  }
+
+  async function readPanel(name, suffix) {
+    const selection = editor;
+    if (!activeEditor(selection) || !current?.id) return null;
+    const item = current;
+    const token = Symbol(name);
+    selection.reads.set(name, token);
+    panelStatus(name, '正在读取…');
+    const result = await request('GET', editorPath(selection, item.id) + suffix, undefined, undefined, selection.controller.signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (!activeEditor(selection) || current.id !== item.id || selection.reads.get(name) !== token) return null;
+    return {result, item, selection};
+  }
+
+  function showDiscoverPublicLink(path) {
+    if (!discoverPublicLink) return;
+    discoverPublicLink.hidden = !path;
+    if (path) discoverPublicLink.href = path;
+    else discoverPublicLink.removeAttribute('href');
+  }
+
+  function setDiscoverPending(pending) {
+    if (publishDiscover) publishDiscover.disabled = pending;
+    if (revokeDiscover) revokeDiscover.disabled = pending;
+    if (discoverSlug) discoverSlug.disabled = pending;
+    if (discoverEditable) discoverEditable.disabled = pending;
+  }
+
+  function renderDiscoverListing(row, updateSlug = true) {
+    const slug = typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug) ? row.slug : '';
+    const listed = row.listed === true && Boolean(slug);
+    if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
+    if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
+    if (revokeDiscover) revokeDiscover.hidden = !listed;
+    const path = '/w/' + slug;
+    showDiscoverPublicLink(listed ? (row.path === '/social' + path ? row.path : path) : '');
+    panelStatus('discover', listed ? (row.editable_remix === true ? '已公开并允许复制可编辑版本。' : '已公开到发现页。') : '尚未公开到发现页。');
   }
 
   async function loadDiscover() {
-    const panel = document.getElementById('discover-panel');
-    const status = document.getElementById('discover-status');
-    const slugInput = document.getElementById('discover-slug');
-    const revoke = document.getElementById('revoke-discover');
-    if (!panel) return;
-    if (!current || !current.id || !workspaceId()) {
-      panel.hidden = true;
+    if (editor?.discoverWrite) return;
+    const response = await readPanel('discover', '/discover');
+    if (!response) return;
+    const {result, selection} = response;
+    if (result.status !== 200) {
+      panelStatus('discover', '无法读取公开状态。关闭后重新展开可重试。');
       return;
     }
-    panel.hidden = false;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`);
-    if (listed.status !== 200) {
-      if (status) {
-        status.hidden = false;
-        status.textContent = '无法读取公开状态。';
+    renderDiscoverListing(result.body.discover || {}, !selection.discoverSlugEdited);
+  }
+
+  async function changeDiscoverListing(publish) {
+    const selection = editor;
+    if (!activeEditor(selection) || !current?.id || selection.discoverWrite) return;
+    const slug = discoverSlug.value.trim();
+    if (publish && !DISCOVER_SLUG.test(slug)) {
+      panelStatus('discover', '请输入符合要求的公开短地址。');
+      discoverSlug.focus();
+      return;
+    }
+    selection.discoverWrite = true;
+    selection.reads.delete('discover');
+    setDiscoverPending(true);
+    panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
+    const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
+    const payload = publish ? {slug} : {};
+    if (publish && discoverEditableField && !discoverEditableField.hidden) {
+      payload.revision = current.revision;
+      payload.allow_editable_remix = discoverEditable.checked;
+    }
+    const result = await request('POST', path, payload, undefined, selection.controller.signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (!activeEditor(selection)) return;
+    selection.discoverWrite = false;
+    setDiscoverPending(false);
+    if (result.status === 200 || (publish && result.status === 201)) {
+      if (publish) selection.discoverSlugEdited = false;
+      selection.discoverEditableEdited = false;
+      if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
+      else await loadDiscover();
+      if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
+      return;
+    }
+    const error = result.body?.error;
+    const messages = {
+      forbidden: '只有所有者或管理员可以将作品发布到发现页。',
+      conflict: '这个短地址已经在用。',
+      invalid: '请输入符合要求的公开短地址。',
+      attachment_type_blocked: '这个文件格式无法公开发布。',
+    };
+    const code = typeof error === 'string' ? error : error?.code;
+    const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
+    panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+  }
+
+  function clearCreatedShare() {
+    const once = document.getElementById('share-once');
+    once.hidden = true;
+    delete once.dataset.shareId;
+    document.getElementById('share-url').value = '';
+    document.getElementById('open-share').removeAttribute('href');
+    document.getElementById('share-copy-status').textContent = '';
+  }
+
+  async function changeShare(selection, path, {create = false, item, button}) {
+    if (!activeEditor(selection) || selection.shareWrite) return;
+    const restoreFocus = document.activeElement === button;
+    selection.shareWrite = true;
+    button.disabled = true;
+    if (!create && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
+    const expires = Number(document.getElementById('share-expires').value);
+    panelStatus('share', create ? '正在创建分享链接…' : '正在撤销分享链接…');
+    try {
+      const result = await request('POST', path, create && expires ? {expires_in: expires} : {},
+        undefined, selection.controller.signal).catch(() => ({status: 0, body: {}}));
+      if (!activeEditor(selection)) return;
+      const share = result.body?.share;
+      if (create && result.status === 201 && /^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) {
+        const value = new URL(share.path, document.defaultView.location.origin).href;
+        const once = document.getElementById('share-once');
+        const copy = document.getElementById('copy-share');
+        document.getElementById('share-url').value = value;
+        document.getElementById('open-share').href = value;
+        document.getElementById('share-copy-status').textContent = '';
+        once.dataset.shareId = share.id;
+        once.hidden = false;
+        copy.focus({preventScroll: true});
+        await loadShares();
+        return;
       }
-      return;
-    }
-    const row = listed.body.discover || {};
-    if (slugInput) slugInput.value = row.slug || suggestedDiscoverSlug(current.title);
-    if (revoke) revoke.hidden = !row.listed;
-    if (status) {
-      status.hidden = false;
-      status.textContent = row.listed ? ('已公开：/w/' + row.slug) : '尚未公开到发现页。';
+      if (!create && result.status === 200 && share?.revoked === true) {
+        await loadShares();
+        if (activeEditor(selection)) panelStatus('share', '分享链接已撤销。');
+        return;
+      }
+      await loadShares();
+      if (activeEditor(selection)) panelStatus('share', create
+        ? '无法确认分享链接已创建。请查看分享列表后再试。'
+        : '撤销尚未确认，链接可能仍可访问。请重试撤销。');
+    } finally {
+      selection.shareWrite = false;
+      if (activeEditor(selection)) {
+        button.disabled = false;
+        if (!create && restoreFocus && document.activeElement === document.body) {
+          const row = [...document.getElementById('share-list').children].find(node => node.dataset.shareId === item.id);
+          (row?.querySelector('button') || document.getElementById('create-share')).focus({preventScroll: true});
+        }
+      }
     }
   }
 
   async function loadShares() {
+    const response = await readPanel('share', '/shares');
+    if (!response) return;
+    const {result: listed, item: artifact, selection} = response;
+    if (listed.status !== 200) {
+      panelStatus('share', '无法读取分享链接。关闭后重新展开可重试。');
+      return;
+    }
+    panelStatus('share', '');
     const list = document.getElementById('share-list');
     const empty = document.getElementById('share-empty');
     list.textContent = '';
-    if (!current || !current.id || !workspaceId()) return;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares`);
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法读取分享链接。'));
-      return;
-    }
     const items = listed.body.items || [];
     empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
+      row.dataset.shareId = item.id;
       const meta = document.createElement('span');
       meta.className = 'note';
-      meta.textContent = item.revoked ? `已撤销 · ${item.prefix}…` : `有效 · ${item.prefix}…`;
+      const expired = item.expired === true;
+      const state = item.revoked ? '已撤销' : expired ? '已过期' : item.revocation_pending ? '撤销待确认' : '有效';
+      const expiry = item.expires ? ` · 到期 ${artifactTime(item.expires)}` : '';
+      meta.textContent = `${state} · ${item.prefix}…${expiry}`;
       row.appendChild(meta);
-      if (!item.revoked) {
+      if (!item.revoked && !expired) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
-        revoke.textContent = '撤销';
-        revoke.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares/${item.id}/revoke`, {});
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '撤销失败。'));
-            return;
-          }
-          document.getElementById('share-once').hidden = true;
-          document.getElementById('share-once').textContent = '';
-          show('ok', '分享链接已撤销。');
-          await loadShares();
-        });
+        revoke.textContent = item.revocation_pending ? '重试撤销' : '撤销';
+        revoke.addEventListener('click', () => changeShare(selection,
+          editorPath(selection, artifact.id) + `/shares/${item.id}/revoke`, {item, button: revoke}));
         row.appendChild(revoke);
       }
       list.appendChild(row);
@@ -1242,15 +2718,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadVersions() {
+    const response = await readPanel('version', '/versions');
+    if (!response) return;
+    const {result: listed, item: artifact, selection} = response;
+    if (listed.status !== 200) {
+      panelStatus('version', '无法读取版本历史。关闭后重新展开可重试。');
+      return;
+    }
+    panelStatus('version', '');
     const list = document.getElementById('version-list');
     const empty = document.getElementById('version-empty');
     list.textContent = '';
-    if (!current || !current.id || !workspaceId()) return;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/versions`);
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法读取版本历史。'));
-      return;
-    }
     const items = listed.body.items || [];
     empty.hidden = items.length > 0;
     for (const item of items) {
@@ -1263,23 +2741,57 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       download.href = exportHref(item.revision);
       download.textContent = '导出';
       row.appendChild(download);
+      const copySource = {...artifact,title:item.title || artifact.title,revision:item.revision};
+      if (canDuplicate(copySource)) {
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = '复制为新作品';
+        copy.addEventListener('click', () => {
+          if (activeEditor(selection) && current.id === artifact.id) openDuplicateDialog(copySource,copy);
+        });
+        row.appendChild(copy);
+      }
       if (item.revision !== current.revision) {
         const restore = document.createElement('button');
         restore.type = 'button';
         restore.textContent = '恢复为新修订';
         restore.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/restore`, {
-            revision: current.revision,
-            to: item.revision,
-          });
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '恢复失败。'));
+          if (!activeEditor(selection) || current.id !== artifact.id || selection.saving || form.inert) return;
+          if (hasEditorDraft()) {
+            show('error', '请先保存当前草稿，再恢复历史版本。');
             return;
           }
-          current = result.body.artifact;
-          fillEditor(current);
-          show('ok', `已恢复为修订 ${current.revision}。`);
-          await loadVersions();
+          const revision = current.revision;
+          selection.saving = true;
+          form.inert = true;
+          setSaving(true);
+          try {
+            const result = await request('POST', editorPath(selection, artifact.id) + '/restore',
+              {revision, to: item.revision}, undefined, selection.controller.signal)
+              .catch(() => ({status: 0, body: {}}));
+            if (!activeEditor(selection) || current.revision !== revision) return;
+            if (revealRevisionConflict(result)) {
+              show('error', '恢复遇到新版本，请先查看服务器版本。');
+              return;
+            }
+            if (result.status !== 200) {
+              show('error', messageFor(result.body.error, '恢复失败。'));
+              return;
+            }
+            current = result.body.artifact;
+            catalog = null;
+            fillEditor(current);
+            readEditorRecovery();
+            liveBanner.hidden = true;
+            show('ok', `已恢复为修订 ${current.revision}。`);
+            await loadVersions();
+          } finally {
+            selection.saving = false;
+            if (activeEditor(selection)) {
+              form.inert = false;
+              setSaving(false);
+            }
+          }
         });
         row.appendChild(restore);
       }
@@ -1287,46 +2799,437 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  let listGeneration = 0;
-  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
-    if(event.workspace!==workspaceId()||!event.changed.includes('artifacts'))return;
-    await loadList();
-    if(event.workspace!==workspaceId()||!current?.id)return;
-    const id=current.id,wid=workspaceId();
-    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
-    if(workspaceId()!==wid||current?.id!==id)return;
-    const banner=document.getElementById('artifact-live-update');
-    if(banner)banner.hidden=result.status===200&&result.body.artifact.revision===current.revision;
-  }});
-  document.getElementById('artifact-live-load')?.addEventListener('click',async()=>{
-    if(!current?.id||!globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？'))return;
-    const wid=workspaceId(),id=current.id;
-    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
-    if(workspaceId()!==wid||current?.id!==id)return;
-    if(result.status!==200){show('error','服务器作品不可读取，可能已删除或访问已撤销；保留本地草稿。');return;}
-    await openEditor(result.body.artifact);
-    const banner=document.getElementById('artifact-live-update');if(banner)banner.hidden=true;
+  const panelLoads = {version: loadVersions, share: loadShares, discover: loadDiscover};
+  for (const [name, panel] of editorPanels) {
+    panel.addEventListener('toggle', () => {
+      if (panel.open && !panel.hidden) void panelLoads[name]();
+    });
+  }
+
+  const activityStatus = document.getElementById('workspace-events-status');
+  const activityRetry = document.getElementById('workspace-events-retry');
+  const activity = createArtifactActivity({
+    ...activityTimers,
+    visible: () => document.visibilityState !== 'hidden',
+    report(state) {
+      if (!activityStatus) return;
+      const message = {
+        ready: '自动更新已开启',
+        error: '自动更新暂不可用，可手动检查。',
+        idle: '',
+      }[state];
+      if (activityStatus.textContent !== message) activityStatus.textContent = message;
+      activityStatus.dataset.state = state;
+    },
+    async read(workspace, signal) {
+      const account = currentUser;
+      const selection = activeEditor(editor) && current?.id ? editor : null;
+      const artifact = selection ? current.id : '';
+      const result = await request('GET', `/v1/workspaces/${workspace}/artifacts/activity${artifact ? '?artifact=' + artifact : ''}`,
+        undefined, undefined, signal);
+      if (result.status !== 200) return null;
+      const {version, revision} = result.body;
+      if (artifact && revision !== null && !(Number.isSafeInteger(revision) && revision > 0)) return null;
+      return {version, revision, selection, artifact, account};
+    },
+    async apply(snapshot, {workspace, changed, signal}) {
+      if (workspace !== workspaceId() || snapshot.account !== currentUser || catalogKind === 'meetings') return 'defer';
+      if (!listPanel.hidden) {
+        if (!changed || catalog?.activityVersion === snapshot.version) return snapshot.version;
+        if (pendingBookmarks.size || itemMenuOpen() || document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true' ||
+            catalog?.state === 'loading' || catalog?.more) return 'defer';
+        facets = null;
+        return loadList({background: true, signal});
+      }
+      if (catalog?.state === 'ready' && catalog.activityVersion !== snapshot.version) catalog.state = 'stale';
+      const selection = snapshot.selection;
+      if (!activeEditor(selection) || snapshot.artifact !== current?.id || selection.saving || selection.loadingRevision) {
+        return snapshot.version;
+      }
+      if (snapshot.revision === null) displayEditorUpdate({missing: true});
+      else if (snapshot.revision === current.revision) liveBanner.hidden = true;
+      else if (snapshot.revision > current.revision) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) displayEditorUpdate({dirty});
+        else {
+          const outcome = await loadEditorRevision(selection, {revision: snapshot.revision, signal});
+          if (outcome === 'failed') return false;
+        }
+      }
+      return snapshot.version;
+    },
   });
-  async function loadList() {
-    workspaceEvents.start(workspaceId());
-    const generation = ++listGeneration;
-    const id = workspaceId();
-    if (!id) return;
-    const listed = await request('GET', `/v1/workspaces/${id}/artifacts${listQuery(search.value)}`);
-    // An old workspace/search response must never replace the current list.
-    if (generation !== listGeneration || workspaceId() !== id) return;
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法读取作品库。'));
+  document.addEventListener?.('visibilitychange', activity.resume);
+  activityRetry?.addEventListener('click', activity.check);
+
+  function canRefreshEditor() {
+    // Replacing the editor can move the caret, interrupt a stroke or reset media.
+    return !form.inert && !drawing && !websiteInteractive && current.kind !== 'media' &&
+      !document.activeElement?.closest?.('#editor-form :is(input,textarea,select,[contenteditable="true"])');
+  }
+
+  function displayEditorUpdate({missing = false, dirty = false, failed = false} = {}) {
+    const message = missing ? '这件作品已无法访问，当前内容仍保留在此页。'
+      : failed ? '暂未读取到服务器版本，请重试。'
+      : dirty ? '服务器有新版本，当前草稿仍保留。'
+      : '服务器有新版本。';
+    if (liveMessage.textContent !== message) liveMessage.textContent = message;
+    liveLoad.hidden = missing || Boolean(dirty && !draftKey());
+    liveCompare.hidden = missing;
+    if (!missing) liveCompare.href = worksPath() + '?workspace=' + editor.workspace + '&artifact=' + current.id;
+    liveBanner.hidden = false;
+  }
+
+  async function loadEditorRevision(selection, {revision, signal, manual = false} = {}) {
+    if (!activeEditor(selection) || !current?.id || selection.saving || selection.loadingRevision || form.inert) return;
+    const prior = current;
+    const isCurrent = () => activeEditor(selection) && current === prior && !selection.saving;
+    // A separate tab remains available when the current draft cannot be recovered here.
+    if (manual && hasEditorDraft()) {
+      persistDraft();
+      const entry = readDraft(draftKey());
+      if (entry?.revision !== prior.revision ||
+          entry.title !== form.elements.title.value || entry.body !== form.elements.body.value) {
+        displayEditorUpdate({dirty: true});
+        liveLoad.hidden = true;
+        liveCompare.focus();
+        return;
+      }
+      if (!document.defaultView?.confirm?.('切换后，可以在草稿恢复区查看并复制当前草稿。继续？')) return;
+    }
+    selection.loadingRevision = true;
+    if (manual) {
+      liveLoad.disabled = true;
+      form.inert = true;
+    }
+    try {
+      const signals = [selection.controller.signal, AbortSignal.timeout(6000)];
+      if (signal) signals.push(signal);
+      const result = await request('GET', editorPath(selection), undefined, undefined, AbortSignal.any(signals))
+        .catch(() => ({status: 0, body: {}}));
+      if (!isCurrent() || signal?.aborted) return;
+      if (result.status === 404) {
+        displayEditorUpdate({missing: true});
+        return;
+      }
+      const latest = result.body.artifact;
+      if (result.status !== 200 || latest?.id !== prior.id || latest.workspace_id !== selection.workspace ||
+          !Number.isSafeInteger(latest.revision) || latest.revision < (revision ?? prior.revision + 1)) {
+        displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+        return 'failed';
+      }
+      const tools = editorTools(latest);
+      if (tools && !tools.instance) await tools.prepare();
+      if (!isCurrent() || signal?.aborted) return;
+      if (!manual) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) {
+          displayEditorUpdate({dirty});
+          return;
+        }
+      }
+      current = latest;
+      fillEditor(current);
+      readEditorRecovery();
+      liveBanner.hidden = true;
+      if (manual) {
+        form.inert = false;
+        form.elements.title.focus({preventScroll: true});
+        show('ok', '已切换到服务器版本。');
+      }
+      for (const [name, panel] of editorPanels) {
+        if (panel.open) void panelLoads[name]();
+      }
+    } catch {
+      if (!isCurrent() || signal?.aborted) return;
+      displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+      return 'failed';
+    } finally {
+      selection.loadingRevision = false;
+      if (manual && activeEditor(selection)) {
+        form.inert = false;
+        liveLoad.disabled = false;
+      }
+    }
+  }
+
+  liveLoad.addEventListener('click', () => void loadEditorRevision(editor, {manual: true}));
+
+  function revealRevisionConflict(result) {
+    const latest = result.body.error?.current;
+    if (result.status !== 409 || !current?.id || latest?.id !== current.id ||
+        latest.workspace_id !== editor.workspace || !Number.isSafeInteger(latest.revision) ||
+        latest.revision <= current.revision) return false;
+    persistDraft();
+    displayEditorUpdate({dirty: hasEditorDraft()});
+    return true;
+  }
+
+  function listStatus(text = '', retry = false) {
+    document.getElementById('artifact-list-status').hidden = !text;
+    document.getElementById('artifact-list-note').textContent = text;
+    document.getElementById('retry-artifact-list').hidden = !retry;
+  }
+
+  function catalogQuery() {
+    return listQuery(search.value, nativeCatalog ? {
+      kind: catalogKind,
+      scope: catalogScope,
+      types: filterTypes,
+      creators: filterCreators,
+      sessions: filterSessions,
+      updated: filterUpdated,
+    } : undefined);
+  }
+
+  function sameSelection(page) {
+    return page && page.workspace === workspaceId() && page.account === currentUser && page.query === catalogQuery();
+  }
+
+  function renderPageFooter(visible) {
+    if (!pageFooter || !pageMore || !pageNote) return;
+    const canPage = catalogKind !== 'meetings' && sameSelection(catalog) && catalog.state === 'ready' && catalog.cursor;
+    pageFooter.hidden = !canPage;
+    if (!canPage) return;
+    pageMore.setAttribute('aria-disabled', String(Boolean(catalog.more)));
+    pageMore.textContent = catalog.more ? '正在加载…' : catalog.moreError ? '重试加载更多' : '加载更多作品';
+    pageNote.textContent = catalog.moreError ||
+      (!visible && !catalog.more ? '已加载的作品中没有符合条件的结果。' : '');
+    pageNote.hidden = !pageNote.textContent;
+  }
+
+  async function fetchCatalogPage(workspace, query, {cursor = '', limit = CATALOG_PAGE_SIZE, signal} = {}) {
+    const options = [];
+    if (nativeCatalog) options.push('order=recent');
+    if (cursor) options.push('cursor=' + encodeURIComponent(cursor));
+    if (limit !== CATALOG_PAGE_SIZE) options.push('limit=' + limit);
+    const tail = options.length ? (query ? '&' : '?') + options.join('&') : '';
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}${tail}`, undefined, undefined, signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (result.status === 200 && !Array.isArray(result.body?.items)) return {status: 502, body: {}};
+    return result;
+  }
+
+  function followingCursor(body, previous = '') {
+    return body.cursor !== previous && CATALOG_CURSOR.test(body.cursor || '') ? body.cursor : '';
+  }
+
+  async function readCatalogDepth(workspace, query, depth, signal) {
+    let remaining = depth;
+    let cursor = '';
+    let version;
+    const items = [];
+    const seen = new Set();
+    while (remaining > 0 && !signal.aborted) {
+      const limit = Math.min(remaining, CATALOG_READ_LIMIT);
+      const result = await fetchCatalogPage(workspace, query, {limit, cursor, signal});
+      if (result.status !== 200) return result;
+      if (version && result.body.activity_version && result.body.activity_version !== version) {
+        return {status: 409, body: {error: {message: '作品列表已更新，请重试。'}}};
+      }
+      version = result.body.activity_version;
+      items.push(...result.body.items);
+      remaining -= limit;
+      cursor = followingCursor(result.body, cursor);
+      if (!cursor || !result.body.items.length || seen.has(cursor)) break;
+      seen.add(cursor);
+    }
+    return {status: 200, body: {items, cursor, activity_version: version}};
+  }
+
+  function replaceCatalogItems(items, preserve) {
+    const prior = new Map(preserve ? allItems.map(item => [item.id, item]) : []);
+    allItems = items.map(item => {
+      const old = prior.get(item.id);
+      return old && JSON.stringify(old) === JSON.stringify(item) ? old : item;
+    });
+  }
+
+  async function loadMoreArtifacts() {
+    // Give an explicit pagination click priority over a quiet refresh.
+    if (catalog?.background && sameSelection(catalog) && catalog.before?.cursor) {
+      catalog.controller.abort();
+      catalog = catalog.before;
+    }
+    const page = catalog;
+    if (!sameSelection(page) || page.state !== 'ready' || !page.cursor || page.more || catalogKind === 'meetings') return;
+    const controller = new AbortController();
+    const {signal} = controller;
+    page.more = controller;
+    page.moreError = '';
+    renderPageFooter(matchingArtifacts().length);
+    const initialCursor = page.cursor;
+    const depth = page.depth + CATALOG_PAGE_SIZE;
+    let listed = await fetchCatalogPage(page.workspace, page.query, {cursor: initialCursor, signal});
+    const valid = () => catalog === page && sameSelection(page) && !signal.aborted && page.more === controller;
+    if (!valid()) {
+      if (page.more === controller) page.more = null;
       return;
     }
-    allItems = listed.body.items || [];
-    renderFilterChoices();
-    renderCatalog();
+    let replace = listed.status === 400 || listed.status === 404;
+    if (listed.status === 200 && page.activityVersion && listed.body.activity_version &&
+        page.activityVersion !== listed.body.activity_version) replace = true;
+    if (replace) {
+      let before;
+      do {
+        before = bookmarkRevision;
+        listed = await readCatalogDepth(page.workspace, page.query, depth, signal);
+      } while (valid() && before !== bookmarkRevision);
+    }
+    if (!valid()) {
+      if (page.more === controller) page.more = null;
+      return;
+    }
+    page.more = null;
+    if (listed.status !== 200) {
+      page.moreError = '无法加载更多作品，请重试。';
+      renderPageFooter(matchingArtifacts().length);
+      return;
+    }
+    const earlierIds = new Set(allItems.map(item => item.id));
+    if (replace) replaceCatalogItems(listed.body.items, true);
+    else allItems = [...allItems, ...listed.body.items.filter(item => !earlierIds.has(item.id))];
+    page.depth = depth;
+    page.cursor = followingCursor(listed.body, replace ? '' : initialCursor);
+    page.activityVersion = listed.body.activity_version;
+    activity.seed(page.workspace, page.activityVersion);
+    if (listPanel.hidden || catalogKind === 'meetings') return;
+    const focusNewRow = document.activeElement === pageMore;
+    showCatalog({preserve: true});
+    if (focusNewRow) {
+      const firstAdded = [...document.getElementById('artifact-list').children]
+        .find(row => row.dataset.artifactId && !earlierIds.has(row.dataset.artifactId));
+      if (firstAdded) firstAdded.firstElementChild?.focus();
+      else if (!page.cursor) search.focus();
+    }
+  }
+
+  async function loadList({reuse = false, background = false, signal, initial} = {}) {
+    if (background && searchTimer !== null) return 'defer';
+    if (!background) cancelScheduledSearch();
+    if (catalogKind === 'meetings') {
+      if (background) return 'defer';
+      catalog?.more?.abort();
+      if (catalog) catalog.more = null;
+      listStatus();
+      activity.setScope('');
+      await loadMeetings();
+      return;
+    }
+    const workspace = workspaceId();
+    if (!workspace || !currentUser) return;
+    activity.setScope(workspace);
+    const query = catalogQuery();
+    const sameCatalog = sameSelection(catalog);
+    if (reuse && sameCatalog && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
+      listStatus(catalog.message, catalog.state === 'error');
+      if (!listPanel.hidden) showCatalog();
+      return;
+    }
+    const before = catalog;
+    before?.controller?.abort();
+    before?.more?.abort();
+    if (before) before.more = null;
+    const controller = new AbortController();
+    const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const bookmarkBefore = bookmarkRevision;
+    if (!sameCatalog) allItems = [];
+    const depth = sameCatalog ? before.depth : CATALOG_PAGE_SIZE;
+    const loading = {
+      workspace, account: currentUser, query, depth, controller, state: 'loading',
+      message: search.value.trim() ? '正在搜索作品…' : '正在加载资料…',
+      ...(background ? {background, before} : {}),
+    };
+    catalog = loading;
+    if (!background) {
+      listStatus(loading.message);
+      if (!listPanel.hidden && (!sameCatalog || !allItems.length)) showCatalog();
+      else renderPageFooter(matchingArtifacts().length);
+    }
+    const listed = initial && !query && depth === CATALOG_PAGE_SIZE ? {status: 200, body: initial} :
+      await readCatalogDepth(workspace, query, depth, requestSignal);
+    if (catalog !== loading || !sameSelection(loading)) return 'defer';
+    if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || itemMenuOpen() ||
+        bookmarkBefore !== bookmarkRevision ||
+        document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true')) {
+      catalog = before;
+      return signal?.aborted ? false : 'defer';
+    }
+    if (!background && bookmarkBefore !== bookmarkRevision) return loadList();
+    if (listed.status !== 200) {
+      if (background) { catalog = before; return false; }
+      loading.state = 'error';
+      loading.message = messageFor(listed.body.error, search.value.trim() ? '搜索作品失败，请重试。' : '无法读取作品库。');
+      if (catalogKind !== 'meetings') {
+        listStatus(loading.message, true);
+        if (!listPanel.hidden) showCatalog({preserve: true});
+      }
+      return;
+    }
+    loading.state = 'ready';
+    loading.message = '';
+    loading.controller = null;
+    delete loading.background;
+    delete loading.before;
+    loading.cursor = followingCursor(listed.body);
+    loading.activityVersion = listed.body.activity_version;
+    activity.seed(workspace, loading.activityVersion);
+    replaceCatalogItems(listed.body.items || [], sameCatalog);
+    if (catalogKind !== 'meetings') listStatus();
+    if (!listPanel.hidden && catalogKind !== 'meetings') showCatalog({preserve: sameCatalog});
+    return loading.activityVersion;
+  }
+
+  function fillWorkspaces(items, selected) {
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    workspaceResolved = true;
+    workspacePending.hidden = true;
+    syncWorkspaceCreation();
+    notifications.setWorkspace(workspaceId());
+    studioWorkspaces = items;
+    syncStudioWorkspace();
   }
 
   async function load() {
-    const session = await request('GET', '/v1/auth/session');
+    const seq = ++workspaceLoad;
+    workspaceResolved = false;
+    workspacePending.hidden = false;
+    syncWorkspaceCreation();
+    activity.setScope('');
+    notifications.setWorkspace('');
+    const location = document.defaultView?.location;
+    const linkedStudio = new URLSearchParams(location?.search).has('studio')
+      ? studioDocumentFromSearch(location.search) || {invalid: true} : null;
+    const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
+    const fragment = new URLSearchParams((location?.hash || '').slice(1));
+    const newKind = newKindFromSearch(location?.search);
+    const linkedWorkspace = linkedStudio?.workspace || requested?.workspace ||
+      (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
+      !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
+      ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
+          (linkedWorkspace ? '&workspace=' + linkedWorkspace : '')).catch(() => null)
+      : null;
+    const session = await sessionRequest;
+    if (seq !== workspaceLoad) return;
     if (session.status === 401) {
+      workspacePending.hidden = true;
+      hideEditor();
+      currentUser = null;
+      syncStudioWorkspace();
+      catalog = null;
+      facets = null;
+      clearFilters();
+      allItems = [];
+      listStatus();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -1334,6 +3237,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (session.status !== 200) {
+      workspacePending.hidden = true;
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
@@ -1343,44 +3247,100 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
-    const space = await request('GET', '/v1/workspaces?limit=100');
+    const personalRequest = initialCatalog?.then(result => {
+      const items = result?.body?.items;
+      if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
+      const owner = items[0]?.owner_id;
+      const viewer = result.body.viewer_username;
+      if ((!owner && !viewer) || (owner && owner !== session.body.user.id) ||
+          (viewer && viewer !== session.body.user.username)) return null;
+      return result;
+    });
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) space = shared;
+      supplemental = null;
+    }
+    if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
-      show('error', messageFor(space.body.error, '无法读取工作区。'));
+      workspacePending.hidden = true;
+      show('error', '无法读取工作区。');
       return;
     }
-    workspaces = space.body.items || [];
-    const requested=artifactTargetFromSearch(document.defaultView?.location?.search);
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
+    const workspaces = space.body.items || [];
+    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    void supplemental?.then(shared => {
+      if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
+    });
     if (!workspaces.length) {
+      hideEditor();
+      catalog = null;
       allItems = [];
+      listStatus();
       document.getElementById('artifact-list').textContent = '';
       const emptyMessage = document.getElementById('list-empty-message');
       if (emptyMessage) emptyMessage.textContent = '还没有工作区。';
       renderCatalog();
+      if (requested || linkedStudio) show('error', '文档链接无效，或你没有访问该工作区的权限。');
       return;
     }
     const emptyMessage = document.getElementById('list-empty-message');
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
-    form.hidden = true;
-    listPanel.hidden = false;
-    if(requested){
-      if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
-        await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
+    hideEditor();
+    if (linkedStudio) {
+      void loadList();
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
+          !await studio?.open(linkedStudio.id, linkedStudio.revision)) {
+        show('error', '团队文档链接无效，或你没有访问权限。');
       }
-      workspaceSelect.value=requested.workspace;
+      return;
     }
-    await loadList();
-    if(requested)await openEditor({id:requested.artifact});
+    if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      syncWorkspaceCreation();
+      notifications.setWorkspace('');
+      meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
+      renderCatalog();
+      return;
+    }
+    if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      syncWorkspaceCreation();
+      notifications.setWorkspace('');
+      show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
+      return;
+    }
+    if (requested) {
+      if (requested.invalid || !workspaces.some(item => item.id === requested.workspace)) {
+        show('error', '文档链接无效，或你没有访问该工作区的权限。');
+        void loadList();
+        return;
+      }
+      if (requested.artifact) {
+        const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
+        void loadList();
+        await opening;
+        return;
+      }
+    }
+    if (newKind) {
+      const view = document.defaultView;
+      const params = new URLSearchParams(view.location.search);
+      params.delete('new');
+      const rest = params.toString();
+      document.getElementById(newKindButtonId(newKind))?.click();
+      const conversation = fragment.get('conversation');
+      if (current?.kind === newKind && linkedWorkspace && workspaceId() === linkedWorkspace && /^[A-Za-z0-9_-]{1,128}$/.test(conversation || '')) {
+        artifactSendOrigin = {wid: linkedWorkspace, conversation, item: current, allowed: false};
+        if (newKind === 'slides') void revealSlideContext(artifactSendOrigin);
+      }
+      writeSpaceAddress(view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
+      return;
+    }
+    const initial = workspaces.length === 1 && workspaces[0].id === workspaceId() &&
+      Array.isArray(space.body.catalog?.items) ? space.body.catalog : undefined;
+    await loadList({initial});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -1398,40 +3358,105 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   workspaceSelect.addEventListener('change', () => {
-    if (pendingDeleteCancel) pendingDeleteCancel();
+    if (!canLeaveEditor()) {
+      if (editor) workspaceSelect.value = editor.workspace;
+      return;
+    }
+    workspaceLoad += 1;
+    syncWorkspaceCreation();
+    closeSendDialog({force:true,restoreFocus:false});
+    notifications.setWorkspace(workspaceId());
+    syncStudioWorkspace();
+    hideEditor();
+    show('', '');
     meetingLoadedFor = '';
+    meetingSharedCursor = '';
     meetingItems = [];
     meetingError = '';
-    loadList().then(() => {
-      if (catalogKind === 'meetings') loadMeetings().then(() => renderCatalog());
-    });
+    meetingLoading = false;
+    facets = null;
+    filterCreators = [];
+    filterSessions = [];
+    renderFilterControls();
+    if (catalogKind === 'meetings' || artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    void loadList();
   });
-  search.addEventListener('input', () => loadList());
+  function cancelScheduledSearch() {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = null;
+  }
 
-  document.getElementById('new-artifact').addEventListener('click', () => {
-    draftKind = 'document';
-    closeNewMenu();
-    openEditor({kind: 'document'});
+  function updateSearch(immediate = false) {
+    cancelScheduledSearch();
+    if (clearSearch) clearSearch.hidden = !search.value;
+    if (catalogKind === 'meetings') {
+      renderMeetings();
+      return;
+    }
+    if (immediate || !search.value.trim() || sameSelection(catalog)) {
+      return loadList({reuse: !immediate || catalog?.state !== 'error'});
+    }
+    catalog?.controller?.abort();
+    catalog?.more?.abort();
+    const expected = {workspace: workspaceId(), account: currentUser, query: catalogQuery()};
+    searchTimer = setTimeout(() => {
+      searchTimer = null;
+      if (sameSelection(expected) && catalogKind !== 'meetings') void loadList({reuse: true});
+    }, CATALOG_SEARCH_DELAY);
+    if (!listPanel.hidden) {
+      listStatus('正在搜索作品…');
+      showCatalog();
+    }
+  }
+  search.addEventListener('input', event => {
+    if (!event.isComposing) updateSearch();
   });
+  search.addEventListener('compositionend', () => updateSearch());
+  function resetSearch() {
+    search.value = '';
+    search.focus();
+    return updateSearch(true);
+  }
+  clearSearch?.addEventListener('click', resetSearch);
+  search.addEventListener('keydown', event => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape' && search.value) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      return resetSearch();
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      return updateSearch(true);
+    }
+  });
+  document.getElementById('retry-artifact-list').addEventListener('click', () => loadList());
+  pageMore?.addEventListener('click', loadMoreArtifacts);
+  document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
+  document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
 
   document.getElementById('new-website').addEventListener('click', () => {
     draftKind = 'website';
     openEditor({kind: 'website'});
   });
 
-  document.getElementById('new-slides').addEventListener('click', () => {
-    draftKind = 'slides';
-    slidesState = {schema: 'openteamily.slides.v1', slides: [{title: '', bullets: []}]};
-    closeNewMenu();
-    openEditor({kind: 'slides'});
+  sendSpreadsheet?.addEventListener('click', () => openSendDialog(current));
+  sendSlides?.addEventListener('click', () => openSendDialog(current));
+  downloadSpreadsheet?.addEventListener('click', () => {
+    if (current?.kind === 'spreadsheet' && current.id) {
+      globalThis.location.assign(exportHref(current.revision));
+    }
   });
-
-  document.getElementById('new-dashboard').addEventListener('click', () => {
-    draftKind = 'dashboard';
-    dashboardState = {schema: 'openteamily.dashboard.v1', widgets: [widgetDefault('metric')]};
-    closeNewMenu();
-    openEditor({kind: 'dashboard'});
+  downloadSlides?.addEventListener('click', () => {
+    if (current?.kind === 'slides' && current.id) {
+      globalThis.location.assign(exportHref(current.revision) + '?format=pptx');
+    }
   });
+  for (const backId of ['sheet-back', 'slides-back']) {
+    document.getElementById(backId)?.addEventListener('click', () => {
+      document.getElementById('cancel-editor').click();
+    });
+  }
 
   document.getElementById('add-widget').addEventListener('click', () => {
     if (dashboardState.widgets.length >= 20) return;
@@ -1442,71 +3467,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('add-slide').addEventListener('click', () => {
     if (slidesState.slides.length >= 30) return;
     slidesState.slides.push({title: '', bullets: []});
-    renderSlidesEditor();
-  });
-
-  document.getElementById('new-media').addEventListener('click', () => {
-    draftKind = 'media';
-    document.getElementById('media-file').value = '';
-    closeNewMenu();
-    openEditor({kind: 'media'});
-  });
-
-  document.getElementById('new-board').addEventListener('click', () => {
-    draftKind = 'whiteboard';
-    boardState = {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
-    closeNewMenu();
-    openEditor({kind: 'whiteboard'});
+    slideEditCount++;
+    renderSlidesEditor(slidesState.slides.length - 1);
   });
 
   function bindCreate(id, start) {
     const button = document.getElementById(id);
-    if (button) button.addEventListener('click', start);
+    button?.addEventListener('click', event => {
+      if (canCreateInWorkspace()) start(event);
+    });
   }
+
+  for (const [id, kind] of [
+    ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
+    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
+  ]) bindCreate(id, event => {
+    draftKind = kind;
+    void openEditor({kind}, {focusTitle: event.isTrusted && event.detail === 0});
+  });
 
   bindCreate('empty-new-document', () => {
     draftKind = 'document';
     openEditor({kind: 'document'});
   });
 
-  const newMenuButton = document.getElementById('new-menu-button');
-  if (newMenuButton) {
-    newMenuButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const menu = document.getElementById('new-menu');
-      if (!menu) return;
-      const open = menu.hidden;
-      menu.hidden = !open;
-      newMenuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
+  for (const kind of ['document', 'website']) {
+    bindCreate('resume-draft-' + kind, () => document.getElementById(newKindButtonId(kind))?.click());
   }
-  document.addEventListener('click', (event) => {
-    const wrap = document.querySelector('.new-menu-wrap');
-    if (wrap && !wrap.contains(event.target)) closeNewMenu();
-  });
+
+  bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+  bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+  bindCreate('new-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeNewMenu();
-      closeFilterPanel();
-    }
+    if (event.key === 'Escape' && !event.defaultPrevented) closeFilterPanel({focus: true});
   });
 
   for (const button of document.querySelectorAll('.artifact-kinds [data-kind]')) {
     button.addEventListener('click', async () => {
+      if (editor && !canLeaveEditor()) return;
+      if (editor) hideEditor();
       const kind = button.getAttribute('data-kind') || 'all';
       const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
       applyView(kind, scope);
-      if (kind === 'meetings' && meetingLoadedFor !== workspaceId()) {
-        meetingLoading = true;
-        renderCatalog();
-        await loadMeetings();
-        renderCatalog();
-      }
+      await loadList({reuse: true});
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
+      if (editor && !canLeaveEditor()) return;
+      if (editor) hideEditor();
       applyView('all', button.getAttribute('data-scope') || 'all');
+      await loadList({reuse: true});
     });
   }
   for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
@@ -1544,15 +3558,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       applyDirectoryCollapsed(document, false);
     });
   }
-  const filterButton = document.getElementById('filter-button');
-  if (filterButton) {
+  if (filterButton && filterPanel) {
     filterButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      const panel = document.getElementById('filter-panel');
-      if (!panel) return;
-      const open = panel.hidden;
-      panel.hidden = !open;
-      filterButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!filterPanel.hidden) {
+        closeFilterPanel();
+        return;
+      }
+      filterPanel.hidden = false;
+      filterButton.setAttribute('aria-expanded', 'true');
+      void loadFacets();
     });
   }
   for (const button of document.querySelectorAll('.filter-accordion')) {
@@ -1568,20 +3583,75 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     });
   }
-  for (const input of document.querySelectorAll('#filter-panel input[name="file-type"], #filter-panel input[name="modified"]')) {
-    input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-  }
+  filterPanel?.addEventListener('change', ({target}) => {
+    if (['file-type', 'creator', 'session', 'modified', 'modified-start', 'modified-end'].includes(target?.name)) {
+      return applyFilters({dates: target.name.startsWith('modified')});
+    }
+  });
+  filterReset?.addEventListener('click', () => {
+    const previous = catalogQuery();
+    clearFilters();
+    return refreshFilters(previous);
+  });
   document.addEventListener('click', (event) => {
     const wrap = document.querySelector('.filter-wrap');
     if (wrap && !wrap.contains(event.target)) closeFilterPanel();
+    if (mobileMenu?.open && !mobileMenu.contains(event.target)) {
+      pendingDeleteCancel?.();
+      mobileMenu.open = false;
+    }
   });
 
-  document.getElementById('cancel-editor').addEventListener('click', async () => {
-    if (pendingDeleteCancel) pendingDeleteCancel();
-    current = null;
-    form.hidden = true;
-    listPanel.hidden = false;
-    await loadList();
+  mobileMenu?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !mobileMenu.open || pendingDeleteCancel) return;
+    event.preventDefault();
+    mobileMenu.open = false;
+    mobileMore?.focus();
+  });
+  for (const [name, button] of mobilePanels) {
+    button?.addEventListener('click', () => {
+      const panel = editorPanels.get(name);
+      if (!activeEditor(editor) || !current?.id || !panel || panel.hidden) return;
+      pendingDeleteCancel?.();
+      mobileMenu.open = false;
+      panel.open = true;
+      panel.querySelector?.('summary')?.focus?.();
+    });
+  }
+  mobileMarkdown?.addEventListener('click', () => {
+    if (!activeEditor(editor) || current?.kind !== 'document') return;
+    pendingDeleteCancel?.();
+    mobileMenu.open = false;
+    document.getElementById('document-source-toggle')?.click();
+  });
+  document.getElementById('mobile-editor-reconnect')?.addEventListener('click', () => {
+    if (!activeEditor(editor)) return;
+    pendingDeleteCancel?.();
+    mobileMenu.open = false;
+    mobileMore?.focus();
+    document.getElementById('workspace-events-retry')?.click();
+  });
+
+  function returnToCatalog() {
+    if (approvedBack || !canLeaveEditor()) return false;
+    const focusNew = editor?.focusTitle && !editor?.catalogView?.focus;
+    const history = document.defaultView?.history;
+    if (spaceAddress?.entry.fromCatalog && typeof history?.back === 'function') {
+      approvedBack = true;
+      history.back();
+      return true;
+    }
+    hideEditor();
+    show('', '');
+    if (artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    void loadList({reuse: true});
+    if (focusNew) newMenuButton?.focus({preventScroll: true});
+    return true;
+  }
+
+  document.getElementById('cancel-editor').addEventListener('click', returnToCatalog);
+  document.getElementById('cancel-editor-load').addEventListener('click', () => {
+    if (returnToCatalog()) document.getElementById('new-menu-button')?.focus?.({preventScroll: true});
   });
 
   async function uploadMedia(path, extraFields) {
@@ -1612,20 +3682,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: parsed};
   }
 
-  let savingArtifact = false;
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (savingArtifact) return;
-    savingArtifact = true;
-    const saveButtons = ['save-artifact', 'document-save'].map(id => document.getElementById(id)).filter(Boolean);
-    for (const button of saveButtons) button.disabled = true;
+    const selection = editor;
+    if (!activeEditor(selection) || !current || form.hidden || selection.saving || form.inert) return;
+    if (websiteInteractive) renderWebsitePreview();
+    selection.saving = true;
+    setSaving(true);
     try {
     if (!workspaceId()) {
       show('error', '先选择一个工作区。');
       return;
     }
+    const submitted = editorDraft();
     const title = form.elements.title.value.trim();
-    richDocument.flush();
     const body = form.elements.body.value;
     const kind = (current && current.kind) || draftKind;
     if (!title) {
@@ -1647,6 +3717,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '至少添加一页幻灯片。');
         return;
       }
+      for (const [index, slide] of slides.slides.entries()) {
+        if (!slide.title && !slide.bullets.length) {
+          show('error', '请填写第 ' + (index + 1) + ' 页的标题或要点。');
+          return;
+        }
+        if (slide.bullets.length > 10 || slide.bullets.some(bullet => bullet.length > 200)) {
+          show('error', '第 ' + (index + 1) + ' 页最多 10 条要点，每条最多 200 字。');
+          return;
+        }
+      }
+      form.inert = true;
       if (current && current.id) {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                                {revision: current.revision, changes: {title, slides}});
@@ -1654,6 +3735,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
                                {title, kind: 'slides', slides},
                                {'Idempotency-Key': idempotencyKey()});
+      }
+    } else if (kind === 'spreadsheet') {
+      form.inert = true;
+      const workbook = spreadsheet.instance.value();
+      if (current?.id) {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                               {revision: current.revision, changes: {title, spreadsheet: workbook}});
+      } else {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
+                               {title, kind, spreadsheet: workbook}, {'Idempotency-Key': idempotencyKey()});
       }
     } else if (kind === 'dashboard') {
       const value = dashboardValue();
@@ -1702,30 +3793,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                              {title, body, kind},
                              {'Idempotency-Key': idempotencyKey()});
     }
-    if (result.status === 409) {
-      show('error', '文档已在别处更新，或标题已被占用，请重新打开后再保存。');
+    if (result.status === 200 || result.status === 201) {
+      if (catalog?.workspace === selection.workspace && catalog.account === selection.account) {
+        catalog = null;
+        if (!listPanel.hidden && workspaceId() === selection.workspace) void loadList();
+      }
+    }
+    if (!activeEditor(selection)) return;
+    if (revealRevisionConflict(result)) {
+      show('error', '保存遇到新版本，请先查看服务器版本。');
+      return;
+    }
+    if (result.body.error?.code === 'title_conflict' ||
+        result.body.error?.message === 'A document with this title already exists') {
+      show('error', '这个工作区已有同名作品，请修改标题后保存。');
+      form.inert = false;
+      form.elements.title.focus();
       return;
     }
     if (result.status !== 200 && result.status !== 201) {
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
+    const isNew = !current?.id;
+    const recoveryKey = draftKey();
+    if (readDraft(recoveryKey)?.revision === (current.revision ?? null)) removeDraft(recoveryKey);
+    if (artifactSendOrigin?.item === current) artifactSendOrigin.item = result.body.artifact;
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
-    fillEditor(current);
+    const newerDraft = editorDraftChanged(submitted);
+    if (newerDraft) {
+      selection.cleanDraft = submitted;
+      updateEditorMeta(current, kind);
+    } else {
+      if (kind === 'media') document.getElementById('media-file').value = '';
+      fillEditor(current);
+    }
+    if (newerDraft) persistDraft();
+    readEditorRecovery();
+    if (isNew) recordEditorAddress(selection, current);
+    document.getElementById('artifact-live-update').hidden = true;
+    updateMobileActions();
     document.getElementById('remove-artifact').hidden = false;
-    document.getElementById('share-panel').hidden = false;
-    const discoverPanel = document.getElementById('discover-panel');
-    if (discoverPanel) discoverPanel.hidden = false;
-    show('ok', '已保存。');
-    await loadShares();
-    await loadDiscover();
-    } catch { show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。'); }
-    finally { savingArtifact = false; for (const button of saveButtons) button.disabled = false; }
+    if (isNew) resetEditorPanels();
+    for (const [name, panel] of editorPanels) {
+      if (panel.open) void panelLoads[name]();
+    }
+    show('ok', newerDraft ? '已保存。编辑器内还有新的未保存修改。' : '已保存。');
+    } catch {
+      if (activeEditor(selection)) show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。');
+    } finally {
+      selection.saving = false;
+      if (activeEditor(selection)) {
+        form.inert = false;
+        setSaving(false);
+      }
+    }
   });
 
-  function askDeleteConfirmation() {
-    const trigger = document.getElementById('remove-artifact');
+  function askDeleteConfirmation(trigger) {
     const target = {workspace: workspaceId(), id: current && current.id};
     const prompt = artifactDeletePrompt(current);
     const box = document.createElement('div');
@@ -1779,6 +3905,257 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+
+  let spaceActionDialog = null;
+
+  function closeSpaceActionDialog() {
+    if (spaceActionDialog && spaceActionDialog.parentNode) spaceActionDialog.parentNode.removeChild(spaceActionDialog);
+    spaceActionDialog = null;
+  }
+
+  function spaceDialogHost() {
+    return mainPanel || listPanel || form;
+  }
+
+  function openSpaceDialog(id, titleText) {
+    closeSpaceActionDialog();
+    closeAgentTaskDialog();
+    const dialog = document.createElement('div');
+    dialog.id = id;
+    dialog.className = 'send-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', id + '-title');
+    const card = document.createElement('div');
+    card.className = 'send-dialog-card';
+    const heading = document.createElement('h2');
+    heading.id = id + '-title';
+    heading.textContent = titleText;
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.hidden = true;
+    card.appendChild(heading);
+    card.appendChild(note);
+    dialog.appendChild(card);
+    const host = spaceDialogHost();
+    if (host && typeof host.appendChild === 'function') host.appendChild(dialog);
+    spaceActionDialog = dialog;
+    return {dialog, card, note, heading};
+  }
+
+  async function openWebsiteBriefDialog() {
+    const workspace = workspaceId();
+    if (!workspace || !currentUser) { show('error', '先选择一个工作区。'); return; }
+    const account = currentUser;
+    const ui = openSpaceDialog('website-brief-dialog', '让智能体搭建网站');
+    const active = () => spaceActionDialog === ui.dialog && currentUser === account && workspaceId() === workspace;
+    const base = `/v1/workspaces/${workspace}`;
+    const failed = () => ({status: 0, body: {}});
+    const brief = document.createElement('textarea');
+    brief.id = 'website-brief';
+    brief.rows = 6;
+    brief.maxLength = 4000;
+    brief.placeholder = '描述网站要做什么、给谁看、需要哪些栏目。';
+    const agentLabel = document.createElement('label');
+    agentLabel.textContent = '智能体';
+    const agentSelect = document.createElement('select');
+    agentSelect.id = 'website-brief-agent';
+    agentLabel.appendChild(agentSelect);
+    const actions = document.createElement('div');
+    actions.className = 'space-action-row';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => closeSpaceActionDialog());
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.textContent = '创建并发送请求';
+    actions.append(cancel, submit);
+    ui.card.append(brief, agentLabel, actions);
+    const [agents, personal] = await Promise.all([
+      request('GET', base + '/agents?limit=100').catch(failed),
+      request('GET', '/v1/personal-agent').catch(failed),
+    ]);
+    if (!active()) return;
+    const options = [];
+    const personalAgent = personal.status === 200 ? personal.body.personal_agent : null;
+    if (personalAgent && personalAgent.agent && personalAgent.workspace && personalAgent.workspace.id === workspace) {
+      const agent = personalAgent.agent;
+      options.push({id: agent.id, name: (agent.name || '个人智能体') + '（个人）'});
+    }
+    if (agents.status === 200) {
+      for (const agent of agents.body.items || []) {
+        if (options.some((row) => row.id === agent.id)) continue;
+        options.push({id: agent.id, name: agent.name || '智能体'});
+      }
+    }
+    if (!options.length) {
+      ui.note.hidden = false;
+      ui.note.textContent = '这个工作区还没有可选用的智能体，无法发出搭建请求。';
+      submit.disabled = true;
+    }
+    for (const option of options) {
+      const row = document.createElement('option');
+      row.value = option.id;
+      row.textContent = option.name;
+      agentSelect.append(row);
+    }
+    submit.addEventListener('click', async () => {
+      if (!active()) return;
+      const text = brief.value.trim();
+      if (!text) { ui.note.hidden = false; ui.note.textContent = '请先填写网站需求。'; return; }
+      const agent = agentSelect.value;
+      if (!agent) { ui.note.hidden = false; ui.note.textContent = '请选择一个智能体。'; return; }
+      submit.disabled = true;
+      const title = websiteTitle(text);
+      const created = await request('POST', base + '/artifacts', {
+        title, kind: 'website', body: websiteStub(text),
+      }, {'Idempotency-Key': idempotencyKey('site-brief-')}).catch(failed);
+      if (!active()) return;
+      if (created.status !== 201 && created.status !== 200) {
+        submit.disabled = false;
+        ui.note.hidden = false;
+        ui.note.textContent = messageFor(created.body.error, '无法创建网站作品。');
+        return;
+      }
+      const artifact = created.body.artifact;
+      const finish = (kind, text) => {
+        closeSpaceActionDialog();
+        if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+        if (artifact?.id) void openEditor(artifact, {workspace, notice: {kind, text}});
+        else show(kind, text);
+        void loadList();
+      };
+      const conversations = base + '/agents/' + encodeURIComponent(agent) + '/conversations';
+      const conversation = await request('POST', conversations, {title},
+        {'Idempotency-Key': idempotencyKey('site-conv-')}).catch(failed);
+      if (!active()) return;
+      if (conversation.status !== 201 && conversation.status !== 200) {
+        finish('error', '网站作品已创建，但未能打开智能体会话：' + messageFor(conversation.body.error, '请稍后重试。'));
+        return;
+      }
+      const conv = conversation.body.conversation;
+      const sent = await request('POST', conversations + '/' + encodeURIComponent(conv.id) + '/messages', {
+        body: websitePrompt(title, text),
+      }, {'Idempotency-Key': idempotencyKey('site-msg-')}).catch(failed);
+      if (!active()) return;
+      if (sent.status !== 201 && sent.status !== 200) {
+        finish('error', '网站作品已创建，但搭建请求发送失败：' + messageFor(sent.body.error, '请打开对话后重试。'));
+      } else {
+        finish('ok', describeWebsiteDispatch(sent.body.reply || sent.body.message));
+      }
+    });
+    if (typeof brief.focus === 'function') brief.focus();
+  }
+
+  async function openSaveMessageDialog() {
+    const workspace = workspaceId();
+    if (!workspace) { show('error', '先选择一个工作区。'); return; }
+    const ui = openSpaceDialog('save-message-dialog', '保存聊天中的消息');
+    const account = currentUser;
+    const current = () => spaceActionDialog === ui.dialog && currentUser === account && workspaceId() === workspace;
+    const feedback = text => {
+      ui.note.hidden = !text;
+      ui.note.textContent = text;
+    };
+    ui.note.setAttribute('role', 'status');
+
+    const label = document.createElement('label');
+    label.textContent = '会话';
+    const select = document.createElement('select');
+    select.id = 'save-message-conversation';
+    select.disabled = true;
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.textContent = '选择要查看的会话';
+    select.append(prompt);
+    label.append(select);
+    const list = document.createElement('ul');
+    list.id = 'save-message-list';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '关闭';
+    close.addEventListener('click', closeSpaceActionDialog);
+    ui.card.append(label, list, close);
+    feedback('正在加载会话…');
+
+    const base = `/v1/workspaces/${workspace}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, agents] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      get('/agents?limit=100&include=conversations'),
+    ]);
+    if (!current()) return;
+    const conversations = [
+      ...(social.body.items || []).map(row => ({...row, label: conversationLabel(row), social: true})),
+      ...agentConversations(agents.body, {includeArchived: true}),
+    ].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const incomplete = social.status !== 200 || agents.status !== 200 || !Array.isArray(agents.body.conversations);
+    feedback(incomplete ? '部分会话无法加载。' : (conversations.length ? '' : '这个工作区还没有会话。'));
+    if (!conversations.length) return;
+    conversations.forEach((row, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = row.label;
+      select.append(option);
+    });
+    select.disabled = false;
+    select.focus();
+
+    let search = 0;
+    select.addEventListener('change', async () => {
+      const selected = ++search;
+      list.replaceChildren();
+      const conversation = conversations[select.value === '' ? -1 : Number(select.value)];
+      if (!conversation) { feedback(''); return; }
+      feedback('正在加载消息…');
+      const path = conversation.social ? `/social/conversations/${conversation.id}/messages?limit=20`
+        : `/agents/${conversation.agent_id}/conversations/${conversation.id}`;
+      const result = await get(path);
+      if (!current() || selected !== search) return;
+      if (result.status !== 200) { feedback('无法加载消息，请重试。'); return; }
+      const items = (result.body.items || []).filter(conversation.social ? saveableSocialMessage : saveableAgentMessage);
+      feedback(items.length ? '' : '这段会话还没有可保存的文字消息。');
+      for (const item of items.slice(-20).reverse()) {
+        const row = document.createElement('li');
+        const preview = document.createElement('span');
+        preview.textContent = defaultSaveTitle(item.body);
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '保存';
+        save.addEventListener('click', async () => {
+          const endpoint = conversation.social ? socialSavePath(workspace, conversation.id, item.id)
+            : agentSavePath(workspace, conversation.agent_id, conversation.id, item.id);
+          const body = {title: preview.textContent};
+          if (conversation.social) body.revision = item.revision || 1;
+          save.disabled = true;
+          feedback('');
+          try {
+            const saved = await request('POST', endpoint, body);
+            if (!current() || selected !== search) return;
+            if (saved.status !== 200 && saved.status !== 201) {
+              feedback(messageFor(saved.body.error, '保存失败，请重试。'));
+              return;
+            }
+            closeSpaceActionDialog();
+            const text = saved.status === 201 ? '已保存为文档。' : '已打开已有副本。';
+            if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+            if (saved.body.artifact) void openEditor(saved.body.artifact, {workspace, notice: {kind: 'ok', text}});
+            else show('ok', text);
+            void loadList();
+          } catch {
+            if (current() && selected === search) feedback('无法确认保存结果，请重试。');
+          } finally {
+            save.disabled = false;
+          }
+        });
+        row.append(preview, save);
+        list.append(row);
+      }
+    });
+  }
+
+
   let agentTaskDialog = null;
 
   function closeAgentTaskDialog() {
@@ -1791,7 +4168,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function openAgentTaskDialog() {
     const opener = document.getElementById('empty-save-agent');
-    if (agentTaskDialog) return;
+    const workspace = workspaceId();
+    const account = currentUser;
+    if (agentTaskDialog || !workspace || !account) return;
     if (opener) opener.disabled = true;
     const dialog = document.createElement('div');
     dialog.id = 'agent-task-dialog';
@@ -1824,9 +4203,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (host && typeof host.appendChild === 'function') host.appendChild(dialog);
     else if (form && typeof form.appendChild === 'function') form.appendChild(dialog);
     agentTaskDialog = dialog;
+    const active = () => agentTaskDialog === dialog && currentUser === account && workspaceId() === workspace;
+    const failed = () => ({status: 0, body: {}});
     if (typeof close.focus === 'function') close.focus();
 
-    const listed = await request('GET', '/v1/runtime/tasks');
+    const listed = await request('GET', '/v1/skills/runs').catch(failed);
+    if (!active()) return;
     if (listed.status !== 200) {
       note.hidden = false;
       note.textContent = taskArtifactError(listed.status, listed.body, '读取任务列表失败。');
@@ -1846,9 +4228,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       save.type = 'button';
       save.textContent = '保存';
       save.addEventListener('click', async () => {
+        if (!active()) return;
         save.disabled = true;
         note.hidden = true;
-        const saved = await request('POST', `/v1/runtime/tasks/${task.id}/artifact`, {workspace_id: workspaceId()});
+        const saved = await request('POST', `/v1/skills/runs/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
+        if (!active()) return;
         if (saved.status === 200 || saved.status === 201) {
           closeAgentTaskDialog();
           show('ok', '已保存。');
@@ -1870,21 +4254,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openAgentTaskDialog();
   });
 
-  document.getElementById('remove-artifact').addEventListener('click', async () => {
-    if (!current || !current.id || !workspaceId()) return;
-    const target = await askDeleteConfirmation();
-    if (!target) return;
-    const result = await request('POST', `/v1/workspaces/${target.workspace}/artifacts/${target.id}/remove`, {});
+  async function removeArtifact(trigger) {
+    const selection = editor;
+    if (!activeEditor(selection) || !current?.id || pendingDeleteCancel) return;
+    const target = await askDeleteConfirmation(trigger);
+    if (!target || editor !== selection) return;
+    if (trigger === mobileDelete) {
+      mobileMenu.open = false;
+      mobileMore?.focus();
+    }
+    const result = await request('POST', editorPath(selection, target.id) + '/remove', {})
+      .catch(() => ({status: 0, body: {}}));
+    if (result.status === 200 && catalog?.workspace === target.workspace && catalog.account === selection.account) {
+      catalog = null;
+      if (!listPanel.hidden && workspaceId() === target.workspace) void loadList();
+    }
+    if (!activeEditor(selection)) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
     }
-    current = null;
-    form.hidden = true;
-    listPanel.hidden = false;
+    returnToCatalog();
     show('ok', '已删除。');
-    await loadList();
-  });
+  }
+  const desktopDelete = document.getElementById('remove-artifact');
+  desktopDelete.addEventListener('click', () => removeArtifact(desktopDelete));
+  mobileDelete?.addEventListener('click', () => removeArtifact(mobileDelete));
 
   const canvas = document.getElementById('board-canvas');
   canvas.addEventListener('pointerdown', event => {
@@ -1943,63 +4338,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // The publish controls live inside #editor-form; a nested <form> would be
   // dropped by the HTML parser and close the editor form early, so this is a
   // plain group with a button handler (Enter in the slug field publishes too).
-  const publishDiscover = document.getElementById('publish-discover');
-  const discoverSlug = document.getElementById('discover-slug');
-  if (publishDiscover) {
-    if (discoverSlug) discoverSlug.addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); publishDiscover.click(); }
-    });
-    publishDiscover.addEventListener('click', async event => {
+  discoverSlug?.addEventListener('input', () => {
+    if (activeEditor(editor)) editor.discoverSlugEdited = true;
+  });
+  discoverEditable?.addEventListener('change', () => {
+    if (activeEditor(editor)) editor.discoverEditableEdited = true;
+  });
+  discoverSlug?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing) {
       event.preventDefault();
-      if (!current || !current.id || !workspaceId()) {
-        show('error', '请先保存作品，再发布到发现页。');
-        return;
-      }
-      const slug = (document.getElementById('discover-slug').value || '').trim();
-      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`, {slug});
-      if (result.status !== 200 && result.status !== 201) {
-        const messages = {
-          forbidden: '只有所有者或管理员可以把作品公开到发现页。',
-          conflict: '这个短地址已经在用。',
-          invalid: '请输入可用的公开短地址。',
-        };
-        show('error', messages[result.body.error] || messageFor(result.body.error, '无法发布到发现页。'));
-        return;
-      }
-      show('ok', '已公开到发现页。');
-      await loadDiscover();
-    });
-  }
-  const revokeDiscover = document.getElementById('revoke-discover');
-  if (revokeDiscover) {
-    revokeDiscover.addEventListener('click', async () => {
-      if (!current || !current.id || !workspaceId()) return;
-      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover/revoke`, {});
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '无法从发现页撤回。'));
-        return;
-      }
-      show('ok', '已从发现页撤回。');
-      await loadDiscover();
-    });
-  }
+      publishDiscover?.click();
+    }
+  });
+  publishDiscover?.addEventListener('click', () => changeDiscoverListing(true));
+  revokeDiscover?.addEventListener('click', () => changeDiscoverListing(false));
 
-  document.getElementById('create-share').addEventListener('click', async () => {
+  const createShareButton = document.getElementById('create-share');
+  createShareButton.addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再创建分享链接。');
       return;
     }
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares`, {});
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法创建分享链接。'));
-      return;
+    if (!activeEditor(editor)) return;
+    void changeShare(editor, editorPath(editor) + '/shares', {create: true, button: createShareButton});
+  });
+  document.getElementById('copy-share').addEventListener('click', async () => {
+    const field = document.getElementById('share-url');
+    const status = document.getElementById('share-copy-status');
+    const value = field.value;
+    if (!value) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(value);
+      if (field.value === value) status.textContent = '已复制链接。';
+    } catch {
+      if (field.value !== value) return;
+      field.focus({preventScroll: true});
+      field.select();
+      status.textContent = '已选中链接，请手动复制。';
     }
-    const share = result.body.share || {};
-    const once = document.getElementById('share-once');
-    once.hidden = false;
-    once.textContent = share.path ? ('链接只显示一次：' + share.path) : '链接已创建，请立即复制。';
-    show('ok', '已创建只读分享链接，完整地址只显示这一次。');
-    await loadShares();
   });
 
   document.getElementById('export-artifact').addEventListener('click', () => {
@@ -2008,7 +4384,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const format=document.getElementById('export-format')?.value||'original';
-    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&current.kind!=='dashboard')||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
+    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&!['dashboard','spreadsheet'].includes(current.kind))||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
       show('error','此格式不支持当前作品类型；请按格式说明选择，或使用原格式。');return;
     }
     globalThis.location.assign(exportHref());
@@ -2016,36 +4392,84 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (!canLeaveEditor()) return;
     const result = await request('POST', '/v1/auth/logout', {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    current = null;
+    workspaceLoad += 1;
+    hideEditor();
+    currentUser = null;
+    syncStudioWorkspace();
+    workspaceSelect.textContent = '';
+    catalog = null;
+    facets = null;
+    clearFilters();
+    allItems = [];
+    meetingItems = [];
+    meetingLoadedFor = '';
+    activity.setScope('');
+    mainPanel.hidden = true;
     await load();
   });
 
   const view = document.defaultView;
   const initial = viewFromSearch(view && view.location && view.location.search);
+  readFilterDates();
+  renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
-    view.addEventListener('popstate', () => {
-      const next = viewFromSearch(view.location.search);
-      applyView(next.kind, next.scope, {sync: false});
+    writeSpaceAddress(spaceLocation());
+    view.addEventListener('popstate', async event => {
+      if (restoringAddress) {
+        restoringAddress = false;
+        return;
+      }
+      const next = event?.state?.openTeamilySpace;
+      const tracked = next?.session === spaceHistoryId;
+      const approved = approvedBack;
+      approvedBack = false;
+      if (!approved && !canLeaveEditor()) {
+        if (spaceAddress) {
+          const delta = tracked ? spaceAddress.entry.position - next.position : 0;
+          if (delta && typeof view.history?.go === 'function') {
+            restoringAddress = true;
+            view.history.go(delta);
+          } else view.history?.replaceState(spaceAddress.state, '', spaceAddress.url);
+        }
+        return;
+      }
+      if (tracked) spaceAddress = {url:spaceLocation(), state:event.state, entry:next};
+      else writeSpaceAddress(spaceLocation());
+      const address = spaceAddress;
+      workspaceLoad += 1;
+      hideEditor();
+      show('', '');
+      const catalogView = tracked ? next.catalogView : null;
+      const {kind, scope} = catalogView || viewFromSearch(view.location.search);
+      applyView(kind, scope, {sync: false});
+      if (studioDocumentFromSearch(view.location.search) || artifactTargetFromSearch(view.location.search) ||
+          newKindFromSearch(view.location.search)) {
+        void load();
+        return;
+      }
+      if (catalogView?.workspace && [...workspaceSelect.options].some(option => option.value === catalogView.workspace)) {
+        workspaceSelect.value = catalogView.workspace;
+        notifications.setWorkspace(workspaceId());
+        syncStudioWorkspace();
+      }
+      await loadList({reuse: true});
+      if (catalogView && main && spaceAddress === address && !listPanel.hidden) {
+        main.scrollTop = catalogView.scroll;
+        const rows = document.getElementById('artifact-list').children;
+        const row = [...rows].find(node => node.dataset.artifactId === catalogView.focus);
+        row?.firstElementChild?.focus?.({preventScroll: true});
+      }
     });
   }
-  return load().then(() => {
-    const kind = newKindFromSearch(view && view.location && view.location.search);
-    if (!kind || mainPanel.hidden || !workspaceId()) return;
-    const button = document.getElementById(newKindButtonId(kind));
-    if (button) button.click();
-    if (view && view.history && view.location) {
-      const params = new URLSearchParams(view.location.search);
-      params.delete('new');
-      const rest = params.toString();
-      view.history.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
-    }
-  });
+  return load();
+
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

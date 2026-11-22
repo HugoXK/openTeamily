@@ -152,3 +152,100 @@ export function renderThumb(document, preview) {
   root.append(grid);
   return root;
 }
+
+export function firstLine(text, limit = 40) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return '';
+  return value.length <= limit ? value : value.slice(0, limit).trim();
+}
+
+export function websiteTitle(brief) {
+  const line = firstLine(brief, 40);
+  return line ? `网站：${line}` : '新网站';
+}
+
+export function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"]/g, (ch) => (
+    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]
+  ));
+}
+
+export function websiteStub(brief) {
+  const body = escapeHtml(String(brief || '').trim() || '尚未填写需求。');
+  return `<h1>待搭建的网站</h1>\n<p>需求：</p>\n<p>${body.replace(/\n/g, '<br>')}</p>\n`;
+}
+
+export function websitePrompt(title, brief) {
+  return (
+    `请根据下列需求搭建一个完整的静态网站，直接给出可保存的 HTML。`
+    + `作品标题：${String(title || '').trim() || '新网站'}。\n\n`
+    + String(brief || '').trim()
+  );
+}
+
+export function saveableSocialMessage(item) {
+  return Boolean(item && !item.retracted && !item.voice && !item.attachment && typeof item.body === 'string' && item.body.trim());
+}
+
+export function saveableAgentMessage(item) {
+  return Boolean(item && item.status === 'succeeded' && typeof item.body === 'string' && item.body.trim());
+}
+
+export function artifactKindLabel(kind, mime) {
+  if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
+  const labels = {website: '网站', whiteboard: '白板', slides: '幻灯片', dashboard: '看板', spreadsheet: '电子表格'};
+  return Object.hasOwn(labels, kind) ? labels[kind] : '文档';
+}
+
+export function artifactVersionLabel(resource, mime) {
+  if (!resource?.kind) return '';
+  const kind = artifactKindLabel(resource.kind, mime);
+  return Number.isSafeInteger(resource.revision) && resource.revision > 0
+    ? `${kind} · 版本 ${resource.revision}` : kind;
+}
+
+export function socialSavePath(workspaceId, conversationId, messageId) {
+  return `/v1/workspaces/${workspaceId}/social/conversations/${conversationId}/messages/${messageId}/save`;
+}
+
+export function agentSavePath(workspaceId, agentId, conversationId, messageId) {
+  return `/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${conversationId}/messages/${messageId}/artifact`;
+}
+
+export function defaultSaveTitle(body) {
+  return firstLine(body, 40) || '保存的消息';
+}
+
+export function conversationChatHref(workspaceId, item) {
+  if (!workspaceId || !item) return '/chat';
+  const message = item.message_id ? '&message=' + encodeURIComponent(item.message_id) : '';
+  if (item.source === 'agent' && item.agent_id) {
+    return '/chat#workspace=' + encodeURIComponent(workspaceId)
+      + '&agent=' + encodeURIComponent(item.agent_id)
+      + '&conversation=' + encodeURIComponent(item.id) + message;
+  }
+  return '/chat#workspace=' + encodeURIComponent(workspaceId)
+    + '&social=' + encodeURIComponent(item.id) + message;
+}
+
+export function describeWebsiteDispatch(result) {
+  if (!result) return '已创建网站作品，但未能发出搭建请求。';
+  if (result.status === 'queued' && result.task_id) {
+    return '已创建网站作品，并向智能体发出搭建请求。结果返回后请在对话里保存或手动写入作品。';
+  }
+  if (result.error_code === 'no_agent') {
+    return '已创建网站作品，也已写进对话，但这个智能体目前没有在线运行时，不会开始搭建。可以在作品里先改草稿，或先连接运行时再重试。';
+  }
+  if (result.error_code) {
+    return '已创建网站作品，但搭建请求未能开始：' + result.error_code + '。';
+  }
+  return '已创建网站作品，并向智能体发出搭建请求。';
+}
+
+export function spaceHref(workspaceId, artifactId) {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set('workspace', workspaceId);
+  if (artifactId) params.set('artifact', artifactId);
+  const query = params.toString();
+  return query ? '/space?' + query : '/space';
+}

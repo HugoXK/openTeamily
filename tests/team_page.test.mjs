@@ -161,6 +161,7 @@ function fakeTeamDocument(html) {
   const body = new TeamNode('BODY');
   const doc = {
     cookie: '',
+    defaultView: {location: {origin: 'https://workspace.test'}},
     body,
     handlers: {},
     getElementById(id) { return byId.get(id) || null; },
@@ -175,18 +176,19 @@ function fakeTeamDocument(html) {
 
 function jsonResponse(status, body) { return {status, json: async () => body}; }
 
-function teamFetcher({inviteStatus = 201} = {}) {
+function teamFetcher({inviteStatus = 201, create} = {}) {
   const requests = [];
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
-    requests.push({method, path, body: options.body ? JSON.parse(options.body) : undefined});
+    requests.push({method, path, body: options.body ? JSON.parse(options.body) : undefined, headers: options.headers});
     if (path === '/v1/auth/session') return jsonResponse(200, {user: {id: 'u1', username: 'alice'}});
     if (path === '/v1/auth/providers') return jsonResponse(200, {items: []});
-    if (path === '/v1/workspaces?limit=100') {
+    if (path === '/v1/workspaces?scope=convertible&limit=100') {
       return jsonResponse(200, {items: [{id: 'ws1', name: 'Desk', owner_id: 'u1', kind: 'personal'}]});
     }
     if (path === '/v1/teams' && method === 'POST') {
-      return jsonResponse(201, {workspace: {id: 'wsnew', name: 'Desk Team', slug: 'desk-team', kind: 'team'}});
+      const success = jsonResponse(201, {workspace: {id: 'wsnew', name: 'Desk Team', slug: 'desk-team', kind: 'team'}});
+      return create ? create(success) : success;
     }
     if (path === '/v1/workspaces/wsnew/invites' && method === 'POST') {
       if (inviteStatus !== 201) return jsonResponse(inviteStatus, {error: {code: 'quota', message: 'Invite capacity reached'}});
@@ -214,7 +216,7 @@ async function mountWizard(values, options) {
 
 const posted = (requests) => requests.filter((item) => item.method !== 'GET').map((item) => `${item.method} ${item.path}`);
 
-test('the wizard ships a real invite step and an honest placeholder for step 3', () => {
+test('the wizard ships a real invitation link and a final success step', () => {
   const {el} = fakeTeamDocument(teamHtml);
   assert.ok(el('step-2'), 'the wizard must ship a #step-2 invite step');
   assert.ok(el('invite-role'), 'step 2 must offer a role for the invited member');
@@ -222,11 +224,11 @@ test('the wizard ships a real invite step and an honest placeholder for step 3',
   assert.ok(el('invite-skip'), 'step 2 must let the user skip inviting for now');
   assert.ok(el('invite-email'), 'step 2 must accept the invited colleague address');
   assert.ok(el('invite-mailto'), 'a created invite must offer a message the user can send');
-  assert.ok(el('step-3'), 'the wizard must keep an honest placeholder for step 3');
+  assert.ok(el('step-3'));
   assert.match(teamHtml, /id="submit"[^>]*>[^<]*邀请/, 'the step 2 submit must say it also invites');
   assert.match(teamHtml, /id="invite-expiry"[\s\S]*?value="604800"/, 'the seven-day expiry must be offered');
   assert.doesNotMatch(teamHtml, /第 2 步和第 3 步还没有截图/, 'the page must stop claiming step 2 was never opened');
-  assert.match(teamHtml, /id="step-3"[\s\S]*?还没有对照/, 'step 3 must stay an honest placeholder');
+  assert.match(teamHtml, /id="step-3"[\s\S]*?团队已创建/);
 });
 
 test('step one advances to the invite step without touching the server', async () => {
@@ -256,16 +258,20 @@ test('creating the team and inviting posts once each with the chosen role and ex
   const [, invite] = requests.filter((item) => item.method === 'POST');
   assert.deepEqual(invite.body, {role: 'member', expires_in: 604800});
   assert.equal(el('invite-result').hidden, false, 'a created invite must be shown in place');
-  assert.equal(el('invite-token').textContent, TEAM_TOKEN, 'the real one-time token must be shown verbatim');
+  const link = 'https://workspace.test/login#team-invite=' + TEAM_TOKEN;
+  assert.equal(el('invite-token').value, link);
   assert.match(el('invite-summary').textContent, /成员/);
   assert.match(el('invite-summary').textContent, /2026-11-26/);
   assert.match(el('invite-summary').textContent, /1 次/);
-  assert.equal(el('finish-members').getAttribute('href'), '/members');
-  assert.match(el('status').textContent, /团队已创建/);
+  assert.equal(el('finish-members').getAttribute('href'), '/members#workspace=wsnew');
+  assert.equal(el('finish-chat').getAttribute('href'), '/chat#workspace=wsnew');
+  assert.equal(el('step-3').hidden, false);
+  assert.equal(el('back').hidden, true);
+  assert.equal(el('status').textContent, '');
   const mail = el('invite-mailto');
   assert.equal(mail.hidden, false, 'a valid address must offer a ready-to-send message');
-  assert.match(mail.getAttribute('href'), /^mailto:bob@example\.com\?/);
-  assert.match(decodeURIComponent(mail.getAttribute('href')), new RegExp(TEAM_TOKEN), 'the message must carry the real token');
+  assert.match(mail.getAttribute('href'), /^mailto:bob%40example\.com\?/);
+  assert.ok(decodeURIComponent(mail.getAttribute('href')).includes(link));
   assert.equal(invite.body.email, undefined, 'the invite body must not invent an email field');
 });
 
@@ -279,8 +285,13 @@ test('a failed invite keeps the invite step, shows the server error and shows no
   assert.equal(el('step-2').hidden, false, 'a failed invite must not advance');
   assert.equal(el('step-3').hidden, true);
   assert.equal(el('invite-result').hidden, true, 'no invite panel without a created invite');
-  assert.equal(el('invite-token').textContent, '');
+  assert.equal(el('invite-token').value, '');
   assert.equal(el('invite-mailto').hidden, true);
+  assert.equal(el('back').hidden, true);
+  await el('invite-skip').dispatch('click');
+  assert.equal(el('step-3').hidden, false);
+  assert.equal(el('finish-members').getAttribute('href'), '/members#workspace=wsnew');
+  assert.equal(posted(requests).length, 2);
 });
 
 test('skipping the invite creates the team only and lands on step 3', async () => {
@@ -290,10 +301,11 @@ test('skipping the invite creates the team only and lands on step 3', async () =
   else await el('wizard-form').dispatch('submit');
 
   assert.deepEqual(posted(requests), ['POST /v1/teams'], 'skipping must not create an invite');
-  assert.ok(el('step-3'), 'skipping must land on the honest step 3 placeholder');
   assert.equal(el('step-3').hidden, false);
   assert.equal(el('step-2').hidden, true);
-  assert.match(el('status').textContent, /团队已创建/);
+  assert.equal(el('finish-members').getAttribute('href'), '/members#workspace=wsnew');
+  assert.equal(el('finish-chat').getAttribute('href'), '/chat#workspace=wsnew');
+  assert.equal(el('status').textContent, '');
 });
 
 test('going back from the invite step keeps the typed team and posts nothing', async () => {
@@ -306,6 +318,31 @@ test('going back from the invite step keeps the typed team and posts nothing', a
   assert.equal(el('step-2').hidden, true);
   assert.equal(el('next').disabled, false, 'the filled step 1 must stay valid after going back');
   assert.deepEqual(posted(requests), []);
+});
+
+test('losing the creation response retains the same request key and prevents a concurrent submission', async () => {
+  let failFirst;
+  const firstResponse = new Promise((_resolve, reject) => { failFirst = reject; });
+  let attempts = 0;
+  const {el, requests} = await mountWizard(
+    {name: 'Desk Team', slug: 'desk-team', mode: 'new'},
+    {create: success => ++attempts === 1 ? firstResponse : success},
+  );
+  await el('next').dispatch('click');
+  const first = el('invite-skip').dispatch('click');
+  assert.equal(el('submit').disabled, true);
+  assert.equal(el('invite-skip').disabled, true);
+  await el('wizard-form').dispatch('submit');
+  assert.equal(attempts, 1);
+  failFirst(new TypeError('Connection closed'));
+  await first;
+  assert.match(el('status').textContent, /暂时无法确认团队是否创建/);
+  assert.equal(el('invite-skip').disabled, false);
+  await el('invite-skip').dispatch('click');
+  const [initial, replay] = requests.filter(row => row.path === '/v1/teams');
+  assert.equal(replay.headers['Idempotency-Key'], initial.headers['Idempotency-Key']);
+  assert.deepEqual(replay.body, initial.body);
+  assert.equal(el('step-3').hidden, false);
 });
 
 class FakeNode {
@@ -328,6 +365,8 @@ class FakeNode {
     this.children = [];
     this._text = String(value);
   }
+  setAttribute(name, value) { (this.attributes ||= {})[name] = value; }
+  focus() {}
   get options() { return this.children.filter(child => child.tagName === 'OPTION'); }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   appendChild(child) { this.children.push(child); return child; }
@@ -393,7 +432,7 @@ async function openTeamPage({workspaces, session = ALICE, login, teams} = {}) {
     calls.push({method, path, headers: options.headers || {}, body: options.body});
     if (path === '/v1/auth/session') return reply(session);
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
-    if (path === '/v1/workspaces?limit=100') return reply({body: {items}});
+    if (path === '/v1/workspaces?scope=convertible&limit=100') return reply({body: {items}});
     if (path === '/v1/auth/login') return reply(login || {status: 200});
     if (path === '/v1/auth/logout') return reply({status: 200});
     if (path === '/v1/teams') return reply(teams || {status: 201});
@@ -459,8 +498,8 @@ test('next advances to the invite step and swaps the action buttons once step 1 
 
 test('the workspace picker appears only for an account with more than one convertible workspace', async () => {
   const two = [
-    {id: 'w1', name: 'Desk', owner_id: 'u1', kind: 'personal'},
-    {id: 'w2', name: 'Studio', owner_id: 'u1', kind: 'personal'},
+    {id: 'w1', name: 'Desk', owner_id: 'u1', kind: 'workspace'},
+    {id: 'w2', name: 'Studio', owner_id: 'u1', kind: 'workspace'},
   ];
   await withTeamPage({workspaces: two}, async ({elements, form}) => {
     form.elements.mode.value = 'convert';
@@ -481,16 +520,29 @@ test('the workspace picker appears only for an account with more than one conver
   });
 });
 
-test('only the signed-in user non-team workspaces are offered for conversion', async () => {
+test('only the signed-in user shared workspaces are offered for conversion', async () => {
   await withTeamPage({workspaces: [
-    {id: 'w1', name: 'Desk', owner_id: 'u1', kind: 'personal'},
-    {id: 'w2', name: 'Someone else', owner_id: 'u2', kind: 'personal'},
+    {id: 'w1', name: 'Desk', owner_id: 'u1', kind: 'workspace'},
+    {id: 'w2', name: 'Someone else', owner_id: 'u2', kind: 'workspace'},
     {id: 'w3', name: 'Already a team', owner_id: 'u1', kind: 'team'},
+    {id: 'w4', name: 'Personal', owner_id: 'u1', kind: 'personal'},
   ]}, async ({elements, form}) => {
     const select = form.elements.workspace_id;
     assert.deepEqual(select.options.map(option => option.value), ['w1']);
     assert.deepEqual(select.options.map(option => option.textContent), ['Desk']);
     assert.equal(elements.get('whoami').textContent, 'alice');
+  });
+});
+
+test('the personal workspace of a new account cannot be converted into a team', async () => {
+  await withTeamPage({}, async ({elements, form}) => {
+    assert.equal(elements.get('convert-mode').disabled, true);
+    assert.match(elements.get('convert-workspace-note').textContent, /专属智能体/);
+    form.elements.name.value = 'Desk';
+    form.elements.slug.value = 'desk-team';
+    form.elements.mode.value = 'convert';
+    await form.dispatch('change');
+    assert.equal(elements.get('next').disabled, true);
   });
 });
 
@@ -510,8 +562,7 @@ test('creating a team posts once with an idempotency key and lands on step 3', a
     assert.deepEqual(JSON.parse(post.body), {name: 'Desk', slug: 'desk-team', mode: 'new'});
     assert.match(post.headers['Idempotency-Key'], /^[A-Za-z0-9_-]{20,}$/);
     assert.equal(post.headers['X-CSRF-Token'], 'csrf-token');
-    assert.equal(elements.get('status').dataset.kind, 'ok');
-    assert.equal(elements.get('status').textContent, '团队已创建。');
+    assert.equal(elements.get('status').textContent, '');
     assert.equal(elements.get('step-3').hidden, false);
     assert.equal(elements.get('step-2').hidden, true);
   });

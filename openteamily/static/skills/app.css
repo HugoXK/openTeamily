@@ -1,5 +1,8 @@
-#main-panel {
+body.app-workspace > #main > #main-panel {
   max-width: 64rem;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0 auto;
   padding: 1.25rem 1.5rem 3rem;
 }
@@ -67,8 +70,9 @@
 
 .skill-card {
   display: grid;
-  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: 2.25rem repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  align-items: start;
   gap: 0.7rem;
   padding: 0.8rem;
   border: 1px solid var(--ot-line);
@@ -95,6 +99,7 @@
 }
 
 .skill-copy {
+  grid-column: 2 / -1;
   display: grid;
   gap: 0.15rem;
   min-width: 0;
@@ -113,7 +118,6 @@
 }
 
 .skill-install {
-  min-width: 4.25rem;
   border: 1px solid var(--ot-line-strong);
   border-radius: 999px;
   background: var(--ot-surface);
@@ -124,20 +128,41 @@
   cursor: pointer;
 }
 
+.skill-card > :is(.skill-install, .skill-library, .skill-use) {
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.5rem;
+}
+
+.skill-card > .skill-install { grid-column: 2; }
+.skill-card > .skill-library { grid-column: 3; }
+.skill-card > .skill-use { grid-column: 2 / -1; }
+
 .skill-install:hover { border-color: var(--ot-accent); color: var(--ot-accent-hover); }
 .skill-install[aria-pressed="true"] {
   border-color: var(--ot-accent);
   background: var(--ot-accent);
   color: var(--ot-surface);
 }
+.skill-install:disabled { cursor: progress; opacity: 0.7; }
+
+.skills-error {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.6rem;
+  background: var(--ot-danger-bg);
+  color: var(--ot-danger);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
 
 .skills-empty { margin-top: 0.75rem; }
 
 @media (max-width: 520px) {
-  #main-panel { padding: 1rem 0.9rem 2rem; }
+  body.app-workspace > #main > #main-panel { padding: 1rem 0.9rem 2rem; }
   .skills-grid { grid-template-columns: minmax(0, 1fr); }
-  .skill-card { grid-template-columns: 2.25rem minmax(0, 1fr); }
-  .skill-install { grid-column: 2; justify-self: start; }
+  .skill-card > :is(.skill-install, .skill-library, .skill-use) { min-height: 2.75rem; }
 }
 
 #skills-scope { display: block; max-width: 100%; margin: .35rem 0 .75rem; font: inherit; }
@@ -148,10 +173,8 @@
 .skill-copy summary { cursor: pointer; color: var(--ot-accent-hover); }
 .skill-copy pre { max-height: 22rem; overflow: auto; font: inherit; overflow-wrap: anywhere; }
 .skill-copy small { overflow-wrap: anywhere; }
-.skill-install { align-self: start; min-height: 2rem; }
 .skill-install:focus-visible, .skill-copy summary:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
 .skills-grid { align-items: start; }
-.skill-card { align-items: start; }
 #skills-error:empty { display: none; }
 
 .skills-execution {margin:1.25rem 0;padding:1.25rem;border:1px solid var(--ot-line);border-radius:1rem;background:var(--ot-surface);color:var(--ot-ink)}
@@ -163,7 +186,6 @@
 #skill-run-history {list-style:none;padding:0}
 #skill-run-history li {padding:1rem 0;border-bottom:1px solid var(--ot-line)}
 #skill-run-history pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:24rem;overflow:auto}
-.skill-card .skill-use {grid-column:2 / -1;justify-self:start;min-height:2.5rem}
 
 /* Opaque scoped primary states: the shared dark gradient carries dark ink. */
 #skill-run-submit {background:#097845;color:#fff;border-color:transparent}

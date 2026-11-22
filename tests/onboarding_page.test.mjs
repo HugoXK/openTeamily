@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {mountAutomationCreation, mountOnboarding, personalChatPath} from '../openteamily/static/onboarding/app.mjs';
 
 class FakeElement {
   constructor(tag = 'div', id = '') {
@@ -33,12 +34,20 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = [...nodes]; }
   querySelector() { return null; }
   focus() {}
+  select() {}
   reset() {}
 }
 
-function fakeDocument() {
+function fakeDocument({native = false} = {}) {
   const elements = new Map();
-  return {
+  const next = new FakeElement('button');
+  next.dataset.go = '3';
+  const stepParts = [2, 3, 4].map(step => {
+    const node = new FakeElement('form');
+    node.dataset.step = String(step);
+    return node;
+  });
+  const doc = {
     readyState: 'complete',
     cookie: '',
     getElementById(id) {
@@ -50,198 +59,270 @@ function fakeDocument() {
     },
     createElement(tag) { return new FakeElement(tag); },
     createTextNode(text) { const node = new FakeElement('#text'); node.textContent = text; return node; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
+    querySelector(selector) {
+      return native && selector.startsWith('meta[') ? new FakeElement('meta') : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#onboarding-steps [data-go]') return [next];
+      if (selector === '#onboarding-steps .onboarding-step') return stepParts;
+      if (selector === '#onboarding-look select') {
+        return doc.getElementById('onboarding-look').children.map(label => label.children[1]);
+      }
+      return [];
+    },
+    next,
+    stepParts,
   };
+  doc.getElementById('main-panel').hidden = true;
+  return doc;
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function settle(times = 16) {
-  for (let i = 0; i < times; i += 1) await flush();
-}
+const workspace = 'a'.repeat(32);
+const agent = 'b'.repeat(32);
+const binding = {workspace: {id: workspace}, agent: {id: agent}};
+const auth = {status: 200, body: {user: {username: 'alice'}}};
+const look = {color: '天空蓝', expression: '微笑', headwear: '无', glasses: '无', hand: '无'};
+const steps = {
+  apps: [{key: 'github', name: 'GitHub'}],
+  look_options: Object.fromEntries(Object.entries(look).map(([name, value]) => [name, [value]])),
+  look,
+};
+const response = (step, extra = {}) => ({
+  status: 200,
+  body: {viewer_username: 'alice', progress: {step, completed: false}, steps, ...extra},
+});
 
-function json(status, body) {
-  return {status, json: async () => body};
-}
-
-function fetcherFor(state) {
+test('native profile prefetch renders only once it matches the authenticated account', async () => {
+  const document = fakeDocument({native: true});
   const calls = [];
-  // A workspace may answer differently from the others: the checklist must
-  // judge every workspace, so a fixture has to be able to make the first one
-  // empty and a later one hold the real activity.
-  const perWorkspace = (id, field) => {
-    const own = state.byWorkspace && state.byWorkspace[id];
-    if (own && field in own) return own[field];
-    return state[field];
-  };
-  return {
-    calls,
-    fetch: async (path) => {
-      calls.push(path);
-      if (state.throwOn && path.indexOf(state.throwOn) === 0) throw new Error('network down');
-      if (path === '/v1/auth/session') return json(200, {user: {username: 'alice'}});
-      if (path === '/v1/onboarding') return json(200, {industries: [], onboarding: null});
-      if (path === '/v1/workspaces?limit=100') {
-        if (state.workspaces === 'error') return json(500, {error: {message: 'workspace listing failed'}});
-        return json(200, {items: state.workspaces || []});
-      }
-      const agents = /^\/v1\/workspaces\/([^/]+)\/agents\?limit=100$/.exec(path);
-      if (agents) {
-        const value = perWorkspace(agents[1], 'agents');
-        if (value === 'error') return json(500, {error: {message: 'agent listing failed'}});
-        return json(200, {items: value || []});
-      }
-      if (path === '/v1/runtime/connections') {
-        if (state.runtimes === 'error') return json(500, {error: {message: 'runtime listing failed'}});
-        return json(200, {items: (state.runtimes || []).map((status, index) => ({id: 'rt-' + index, status}))});
-      }
-      const automations = /^\/v1\/workspaces\/([^/]+)\/automations$/.exec(path);
-      if (automations) {
-        const value = perWorkspace(automations[1], 'automations');
-        if (value === 'error') return json(500, {error: {message: 'automation listing failed'}});
-        return json(200, {items: (value || []).map(id => ({id}))});
-      }
-      const runs = /^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/.exec(path);
-      if (runs) {
-        const value = perWorkspace(runs[1], 'runs');
-        if (value === 'error') return json(500, {error: {message: 'run listing failed'}});
-        return json(200, {items: (value || []).map(status => ({status}))});
-      }
-      throw new Error('unexpected ' + path);
-    },
-  };
-}
+  let authenticate;
+  const wizard = mountOnboarding(document, {send: async (method, path) => {
+    calls.push([method, path]);
+    if (path === '/v1/auth/session') return new Promise(resolve => { authenticate = resolve; });
+    if (path === '/v1/onboarding') return response(1);
+    throw new Error('Unexpected read ' + path);
+  }});
+  await flush();
+  assert.equal(document.getElementById('main-panel').hidden, true);
+  assert.deepEqual(calls, [['GET', '/v1/auth/session'], ['GET', '/v1/onboarding']]);
+  authenticate(auth);
+  await wizard.ready;
+  assert.equal(document.getElementById('main-panel').hidden, false);
+  assert.equal(document.getElementById('onboarding-step-label').textContent, '第 1 步，共 4 步');
+  assert.equal(document.getElementById('onboarding-save').disabled, true);
+  assert.equal(calls.length, 2);
+});
 
-async function mountOnboarding(state) {
-  const doc = fakeDocument();
-  const fake = fetcherFor(state);
-  const saved = {document: globalThis.document, fetch: globalThis.fetch};
-  globalThis.document = doc;
-  globalThis.fetch = fake.fetch;
-  try {
-    await import('../openteamily/static/onboarding/app.mjs?checklist=' + Math.random());
-    await settle();
-  } finally {
-    if (saved.document === undefined) delete globalThis.document; else globalThis.document = saved.document;
-    if (saved.fetch === undefined) delete globalThis.fetch; else globalThis.fetch = saved.fetch;
+test('a prefetched wizard for another account is discarded', async () => {
+  const document = fakeDocument({native: true});
+  let reads = 0;
+  const wizard = mountOnboarding(document, {send: async (_method, path) => {
+    if (path === '/v1/auth/session') return auth;
+    if (path === '/v1/onboarding') {
+      reads += 1;
+      return reads === 1 ? response(4, {viewer_username: 'bob'}) : response(1);
+    }
+    throw new Error('Unexpected read ' + path);
+  }});
+  await wizard.ready;
+  assert.equal(reads, 2);
+  assert.equal(document.getElementById('onboarding-step-label').textContent, '第 1 步，共 4 步');
+});
+
+test('connector status is optional and cannot block durable advancement', async () => {
+  const document = fakeDocument();
+  const calls = [];
+  let resolveConnector;
+  const wizard = mountOnboarding(document, {send: async (method, path, body) => {
+    calls.push([method, path, body]);
+    if (path === '/v1/auth/session') return auth;
+    if (path === '/v1/onboarding') return response(2);
+    if (path === '/v1/composio/connections') return new Promise(resolve => { resolveConnector = resolve; });
+    if (path === '/v1/onboarding/progress') return {status: 200, body: {progress: {step: 3, completed: false}}};
+    throw new Error('Unexpected request ' + path);
+  }});
+  await wizard.ready;
+  assert.equal(document.stepParts[0].hidden, false);
+  assert.match(document.getElementById('onboarding-apps').textContent, /读取中/);
+  document.next.handlers.click[0]();
+  await flush();
+  assert.equal(document.stepParts[1].hidden, false);
+  assert.deepEqual(calls.at(-1), ['POST', '/v1/onboarding/progress', {step: 3}]);
+  resolveConnector({status: 200, body: {items: [{toolkit: 'github', state: 'connected'}]}});
+  await flush();
+  assert.equal(document.stepParts[1].hidden, false);
+});
+
+test('saved appearance step completes with the selected look, then opens the exact personal chat', async () => {
+  const document = fakeDocument();
+  const calls = [];
+  const destination = [];
+  const wizard = mountOnboarding(document, {navigate: path => destination.push(path),
+    send: async (method, path, body) => {
+      calls.push([method, path, body]);
+      if (path === '/v1/auth/session') return auth;
+      if (path === '/v1/onboarding') return response(4);
+      if (path === '/v1/onboarding/look') return response(4, {progress: {step: 4, completed: true}});
+      if (path === '/v1/personal-agent') return {status: 200, body: {personal_agent: binding}};
+      throw new Error('Unexpected request ' + path);
+    }});
+  await wizard.ready;
+  assert.equal(document.stepParts[2].hidden, false);
+  assert.equal(document.getElementById('onboarding-enter').textContent, '完成并开始聊天');
+  document.getElementById('onboarding-enter').handlers.click[0]();
+  await flush();
+  assert.deepEqual(calls.slice(-2), [
+    ['POST', '/v1/onboarding/look', {look, finish: true}],
+    ['GET', '/v1/personal-agent', undefined],
+  ]);
+  assert.deepEqual(destination, ['/chat#workspace=' + workspace + '&agent=' + agent]);
+  assert.equal(personalChatPath({workspace: {id: '../../../chat'}, agent: {id: agent}}), '');
+});
+
+test('a selected one-off task only stages a private draft and preserves an existing draft', async () => {
+  const owner = 'c'.repeat(32);
+  const other = 'd'.repeat(32);
+  const storageKey = 'openteamily.chat-drafts:' + owner;
+  const scope = JSON.stringify([owner, workspace, 'agent', agent, null]);
+  const taskSteps = {...steps, picks: ['once', 'routine'], recommendations: [
+    {key: 'once', kind: 'task', title: '整理会议纪要', summary: '整理结论和行动项。'},
+    {key: 'routine', kind: 'routine', title: '每日早报', summary: '定时发早报。'},
+    {key: 'unselected', kind: 'task', title: '起草回复', summary: '根据上下文起草。'},
+  ]};
+  for (const mode of ['new', 'existing', 'foreign', 'unavailable']) {
+    const document = fakeDocument();
+    const storage = new Map();
+    if (mode === 'existing') storage.set(storageKey, JSON.stringify({[scope]: '用户原草稿'}));
+    document.defaultView = {addEventListener() {}, sessionStorage: {
+      getItem: key => storage.get(key),
+      setItem: (key, value) => {
+        if (mode === 'unavailable') throw new Error('storage denied');
+        storage.set(key, value);
+      },
+    }};
+    const writes = [];
+    const destinations = [];
+    const wizard = mountOnboarding(document, {navigate: path => destinations.push(path), send: async (method, path) => {
+      if (method === 'POST') writes.push(path);
+      switch (path) {
+        case '/v1/auth/session':
+          return {status: 200, body: {user: {id: owner, username: 'alice'}}};
+        case '/v1/onboarding':
+          return response(4, {steps: taskSteps});
+        case '/v1/onboarding/look':
+          return response(4, {steps: taskSteps, progress: {step: 4, completed: true}});
+        case '/v1/personal-agent':
+          return {status: 200, body: {personal_agent: {
+            ...binding, workspace: {id: workspace, owner_id: mode === 'foreign' ? other : owner},
+          }}};
+        default:
+          throw new Error('Unexpected request ' + path);
+      }
+    }});
+    await wizard.ready;
+    const choice = document.getElementById('onboarding-first-task');
+    assert.deepEqual(choice.children.map(option => option.value), ['', 'once']);
+    choice.value = 'once';
+    choice.handlers.change[0]();
+    const text = document.getElementById('onboarding-first-task-preview').value;
+    assert.match(text, /整理会议纪要/);
+    assert.deepEqual(writes, [], 'selection does not start a conversation or inference');
+    document.getElementById('onboarding-enter').handlers.click[0]();
+    await flush();
+    assert.deepEqual(writes, ['/v1/onboarding/look']);
+    if (mode === 'new') {
+      assert.deepEqual(destinations, ['/chat#workspace=' + workspace + '&agent=' + agent]);
+      assert.deepEqual(JSON.parse(storage.get(storageKey)), {[scope]: text});
+    } else {
+      assert.deepEqual(destinations, []);
+      assert.deepEqual(storage.get(storageKey), mode === 'existing' ? JSON.stringify({[scope]: '用户原草稿'}) : undefined);
+      assert.match(document.getElementById('onboarding-first-task-status').textContent, /已有未发送草稿|无法确认|无法暂存/);
+    }
   }
-  return {doc, calls: fake.calls};
-}
-
-function steps(doc) {
-  const list = doc.getElementById('onboarding-checklist');
-  return list.children.map((row) => ({
-    text: row.textContent,
-    done: row.dataset.state === 'done',
-  }));
-}
-
-test('a fresh account sees three steps, none of them faked as done', async () => {
-  const {doc} = await mountOnboarding({workspaces: [], runtimes: [], automations: []});
-  const rows = steps(doc);
-  assert.equal(rows.length, 3, 'expected 3 onboarding steps, got ' + rows.length);
-  assert.deepEqual(rows.map((row) => row.done), [false, false, false],
-    'an empty account claims a step is already done');
-  assert.match(rows[0].text, /建智能体/);
-  assert.match(rows[1].text, /连运行时/);
-  assert.match(rows[2].text, /跑一次自动化/);
-  assert.match(rows[0].text, /需要你先创建工作区/);
-  assert.match(rows[2].text, /需要你先创建工作区/);
-  assert.equal(doc.getElementById('onboarding-ready').hidden, true,
-    'the ready banner shows before the checklist is complete');
 });
 
-test('an agent, an online runtime and a finished automation run complete every step', async () => {
-  const {doc, calls} = await mountOnboarding({
-    workspaces: [{id: 'ws-1', name: 'Desk'}],
-    agents: [{id: 'ag-1', name: 'Helper'}],
-    runtimes: ['online'],
-    automations: ['au-1'],
-    runs: ['succeeded'],
+test('a failed completion remains on step 4 and does not open chat', async () => {
+  const document = fakeDocument();
+  let personalReads = 0;
+  const wizard = mountOnboarding(document, {navigate: () => assert.fail('navigated after failed save'),
+    send: async (_method, path) => {
+      if (path === '/v1/auth/session') return auth;
+      if (path === '/v1/onboarding') return response(4);
+      if (path === '/v1/onboarding/look') return {status: 503, body: {}};
+      personalReads += 1;
+      return {status: 200, body: {personal_agent: binding}};
+    }});
+  await wizard.ready;
+  document.getElementById('onboarding-enter').handlers.click[0]();
+  await flush();
+  assert.equal(document.stepParts[2].hidden, false);
+  assert.equal(personalReads, 0);
+  assert.match(document.getElementById('status').textContent, /保存失败/);
+});
+
+test('automation creation is opt-in, click-only and guarded against duplicate clicks', async () => {
+  const doc = fakeDocument();
+  const calls = [];
+  let finish;
+  const creation = mountAutomationCreation(doc, async (...args) => {
+    calls.push(args);
+    if (args[1] === '/v1/personal-agent') {
+      return {status: 201, body: {personal_agent: {workspace: {id: 'a'.repeat(32)}}}};
+    }
+    return new Promise(resolve => {finish = resolve;});
   });
-  const rows = steps(doc);
-  assert.deepEqual(rows.map((row) => row.done), [true, true, true],
-    'real state (agent, online runtime, finished run) did not complete the steps');
-  for (const row of rows) assert.match(row.text, /✓/, 'a completed step is not ticked: ' + row.text);
-  assert.match(rows[0].text, /Helper/);
-  const ready = doc.getElementById('onboarding-ready');
-  assert.equal(ready.hidden, false, 'all steps are done but the ready banner is hidden');
-  assert.match(ready.textContent, /可以开始了/);
-  const link = ready.children.find((child) => child.tagName === 'A');
-  assert.ok(link, 'the ready banner has no link to /chat');
-  assert.equal(link.getAttribute('href'), '/chat');
-  assert.ok(calls.includes('/v1/workspaces?limit=100'), 'the checklist did not read the workspaces API');
-  assert.ok(calls.includes('/v1/runtime/connections'), 'the checklist did not read the runtime connections');
-  assert.ok(calls.some((path) => /\/automations$/.test(path)), 'the checklist did not read automations');
-  assert.ok(calls.some((path) => /\/runs\?limit=20$/.test(path)), 'the checklist did not read automation runs');
+  creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
+  const button = doc.getElementById('create-onboarding-automations');
+  const box = doc.getElementById('onboarding-automation-templates').children[0].children[0];
+  assert.equal(box.checked, false);
+  assert.deepEqual(calls, [], 'rendering onboarding must not create anything');
+  const click = button.handlers.click[0];
+  await click();
+  assert.deepEqual(calls, [], 'an empty selection never creates anything');
+  box.checked = true;
+  assert.deepEqual(calls, [], 'selection alone must not create anything');
+  const pending = click();
+  await click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 2);
+  assert.equal(button.disabled, true);
+  assert.deepEqual(calls[0], ['POST', '/v1/personal-agent', {}]);
+  assert.deepEqual(calls[1], ['POST', '/v1/onboarding/automations', {workspace_id: 'a'.repeat(32), template_ids: ['daily_brief']}]);
+  finish({status: 201, body: {created: [{id: 'b'.repeat(32), title: '每日工作简报'}], skipped: []}});
+  await pending;
+  assert.equal(button.disabled, false);
+  assert.match(doc.getElementById('onboarding-automation-status').textContent, /暂停的自动化/);
+  const links = doc.getElementById('onboarding-automation-links');
+  assert.equal(links.children[0].children[0].href, `/automations?workspace=${'a'.repeat(32)}&automation=${'b'.repeat(32)}`);
 });
 
-test('an offline runtime and a queued-only run stay unproven with the reason shown', async () => {
-  const {doc} = await mountOnboarding({
-    workspaces: [{id: 'ws-1', name: 'Desk'}],
-    agents: [{id: 'ag-1', name: 'Helper'}],
-    runtimes: ['offline'],
-    automations: ['au-1'],
-    runs: ['queued'],
+test('automation replay links to the existing result from an already verified personal workspace', async () => {
+  const doc = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const id = 'c'.repeat(32);
+  const calls = [];
+  const creation = mountAutomationCreation(doc, async (...args) => {
+    calls.push(args);
+    return {status: 200, body: {created: [], skipped: [{id, title: '已改名的简报'}, {title: '重名项目'}]}};
   });
-  const rows = steps(doc);
-  assert.deepEqual(rows.map((row) => row.done), [true, false, false]);
-  assert.match(rows[1].text, /当前离线/);
-  assert.match(rows[2].text, /还没有执行过/);
-  assert.equal(doc.getElementById('onboarding-ready').hidden, true);
+  creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
+  creation.setPersonalWorkspace(workspace);
+  doc.getElementById('onboarding-automation-templates').children[0].children[0].checked = true;
+  await doc.getElementById('create-onboarding-automations').handlers.click[0]();
+  assert.deepEqual(calls, [['POST', '/v1/onboarding/automations', {workspace_id: workspace, template_ids: ['daily_brief']}]]);
+  const links = doc.getElementById('onboarding-automation-links');
+  assert.equal(links.children.length, 1);
+  assert.equal(links.children[0].children[0].href, `/automations?workspace=${workspace}&automation=${id}`);
 });
 
-test('a failing workspace request leaves the workspace steps unproven but still judges the runtime', async () => {
-  const {doc} = await mountOnboarding({workspaces: 'error', runtimes: ['online'], automations: []});
-  const rows = steps(doc);
-  assert.equal(rows.length, 3);
-  assert.deepEqual(rows.map((row) => row.done), [false, true, false],
-    'a failed workspace request was reported as completed, or a judgeable runtime was skipped');
-  assert.match(rows[0].text, /读取工作区失败/);
-  assert.match(rows[2].text, /读取工作区失败/);
-});
-
-test('a failing run listing reports the automation step as unknown, not done', async () => {
-  const {doc} = await mountOnboarding({
-    workspaces: [{id: 'ws-1', name: 'Desk'}],
-    agents: [{id: 'ag-1', name: 'Helper'}],
-    runtimes: ['online'],
-    automations: ['au-1'],
-    runs: 'error',
-  });
-  const rows = steps(doc);
-  assert.deepEqual(rows.map((row) => row.done), [true, true, false]);
-  assert.match(rows[2].text, /读取运行记录失败/);
-  assert.equal(doc.getElementById('onboarding-ready').hidden, true);
-});
-
-test('a second workspace with the agent and the finished run completes the steps it proves', async () => {
-  const {doc, calls} = await mountOnboarding({
-    workspaces: [{id: 'ws-1', name: 'Desk'}, {id: 'ws-2', name: 'Team'}],
-    byWorkspace: {
-      'ws-1': {agents: [], automations: []},
-      'ws-2': {agents: [{id: 'ag-2', name: 'Second'}], automations: ['au-2'], runs: ['succeeded']},
-    },
-    runtimes: ['online'],
-  });
-  const rows = steps(doc);
-  assert.deepEqual(rows.map((row) => row.done), [true, true, true],
-    'a second workspace holds the agent and the finished run, but the checklist judged the first workspace only');
-  assert.match(rows[0].text, /Second/, 'the agent step does not name the agent found in the second workspace');
-  assert.match(rows[2].text, /执行记录/, 'the automation step does not see the run finished in the second workspace');
-  assert.ok(calls.includes('/v1/workspaces/ws-2/agents?limit=100'), 'the checklist never read the second workspace agents');
-  assert.ok(calls.includes('/v1/workspaces/ws-2/automations'), 'the checklist never read the second workspace automations');
-  assert.equal(doc.getElementById('onboarding-ready').hidden, false);
-});
-
-test('a thrown workspace request still renders three honest unknown rows', async () => {
-  const {doc} = await mountOnboarding({workspaces: [], runtimes: ['online'], throwOn: '/v1/workspaces?limit=100'});
-  const rows = steps(doc);
-  assert.equal(rows.length, 3, 'expected 3 onboarding steps after a thrown request, got ' + rows.length);
-  assert.deepEqual(rows.map((row) => row.done), [false, false, false],
-    'a thrown request must not tick a step');
-  const text = rows.map((row) => row.text).join('\n');
-  assert.doesNotMatch(text, /✓/, 'a thrown request rendered a tick');
-  for (const row of rows) assert.match(row.text, /无法判断|失败|出错/, 'a row gives no reason after a thrown request: ' + row.text);
-  assert.equal(doc.getElementById('onboarding-ready').hidden, true);
+test('automation creation reports errors without advancing onboarding', async () => {
+  const doc = fakeDocument();
+  const creation = mountAutomationCreation(doc, async () => {throw new Error('offline');});
+  creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
+  doc.getElementById('onboarding-automation-templates').children[0].children[0].checked = true;
+  const button = doc.getElementById('create-onboarding-automations');
+  await button.handlers.click[0]();
+  assert.equal(button.disabled, false);
+  assert.match(doc.getElementById('onboarding-automation-status').textContent, /结果尚不确定/);
 });
