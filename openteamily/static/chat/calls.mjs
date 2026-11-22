@@ -1,10 +1,10 @@
-import { meetingCodeFromHash, meetingHref, parseMeetingCode } from '../shell/meeting-link.mjs';
+import { meetingCodeFromHash, meetingDraftFromCallHref, meetingHref, parseMeetingCode } from '../shell/meeting-link.mjs';
 
 const POLL_MS = 900;
 const typeLabel = kind => kind === 'video' ? '视频通话' : '语音通话';
 const stopTracks = stream => stream?.getTracks().forEach(track => track.stop());
 
-export function mountChatCalls(document, {request, context} = {}) {
+export function mountChatCalls(document, {request, context, account = () => null} = {}) {
   const element = id => document.getElementById(id);
   const launcher = element('chat-call');
   if (!launcher) return {refresh() {}, sync() {}, openMeeting() {}, resumeMeeting() {}};
@@ -33,6 +33,9 @@ export function mountChatCalls(document, {request, context} = {}) {
   const shareStatus = element('chat-meeting-share-status');
   const end = element('chat-meeting-end');
   const hangup = element('chat-meeting-hangup');
+  const notes = element('chat-meeting-notes');
+  const notesHint = element('chat-meeting-notes-hint');
+  const notesCopy = element('chat-meeting-notes-copy');
   const view = document.defaultView ?? globalThis;
   const setTimer = view.setTimeout?.bind(view) ?? globalThis.setTimeout;
   const clearTimer = view.clearTimeout?.bind(view) ?? globalThis.clearTimeout;
@@ -44,12 +47,36 @@ export function mountChatCalls(document, {request, context} = {}) {
   let readSequence = 0;
   let previewTimer;
   let watching = true;
+  let handoffSequence = 0;
+  let handoffScope = null;
+  let viewer = account();
 
   const currentKey = value => value ? value.wid + '/' + value.cid : '';
   const path = (scope, action = '') => scope.meeting ? '/v1/meeting-calls/' + action :
     `/v1/workspaces/${scope.wid}/social/conversations/${scope.cid}/call${action && '/' + action}`;
   const payload = own => ({call_id: own.call.id, peer_id: own.id});
   const note = text => { status.textContent = text; };
+
+  function clearHandoff() {
+    handoffSequence += 1;
+    handoffScope = null;
+    notes.hidden = true;
+    notesCopy.hidden = true;
+    notes.removeAttribute('href');
+    notesHint.hidden = true;
+  }
+
+  function showHandoff(own, ended) {
+    if (!dialog.open || active || own.viewer !== account()) return;
+    const href = meetingDraftFromCallHref(own.call.id, own.scope.wid);
+    if (!href) return;
+    handoffScope = own.scope;
+    notes.href = href;
+    notes.hidden = false;
+    notesCopy.hidden = false;
+    notesHint.textContent = ended ? '打开会议页，补充正文后可生成纪要。' : '会议结束后，可打开会议页整理纪要。';
+    notesHint.hidden = false;
+  }
 
   function renderLauncher() {
     launcher.hidden = !current;
@@ -102,25 +129,40 @@ export function mountChatCalls(document, {request, context} = {}) {
     renderLauncher();
   }
 
-  async function leave({dismiss = true} = {}) {
+  async function leave({dismiss = true, offerNotes = false} = {}) {
     const own = active;
+    const keepOpen = Boolean(own && offerNotes && dialog.open);
     joining = null;
-    if (dismiss) {
+    clearHandoff();
+    const sequence = handoffSequence;
+    if (dismiss && !keepOpen) {
       prejoin = null;
       if (dialog.open) dialog.close();
     }
     stopLocal(own);
     if (own) {
-      await request('POST', path(own.scope, 'leave'), payload(own)).catch(() => {});
+      if (keepOpen) {
+        note(own.scope.meeting ? '你已离开会议。' : '你已离开通话。');
+        showHandoff(own, false);
+        close.focus();
+      }
+      const result = await request('POST', path(own.scope, 'leave'), payload(own)).catch(() => null);
+      if (keepOpen && sequence === handoffSequence && result?.body?.handoff?.id === own.call.id) showHandoff(own, true);
       if (currentKey(own.scope) === currentKey(current)) void refresh();
     }
   }
 
   function sync() {
     const next = context();
-    if (currentKey(current) === currentKey(next)) return;
+    const nextViewer = account();
+    const accountChanged = viewer !== nextViewer;
+    if (accountChanged) {
+      viewer = nextViewer;
+      void leave();
+    }
+    if (!accountChanged && currentKey(current) === currentKey(next)) return;
     readSequence++;
-    if ((dialog.open || active) && !prejoin?.scope.meeting && !active?.scope.meeting) void leave();
+    if ((dialog.open || active) && !prejoin?.scope.meeting && !active?.scope.meeting && !handoffScope?.meeting) void leave();
     current = next;
     available = null;
     renderLauncher();
@@ -137,6 +179,7 @@ export function mountChatCalls(document, {request, context} = {}) {
 
   function showChoices() {
     if (!showDialog() || active || joining) return;
+    clearHandoff();
     prejoin = null;
     drawPrejoin(false);
     element('chat-call-title').textContent = '通话';
@@ -156,6 +199,7 @@ export function mountChatCalls(document, {request, context} = {}) {
 
   function prepareVideo(scope, action, code = '') {
     if (active || joining || !showDialog(scope)) return;
+    clearHandoff();
     prejoin = {scope, action};
     const creating = action === 'create';
     const invite = scope.meeting && !creating;
@@ -344,11 +388,13 @@ export function mountChatCalls(document, {request, context} = {}) {
     try {
       const result = await request('POST', path(own.scope, 'poll'), {...payload(own), after: own.cursor});
       if (active !== own) return;
-      if ([401, 403, 404].includes(result.status)) {
+      if ([401, 403, 404].includes(result.status) || (result.status === 200 && result.body?.ended === true)) {
         stopLocal(own);
         available = null;
         renderLauncher();
         note(own.scope.meeting ? '会议已结束。' : '通话已结束。');
+        const code = result.body?.error?.code;
+        if (result.body?.handoff?.id === own.call.id || code === 'call_ended' || code === 'meeting_ended') showHandoff(own, true);
         return;
       }
       if (result.status !== 200) throw new Error('Call poll failed');
@@ -375,7 +421,8 @@ export function mountChatCalls(document, {request, context} = {}) {
   async function join(kind, {start = true, setup = null} = {}) {
     const scope = setup?.scope || current;
     if (active || joining || !showDialog(scope)) return;
-    const ticket = {scope};
+    clearHandoff();
+    const ticket = {scope, viewer: account()};
     joining = ticket;
     choices.hidden = true;
     submit.disabled = true;
@@ -430,7 +477,7 @@ export function mountChatCalls(document, {request, context} = {}) {
         return;
       }
       const meeting = result.body.meeting;
-      own = {scope, id: result.body.peer_id, call: result.body.call, ice: result.body.ice_servers,
+      own = {scope, viewer: ticket.viewer, id: result.body.peer_id, call: result.body.call, ice: result.body.ice_servers,
         stream, kinds: kind === 'video' ? ['audio', 'video'] : ['audio'], deviceBusy: new Set(),
         peers: new Map(), cursor: 0, failures: 0, timer: null};
       if (joining !== ticket) {
@@ -522,8 +569,8 @@ export function mountChatCalls(document, {request, context} = {}) {
   element('chat-call-join').addEventListener('click', () => available && openCall(available.kind, false));
   startAudio.addEventListener('click', () => openCall('audio'));
   startVideo.addEventListener('click', () => openCall('video'));
-  close.addEventListener('click', () => leave());
-  hangup.addEventListener('click', () => leave());
+  close.addEventListener('click', () => leave({offerNotes: true}));
+  hangup.addEventListener('click', () => leave({offerNotes: true}));
   dialog.addEventListener('cancel', event => { event.preventDefault(); void leave(); });
   mute.addEventListener('click', () => toggleDevice('audio', mute));
   camera.addEventListener('click', () => toggleDevice('video', camera));
@@ -551,6 +598,16 @@ export function mountChatCalls(document, {request, context} = {}) {
       shareStatus.textContent = '已选中链接，可以手动复制。';
     }
   });
+  notesCopy.addEventListener('click', async () => {
+    if (notes.hidden || !notes.href) return;
+    const sequence = handoffSequence;
+    try {
+      await view.navigator.clipboard.writeText(new URL(notes.href, view.location.origin).href);
+      if (sequence === handoffSequence) notesHint.textContent = '已复制纪要入口。';
+    } catch {
+      if (sequence === handoffSequence) notesHint.textContent = '可以从链接菜单复制纪要入口。';
+    }
+  });
   end.addEventListener('click', async () => {
     const own = active;
     if (!own?.scope.meeting) return;
@@ -566,6 +623,7 @@ export function mountChatCalls(document, {request, context} = {}) {
     if (result?.status === 200 || result?.status === 404) {
       stopLocal(own);
       note('会议已结束。');
+      if (result.status === 200 || result.body?.error?.code === 'call_ended' || result.body?.handoff?.id === own.call.id) showHandoff(own, true);
       close.focus();
     } else shareStatus.textContent = '无法结束会议，请重试。';
   });
@@ -586,6 +644,7 @@ export function mountChatCalls(document, {request, context} = {}) {
     }
     joining = null;
     prejoin = null;
+    clearHandoff();
   });
   view.addEventListener?.('pageshow', () => {
     watching = true;

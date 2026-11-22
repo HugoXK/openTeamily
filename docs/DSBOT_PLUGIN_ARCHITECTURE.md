@@ -75,8 +75,10 @@ All of these already exist in the pinned tree and are used by today's runtime im
   (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
   calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
   page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`, `automations`, `agents`, `artifacts`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations`, workspace lists, runtime keys and public `/share/<token>` pages stay on the platform. `/members/`, `/team/`, `/messenger/` and `/discover/` wait for a dedicated (not old FlyBot) Bot Social URL. Office format exports of works still follow.
-  platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
-  `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
+* The native skills feature keeps the catalogue, saved library entries and approved bindings in the
+  user's DS-Bot. A binding pins the package version, content digest and scope. The runtime applies
+  approved instruction-only skills when a binding changes and resolves the current set before a turn.
+  Saving an item to the library leaves its model permissions unchanged.
 
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's

@@ -8,6 +8,7 @@ import unittest
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
+from openteamily.app import App, Config
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.security import digest
 from openteamily.store import Store
@@ -83,6 +84,16 @@ class GatewayTest(unittest.TestCase):
         with self.store.transaction() as db:
             db.execute("UPDATE instances SET health='unknown' WHERE id=?", (canonical,))
         self.assertEqual(self.call(self.tokens[owner])[0], 503)
+
+    def test_skill_runs_use_own_runtime_and_the_old_namespace_is_retired_at_the_edge(self):
+        task = 'a' * 32
+        token = self.tokens['a' * 32]
+        status, headers = self.call(token, uri=f'/v1/skills/runs/{task}/artifact')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=skills', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(token, uri=f'/v1/runtime/tasks/{task}/artifact')[0], 404)
+        config = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key=KEY)
+        self.assertIn('location ^~ /v1/runtime/ {\n    default_type application/json;\n    return 410', config)
 
     def test_each_user_reaches_only_their_own_dsbot(self):
         a, b = self.tokens['a' * 32], self.tokens['b' * 32]
@@ -163,29 +174,88 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/team/', gw.load_routes()), '/api/openteamily/page?path=%2Fteam%2F')
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/studio-copy'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live'), 'studio')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live/anything'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/action'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
+        work = '/v1/discover/works/work-demo'
+        comment = 'otwc_' + '0' * 26
+        for path in (work, work + '/remix', work + '/comments', work + '/comments/' + comment + '/like',
+                     work + '/comments/' + comment + '/remove'):
+            self.assertEqual(gw.moved_api(path), 'discover')
         self.assertEqual(gw.moved_api('/v1/model-api/image'), 'model-api')
         self.assertEqual(gw.moved_api('/v1/model-api/video'), 'model-api')
         self.assertEqual(gw.moved_api('/v1/model-api/music'), 'model-api')
+        self.assertEqual(gw.moved_api('/v1/model-api/model3d'), 'model-api')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/videos'), 'videos')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/music'), 'music')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images/{aid}'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/videos/{aid}'), 'videos')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/music/{aid}'), 'music')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites'), 'websites')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites/{aid}'), 'websites')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d/{aid}'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/attachments'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-progress'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/retry'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/attachments'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/profile/dream'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/actions/draft'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/actions/draft/save'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/{aid}/share-group'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/candidates/{aid}'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/memory/capture'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/memory/capture'), 'agents')
+
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/draft'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/speech'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/share-recipients'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/shares'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/artifact'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/memory'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/action'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/revoke'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
+        self.assertEqual(gw.moved_api('/v1/stickers'), 'stickers')
+        self.assertEqual(gw.moved_api(f'/v1/stickers/{aid}/file'), 'stickers')
+        self.assertIsNone(gw.moved_api('/v1/stickers/other/file'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'A' * 26), 'meetings')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'O' * 26))
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/draft'))
+
+    def test_team_runs_are_forwarded_only_to_the_signed_in_users_runtime(self):
+        workspace = 'a' * 32
+        run = 'c' * 32
+        share = 'otsr_' + '0' * 26
+        base = f'/v1/workspaces/{workspace}/team-runs'
+        shared = f'/v1/workspaces/{workspace}/shared-runs'
+        for path, feature in (
+            (base, 'team-runs'),
+            (f'{base}/{run}/steps/7/retry', 'team-runs'),
+            (f'{base}/{run}/steps/1/artifact', 'team-runs'),
+            (f'{base}/{run}/share', 'shares'),
+            (f'{shared}/{share}/revoke', 'shares'),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(gw.moved_api(path), feature)
+                self.assertEqual(self.call(uri=path, method='POST', origin=ORIGIN)[0], 401)
+                for owner, instance in (('a' * 32, '1' * 32), ('b' * 32, '2' * 32)):
+                    status, headers = self.call(self.tokens[owner], uri=path, method='POST', origin=ORIGIN)
+                    self.assertEqual(status, 204)
+                    self.assertEqual(headers['X-OT-Instance'], instance)
+                    self.assertIn(f'feature={feature}', headers['X-OT-Upstream-Path'])
+        self.assertIsNone(gw.moved_api(f'{base}/{run}/steps/8/retry'))
+        self.assertEqual(self.call(uri='/team-runs')[0], 401)
+        status, headers = self.call(self.tokens['a' * 32], uri='/team-runs')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Upstream-Path'], '/api/openteamily/page?path=%2Fteam-runs')
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -206,6 +276,25 @@ class GatewayTest(unittest.TestCase):
             self.assertEqual(gw.moved_api(path), feature, path)
         self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
         self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
+
+    def test_space_activity_is_owner_routed_and_the_old_stream_is_gone(self):
+        uri = '/v1/workspaces/' + 'a' * 32 + '/artifacts/activity?artifact=' + 'b' * 32
+        for owner, iid in [('a' * 32, '1' * 32), ('b' * 32, '2' * 32)]:
+            status, headers = self.call(self.tokens[owner], uri=uri)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], iid)
+            self.assertIn('feature=artifacts', headers['X-OT-Upstream-Path'])
+            self.assertIn('%2Fartifacts%2Factivity', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(uri=uri)[0], 401)
+
+        app = App(self.store, Config(ORIGIN))
+        received = {}
+        body = b''.join(app({'HTTP_HOST': 'openteamily.example', 'REQUEST_METHOD': 'GET',
+                            'PATH_INFO': '/v1/workspaces/' + 'a' * 32 + '/events'},
+                           lambda status, headers: received.update(status=status, headers=dict(headers))))
+        self.assertTrue(received['status'].startswith('410 '))
+        self.assertEqual(received['headers']['Content-Type'], 'application/json; charset=utf-8')
+        self.assertEqual(json.loads(body)['error']['code'], 'retired')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -243,11 +332,13 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /onboarding { return 418; }', conf)
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
-        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
+        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)
-        self.assertIn('location @ot_login { return 302 /login; }', conf)
+        self.assertIn('location @ot_login {', conf)
+        self.assertIn('rewrite ^ /_ot_discover_guest$uri last;', conf)
+        self.assertIn('return 302 /login;', conf)
         self.assertNotIn('location = /login { return 418; }', conf)
         self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
 
@@ -255,11 +346,14 @@ class GatewayTest(unittest.TestCase):
         routes = gw.load_routes()
         conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertNotIn('location ^~ /social/', conf)
+        self.assertNotIn('rewrite ^/v1/discover/(works|agents)$', conf)
         with self.assertRaises(ValueError):
             gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='http://bad')
         social = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='bot-social:8787')
         self.assertIn('location = /social { absolute_redirect off; return 308 /social/; }', social)
         self.assertIn('location ^~ /social/', social)
+        self.assertIn('rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;', social)
+        self.assertIn('proxy_pass http://bot-social:8787/v1/ot/public/discover/;', social)
         self.assertIn('proxy_pass http://bot-social:8787/;', social)
         self.assertIn('X-Forwarded-Prefix /social;', social)
         self.assertIn('proxy_set_header X-OT-Gateway-Key "";', social)
@@ -291,6 +385,30 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.report('1' * 32, dict(good, address='8.8.8.8:8080'), token)[0], 400)
         self.assertEqual(self.report('1' * 32, good, 'x' * 43)[0], 401)
         self.assertEqual(self.report('1' * 32, dict(good, extra=1), token)[0], 400)
+
+    def test_restart_cannot_reactivate_an_old_gateway_route(self):
+        iid, owner, other = '1' * 32, 'a' * 32, 'b' * 32
+        token = secrets.token_urlsafe(32)
+        manager = ManagerIdentity('manager-a', digest(token), frozenset({iid}), 'compose')
+        self.app.manager_auth = ManagerAuth([manager])
+        runtime = lifecycle.Lifecycle(self.store, lifecycle.RuntimePolicy(backend_mode='compose', image_ref='example/runtime@sha256:' + 'a' * 64))
+        previous = {'address': '172.30.0.21:8080', 'auth_cookie': 'dsh-auth-172.30.0.21:8080=' + 'Z' * 30, 'process_ref': 'f' * 32}
+        with self.store.transaction() as db:
+            db.execute('UPDATE instances SET process_ref=? WHERE id=?', (previous['process_ref'], iid))
+        self.assertEqual(self.report(iid, previous, token)[0], 200)
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Upstream'], previous['address'])
+
+        self.assertTrue(runtime.restart(owner, iid, operation_id='restart-race-fixture-0001')[0])
+        claim = runtime.claim(manager, iid)
+        self.assertEqual(self.report(iid, previous, token)[0], 409, 'old process may not refresh during restart')
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+        runtime.observe(manager, iid, claim['job']['id'], claim['job']['revision'], claim['lease'], 'running', 'd' * 32)
+        self.assertEqual(self.call(self.tokens[owner])[0], 503, 'old cookie does not reactivate after a new process is healthy')
+        self.assertEqual(self.report(iid, previous, token)[0], 409, 'old process may not report after replacement')
+        self.assertEqual(self.call(self.tokens[other])[1]['X-OT-Upstream'], '172.30.0.12:8080')
+        current = {'address': '172.30.0.31:8080', 'auth_cookie': 'dsh-auth-172.30.0.31:8080=' + 'R' * 30, 'process_ref': 'd' * 32}
+        self.assertEqual(self.report(iid, current, token)[0], 200)
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Upstream'], current['address'])
 
     def test_retired_instance_cannot_route_or_receive_manager_reports(self):
         owner, canonical, retired = 'a' * 32, '1' * 32, '3' * 32
@@ -410,6 +528,9 @@ class GatewayTest(unittest.TestCase):
         status, headers = self.call(a, uri='/v1/onboarding/look', method='POST', Origin='https://openteamily.example')
         self.assertEqual(status, 204)
         self.assertIn('feature=settings', headers['X-OT-Upstream-Path'])
+        status, headers = self.call(a, uri='/v1/onboarding/progress', method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=settings&path=%2Fv1%2Fonboarding%2Fprogress', headers['X-OT-Upstream-Path'])
         status, headers = self.call(a, uri='/v1/model-api')
         self.assertIn('feature=model-api', headers['X-OT-Upstream-Path'])
         status, headers = self.call(a, uri='/v1/onboarding/automations', method='POST', Origin='https://openteamily.example')
@@ -431,10 +552,29 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
+    def test_profile_page_and_social_activity_use_owners_runtime(self):
+        routes = gw.load_routes()
+        for path, encoded in (('/profile', '%2Fprofile'), ('/profile/edit/', '%2Fprofile%2Fedit'),
+                              ('/profile/app.mjs', '%2Fprofile%2Fapp.mjs')):
+            self.assertEqual(gw.target_for(path, routes), '/api/openteamily/page?path=' + encoded)
+        for path in ('/v1/profile', '/v1/profile/avatar', '/p/alice'):
+            self.assertIsNone(gw.target_for(path, routes))
+        path = '/v1/profile/social?view=liked'
+        self.assertEqual(self.call(uri=path)[0], 401)
+        for user, expected in (('a', '1'), ('b', '2')):
+            status, headers = self.call(self.tokens[user * 32], uri=path)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], expected * 32)
+            self.assertIn('feature=discover', headers['X-OT-Upstream-Path'])
+        self.assertEqual(gw.moved_api('/v1/profile/follow-work'), 'discover')
+
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
         self.assertIn('location = /space { return 418; }', conf)
+        self.assertIn('location = /profile { return 418; }', conf)
+        self.assertIn('location = /v1/profile/social { return 418; }', conf)
+        self.assertIn('location = /v1/profile/follow-work { return 418; }', conf)
         self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
         self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
         self.assertIn('location = /v1/composio/callback', conf)

@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 //   DS-Bot's. No runtime_tasks row and no server queue are involved.
 import { createHash } from 'node:crypto'
 import { TEMPLATES, INTENTS } from './templates.js'
-import { dueAt, normalizeSchedule, validSchedule } from './schedule.js'
+import { dueAt, nextScheduledSlot, normalizeSchedule, validSchedule } from './schedule.js'
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
@@ -38,9 +38,9 @@ export function dsBotTurn(host) {
 }
 
 export const MAX_AUTOMATIONS = 100
-export const MAX_RUNS = 200
 export const TICK_MS = 15_000
 const SCOPES = new Set(['once', 'ongoing'])
+const RECURRING = new Set(['daily', 'weekdays', 'weekly', 'monthly'])
 const REMINDER = 'reminder'
 const RESULT_TEXT = 8000
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
@@ -55,14 +55,22 @@ CREATE TABLE IF NOT EXISTS ot_automations (
  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), revision INTEGER NOT NULL CHECK(revision >= 1),
  created INTEGER NOT NULL, updated INTEGER NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
  intent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'once', agents TEXT NOT NULL DEFAULT '[]',
- compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT,
+ compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT, schedule_active_at INTEGER,
  UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_meeting_sources (
+ automation_id TEXT PRIMARY KEY REFERENCES ot_automations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL,
+ title TEXT NOT NULL, text TEXT NOT NULL, owner TEXT NOT NULL,
+ UNIQUE(workspace_id, meeting_id, revision, action_index));
 CREATE TABLE IF NOT EXISTS ot_automation_runs (
  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
  status TEXT NOT NULL CHECK(status IN ('queued','succeeded','failed','skipped')), error_code TEXT,
- dispatch TEXT NOT NULL, attempt_of TEXT, UNIQUE(automation_id, due_at));
-CREATE INDEX IF NOT EXISTS ot_automation_run_list ON ot_automation_runs(automation_id, id);
+ dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER, UNIQUE(automation_id, due_at));
+CREATE INDEX IF NOT EXISTS ot_automation_runs_recent ON ot_automation_runs(automation_id, started DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_runs_status_recent ON ot_automation_runs(status, automation_id, started DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_active_run ON ot_automation_runs(automation_id, started DESC, id DESC) WHERE status='queued';
+DROP INDEX IF EXISTS ot_automation_run_list;
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
  PRIMARY KEY(run_id, key_hash));
@@ -70,6 +78,9 @@ CREATE TABLE IF NOT EXISTS ot_automation_manual_runs (
  automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  key_hash TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
  PRIMARY KEY(automation_id, key_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_studio_runs (
+ run_id TEXT PRIMARY KEY REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, document_id TEXT);
 `
 
 const sha = (text) => createHash('sha256').update(String(text)).digest('hex')
@@ -132,19 +143,21 @@ export function runView(row) {
   let dispatch = {}
   try { dispatch = JSON.parse(row.dispatch) || {} } catch { dispatch = {} }
   let status = row.status
-  if (row.error_code === 'cancelled') status = 'cancelled'
+  if (status === 'queued' && row.claimed_at != null) status = 'running'
+  else if (row.error_code === 'cancelled') status = 'cancelled'
   else if (row.error_code === 'timeout') status = 'timeout'
+  const trigger = row.attempt_of ? 'retry' : row.due_at < 0 ? 'manual' : 'scheduled'
+  const backend = row.error_code !== 'migrated' && dispatch.backend === 'ds-bot' ? 'ds-bot' : 'legacy'
   const out = {
     id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at < 0 ? row.started : row.due_at,
-    started: row.started, finished: row.finished, status, error_code: row.error_code,
-    ...(row.due_at < 0 ? { trigger: 'manual' } : {}),
-    dispatch: { backend: 'ds-bot', ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
+    started: row.started, finished: row.finished, status, error_code: row.error_code, trigger,
+    dispatch: { backend, ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact, readMeetingAction, studioRequest }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -152,6 +165,61 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
+  const existingSlot = db.prepare('SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
+
+  function activeRun(id) {
+    const row = activeRunFor.get(id)
+    if (!row) return null
+    const {id:runId, automation_id, workspace_id, claimed_at} = row
+    return {id:runId, automation_id, workspace_id, status:claimed_at === null ? 'queued' : 'running'}
+  }
+
+  function eligibleSlot(schedule, at, activeAt) {
+    const due = dueAt(schedule, at)
+    if (due !== null && activeAt != null && due < activeAt &&
+      schedule.kind !== 'now' && schedule.kind !== 'once') return null
+    return due
+  }
+
+  function scheduleStatus(item, activeAt, at = clock()) {
+    if (!item.enabled) return {state:'paused'}
+    if (!validSchedule(item.schedule)) return null
+    const schedule = normalizeSchedule(item.schedule)
+    const once = schedule.kind === 'now' || schedule.kind === 'once'
+    const due = eligibleSlot(schedule, at, activeAt)
+    if (due !== null) {
+      if (!existingSlot.get(item.id, due)) return {state:'due'}
+      if (once) return {state:'once_triggered'}
+    }
+    const after = once || activeAt == null ? at : Math.max(at, activeAt - 1)
+    const next = nextScheduledSlot(schedule, after)
+    if (next === null) return null
+    if (once && existingSlot.get(item.id, next)) return {state:'once_triggered'}
+    return {state:'scheduled', at:next}
+  }
+
+  function projected(item, activeAt, at) {
+    const pending = activeRun(item.id)
+    return {...item, schedule_status:scheduleStatus(item, activeAt, at), ...(pending ? {active_run:pending} : {})}
+  }
+
+  // This feature is loaded once in the runtime that owns the volume. A previous
+  // process's claimed turn may have already made calls or changed state.
+  tx(db, () => {
+    if (!all('PRAGMA table_info(ot_automations)').some(column => column.name === 'schedule_active_at')) {
+      run('ALTER TABLE ot_automations ADD COLUMN schedule_active_at INTEGER')
+    }
+    if (!all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')) {
+      run('ALTER TABLE ot_automation_runs ADD COLUMN claimed_at INTEGER')
+      // Older pending rows combined queued and running; their delivery is uncertain.
+      run("UPDATE ot_automation_runs SET claimed_at=started WHERE status='queued'")
+    }
+    const dispatch = { backend: 'ds-bot', result: { error: '上次运行因 DS-Bot 重启而中断。请检查已有结果，再决定是否重试。' } }
+    run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?
+      WHERE status='queued' AND claimed_at IS NOT NULL`, clock(), JSON.stringify(dispatch))
+  })
+  const activeRunFor = db.prepare(`SELECT id, automation_id, workspace_id, claimed_at FROM ot_automation_runs
+    WHERE automation_id=? AND status='queued' ORDER BY started DESC, id DESC LIMIT 1`)
 
   const workspaceOf = (payload) => {
     const id = payload?.workspace_id
@@ -164,6 +232,27 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (!row) refuse(404, 'not_found', 'Automation not found')
     return row
   }
+  const meetingSourceFor = (id) => one(`SELECT meeting_id, revision, action_index, title, text, owner
+    FROM ot_automation_meeting_sources WHERE automation_id=?`, id)
+  function detail(row, at) {
+    const source = meetingSourceFor(row.id)
+    return projected({ ...view(row), ...(source ? { source_meeting: {...source} } : {}) }, row.schedule_active_at, at)
+  }
+  function meetingReference(value) {
+    const { meeting_id, revision, action_index } = value ?? {}
+    if (typeof meeting_id !== 'string' || !HEX32.test(meeting_id) || !Number.isSafeInteger(revision) || revision < 1
+      || !Number.isInteger(action_index) || action_index < 0 || action_index >= 50) {
+      refuse(400, 'invalid', '请选择已保存的行动项。')
+    }
+    return { meeting_id, revision, action_index }
+  }
+  function existingFollowup(workspaceId, { meeting_id, revision, action_index }) {
+    const row = one(`SELECT ot_automations.* FROM ot_automation_meeting_sources source
+      JOIN ot_automations ON ot_automations.id=source.automation_id AND ot_automations.workspace_id=source.workspace_id
+      WHERE source.workspace_id=? AND source.meeting_id=? AND source.revision=? AND source.action_index=?`,
+    workspaceId, meeting_id, revision, action_index)
+    return row ? detail(row) : null
+  }
   const loadRun = (row, runId) => {
     const item = typeof runId === 'string' && HEX32.test(runId)
       ? one('SELECT * FROM ot_automation_runs WHERE id=? AND automation_id=?', runId, row.id) : undefined
@@ -173,18 +262,21 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   function finish(runId, status, error, patch) {
     const row = one('SELECT * FROM ot_automation_runs WHERE id=?', runId)
-    if (!row || row.status !== 'queued') return row // cancelled meanwhile: keep the cancel
+    if (!row || row.status !== 'queued' || row.claimed_at === null) return row
     let dispatch = {}
     try { dispatch = JSON.parse(row.dispatch) || {} } catch { dispatch = {} }
     Object.assign(dispatch, patch)
-    run('UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=? WHERE id=?', clock(), status, error, JSON.stringify(dispatch), runId)
+    run(`UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=?
+      WHERE id=? AND status='queued' AND claimed_at IS NOT NULL`, clock(), status, error, JSON.stringify(dispatch), runId)
     return one('SELECT * FROM ot_automation_runs WHERE id=?', runId)
   }
 
-  // Execute one queued run as a DS-Bot turn. Never throws.
+  // Claim before publishing a receipt; run the model outside the dispatch call.
   function execute(runId) {
     if (inflight.has(runId)) return inflight.get(runId)
-    const job = (async () => {
+    const claimed = run("UPDATE ot_automation_runs SET claimed_at=? WHERE id=? AND status='queued' AND claimed_at IS NULL", clock(), runId)
+    if (!claimed.changes) return
+    const job = Promise.resolve().then(async () => {
       const item = one('SELECT r.*, a.title, a.prompt FROM ot_automation_runs r JOIN ot_automations a ON a.id=r.automation_id WHERE r.id=?', runId)
       if (!item || item.status !== 'queued') return
       try {
@@ -201,23 +293,29 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
           ds_bot: { engine: 'ds-bot', session_id: reply.session_id ?? null, turn_id: reply.turn_id ?? null, bot_id: reply.bot_id ?? null, model_calls: reply.model_calls ?? null },
         })
       } catch (error) {
-        const code = /runtime-unavailable$/.test(String(error?.code)) ? 'runtime_unavailable'
+        const code = error?.code === 'agents/model-unconfigured' ? 'model_unconfigured'
+          : /runtime-unavailable$/.test(String(error?.code)) ? 'runtime_unavailable'
           : /timed out/i.test(String(error?.message)) ? 'timeout' : 'runtime_failed'
-        finish(runId, 'failed', code, { result: { error: code === 'timeout' ? 'DS-Bot turn timed out' : 'DS-Bot turn failed; no automatic retry' } })
+        const message = code === 'model_unconfigured' ? '这个运行时缺少模型 API 配置。'
+          : code === 'timeout' ? 'DS-Bot turn timed out' : 'DS-Bot turn failed; no automatic retry'
+        finish(runId, 'failed', code, { result: { error: message } })
         log(`openteamily-web: automation run ${runId} failed (${code})`)
       }
-    })().finally(() => inflight.delete(runId))
+    }).finally(() => inflight.delete(runId))
     inflight.set(runId, job)
     return job
   }
 
   function insertRun(row, due, attemptOf = null) {
-    const count = one('SELECT COUNT(*) AS n FROM ot_automation_runs WHERE automation_id=?', row.id).n
-    if (count >= MAX_RUNS) return null
     const id = newId()
-    run('INSERT INTO ot_automation_runs VALUES(?,?,?,?,?,?,?,?,?,?)', id, row.id, row.workspace_id, due, clock(), null, 'queued', null, JSON.stringify({ backend: 'ds-bot' }), attemptOf)
+    run(`INSERT INTO ot_automation_runs
+      (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`, id, row.id, row.workspace_id, due, clock(), null, 'queued', null, JSON.stringify({ backend: 'ds-bot' }), attemptOf)
     return id
   }
+
+  const hasActiveRun = (id) => Boolean(one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", id))
+  const nextAdHocSlot = (id) => (one('SELECT MIN(due_at) AS slot FROM ot_automation_runs WHERE automation_id=? AND due_at<0', id).slot ?? 0) - 1
 
   // Evaluate every enabled automation (optionally one workspace) and fire due slots.
   function tick(workspaceId = null) {
@@ -227,9 +325,12 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       : all('SELECT * FROM ot_automations WHERE enabled=1 ORDER BY id')
     const fired = []
     for (const row of rows) {
-      const due = dueAt(JSON.parse(row.schedule), now)
+      const due = eligibleSlot(JSON.parse(row.schedule), now, row.schedule_active_at)
       if (due === null) continue
-      const id = tx(db, () => (one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due) ? null : insertRun(row, due)))
+      const id = tx(db, () => {
+        if (hasActiveRun(row.id) || one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due)) return null
+        return insertRun(row, due)
+      })
       if (!id) continue
       void execute(id)
       fired.push(runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)))
@@ -238,8 +339,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   function start() {
-    // Runs left queued by a previous process never got their DS-Bot turn: run them now.
-    for (const { id } of all("SELECT id FROM ot_automation_runs WHERE status='queued' ORDER BY id")) void execute(id)
+    if (timer) return
+    for (const { id } of all("SELECT id FROM ot_automation_runs WHERE status='queued' AND claimed_at IS NULL ORDER BY started,id")) void execute(id)
     try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
     timer = setInterval(() => {
       try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
@@ -248,7 +349,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
   function stop() { if (timer) clearInterval(timer); timer = null }
 
-  function createInTransaction(payload) {
+  function createInTransaction(payload, source) {
     const workspaceId = workspaceOf(payload)
     const { title, template_id: templateId, schedule, participants: names } = payload
     const intent = payload.intent ?? ''
@@ -260,6 +361,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
     if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
+    if (payload.run_sample !== undefined && (typeof payload.run_sample !== 'boolean' ||
+      (payload.run_sample && (source || !RECURRING.has(schedule.kind))))) {
+      refuse(400, 'invalid_sample', '请先选定重复运行时间，然后试运行。')
+    }
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const sched = normalizeSchedule(schedule)
@@ -271,13 +376,17 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
     const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
-      ...(payload.enabled === undefined ? {} : { enabled }) }))
+      ...(payload.enabled === undefined ? {} : { enabled }), ...(source ? { source_meeting: meetingReference(source) } : {}),
+      ...(payload.run_sample ? { run_sample: true } : {}) }))
     const keyHash = sha(key)
+    const sampleKey = 'automation-sample:' + key
     const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (existing) {
-      const replay = existing.template_id === REMINDER && templateId === REMINDER
+      const sample = submittedRun(existing.id, sampleKey)
+      const replay = !source && !sample && !payload.run_sample && !meetingSourceFor(existing.id) &&
+        existing.template_id === REMINDER && templateId === REMINDER
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, automation: view(existing) }
+      return { status: 200, automation: detail(existing), ...(sample ? { sample_run: runView(sample) } : {}) }
     }
     if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
       refuse(409, 'conflict', 'An automation with this title already exists')
@@ -285,11 +394,53 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (one('SELECT COUNT(*) AS n FROM ot_automations WHERE workspace_id=?', workspaceId).n >= MAX_AUTOMATIONS) refuse(429, 'quota', 'Automation capacity reached')
     const id = newId()
     const now = clock()
-    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
+    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled, schedule_active_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)',
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
-      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
-    return { status: 201, automation: view(one('SELECT * FROM ot_automations WHERE id=?', id)) }
+      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0, enabled ? now : null)
+    if (source) {
+      run(`INSERT INTO ot_automation_meeting_sources (automation_id, workspace_id, meeting_id, revision, action_index, title, text, owner)
+        VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, source.meeting_id, source.revision, source.action_index,
+      source.title, source.text, source.owner)
+    }
+    const row = one('SELECT * FROM ot_automations WHERE id=?', id)
+    if (!payload.run_sample) return { status: 201, automation: detail(row, now) }
+    const sampleId = insertRun(row, nextAdHocSlot(id))
+    run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', id, sha(sampleKey), sampleId)
+    return { status: 201, automation: detail(row, now), sample_run: runView(loadRun(row, sampleId)) }
+  }
+
+  function create(payload) {
+    if (payload && Object.hasOwn(payload, 'source_meeting')) {
+      if (payload.run_sample !== undefined && payload.run_sample !== false) {
+        refuse(400, 'invalid_sample', '会议跟进需要先保存，再手动运行。')
+      }
+      return createMeetingFollowup(payload)
+    }
+    const result = tx(db, () => createInTransaction(payload))
+    if (result.sample_run) void execute(result.sample_run.id)
+    return result
+  }
+
+  async function createMeetingFollowup(payload) {
+    const workspaceId = workspaceOf(payload)
+    const ref = meetingReference(payload.source_meeting)
+    if (!IDEM.test(String(payload.idempotency_key ?? ''))) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const prior = existingFollowup(workspaceId, ref)
+    if (prior) return {status: 200, automation: prior}
+    const result = await readMeetingAction?.(workspaceId, ref)
+    return tx(db, () => {
+      const existing = existingFollowup(workspaceId, ref)
+      if (existing) return {status: 200, automation: existing}
+      const {meeting, action} = result?.body ?? {}
+      if ([403, 404, 409].includes(result?.status)) refuse(result.status, 'meeting_source_unavailable', '行动项已更新、已完成或不可访问。请返回会议重新选择。')
+      if (result?.status !== 200 || meeting?.id !== ref.meeting_id || meeting.workspace_id !== workspaceId || meeting.revision !== ref.revision
+        || typeof meeting.title !== 'string' || !meeting.title.trim() || action?.done !== false || typeof action.text !== 'string' || !action.text.trim()) {
+        refuse(503, 'meeting_source_unavailable', '暂时无法读取会议行动项，请重试。')
+      }
+      const source = { ...ref, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : '' }
+      return createInTransaction({ ...payload, enabled: false }, source)
+    })
   }
 
   function createOnboarding(payload) {
@@ -303,17 +454,20 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       const created = [], skipped = []
       for (const id of ids) {
         const title = TEMPLATES[id].title
-        if (one('SELECT 1 FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(title.toLowerCase()))) {
-          skipped.push({ template_id: id, title })
+        const key = 'onboarding-template-' + id
+        const existing = one('SELECT id, title, template_id FROM ot_automations WHERE workspace_id=? AND key_hash=?',
+          workspaceId, sha(key)) ?? one('SELECT id, title, template_id FROM ot_automations WHERE workspace_id=? AND title_hash=?',
+          workspaceId, sha(title.toLowerCase()))
+        if (existing) {
+          skipped.push(existing.template_id === id ? { id: existing.id, template_id: id, title: existing.title } : { template_id: id, title })
           continue
         }
         const result = createInTransaction({
           workspace_id: workspaceId, title, template_id: id,
           schedule: { kind: 'daily', time: '09:00', time_zone: 'Asia/Shanghai' },
-          participants: [payload.username], scope: 'ongoing', idempotency_key: 'onboarding-template-' + id,
+          participants: [payload.username], scope: 'ongoing', enabled: false, idempotency_key: key,
         })
-        if (result.status === 201) created.push({ id: result.automation.id, template_id: id, title })
-        else skipped.push({ template_id: id, title })
+        created.push({ id: result.automation.id, template_id: id, title })
       }
       return { status: created.length ? 201 : 200, created, skipped }
     })
@@ -348,11 +502,16 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         const clash = one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=? AND id<>?', workspaceId, sha(next.title.toLowerCase()), row.id)
         if (clash) refuse(409, 'conflict', 'An automation with this title already exists')
       }
-      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=? WHERE id=?',
-        next.title, sha(next.title.toLowerCase()), next.prompt, JSON.stringify(next.schedule),
+      const now = clock()
+      const schedule = JSON.stringify(next.schedule)
+      // Establish eligibility only when the rule changes or resumes. A prompt
+      // edit and a DS-Bot restart must leave an eligible overdue slot intact.
+      const activeAt = next.enabled && (!current.enabled || schedule !== row.schedule) ? now : row.schedule_active_at
+      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=?, schedule_active_at=? WHERE id=?',
+        next.title, sha(next.title.toLowerCase()), next.prompt, schedule,
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
-        JSON.stringify(next.agents), compiled ? 1 : 0, clock(), row.id)
-      return { automation: view(one('SELECT * FROM ot_automations WHERE id=?', row.id)) }
+        JSON.stringify(next.agents), compiled ? 1 : 0, now, activeAt, row.id)
+      return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id), now) }
     })
   }
 
@@ -364,13 +523,19 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (category && !['work', 'life', 'custom', 'mine'].includes(category)) refuse(400, 'invalid', 'Invalid automation request')
     const me = String(payload.username ?? '').toLowerCase()
     const items = []
-    for (const row of all('SELECT * FROM ot_automations WHERE workspace_id=? ORDER BY id', workspaceId)) {
+    const at = clock()
+    for (const row of all(`SELECT automation.*, source.meeting_id, source.revision AS source_revision,
+      source.action_index, source.title AS source_title, source.text AS source_text, source.owner AS source_owner
+      FROM ot_automations automation LEFT JOIN ot_automation_meeting_sources source ON source.automation_id=automation.id
+      WHERE automation.workspace_id=? ORDER BY automation.id`, workspaceId)) {
       const item = view(row)
       if (needle && !item.title.toLowerCase().includes(needle) && !item.prompt.toLowerCase().includes(needle)) continue
       const template = TEMPLATES[item.template_id] ?? TEMPLATES.custom
       if (category === 'mine') { if (!item.participants.some((p) => p.username.toLowerCase() === me)) continue }
       else if (category && template.category !== category) continue
-      items.push(item)
+      if (row.meeting_id) item.source_meeting = {meeting_id:row.meeting_id, revision:row.source_revision, action_index:row.action_index,
+        title:row.source_title, text:row.source_text, owner:row.source_owner}
+      items.push(projected(item, row.schedule_active_at, at))
     }
     return { items }
   }
@@ -382,14 +547,100 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const cursor = payload.cursor ?? ''
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
-    if (status && !['queued', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const after = cursor && loadRun(row, cursor)
+    if (status && !['queued', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
+    const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND id=?', row.id, cursor)
+    if (cursor && !after) refuse(404, 'not_found', 'Automation run not found')
     const params = [row.id]
     let filter = 'automation_id=?'
-    if (status) { filter += ' AND status=?'; params.push(status) }
+    if (status) {
+      filter += ' AND status=?'
+      params.push(status === 'running' ? 'queued' : status)
+      if (status === 'queued') filter += ' AND claimed_at IS NULL'
+      if (status === 'running') filter += ' AND claimed_at IS NOT NULL'
+    }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
-    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null }
+    const pending = activeRun(row.id)
+    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null,
+      has_pending: Boolean(pending), active_run: pending, schedule_status: scheduleStatus(view(row), row.schedule_active_at), schedule_revision: row.revision }
+  }
+
+  async function saveRun(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const saved = runView(loadRun(row, payload.run_id))
+    if (saved.status !== 'succeeded' || typeof saved.result?.text !== 'string' || !saved.result.text.trim()) {
+      refuse(409, 'result_unavailable', '这次运行没有可保存的结果。')
+    }
+    return saveArtifact({
+      workspace_id: row.workspace_id, automation_id: row.id, automation_title: row.title,
+      run_id: saved.id, body: saved.result.text,
+    })
+  }
+
+  async function studioCopy(payload, publish = false) {
+    const row = load(workspaceOf(payload), payload.id)
+    const saved = runView(loadRun(row, payload.run_id))
+    if (saved.status !== 'succeeded' || typeof saved.result?.text !== 'string' || !saved.result.text.trim()) {
+      refuse(409, 'result_unavailable', '这次运行没有可共享的文字结果。')
+    }
+    const prior = one('SELECT title, document_id FROM ot_automation_studio_runs WHERE run_id=?', saved.id)
+    const path = `/v1/workspaces/${row.workspace_id}/studio/documents`
+    const title = prior?.title ?? `${row.title} · 自动化结果 ${saved.id.slice(0, 8)}`
+    const body = saved.result.text
+    const key = sha(JSON.stringify([saved.id, title, body, prior?.document_id ?? null]))
+
+    const studio = async (method, target, data) => {
+      const result = await studioRequest?.({method, path: target, ...(data ? {body: data} : {})})
+      if (!result) refuse(503, 'unavailable', '团队协作暂时不可用。')
+      return result
+    }
+    const rejected = ({status, body: response}) => {
+      if ([401, 403, 404].includes(status)) refuse(403, 'forbidden', '当前账号无法访问该团队的协作文档。')
+      if (response?.error?.code === 'document_limit') refuse(409, 'document_limit', '团队文档已达到上限。')
+      refuse(503, 'unavailable', '暂时无法确认共享，请重试。')
+    }
+    if (prior?.document_id) {
+      const existing = await studio('GET', `${path}/${prior.document_id}`)
+      if (existing.status === 200) return {document_id: prior.document_id}
+      if (existing.status !== 404) rejected(existing)
+    }
+    if (publish && payload.review !== key) refuse(409, 'review_changed', '共享内容已变化，请重新查看。')
+    if (!publish) {
+      const access = await studio('GET', path)
+      if (access.status !== 200) rejected(access)
+      return {title, body, review: key}
+    }
+
+    // Pin the title before sending so a lost reply and a concurrent rename do
+    // not turn another confirmation of the same run into a different document.
+    run('INSERT OR IGNORE INTO ot_automation_studio_runs (run_id,title) VALUES(?,?)', saved.id, title)
+    const pinned = one('SELECT title, document_id FROM ot_automation_studio_runs WHERE run_id=?', saved.id)
+    if (pinned.title !== title || pinned.document_id !== (prior?.document_id ?? null)) {
+      refuse(409, 'review_changed', '共享状态已变化，请重新查看。')
+    }
+    const result = await studio('POST', path, {title, body, client_key: key})
+    const id = result.body?.document?.id
+    if (![200, 201].includes(result.status) || !HEX32.test(id || '')) rejected(result)
+    run('UPDATE ot_automation_studio_runs SET document_id=? WHERE run_id=? AND document_id IS ?', id, saved.id, pinned.document_id)
+    return {document_id: id}
+  }
+
+  function submittedRun(automationId, key, source) {
+    if (source) {
+      return one(`SELECT r.* FROM ot_automation_retries t JOIN ot_automation_runs r ON r.id=t.new_run_id
+        WHERE t.run_id=? AND t.key_hash=? AND r.automation_id=?`, source, sha('automation-retry:' + key), automationId)
+    }
+    return one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
+      WHERE m.automation_id=? AND m.key_hash=?`, automationId, sha(key))
+  }
+
+  function receipt(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const key = String(payload.idempotency_key ?? '')
+    if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const source = payload.run_id === undefined ? undefined : loadRun(row, payload.run_id).id
+    const found = submittedRun(row.id, key, source)
+    return { run: found ? runView(found) : null }
   }
 
   function runNow(payload) {
@@ -398,28 +649,26 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const keyHash = sha(key)
     const outcome = tx(db, () => {
-      const prior = one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
-        WHERE m.automation_id=? AND m.key_hash=?`, row.id, keyHash)
+      const prior = submittedRun(row.id, key)
       if (prior) return { status: 200, run: runView(prior) }
-      if (one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id)) {
-        refuse(409, 'already_running', '这条自动化正在运行。')
-      }
+      if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       // Keep manual runs and scheduled slots distinct.
-      const slot = Math.min(0, one('SELECT MIN(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0) - 1
-      const id = insertRun(row, slot)
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      const id = insertRun(row, nextAdHocSlot(row.id))
       run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', row.id, keyHash, id)
-      return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)) }
+      return { status: 202, id }
     })
-    if (outcome.status === 202) void execute(outcome.run.id)
-    return outcome
+    if (outcome.run) return outcome
+    void execute(outcome.id)
+    return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)) }
   }
 
   function cancel(payload) {
     const row = load(workspaceOf(payload), payload.id)
     const item = loadRun(row, payload.run_id)
-    if (item.status !== 'queued') refuse(409, 'conflict', 'Automation run cannot be cancelled')
-    run('UPDATE ot_automation_runs SET finished=?, status=?, error_code=?, dispatch=? WHERE id=?', clock(), 'failed', 'cancelled', JSON.stringify({ backend: 'ds-bot', result: { cancelled: true } }), item.id)
+    const dispatch = JSON.stringify({ backend: 'ds-bot', result: { cancelled: true } })
+    const cancelled = run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='cancelled', dispatch=?
+      WHERE id=? AND status='queued' AND claimed_at IS NULL`, clock(), dispatch, item.id)
+    if (!cancelled.changes) refuse(409, 'conflict', '只有尚未启动的运行可以取消。')
     return { run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', item.id)) }
   }
 
@@ -430,16 +679,11 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const item = loadRun(row, payload.run_id)
     const keyHash = sha('automation-retry:' + key)
     const outcome = tx(db, () => {
-      const prior = one('SELECT * FROM ot_automation_retries WHERE run_id=? AND key_hash=?', item.id, keyHash)
-      if (prior) {
-        const again = one('SELECT * FROM ot_automation_runs WHERE id=?', prior.new_run_id)
-        if (again) return { status: 200, run: runView(again) }
-      }
+      const prior = submittedRun(row.id, key, item.id)
+      if (prior) return { status: 200, run: runView(prior) }
       if (item.status !== 'failed') refuse(409, 'conflict', 'Only a failed run can be retried')
-      // A retry is its own slot: one second after the latest slot of this automation.
-      const latest = one('SELECT MAX(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0
-      const id = insertRun(row, Math.max(latest + 1, clock()), item.id)
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
+      const id = insertRun(row, nextAdHocSlot(row.id), item.id)
       run('INSERT INTO ot_automation_retries VALUES(?,?,?,?)', item.id, keyHash, id, clock())
       return { status: 201, id }
     })
@@ -469,7 +713,9 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
           JSON.stringify(validAgents(r.agents ?? []) ? (r.agents ?? []) : []), r.compiled ? 1 : 0, 'management')
         // The last legacy slot counts as already run, so a migrated schedule never fires twice.
         const due = dueAt(normalizeSchedule(r.schedule), clock())
-        if (due !== null) run('INSERT OR IGNORE INTO ot_automation_runs VALUES(?,?,?,?,?,?,?,?,?,?)', newId(), r.id, r.workspace_id, due, clock(), clock(), 'skipped', 'migrated', JSON.stringify({ backend: 'ds-bot' }), null)
+        if (due !== null) run(`INSERT OR IGNORE INTO ot_automation_runs
+          (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
+          VALUES(?,?,?,?,?,?,?,?,?,?)`, newId(), r.id, r.workspace_id, due, clock(), clock(), 'skipped', 'migrated', JSON.stringify({ backend: 'legacy' }), null)
         imported += 1
       }
     })
@@ -479,8 +725,9 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const endpoints = {
     'automations/templates': () => ({ items: Object.values(TEMPLATES).map((t) => ({ ...t })) }),
     'automations/list': list,
-    'automations/get': (p) => ({ automation: view(load(workspaceOf(p), p?.id)) }),
-    'automations/create': (p) => tx(db, () => createInTransaction(p)),
+    'automations/get': (p) => ({ automation: detail(load(workspaceOf(p), p?.id)) }),
+    'automations/meetingFollowup': (p) => ({ automation: existingFollowup(workspaceOf(p), meetingReference(p)) }),
+    'automations/create': create,
     'automations/createOnboarding': createOnboarding,
     'automations/update': update,
     'automations/remove': (p) => {
@@ -489,7 +736,11 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { removed: view(row) }
     },
     'automations/runs': runs,
+    'automations/saveRun': saveRun,
+    'automations/studioPreview': studioCopy,
+    'automations/studioPublish': (p) => studioCopy(p, true),
     'automations/runNow': runNow,
+    'automations/receipt': receipt,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
     'automations/cancel': cancel,
     'automations/retry': retry,
@@ -511,7 +762,12 @@ export default async function automations(host) {
   const { openDatabase } = await import('../../src/store.js')
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
-    personalBinding: () => host.call('agents/personal-binding', {}) })
+    personalBinding: () => host.call('agents/personal-binding', {}),
+    saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
+    studioRequest: payload => host.call('studio/v1', payload),
+    readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
+      method: 'GET', path: `/v1/workspaces/${workspace}/meetings/${meeting_id}/action?index=${action_index}&revision=${revision}`,
+    }) })
   const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.

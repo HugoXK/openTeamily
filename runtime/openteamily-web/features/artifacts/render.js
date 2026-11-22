@@ -1,5 +1,6 @@
 // Rendering and export of artifacts (legacy artifacts.py render_*,
 // sanitize_html, export_*): HTML/SVG generated inside the user's DS-Bot.
+import { GLB_MIME, validGlb } from '../../lib/glb.js'
 import { BODY_MAX, SAFE_FILENAME, emptyBoard, emptyDashboard, emptySlides, publicKind, unescapeHtml } from './model.js'
 import {decodeWorkbook,emptyWorkbook} from './workbook.js'
 import { decodeBoard, decodeDashboard, decodeSlides } from './structured.js'
@@ -219,11 +220,14 @@ export function cleanFilename(name) {
   return SAFE_FILENAME.test(name) ? name : 'file'
 }
 
+export function savedMediaFilename(name) {
+  const value = typeof name === 'string' ? name.trim().toWellFormed() : ''
+  if (!value || value.length > 80 || value.startsWith('.') || value.includes('..') || /[\x00-\x1f\x7f<>:"/\\|?*]/.test(value)) return 'file'
+  return value
+}
+
 export function exportFilename(title, kind, revision = null, mediaFilename = null) {
-  if (kind === 'media') {
-    const name = cleanFilename(mediaFilename || '')
-    return name !== 'file' || !mediaFilename ? name : 'file'
-  }
+  if (kind === 'media') return savedMediaFilename(mediaFilename)
   const suffix = { document: '.txt', website: '.html', whiteboard: '.svg', slides: '.html', dashboard: '.html' }[kind] ?? '.txt'
   const base = kind + (revision ? `-${revision}` : '') + suffix
   return SAFE_FILENAME.test(base) ? base : 'artifact' + suffix
@@ -250,6 +254,7 @@ export function sniffMime(data) {
   if (at(0, 'RIFF') && at(8, 'WEBP')) return 'image/webp'
   // MPEG Layer III frame sync, excluding the reserved MPEG version.
   if (at(0, 'ID3') || (data[0] === 0xff && (data[1] & 0xe6) === 0xe2 && (data[1] & 0x18) !== 0x08)) return 'audio/mpeg'
+  if (at(0, 'glTF') && validGlb(data)) return GLB_MIME
   if (at(0, 'OggS')) return 'audio/ogg'
   if (at(0, 'RIFF') && at(8, 'WAVE')) return 'audio/wav'
   if (at(4, 'ftyp') && ['isom', 'iso2', 'mp41', 'mp42', 'M4A ', 'avc1'].some((brand) => at(8, brand))) return 'video/mp4'

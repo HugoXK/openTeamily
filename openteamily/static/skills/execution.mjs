@@ -1,8 +1,9 @@
 // Original persisted skill execution UI. Provider calls happen only in the authenticated runtime.
 export const readinessLabels = {
-  ready:'运行时声明支持技能加载，模型已配置。仍需实际任务成功及摘要回执才算本次验证通过。',
-  runtime_offline:'没有自己的在线运行时。请连接或重启 FlyBot；不会改用其他人的运行时。',
-  runtime_upgrade_required:'当前在线运行时未声明支持技能格式。下载当前 FlyBot，停止旧进程，用原 key-file 重启后刷新。',
+  ready:'你的 DS-Bot 已就绪，可以试用已安装的技能。',
+  no_model:'当前范围尚未配置可用模型，请检查模型设置。',
+  runtime_offline:'你的 DS-Bot 暂未就绪，请稍后刷新。',
+  runtime_upgrade_required:'当前 DS-Bot 版本不支持此技能，请联系管理员更新。',
   model_missing:'当前范围尚未配置可用模型。请先保存模型配置；不会伪造结果。',
   provider_unsupported:'当前模型不是此运行时支持的 OpenAI-compatible 接口。请调整配置。',
   delegated_runtime:'该智能体绑定了别人的运行时，个人技能不能传给它。请由管理员调整绑定或选择自己的范围。',
@@ -37,14 +38,14 @@ export function mountSkillExecution(document,{request,scope,keyFactory=()=>globa
       const identity=document.createElement('small');identity.textContent='任务 '+task.id+' · '+new Date(task.created*1000).toLocaleString()+' · '+(record.skills||[]).map(i=>i.id+'@'+i.version).join(', ');li.append(identity);
       if(['queued','claimed'].includes(task.status)){
         const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消此任务';
-        cancel.addEventListener('click',async()=>{cancel.disabled=true;try{await request('POST','/v1/runtime/tasks/'+task.id+'/cancel',{});await refresh()}catch(e){showError(e)}finally{cancel.disabled=false}});li.append(cancel);
+        cancel.addEventListener('click',async()=>{cancel.disabled=true;try{await request('POST','/v1/skills/runs/'+task.id+'/cancel',{});await refresh()}catch(e){showError(e)}finally{cancel.disabled=false}});li.append(cancel);
       }
       if(record.verified){
         const save=document.createElement('button');save.type='button';save.textContent='保存结果为工作区文档';
         save.addEventListener('click',async()=>{save.disabled=true;try{
           const workspace=get('skill-result-workspace').value;
           if(!workspace)throw new Error('请先选择可访问的工作区；保存后成员可见。');
-          const data=await request('POST','/v1/runtime/tasks/'+task.id+'/artifact',{workspace_id:workspace});
+          const data=await request('POST','/v1/skills/runs/'+task.id+'/artifact',{workspace_id:workspace});
           const link=document.createElement('a');link.href='/space?workspace='+workspace+'&artifact='+data.artifact.id;link.textContent='打开已保存文档';li.append(link);
         }catch(e){showError(e)}finally{save.disabled=false}});li.append(save);
       }
