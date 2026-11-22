@@ -230,7 +230,7 @@ test('selected history combines explicit context and remains separate from autom
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
 
-test('group drafts recheck the full batch on save and hide when group access is lost', async () => {
+test('group draft review and save both verify the exact source batch', async () => {
   const {default: memoryFeature} = await import('../features/memory/index.js')
   const {mkdtempSync, rmSync} = await import('node:fs')
   const {tmpdir} = await import('node:os')
@@ -242,14 +242,14 @@ test('group drafts recheck the full batch on save and hide when group access is 
     {id:'otm_context',revision:1,title:'发布群',author:'甲',text:'我们在讨论荔枝项目。'},
     {id:'otm_decision',revision:1,title:'发布群',author:'乙',text:'确定周五发布。'},
   ]
-  let accessible = true
+  let sourceError
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
       if (name === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(name,'messenger/captureSources')
       assert.equal(payload.workspace_id,WS)
       assert.equal(payload.conversation_id,scope.conversation_id)
-      if (!accessible) throw new Error('Group inaccessible')
+      if (sourceError) throw sourceError
       return {items:input.filter(item => payload.message_ids.includes(item.id))}
     },
     currentRuntime:()=>({async backgroundTextOnly(prompt) {
@@ -275,17 +275,34 @@ test('group drafts recheck the full batch on save and hide when group access is 
     assert.equal(draft.source.kind,'group')
     assert.equal(draft.source.message_id,input[1].id)
     assert.equal(draft.source.conversation_id,scope.conversation_id)
-    accessible = false
-    assert.equal((await v1('GET')).body.items.length,0)
     const save = () => v1('POST','/'+draft.id,{action:'save',title:draft.title,body:draft.body})
-    assert.equal((await save()).status,409)
-    accessible = true
+    sourceError = new Error('Source service offline')
+    const pending = (await v1('GET')).body
+    assert.deepEqual(pending.items,[])
+    assert.equal(pending.source_check_pending,true)
+    assert.equal(pending.invalidated,undefined)
+    assert.equal((await save()).body.error.code,'conflict')
+    sourceError = Object.assign(new Error('Group inaccessible'),{status:404})
+    const inaccessible = (await v1('GET')).body
+    assert.deepEqual(inaccessible.items,[])
+    assert.deepEqual(inaccessible.invalidated,[draft.id])
+    assert.doesNotMatch(JSON.stringify(inaccessible),/发布群|荔枝|周五|otm_decision/)
+    assert.equal((await save()).body.error.code,'source_changed')
+    sourceError = null
     input[0].revision = 2
-    assert.equal((await save()).status,409, 'a supporting source changed')
+    const changed = (await v1('GET')).body
+    assert.deepEqual(changed.items,[])
+    assert.deepEqual(changed.invalidated,[draft.id])
+    assert.equal((await save()).body.error.code,'source_changed', 'a supporting source changed')
+    assert.equal(memory.store.get('SELECT state FROM memory_capture_items WHERE id=?',draft.id).state,'ready')
+    assert.equal(memory.store.get('SELECT COUNT(*) AS count FROM memory_pages').count,0)
     input[0].revision = 1
     const done = await save()
     assert.equal(done.status,201)
     assert.equal(done.body.page.source.message_id,input[1].id)
+    sourceError = Object.assign(new Error('Group inaccessible'),{status:404})
+    assert.deepEqual((await v1('GET')).body.items,[])
+    assert.equal((await memory.endpoints.v1({method:'GET',path:base('/'+done.body.page.id)})).body.page.id,done.body.page.id)
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
 

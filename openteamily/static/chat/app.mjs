@@ -2,7 +2,6 @@ import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
-import { mountGroupInviteLink } from './group-invite-link.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
@@ -14,6 +13,7 @@ import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs'
 import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -5403,8 +5403,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const inviteMatches = (target) => target && target.owner === currentUser?.id && target.workspace === workspaceId() &&
     currentSource === 'social' && currentConversation?.id === target.conversation;
-  const showGroupInviteLink = mountGroupInviteLink(document, request, target =>
-    groupInvite.open && inviteTarget === target && inviteMatches(target));
+  const groupInviteLinkPanel = document.getElementById('group-invite-link-panel');
+  const groupInviteLinkStatus = document.getElementById('group-invite-link-status');
+  const groupInviteLinkCreate = document.getElementById('group-invite-link-create');
+  let showGroupInviteLink;
+  const currentInvite = target => groupInvite.open && inviteTarget === target && inviteMatches(target);
+
+  async function prepareGroupInviteLink(target, conversation) {
+    if (!currentInvite(target) || !conversation.group_management?.can_rename) return;
+    if (showGroupInviteLink) return showGroupInviteLink(target, conversation);
+    groupInviteLinkPanel.hidden = false;
+    groupInviteLinkCreate.disabled = true;
+    groupInviteLinkCreate.textContent = uiLabel('正在加载…', 'Loading…');
+    groupInviteLinkStatus.textContent = '';
+    try {
+      const {mountGroupInviteLink} = await loadGroupInviteModule();
+      if (!currentInvite(target)) return;
+      showGroupInviteLink ||= mountGroupInviteLink(document, request, currentInvite);
+      showGroupInviteLink(target, conversation);
+    } catch {
+      if (!currentInvite(target)) return;
+      groupInviteLinkCreate.disabled = false;
+      groupInviteLinkCreate.textContent = uiLabel('重试', 'Retry');
+      groupInviteLinkStatus.textContent = uiLabel('邀请链接暂时无法加载。', 'Could not load invitation links.');
+    }
+  }
+
+  groupInviteLinkCreate.addEventListener('click', () => {
+    if (!showGroupInviteLink && inviteTarget) void prepareGroupInviteLink(inviteTarget, currentConversation);
+  });
   const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
 
   function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
@@ -5444,7 +5471,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
     groupInvite.showModal();
     groupInviteQuery.focus();
-    showGroupInviteLink(target, conversation);
+    void prepareGroupInviteLink(target, conversation);
     const result = await request('GET', personal ? '/v1/contacts' : `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
     if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
     if (result.status !== 200) {
@@ -5472,7 +5499,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   groupInvite.addEventListener('close', () => {
     if (groupInvite.open) return;
     inviteTarget = null;
-    showGroupInviteLink(null);
+    showGroupInviteLink?.(null);
+    groupInviteLinkPanel.hidden = true;
   });
   groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
   groupInviteQuery.addEventListener('input', syncGroupInvite);

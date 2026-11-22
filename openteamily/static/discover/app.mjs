@@ -765,6 +765,37 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     button.title = slug ? String(neighbor.title || '') : '';
   }
 
+  function syncGuestWorkNavigation(entry = activeWork) {
+    if (!entry?.ready || entry.viewer !== null) return;
+    const works = feedViewer === null && feedState.tab === 'activity' ? feedState.items : [];
+    const index = works.findIndex(item => item.slug === entry.slug);
+    setAdjacent(entry, 'previous', index > 0 ? works[index - 1] : null);
+    setAdjacent(entry, 'next', index >= 0 ? works[index + 1] : null);
+    entry.canPageNext = index >= 0 && index === works.length - 1 && Boolean(feedState.cursor);
+    detail.next.disabled = Boolean(entry.loadingNext || (!entry.next && (!entry.canPageNext || feedState.loading || feedRestore)));
+    detail.next.setAttribute('aria-busy', String(Boolean(entry.loadingNext)));
+  }
+
+  function openAdjacentWork(entry, slug) {
+    const item = entry.viewer === null ? feedState.items.find(work => work.slug === slug) : null;
+    return openWorkDetail({slug}, {item, navigate: true});
+  }
+
+  async function loadNextGuestWork(entry) {
+    if (!entry.canPageNext || feedState.loading || feedRestore || entry.loadingNext) return;
+    entry.loadingNext = true;
+    syncGuestWorkNavigation(entry);
+    detail.status.textContent = '正在加载下一件作品…';
+    const loaded = await loadFeed({append: true});
+    if (!activeWorkEntry(entry)) return;
+    entry.loadingNext = false;
+    syncGuestWorkNavigation(entry);
+    if (loaded && entry.next) return openAdjacentWork(entry, entry.next);
+    if (!loaded) detail.status.textContent = '未能加载下一件作品，请重试。';
+    else if (entry.canPageNext) detail.status.textContent = '这页没有新的作品，可以继续加载。';
+    else detail.status.textContent = '当前列表没有可继续浏览的作品。';
+  }
+
   function workUrl(intent) {
     return '/discover' + workDetailSearchText(feedState, intent);
   }
@@ -800,6 +831,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.paper.setAttribute('aria-busy', 'true');
     setAdjacent(entry, 'previous');
     setAdjacent(entry, 'next');
+    detail.next.setAttribute('aria-busy', 'false');
     setWorkEngagement(entry);
     detail.title.focus?.({preventScroll: true});
 
@@ -896,8 +928,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.comments.hidden = false;
     detail.comments.textContent = commentsLabel(entry.item.comment_count);
     setWorkEngagement(entry);
-    setAdjacent(entry, 'previous', previous);
-    setAdjacent(entry, 'next', next);
+    if (viewer) {
+      setAdjacent(entry, 'previous', previous);
+      setAdjacent(entry, 'next', next);
+    } else syncGuestWorkNavigation(entry);
     if (entry.intent.comments) return Promise.all([entry.preview, workComments.open(entry.item, detail.comments)]);
     if (entry.intent.share) openWorkShare();
     return entry.preview;
@@ -1101,8 +1135,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   for (const name of ['previous', 'next']) {
     detail[name].addEventListener('click', () => {
-      const slug = activeWork?.[name];
-      if (slug) return openWorkDetail({slug}, {navigate: true});
+      const entry = activeWork;
+      if (!entry?.ready || !activeWorkEntry(entry)) return;
+      if (entry[name] && !detail[name].disabled) return openAdjacentWork(entry, entry[name]);
+      if (name === 'next' && entry.viewer === null && !detail.next.disabled) return loadNextGuestWork(entry);
     });
   }
   detail.retry.addEventListener('click', () => activeWork && openWorkDetail(activeWork.intent));
@@ -1577,6 +1613,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function updateFeedStatus() {
+    syncGuestWorkNavigation();
     const results = document.getElementById('feed-activity-empty');
     results?.setAttribute('aria-busy', String(Boolean(feedRestore || feedState.loading)));
     if (results) results.dataset.initialLoading = String(feedState.loading && !feedState.items.length);

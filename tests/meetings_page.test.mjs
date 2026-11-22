@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
-import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
+import { discussionContext, mountMeetingDiscussion } from '../openteamily/static/meetings/discussion.mjs';
 import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
 import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
 
@@ -15,6 +15,7 @@ test('meeting discussion includes only saved summary and open actions until the 
   assert.doesNotMatch(text,/Private transcript|Private attendee|Closed task/);
   assert.equal(clipped,false);
   assert.match(discussionContext(meeting,true).text,/Private transcript/);
+  assert.doesNotMatch(discussionContext({...meeting,shared:true},true).text,/Private transcript/);
   const transcriptOnly = {...meeting,summary:'',action_items:[]};
   assert.equal(discussionContext(transcriptOnly).text,'');
   assert.match(discussionContext(transcriptOnly,true).text,/Private transcript/);
@@ -64,6 +65,55 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('a received meeting revoked during conversation creation cannot become a chat draft', async () => {
+  const document = meetingDocument();
+  const get = id => document.getElementById(id);
+  const owner = 'a'.repeat(32), source = 'b'.repeat(32), personal = 'c'.repeat(32), agent = 'd'.repeat(32);
+  const meeting = {id:'e'.repeat(32), shared:true, revision:2, title:'Received', summary:'Shared notes', transcript:'Private transcript'};
+  const dialog = get('meeting-discussion-dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  const stored = new Map();
+  document.defaultView = {sessionStorage:{
+    getItem: key => stored.get(key),
+    setItem: (key, value) => { stored.set(key, value); },
+    removeItem: key => { stored.delete(key); },
+  }};
+  const checked = '/v1/workspaces/'+source+'/meetings/shared/'+meeting.id;
+  const created = '/v1/workspaces/'+personal+'/agents/'+agent+'/conversations';
+  const reads = [];
+  let sourceReads = 0;
+  const discussion = mountMeetingDiscussion(document, {
+    context: () => ({owner, workspace:source, meeting, shared:true}),
+    isDirty: () => false,
+    openChat: () => assert.fail('revoked source opened a draft'),
+    key: () => 'meeting-discussion-' + 'a'.repeat(32),
+    async request(method, path, body) {
+      reads.push([method,path]);
+      if (path === '/v1/auth/session') return {status:200,body:{user:{id:owner,username:'reader'}}};
+      if (path === '/v1/personal-agent') return {status:200,body:{personal_agent:{workspace:{id:personal},agent:{id:agent}}}};
+      if (path === checked) {
+        if (++sourceReads === 2) return {status:404,body:{}};
+        return {status:200,body:{meeting,viewer_username:'reader',received:true}};
+      }
+      assert.deepEqual([method,path,body],['POST',created,{title:'会议讨论 · Received',memory_recall:false}]);
+      return {status:201,body:{conversation:{id:'f'.repeat(32),workspace_id:personal,agent_id:agent}}};
+    },
+  });
+  discussion.sync();
+  assert.equal(get('shared-meeting-discussion-entry').hidden,false);
+  await get('shared-meeting-discussion').fire('click');
+  assert.doesNotMatch(get('meeting-discussion-preview').value,/Private transcript/);
+  assert.equal(get('meeting-discussion-transcript-option').hidden,true);
+  assert.deepEqual(reads,[]);
+  await get('meeting-discussion-form').fire('submit');
+  assert.deepEqual(reads.filter(([method])=>method==='POST'),[['POST',created]]);
+  assert.deepEqual(reads.at(-1),['GET',checked]);
+  assert.match(get('meeting-discussion-status').textContent,/已撤回/);
+  assert.equal(get('meeting-discussion-preview').value,'');
+  assert.equal(get('meeting-discussion-submit').disabled,true);
+  assert.doesNotMatch([...stored.values()].join(' '),/Shared notes/);
+});
 
 test('a handed-off call recording stays local until the user starts transcription', () => {
   const document = meetingDocument();

@@ -132,6 +132,9 @@
             <ul id="shared-meeting-actions"></ul>
             <p id="shared-meeting-no-actions" class="note" hidden>没有行动项。</p>
           </section>
+          <div class="meeting-actions" id="shared-meeting-discussion-entry" hidden>
+            <button type="button" id="shared-meeting-discussion" class="secondary" aria-haspopup="dialog">与个人智能体讨论</button>
+          </div>
         </article>
         <form id="meeting-form" hidden>
           <p id="meeting-call-source" class="note" tabindex="-1" hidden>来自通话</p>
@@ -279,7 +282,7 @@
     <form id="meeting-discussion-form">
       <label for="meeting-discussion-question">想讨论的问题</label>
       <textarea id="meeting-discussion-question" rows="2" maxlength="1000" required autofocus></textarea>
-      <label class="meeting-discussion-option"><input type="checkbox" id="meeting-discussion-transcript"> 包含已保存的转写 / 正文</label>
+      <label id="meeting-discussion-transcript-option" class="meeting-discussion-option"><input type="checkbox" id="meeting-discussion-transcript"> 包含已保存的转写 / 正文</label>
       <label for="meeting-discussion-preview">会议内容预览</label>
       <textarea id="meeting-discussion-preview" rows="7" readonly></textarea>
       <p id="meeting-discussion-notice" class="note"></p>

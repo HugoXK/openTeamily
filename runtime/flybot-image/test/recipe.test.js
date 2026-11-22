@@ -151,6 +151,7 @@ test('the image overlay checks pinned inputs before adding native group and skil
   assert.match(readFileSync(channelPath, 'utf8'), /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)
   assert.match(readFileSync(channelPath, 'utf8'), /openteamilyReplyPolicy: body\.openteamilyReplyPolicy/)
   assert.match(readFileSync(channelPath, 'utf8'), /case 'openteamily-group-workspaces':\s+case 'openteamily-group-create':/)
+  assert.match(readFileSync(channelPath, 'utf8'), /case 'openteamily-group-directory':\s+case 'openteamily-group-open':/)
   applyNativeOverlay(copy)
   assert.deepEqual(readFileSync(join(upstream, 'client.js')), originalClient)
 })

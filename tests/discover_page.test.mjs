@@ -1618,6 +1618,52 @@ test('the native direct excerpt paints before auth and is retained through a mis
   assert.equal(el('next').disabled, false);
 });
 
+test('a guest detail pages only its filtered feed and a late page cannot reopen the detail after Back', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const first = detailFixture({slug:'guest-first', title:'前一件公开作品'});
+  const last = detailFixture({slug:'guest-edge', title:'首尾公开作品'});
+  const later = detailFixture({slug:'guest-later', title:'下一页公开作品'});
+  const pending = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const paths = [];
+  const history = {replaceState(_state, _unused, path) { paths.push(path); }};
+  const detailRequests = [];
+  await mount(doc, {history, location:{search:'?kind=document&q=公开&work=guest-edge'}, fetcher: async path => {
+    if (path === '/v1/auth/session') return commentResponse({},401);
+    if (path.startsWith('/v1/discover/works?')) {
+      const args = new URL(path,'https://discover.test').searchParams;
+      assert.equal(args.get('kind'),'document');
+      assert.equal(args.get('q'),'公开');
+      if (args.has('cursor')) {
+        assert.equal(args.get('cursor'),'guest-next-cursor');
+        started.resolve();
+        return pending.promise;
+      }
+      return commentResponse({items:[first,last],cursor:'guest-next-cursor'});
+    }
+    if (path.startsWith('/w/')) {
+      detailRequests.push(path);
+      if (path === '/w/guest-edge?view=preview') return commentResponse({...last,preview:'公开详情正文'});
+    }
+    assert.fail('Unexpected request ' + path);
+  }});
+  const button = name => doc.getElementById('work-detail-' + name);
+  assert.equal(button('previous').disabled,false);
+  assert.equal(button('next').disabled,false);
+  const advancing = button('next').handlers.click();
+  await started.promise;
+  assert.equal(button('next').disabled,true);
+  assert.equal(button('next').attributes['aria-busy'],'true');
+  button('back').handlers.click();
+  pending.resolve(commentResponse({items:[later],cursor:null}));
+  await advancing;
+  assert.equal(doc.getElementById('work-detail').hidden,true);
+  assert.deepEqual(paths,['/discover?kind=document&q=%E5%85%AC%E5%BC%80']);
+  assert.deepEqual(detailRequests,['/w/guest-edge?view=preview']);
+  assert.deepEqual(doc.getElementById('feed-grid').children.map(child=>child.dataset.slug),[first.slug,last.slug,later.slug]);
+});
+
 test('a failed public detail cannot block the native scoped work or its preview', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();

@@ -3,6 +3,7 @@
 // membership, rather than copying a second chat log. No model call on import.
 import { randomUUID } from 'node:crypto'
 import { nativeGroupCreation } from './native-group-create.js'
+import { nativeGroupDirectory } from './native-group-directory.js'
 const installed = new WeakMap()
 const replyModes = new Set(['default', 'everyone', 'lead'])
 const groupAgentId = /^[A-Za-z0-9._:-]{1,80}$/
@@ -115,10 +116,21 @@ export function nativeGroupClient(host, raw) {
     const ordered = task => { const next = queue.then(task); queue = next.catch(() => {}); return next }
     const sync = conversation => ordered(() => syncOne(conversation))
     const create = nativeGroupCreation(host, raw, rt, sync)
+    const directory = nativeGroupDirectory(host, raw)
     const originalMobile = rt.mobileEndpoint.bind(rt)
     rt.mobileEndpoint = async (endpoint, p) => {
       if (endpoint === 'openteamily-group-workspaces') return create.workspaces(p)
       if (endpoint === 'openteamily-group-create') return create.create(p)
+      if (endpoint === 'openteamily-group-directory') return directory.list(p)
+      if (endpoint === 'openteamily-group-open') return ordered(async () => {
+        const group = await directory.get(p)
+        const opened = await syncOne(group)
+        const room = rt.roomOf(opened.native_room_id)
+        if (!room || room.openteamily?.conversation_id !== group.id) {
+          throw Object.assign(new Error('Could not open the shared group. Refresh the list and try again.'),{code:'bot/refused'})
+        }
+        return {conversation_id:group.id,room}
+      })
       const cid = endpoint === 'room-chat' && roomFor(p?.roomId)
       if (!cid) return originalMobile(endpoint, p)
       await sync(await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid)))

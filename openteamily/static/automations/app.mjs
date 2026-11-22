@@ -186,6 +186,12 @@ function exactRunForTarget(run, target) {
   return /^[a-f0-9]{32}$/.test(run?.id || '') && run.workspace_id === target.workspace && run.automation_id === target.automation;
 }
 
+function automationRunHref(target, run, filter) {
+  const params = new URLSearchParams({workspace: target.workspace, automation: target.automation, run});
+  if (filter) params.set('runs', filter);
+  return '/automations?' + params;
+}
+
 export function meetingTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
   if (!['meeting', 'action', 'revision'].some(name => params.has(name))) return null;
@@ -905,8 +911,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         globalThis.setTimeout(() => URL.revokeObjectURL(href), 1000);
       }, '已开始下载本次运行结果。'],
       ['copy-run-link', '复制运行链接', () => {
-        const url = new URL('/automations', view.location.origin);
-        url.search = new URLSearchParams({workspace: target.workspace, automation: target.automation, run: item.id});
+        const url = new URL(automationRunHref(target, item.id), view.location.origin);
         return view.navigator.clipboard.writeText(url.href);
       }, '已复制私有运行链接。打开时需要原有访问权限。'],
     ];
@@ -925,6 +930,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
       });
       controls.appendChild(action);
+    }
+    return controls;
+  }
+
+  function runRelatedControls(item, target) {
+    if (!exactRunForTarget(item, target)) return null;
+    const latest = item.latest_retry;
+    const status = latest && runStatusLabel(latest);
+    const links = [
+      [item.retry_of, 'retry-source', '查看原运行', 'failed'],
+      [latest?.id, 'latest-retry', status ? '查看重试 · ' + status : '查看重试'],
+    ].filter(([id]) => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id) && id !== item.id);
+    if (!links.length) return null;
+    const controls = document.createElement('div');
+    controls.className = 'run-related';
+    for (const [id, name, label, filter] of links) {
+      const link = document.createElement('a');
+      link.dataset.runControl = name;
+      link.href = automationRunHref(target, id, filter);
+      link.textContent = label;
+      controls.appendChild(link);
     }
     return controls;
   }
@@ -1002,6 +1028,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         note.className = 'note';
         note.textContent = runActive(item) ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
         detail.appendChild(note);
+      }
+      const related = runRelatedControls(item, target);
+      if (related) {
+        detail.appendChild(related);
+        if (restore && focusRow.dataset.runId === item.id) {
+          nextFocus = [...related.children].find(control => control.dataset.runControl === focusedControl) || nextFocus;
+        }
       }
       if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
         if (native && exactRunForTarget(item, target)) {
@@ -1153,7 +1186,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!submission) submission = {source, idempotency: idempotencyKey()};
     submission.state = 'pending';
     storeRunSubmission(target, submission);
-    if (submissionStorageKey(target)) replaceAutomationLink({workspace_id: target.workspace, id: target.automation});
+    if (submissionStorageKey(target)) {
+      replaceAutomationLink({workspace_id: target.workspace, id: target.automation}, source ? {id:source} : null);
+    }
     const intent = runIntent;
     show('', '');
     syncRunControls();
@@ -1184,9 +1219,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     activeRun = runActive(item);
     expandedRuns.add(item.id);
+    const isRetry = source && item.retry_of === source && exactRunForTarget(item, target);
+    if (isRetry) expandedRuns.add(source);
+    const withRetry = row => isRetry && row?.id === source
+      ? {...row, latest_retry:{id:item.id,status:item.status}} : row;
+    selectedRun = withRetry(selectedRun);
     if ((pendingRunCursors || runCursors).length === 1 && runFilter === 'all') {
-      renderRuns([item, ...(onLatest ? recentRuns.filter(run => run.id !== item.id) : [])].slice(0, 20));
-    }
+      renderRuns([item, ...(onLatest ? recentRuns.filter(run => run.id !== item.id).map(withRetry) : [])].slice(0, 20));
+    } else if (isRetry) renderRuns(recentRuns.map(withRetry));
     syncRunControls();
     if (!source && intent === runIntent) showRunHistory();
     await loadRuns();
@@ -1398,7 +1438,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     recentRuns = [];
     selectedRun = run;
     if (selectedRun) {
-      runFilter = 'all';
+      if (!matchesRunFilter(selectedRun, runFilter)) runFilter = 'all';
       syncRunFilters();
       expandedRuns.add(selectedRun.id);
     }
@@ -1432,7 +1472,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runButton.hidden = !item?.id;
     syncRunControls();
     renderManualRunNote();
-    loadRuns({focus: Boolean(selectedRun)});
+    if (selectedRun) {
+      renderRuns([selectedRun]);
+      showRunHistory();
+    }
+    void loadRuns();
     if ((!item?.id && !source) || editorOptions?.open) void loadTemplates();
     main.scrollTop = 0;
     heading?.focus({preventScroll: true});

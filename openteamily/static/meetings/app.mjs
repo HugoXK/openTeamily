@@ -541,6 +541,7 @@ function mount() {
   let viewerId = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
+  let receivedMeeting = null;
   let callDraft = null;
   const callSource = document.getElementById('meeting-call-source');
   const sharedDetail = document.getElementById('shared-meeting-detail');
@@ -554,9 +555,15 @@ function mount() {
   });
   const discussion = mountMeetingDiscussion(document, {
     request,
-    context: () => native && meetingIdPattern.test(viewerId) && current?.id && current.workspace_id === workspaceId()
-      && !form.hidden && layout?.dataset.view !== 'catalogue'
-      ? {owner: viewerId, workspace: workspaceId(), meeting: current} : null,
+    context: () => {
+      const workspace = workspaceId();
+      if (!native || !meetingIdPattern.test(viewerId)) return null;
+      if (receivedMeeting?.workspace === workspace && !sharedDetail.hidden) {
+        return {owner:viewerId, workspace, meeting:receivedMeeting.meeting, shared:true};
+      }
+      return current?.id && current.workspace_id === workspace && !form.hidden && layout?.dataset.view !== 'catalogue'
+        ? {owner:viewerId, workspace, meeting:current} : null;
+    },
     isDirty: hasUnsavedChanges,
     openChat: href => document.defaultView.location.assign(href),
   });
@@ -1519,8 +1526,10 @@ function mount() {
     if (pane) pane.hidden = receipt;
     layout?.classList?.toggle('is-reading-receipt', receipt);
     if (layout && receipt) layout.dataset.view = 'receipt';
+    receivedMeeting = null;
     if (!receipt && sharedDetail) sharedDetail.hidden = true;
     sharing.sync();
+    discussion.sync();
   }
 
   function syncRecord() {
@@ -1746,6 +1755,8 @@ function mount() {
         : messageFor(saved.body.error, '暂时无法保存待办，请重试。')};
     } : null;
     renderSharedMeeting(document, meeting, {copy, saved:result.body.saved_actions});
+    if (result.body.received === true) receivedMeeting = {workspace:target.workspace, meeting};
+    discussion.sync();
     show('', '');
   }
 

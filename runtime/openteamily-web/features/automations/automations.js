@@ -174,21 +174,25 @@ function view(row) {
   }
 }
 
+function runStatus(row) {
+  if (row.status === 'queued' && row.claimed_at != null) return 'running'
+  if (row.error_code === 'cancelled') return 'cancelled'
+  if (row.error_code === 'timeout') return 'timeout'
+  return row.status
+}
+
 export function runView(row) {
   let dispatch = {}
   try { dispatch = JSON.parse(row.dispatch) || {} } catch { dispatch = {} }
-  let status = row.status
-  if (status === 'queued' && row.claimed_at != null) status = 'running'
-  else if (row.error_code === 'cancelled') status = 'cancelled'
-  else if (row.error_code === 'timeout') status = 'timeout'
   const trigger = row.attempt_of ? 'retry' : row.due_at < 0 ? 'manual' : 'scheduled'
   const backend = row.error_code !== 'migrated' && dispatch.backend === 'ds-bot' ? 'ds-bot' : 'legacy'
   const out = {
     id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at < 0 ? row.started : row.due_at,
-    started: row.started, finished: row.finished, status, error_code: row.error_code, trigger,
+    started: row.started, finished: row.finished, status: runStatus(row), error_code: row.error_code, trigger,
     dispatch: { backend, ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
+  if (HEX32.test(row.attempt_of || '')) out.retry_of = row.attempt_of
   return out
 }
 
@@ -401,7 +405,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
   const loadRun = (row, runId) => {
     const item = typeof runId === 'string' && HEX32.test(runId)
-      ? one('SELECT * FROM ot_automation_runs WHERE id=? AND automation_id=?', runId, row.id) : undefined
+      ? one('SELECT * FROM ot_automation_runs WHERE id=? AND automation_id=? AND workspace_id=?', runId, row.id, row.workspace_id) : undefined
     if (!item) refuse(404, 'not_found', 'Automation run not found')
     return item
   }
@@ -733,6 +737,36 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     return { items }
   }
 
+  function runHistoryViews(automation, rows) {
+    const sourceIds = [...new Set(rows.map(row => row.attempt_of).filter(id => id && HEX32.test(id)))]
+    const originals = sourceIds.length ? all(`SELECT id FROM ot_automation_runs
+      WHERE workspace_id=? AND automation_id=? AND id IN (${sourceIds.map(() => '?').join(',')})`,
+    automation.workspace_id, automation.id, ...sourceIds) : []
+    const available = new Set(originals.map(row => row.id))
+    const failed = rows.filter(row => row.status === 'failed').map(row => row.id)
+    const retries = failed.length ? all(`SELECT id, attempt_of, status, error_code, claimed_at FROM (
+      SELECT child.id, child.attempt_of, child.status, child.error_code, child.claimed_at,
+        ROW_NUMBER() OVER (PARTITION BY receipt.run_id ORDER BY receipt.created DESC, receipt.rowid DESC) AS position
+      FROM ot_automation_retries receipt
+      JOIN ot_automation_runs child ON child.id=receipt.new_run_id AND child.attempt_of=receipt.run_id
+      WHERE child.workspace_id=? AND child.automation_id=?
+        AND receipt.run_id IN (${failed.map(() => '?').join(',')})
+    ) WHERE position=1`, automation.workspace_id, automation.id, ...failed) : []
+    const latest = new Map(retries.map(retry => [retry.attempt_of, {id:retry.id, status:runStatus(retry)}]))
+    return rows.map(row => {
+      const item = runView(row)
+      if (item.retry_of && !available.has(item.retry_of)) delete item.retry_of
+      if (latest.has(row.id)) item.latest_retry = latest.get(row.id)
+      return item
+    })
+  }
+
+  function runHistoryDetail(payload) {
+    const row = load(workspaceOf(payload), payload?.id)
+    const [run] = runHistoryViews(row, [loadRun(row, payload?.run_id)])
+    return {run}
+  }
+
   function runs(payload) {
     const row = load(workspaceOf(payload), payload.id)
     const limit = payload.limit ?? 20
@@ -741,10 +775,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
     if (status && !['queued', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND id=?', row.id, cursor)
+    const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND workspace_id=? AND id=?', row.id, row.workspace_id, cursor)
     if (cursor && !after) refuse(404, 'not_found', 'Automation run not found')
-    const params = [row.id]
-    let filter = 'automation_id=?'
+    const params = [row.id, row.workspace_id]
+    let filter = 'automation_id=? AND workspace_id=?'
     if (status) {
       filter += ' AND status=?'
       params.push(status === 'running' ? 'queued' : status)
@@ -754,7 +788,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
     const pending = activeRun(row.id)
-    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null,
+    return { items: runHistoryViews(row, rows.slice(0, limit)), cursor: rows.length > limit ? rows[limit - 1].id : null,
       has_pending: Boolean(pending), active_run: pending, schedule_status: scheduleStatus(view(row), row.schedule_active_at), schedule_revision: row.revision }
   }
 
@@ -937,7 +971,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/studioPublish': (p) => studioCopy(p, true),
     'automations/runNow': runNow,
     'automations/receipt': receipt,
-    'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
+    'automations/run': runHistoryDetail,
     'automations/cancel': cancel,
     'automations/retry': retry,
     'automations/tick': (p) => ({ items: tick(workspaceOf(p)) }),
