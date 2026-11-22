@@ -1,6 +1,6 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, chatFileDownload, deferModule, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -9,7 +9,7 @@ import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, signupDraftScope, signupSessionError } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
@@ -1313,14 +1313,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bubble.append(body);
     if (sticker) bubble.append(renderChatFile(document, {...sticker,sticker:true}, {pending:true}));
     const previews = [];
-    const urls = document.defaultView?.URL;
     for (const file of files) {
-      const path = file.type?.startsWith('image/') && urls?.createObjectURL ? urls.createObjectURL(file) : '';
-      if (path) previews.push(path);
-      bubble.append(renderChatFile(document, {title:file.name,mime:file.type,bytes:file.size,path}, {pending:true}));
+      const {card, preview} = localChatFile(document, file);
+      if (preview) previews.push(preview);
+      bubble.append(card);
     }
-    bubble.append(status, actions);
-    const job = {key, message, files, previews, bubble, status, actions, retry, failed: false,
+    const progress = files.length ? chatUploadProgress(document, uiLabel('上传进度', 'Upload progress')) : null;
+    bubble.append(status);
+    if (progress) bubble.append(progress);
+    bubble.append(actions);
+    const job = {key, message, files, previews, progress, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
@@ -3825,6 +3827,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPendingSend();
     syncGroupReplyProgress();
+    attachmentSender?.confirmFromHistory?.(scope, lastSocialItems);
     attachmentSender?.render();
     if (anchor) {
       scroller.scrollTop = anchor.top;
@@ -5831,10 +5834,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const openStartingAgent = async () => {
+      const personalRoute = start.workspace === personalWorkspace && workspaceId() === personalWorkspace && start.agent === personalAgentId;
+      const personalTarget = servedByDsbot && personalRoute && personalDraftScope(view, owner.id, {
+        workspace_id: personalWorkspace, agent_id: personalAgentId,
+      });
+      const coldDraft = takeColdDraftHandoff(view, personalTarget);
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) {
-        if (firstDraft && start.workspace === personalWorkspace && workspaceId() === personalWorkspace && start.agent === personalAgentId) {
-          publicDraft.move(firstDraft, JSON.stringify([owner.id, personalWorkspace, 'agent', personalAgentId, first.id]));
+        const incomingDraft = coldDraft || firstDraft;
+        if (incomingDraft && personalRoute) {
+          const threadDraft = JSON.stringify([owner.id, personalWorkspace, 'agent', personalAgentId, first.id]);
+          if (publicDraft.lookup(incomingDraft) && publicDraft.lookup(threadDraft)) {
+            openEmptyAgentChat(start.agent);
+            return;
+          }
+          publicDraft.move(incomingDraft, threadDraft);
         }
         const startupSnapshot = openLocal ? ownedStartingTranscript(local, start.agent, first.id) : undefined;
         await openAgentConversation(start.agent, first.id, {startupSnapshot});
@@ -6645,7 +6659,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     createKey: () => idempotencyKey('chat-file-'),
     sent(destination, message) {
       consumeReplyDraft(destination.scope, destination.reply);
-      renderDeliveredSocialMessage(destination.scope, message);
+      if (message) renderDeliveredSocialMessage(destination.scope, message);
     },
   });
   const filterButton = document.getElementById('session-filter');
@@ -7108,29 +7122,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
           const path = `${queue.base}/${queue.conversationId}/messages`;
           const headers = {'Idempotency-Key':job.key};
-          feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
+          const progress = job.progress;
+          if (progress) {
+            progress.hidden = false;
+            progress.removeAttribute('value');
+          }
+          feedback(progress ? uiLabel('正在上传附件…', 'Uploading attachments…') : queue.social ? '正在发送…' : '正在等待智能体回复…');
           let result;
           let anchor;
           const nativePrivate = servedByDsbot && !queue.social;
           const receipt = nativePrivate ? Promise.withResolvers() : null;
           job.acceptReceipt = receipt?.resolve;
           try {
-            const response = job.files.length
+            const response = progress
               ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
                 {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                  feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
-                  if (percent >= 100) beginReply();
+                  if (percent < 100) {
+                    progress.value = percent;
+                  } else {
+                    progress.hidden = true;
+                    feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
+                    beginReply();
+                  }
                 }) : request('POST', path, job.message, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
-            if (!job.files.length) beginReply();
+            if (!progress) beginReply();
             result = receipt
               ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
               : await response;
             if (nativePrivate && uncertainPrivateWrite(result)) {
+              if (progress) progress.hidden = true;
               feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
               const pair = await confirmPostedSend(queue, job);
               if (pair) result = {status: 200, body: pair};
             }
           } finally {
+            if (progress) progress.hidden = true;
             job.acceptReceipt = null;
             if (queue.replying === job) {
               if (isCurrent()) {

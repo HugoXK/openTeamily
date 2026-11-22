@@ -2453,7 +2453,7 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 .chat-file-info { display: grid; flex: 1; gap: .125rem; min-width: 0; overflow-wrap: anywhere; font-size: .875rem; }
 .chat-file-info small, .chat-file p { color: var(--ot-muted); font-size: .75rem; }
 .chat-file p { margin: 0; }
-.chat-file progress { width: 100%; height: .375rem; accent-color: var(--ot-accent); }
+.chat-upload-progress:not([hidden]) { display: block; width: 100%; height: .375rem; accent-color: var(--ot-accent); }
 .chat-file a { flex-shrink: 0; padding: .625rem .25rem; font-size: .8125rem; }
 .chat-file-actions button { min-height: 2.5rem; }
 #chat-attachment[hidden] { display: none; }

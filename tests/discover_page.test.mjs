@@ -680,6 +680,42 @@ test('the feed only presents available filters', () => {
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
 });
 
+test('selecting the active feed category refreshes once and preserves its items and cursor on failure', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [], visits = [];
+  const delayed = Promise.withResolvers();
+  const work = {slug: 'layout-notes', title: '公开笔记', kind: 'document', creator: {username: 'alice'}};
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    calls.push(path);
+    if (calls.length === 2) return delayed.promise;
+    return {status: 200, json: async () => ({items: [work], cursor: '1.layout-notes'})};
+  };
+  await mount(doc, {fetcher, location: {search: '?kind=document'}, history: {pushState(...args) { visits.push(args); }}});
+  const el = id => doc.getElementById(id);
+  const selected = el('feed-kind-document');
+  const card = el('feed-grid').children[0];
+  assert.equal(card.dataset.slug, 'layout-notes');
+  const refresh = selected.handlers.click();
+  await selected.handlers.click();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1], '/v1/discover/works?limit=12&kind=document');
+  assert.equal(el('feed-grid').children[0], card);
+  assert.equal(el('feed-filters').dataset.refreshing, 'true');
+  assert.equal(el('feed-more').disabled, true);
+  delayed.resolve({status: 503, json: async () => ({})});
+  await refresh;
+  assert.equal(el('feed-grid').children[0], card);
+  assert.equal(el('feed-filters').dataset.refreshing, 'false');
+  assert.equal(el('feed-more').disabled, false);
+  assert.equal(el('feed-retry').hidden, false);
+  await el('feed-retry').handlers.click();
+  assert.equal(calls[2], calls[1]);
+  assert.equal(el('feed-retry').hidden, true);
+  assert.deepEqual(visits, []);
+});
+
 
 test('every supported selected type uses the selected category styling', () => {
   const css = readFileSync(new URL('../openteamily/static/discover/app.css', import.meta.url), 'utf8');
