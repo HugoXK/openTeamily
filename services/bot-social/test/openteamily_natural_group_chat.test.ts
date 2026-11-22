@@ -236,6 +236,52 @@ test("shared group workers judge ordinary text while explicit mentions preserve 
   assert.equal(quoted.reply_jobs[0].agent_owner_id, colleagueId);
 });
 
+test("typed shared group mentions resolve the longest eligible name without guessing between owners", async () => {
+  const [sender, teammate] = await Promise.all([
+    home(service.base, "native-name-sender"), home(service.base, "native-name-peer"),
+  ]);
+  const team = await sender.ok("POST", "/v1/ot/teams", {name: "Shared native mentions"});
+  const {code} = await sender.ok("POST", `/v1/ot/teams/${team.id}/invites`, {});
+  await teammate.ok("POST", "/v1/ot/invites/accept", {code});
+  const group = await sender.ok("POST", "/v1/ot/conversations", {
+    kind: "group", team_id: team.id, title: "Named discussion", members: [teammate.handle],
+    agents: [{agent_ref: "product", name: "Product"}],
+  });
+  const room = roomPath(group);
+  await teammate.ok("PUT", room + "/agents/manager", {name: "Product Manager"});
+  const senderId = await ownerId(sender);
+  const teammateId = await ownerId(teammate);
+  const send = (body: string, extras = {}) => sender.ok("POST", room + "/messages", {body, ...extras});
+  const requested = "＠product manager, could you review this?";
+  const sent = await send(requested);
+  assert.equal(sent.body, requested);
+  assert.deepEqual(sent.mentions, [`/agent/${teammateId}/manager`]);
+  assert.deepEqual(sent.reply_jobs.map((job: Job) => [job.agent_owner_id, job.agent_id]), [[teammateId, "manager"]]);
+  assert.deepEqual(targets(await send("@Product, please review this.")), ["product"]);
+  assert.deepEqual(targets(await send("@Product and @Product Manager.")), ["product", "manager"]);
+  assert.deepEqual(targets(await send("@manager Please check")), ["manager"]);
+  assert.deepEqual(targets(await send("@Product Managerial staff is a phrase.")), []);
+  assert.deepEqual(targets(await send("@Product/guide.md is a file reference.")), []);
+  const literal = await send("Read [the @Product Manager example](/guide) and `@Product Manager`.");
+  assert.deepEqual(literal.mentions, []);
+  assert.deepEqual(targets(literal), ["product", "manager"]);
+  const inbox = await teammate.ok("GET", queue);
+  assert.ok(inbox.jobs.some((job: any) => job.message.id === sent.id && job.discretionary === undefined && job.group_text_only));
+  assert.ok(inbox.jobs.some((job: any) => job.message.id === literal.id && job.discretionary === true));
+
+  await sender.ok("PUT", room + "/agents/manager", {name: "PRODUCT MANAGER"});
+  const ambiguous = await send("@Product Manager, please review this.");
+  assert.deepEqual(ambiguous.mentions, []);
+  assert.deepEqual(targets(ambiguous), []);
+  const selected = await send("Please review this.", {agent_mentions: [{owner_id:senderId,agent_id:"manager"}]});
+  assert.deepEqual(selected.mentions, [`/agent/${senderId}/manager`]);
+  assert.deepEqual(selected.reply_jobs.map((job: Job) => [job.agent_owner_id, job.agent_id]), [[senderId,"manager"]]);
+  await teammate.ok("PUT", room + "/agents/reviewer", {name: "Manager"});
+  const displayName = await send("@Manager, please review this.");
+  assert.deepEqual(displayName.mentions, [`/agent/${teammateId}/reviewer`]);
+  assert.deepEqual(targets(displayName), ["reviewer"]);
+});
+
 test("an active owner gets a bounded head start on shared ordinary text while explicit jobs remain available", async () => {
   const [author, colleague, outsider] = await Promise.all([
     home(service.base, "round-author"), home(service.base, "round-peer"), home(service.base, "round-outsider"),

@@ -341,7 +341,71 @@ diff --git a/client.js b/client.js
  var qrcode = function(typeNumber, errorCorrectionLevel) {
    const PAD0 = 236;
    const PAD1 = 17;
-@@ -40079,10 +40266,278 @@
+@@ -38487,6 +38674,28 @@
+ var CHATS_SOURCE = "ds-bot-chats";
+ var ROOM_ALL = ["all", "everyone", "所有人", "全体"];
+ var OTHER_CHATS_MAX = 8;
++var SHARED_AGENT_PREFIX = "ot-agent:";
++var SHARED_AGENT_ID = /^[A-Za-z0-9._:-]{1,80}$/;
++function sharedMentionRows(room2, needle) {
++  const targets = (room2.openteamily.reply_policy?.targets ?? []).filter((target) => typeof target?.name === "string" && target.name.trim() && !/[\r\n]/.test(target.name) && SHARED_AGENT_ID.test(target.owner_id ?? "") && SHARED_AGENT_ID.test(target.agent_id ?? ""));
++  const people = room2.remoteParticipants?.length ?? 0;
++  const rows2 = [];
++  for (const target of targets) {
++    const name = target.name;
++    const handle = target.owner_handle;
++    const owner = target.owner_name;
++    if (!`${name} ${owner ?? ""} ${handle ?? ""}`.toLowerCase().includes(needle)) continue;
++    const role = [owner, handle && handle !== owner ? `@${handle}` : void 0].filter(Boolean).join(" · ");
++    const id = `${SHARED_AGENT_PREFIX}${target.owner_id}/${target.agent_id}`;
++    const ref = `@[${name.replace(/[[\]\\]/g, "\\$&")}](${id})`;
++    rows2.push({ bot: { id, name, role }, ref });
++  }
++  const everyone = t("Everyone");
++  if ((targets.length || people > 1) && [everyone, ...ROOM_ALL].some((word) => word.toLowerCase().startsWith(needle))) {
++    rows2.push({ room: room2, count: targets.length + people, text: `@${everyone} ` });
++  }
++  return rows2;
++}
+ var conversationOf = (roster, sessionId) => {
+   if (!roster.ready) return null;
+   const room2 = roster.roomsById[sessionId];
+@@ -38497,8 +38706,9 @@
+ function mentionRows(roster, sessionId, query = "") {
+   const here = conversationOf(roster, sessionId);
+   if (here === null) return null;
+-  const bots = here.room ? here.room.members.map((id) => roster.byId[id]).filter(Boolean) : roster.bots.filter((bot) => bot.id !== here.self.id);
+   const needle = query.trim().toLowerCase();
++  if (here.room?.openteamily?.conversation_id) return sharedMentionRows(here.room, needle);
++  const bots = here.room ? here.room.members.map((id) => roster.byId[id]).filter(Boolean) : roster.bots.filter((bot) => bot.id !== here.self.id);
+   const rows2 = bots.filter((bot) => bot.name.toLowerCase().includes(needle)).map((bot) => ({ bot, text: `@${bot.name} ` }));
+   const everyone = t("Everyone");
+   if (here.room && bots.length > 1 && [everyone, ...ROOM_ALL].some((word) => word.toLowerCase().startsWith(needle))) {
+@@ -38537,13 +38747,20 @@
+       return (mentionRows(roster.getSnapshot(), session.sessionId, query) ?? []).map((row) => ({
+         name: row.bot ? row.bot.name : t("Everyone"),
+         ...row.bot?.role ? { description: row.bot.role } : {},
+-        ...row.room ? { description: t("{count} members", { count: row.room.members.length }) } : {},
++        ...row.room ? { description: t("{count} members", { count: row.count ?? row.room.members.length }) } : {},
+         icon: iconFor(row),
+         section: t("Bots"),
+-        value: row.text
++        value: row.ref ? SHARED_AGENT_PREFIX + row.ref : row.text
+       }));
+     },
+-    onPick: ({ candidate }) => candidate.value ? { text: candidate.value } : void 0
++    onPick({ candidate: { value, name, description } }) {
++      if (!value) return void 0;
++      if (!value.startsWith(SHARED_AGENT_PREFIX)) return { text: value };
++      const ref = value.slice(SHARED_AGENT_PREFIX.length);
++      const label = `@${name}${description ? ` · ${description}` : ""}`;
++      return { insert: { source: BOTS_SOURCE, ref, label, appearance: "session", clipboardText: ref + " " } };
++    },
++    codec: { clipboardText: (ref) => ref + " ", serialize: (ref) => Promise.resolve(ref + " ") }
+   };
+   const chats = {
+     trigger: "@",
+@@ -40079,10 +40296,278 @@
 
  // src/client/new-chat.js
  var import_react62 = require("react");
@@ -620,7 +684,7 @@ diff --git a/client.js b/client.js
    const [admin, setAdmin] = (0, import_react62.useState)(null);
    const [message, setMessage] = (0, import_react62.useState)("");
    const [pasted, setPasted] = (0, import_react62.useState)(null);
-@@ -40193,6 +40648,12 @@
+@@ -40193,6 +40678,12 @@
        }) });
      }
    }
@@ -633,7 +697,7 @@ diff --git a/client.js b/client.js
    for (const bot of matches2) {
      options.push({ key: bot.id, bot, label: bot.name, hint: choosingAdmin ? t("Make admin") : group || picked.length > 0 ? t("Add to group chat") : void 0, run: () => openBot(bot) });
    }
-@@ -40220,6 +40681,21 @@
+@@ -40220,6 +40711,21 @@
          } : close,
          onCreated: created
        })
@@ -655,6 +719,78 @@ diff --git a/client.js b/client.js
      );
    }
    const adminBot = admin === null ? void 0 : roster.byId[admin];
+diff --git a/src/client/at-menu.js b/src/client/at-menu.js
+--- a/src/client/at-menu.js
++++ b/src/client/at-menu.js
+@@ -11,6 +11,31 @@
+ // The words the group host reads as "everyone" (groups.js ROOM_ALL).
+ const ROOM_ALL = ['all', 'everyone', '所有人', '全体']
+ const OTHER_CHATS_MAX = 8
++const SHARED_AGENT_PREFIX = 'ot-agent:'
++const SHARED_AGENT_ID = /^[A-Za-z0-9._:-]{1,80}$/
++
++function sharedMentionRows(room, needle) {
++  const targets = (room.openteamily.reply_policy?.targets ?? []).filter(target =>
++    typeof target?.name === 'string' && target.name.trim() && !/[\r\n]/.test(target.name) &&
++    SHARED_AGENT_ID.test(target.owner_id ?? '') && SHARED_AGENT_ID.test(target.agent_id ?? ''))
++  const people = room.remoteParticipants?.length ?? 0
++  const rows = []
++  for (const target of targets) {
++    const name = target.name
++    const handle = target.owner_handle
++    const owner = target.owner_name
++    if (!`${name} ${owner ?? ''} ${handle ?? ''}`.toLowerCase().includes(needle)) continue
++    const role = [owner, handle && handle !== owner ? `@${handle}` : undefined].filter(Boolean).join(' · ')
++    const id = `${SHARED_AGENT_PREFIX}${target.owner_id}/${target.agent_id}`
++    const ref = `@[${name.replace(/[[\]\\]/g, '\\$&')}](${id})`
++    rows.push({ bot:{id,name,role}, ref })
++  }
++  const everyone = t('Everyone')
++  if ((targets.length || people > 1) && [everyone, ...ROOM_ALL].some(word => word.toLowerCase().startsWith(needle))) {
++    rows.push({ room, count:targets.length + people, text:`@${everyone} ` })
++  }
++  return rows
++}
+
+ const conversationOf = (roster, sessionId) => {
+   if (!roster.ready) return null
+@@ -25,10 +50,11 @@
+ export function mentionRows(roster, sessionId, query = '') {
+   const here = conversationOf(roster, sessionId)
+   if (here === null) return null
++  const needle = query.trim().toLowerCase()
++  if (here.room?.openteamily?.conversation_id) return sharedMentionRows(here.room, needle)
+   const bots = here.room
+     ? here.room.members.map(id => roster.byId[id]).filter(Boolean)
+     : roster.bots.filter(bot => bot.id !== here.self.id)
+-  const needle = query.trim().toLowerCase()
+   const rows = bots.filter(bot => bot.name.toLowerCase().includes(needle)).map(bot => ({ bot, text: `@${bot.name} ` }))
+   const everyone = t('Everyone')
+   if (here.room && bots.length > 1 && [everyone, ...ROOM_ALL].some(word => word.toLowerCase().startsWith(needle))) {
+@@ -81,13 +107,20 @@
+       return (mentionRows(roster.getSnapshot(), session.sessionId, query) ?? []).map(row => ({
+         name: row.bot ? row.bot.name : t('Everyone'),
+         ...(row.bot?.role ? { description: row.bot.role } : {}),
+-        ...(row.room ? { description: t('{count} members', { count: row.room.members.length }) } : {}),
++        ...(row.room ? { description: t('{count} members', { count: row.count ?? row.room.members.length }) } : {}),
+         icon: iconFor(row),
+         section: t('Bots'),
+-        value: row.text,
++        value: row.ref ? SHARED_AGENT_PREFIX + row.ref : row.text,
+       }))
+     },
+-    onPick: ({ candidate }) => (candidate.value ? { text: candidate.value } : undefined),
++    onPick({ candidate: { value, name, description } }) {
++      if (!value) return undefined
++      if (!value.startsWith(SHARED_AGENT_PREFIX)) return { text:value }
++      const ref = value.slice(SHARED_AGENT_PREFIX.length)
++      const label = `@${name}${description ? ` · ${description}` : ''}`
++      return { insert:{source:BOTS_SOURCE, ref, label, appearance:'session', clipboardText:ref + ' '} }
++    },
++    codec: { clipboardText:ref => ref + ' ', serialize:ref => Promise.resolve(ref + ' ') },
+   }
+   const chats = {
+     trigger: '@',
 diff --git a/src/client/group-settings.js b/src/client/group-settings.js
 index fce520335d06a1098bc530c0716fa1a7e3927a9d..f32632bbb3b88d58c069d47bcc42980a9b5e76e3 100644
 --- a/src/client/group-settings.js

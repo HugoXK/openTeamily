@@ -7153,10 +7153,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
     const sharedRequest = servedByDsbot ? listWorkspaces() : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
-    const scopedSocial = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && chatPathId(start.social);
-    // An authenticated workspace list can verify a shared chat before the private agent metadata arrives.
-    const {local, shared, personalSpace} = scopedSocial ? await Promise.any([
-      localReady.then(local => local ? {local} : Promise.reject()),
+    let personalRequest;
+    const readPersonal = () => personalRequest ??= read('/v1/personal-agent').then(result =>
+      result.status === 200 ? result.body.personal_agent : null);
+    const exactTarget = start.social ? chatPathId(start.social) : chatPathId(start.agent) && chatPathId(start.conversation);
+    const scopedLink = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && exactTarget;
+    // An authenticated workspace list can open an exact team conversation while the personal snapshot is pending.
+    const {local, shared, personalSpace} = scopedLink ? await Promise.any([
+      localReady.then(async local => {
+        if (!local && bootCurrent()) await readPersonal();
+        return {local};
+      }),
       sharedRequest.then(shared => {
         const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
         const personalSpace = items.find(space => space.kind === 'personal');
@@ -7166,10 +7173,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     ]).catch(() => ({})) : {local: await localReady};
     if (!bootCurrent()) return;
 
-    const readPersonal = async () => {
-      const result = await read('/v1/personal-agent');
-      return result.status === 200 ? result.body.personal_agent : null;
-    };
     const openLocal = local && (!start.workspace || start.workspace === local.space.id);
     let personalEntity = local ? {workspace: local.space, agent: {id: local.agentId}} : null;
     let listed;

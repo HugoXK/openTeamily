@@ -612,6 +612,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const viewWatchedRun = document.getElementById('view-watched-run');
   const reloadSettings = document.getElementById('reload-automation-settings');
   const historyError = document.getElementById('run-history-error');
+  const runLinkStatus = document.getElementById('run-link-status');
+  const runLinkNote = document.getElementById('run-link-note');
+  const runLinkRetry = document.getElementById('run-link-retry');
   const linkRetry = document.getElementById('automation-link-retry');
   const sourcePanel = document.getElementById('meeting-action-source');
   const tabs = document.querySelectorAll('.tabs [data-category]');
@@ -639,6 +642,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let listReturn = null;
   let recentRuns = [];
   let selectedRun = null;
+  let linkedRunRequest = null;
   let runCursors = [''];
   let pendingRunCursors = null;
   let nextRunCursor = '';
@@ -673,6 +677,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (target?.automation) {
       params.set('workspace', target.workspace);
       params.set('automation', target.automation);
+      if (selectedRun && exactRunForTarget(selectedRun, target) && matchesRunFilter(selectedRun, filter)) {
+        params.set('run', selectedRun.id);
+      }
     }
     if (filter !== 'all') params.set('runs', filter);
     const text = params.size ? '?' + params : '';
@@ -876,6 +883,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runHeading?.focus({preventScroll: true});
   }
 
+  function clearRunLinkStatus() {
+    linkedRunRequest = null;
+    if (runLinkStatus) runLinkStatus.hidden = true;
+  }
+
+  function selectRun(target, item) {
+    selectedRun = item;
+    if (item) expandedRuns.add(item.id);
+    replaceAutomationLink({workspace_id:target.workspace, id:target.automation}, item);
+  }
+
   const runResultKey = (target, item) => target.key + '/' + item.id;
   const runWorkReceipt = work => typeof work?.id === 'string' && /^[a-f0-9]{32}$/.test(work.id)
     ? {id:work.id, title:work.title} : null;
@@ -1017,7 +1035,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible,
       hasRetry && [activeRun, runSettingsChanged, current?.revision],
       hasRetry && submission?.state, hasRetry && submission?.source,
-      visible.map(item => [savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
+      visible.map(item => [expandedRuns.has(item.id), savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
         cancellingRuns.has(`${target.key}/${item.id}`)])]);
     if (runFingerprint === fingerprint) return;
     runFingerprint = fingerprint;
@@ -1127,8 +1145,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       toggle.addEventListener('click', () => {
         const next = !expandedRuns.has(item.id);
-        if (next) expandedRuns.add(item.id);
-        else expandedRuns.delete(item.id);
+        runIntent += 1;
+        clearRunLinkStatus();
+        if (next) {
+          if (native && exactRunForTarget(item, target)) selectRun(target, item);
+          else expandedRuns.add(item.id);
+        } else {
+          expandedRuns.delete(item.id);
+          if (selectedRun?.id === item.id) selectRun(target, null);
+        }
         detail.hidden = !next;
         toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
       });
@@ -1251,7 +1276,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     submission.state = 'pending';
     storeRunSubmission(target, submission);
     if (submissionStorageKey(target)) {
-      replaceAutomationLink({workspace_id: target.workspace, id: target.automation}, source ? {id:source} : null);
+      const returnRun = source ? {id:source} : exactRunForTarget(selectedRun, target) ? selectedRun : null;
+      replaceAutomationLink({workspace_id: target.workspace, id: target.automation}, returnRun);
     }
     const intent = runIntent;
     show('', '');
@@ -1294,7 +1320,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderRuns([item, ...(onLatest ? recentRuns.filter(run => run.id !== item.id).map(withRetry) : [])].slice(0, 20));
     } else if (isRetry) renderRuns(recentRuns.map(withRetry));
     syncRunControls();
-    if (!source && intent === runIntent) showRunHistory();
+    if (!source && intent === runIntent) {
+      if (native && exactRunForTarget(item, target)) selectRun(target, item);
+      showRunHistory();
+    }
     await loadRuns();
   }
 
@@ -1500,6 +1529,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     saveButton.textContent = '保存';
     backButton.disabled = false;
     current = item;
+    clearRunLinkStatus();
     runSettingsChanged = false;
     followupSource = source;
     draftSave = null;
@@ -1578,24 +1608,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function readLinkedAutomation(target) {
     const path = runPath(target);
-    return Promise.all([
-      runRequestWithTimeout('GET', path),
-      target.run ? runRequestWithTimeout('GET', `${path}/runs/${target.run}`) : null,
-    ]);
+    return {
+      detail: runRequestWithTimeout('GET', path),
+      run: target.run ? runRequestWithTimeout('GET', `${path}/runs/${target.run}`) : null,
+    };
+  }
+
+  async function openLinkedRun(target, id, reading) {
+    const lookup = {target, id};
+    linkedRunRequest = lookup;
+    if (runPanel) runPanel.hidden = false;
+    if (runLinkStatus) runLinkStatus.hidden = false;
+    if (runLinkRetry) runLinkRetry.hidden = true;
+    if (runLinkNote) runLinkNote.textContent = '正在读取这次运行…';
+    const result = await (reading || runRequestWithTimeout('GET', `${runPath(target)}/runs/${id}`));
+    if (linkedRunRequest !== lookup || !currentRunScope(target)) return;
+    const unavailable = [401, 403, 404, 410].includes(result.status);
+    const listed = unavailable ? null : recentRuns.find(item => item.id === id && exactRunForTarget(item, target));
+    const exact = result.body?.run;
+    const run = result.status === 200 && exact?.id === id && exactRunForTarget(exact, target) ? exact : listed;
+    if (!run) {
+      if (runLinkNote) runLinkNote.textContent = unavailable ? '这次运行已不可用。' : '暂时无法读取这次运行。';
+      if (runLinkRetry) runLinkRetry.hidden = unavailable;
+      return;
+    }
+    clearRunLinkStatus();
+    const selected = listed && !runActive(listed) && runActive(run) ? listed : run;
+    const changeFilter = !matchesRunFilter(selected, runFilter);
+    if (changeFilter) {
+      runFilter = 'all';
+      resetRunPages();
+      syncRunFilters();
+    }
+    selectRun(target, selected);
+    renderRuns([selected, ...recentRuns.filter(item => item.id !== id)]);
+    if (changeFilter || runActive(selected)) void loadRuns();
   }
 
   async function openLinkedAutomation(target, loadSeq, reading) {
     const seq = ++editorRequest;
     show('', '正在打开自动化…');
-    const [result, exact] = await (reading || readLinkedAutomation(target));
+    const request = reading || readLinkedAutomation(target);
+    const result = await request.detail;
     if (seq !== editorRequest || loadSeq !== loadRequest || workspaceId() !== target.workspace || !form.hidden) return;
     const item = result.body.automation;
     if (result.status === 200 && item?.id === target.automation && item.workspace_id === target.workspace) {
-      const run = exact?.body.run;
-      const selected = exact?.status === 200 && run?.id === target.run && exactRunForTarget(run, target) ? run : null;
-      if (target.run && !selected) show('error', '暂时无法打开这次运行。你可以从运行记录重新选择。');
-      else show('', '');
-      openEditor(item, null, null, selected);
+      show('', '');
+      openEditor(item);
+      if (target.run) {
+        const opening = openLinkedRun(runScope(), target.run, request.run);
+        showRunHistory();
+        await opening;
+      }
       return true;
     }
     show('error', [403, 404].includes(result.status) ? '这条自动化已不可用。' : '暂时无法打开自动化。');
@@ -1725,7 +1789,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!quiet || listFingerprint !== fingerprint) {
         const focused = document.activeElement?.dataset?.automationId;
         listFingerprint = fingerprint;
-        renderList(items, list, empty, (item, opener) => openEditor(item, null, opener));
+        renderList(items, list, empty, (item, opener) => {
+          openEditor(item, null, opener);
+          if (native && /^[0-9a-f]{32}$/.test(item.id) && item.workspace_id === id) replaceAutomationLink(item);
+        });
         if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
       }
       if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
@@ -1947,24 +2014,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   runNewer?.addEventListener('click', () => {
     runIntent += 1;
+    clearRunLinkStatus();
     if (runCursors.length > 1) void loadRuns({cursors: runCursors.slice(0, -1), focus: true});
   });
   runOlder?.addEventListener('click', () => {
     runIntent += 1;
+    clearRunLinkStatus();
     if (nextRunCursor) void loadRuns({cursors: [...runCursors, nextRunCursor], focus: true});
   });
   viewWatchedRun?.addEventListener('click', () => {
     const watched = watchedRuns.get(runScope().key);
     if (!watched) return;
     runIntent += 1;
+    clearRunLinkStatus();
     expandedRuns.add(watched.id);
     runFilter = 'all';
     resetRunPages();
     syncRunFilters();
+    const target = runScope();
+    if (native && exactRunForTarget(watched, target)) selectedRun = watched;
     pushRunFilter(runFilter);
     void loadRuns({focus: true});
   });
   document.getElementById('run-history-retry')?.addEventListener('click', () => void loadRuns());
+  runLinkRetry?.addEventListener('click', () => {
+    const lookup = linkedRunRequest;
+    if (lookup && currentRunScope(lookup.target)) void openLinkedRun(lookup.target, lookup.id);
+  });
   syncRunFilters();
   for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
     const button = document.getElementById(id);
@@ -1972,7 +2048,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.addEventListener('click', async () => {
       if (filter === runFilter) return;
       runIntent += 1;
+      clearRunLinkStatus();
       runFilter = filter;
+      if (selectedRun && !matchesRunFilter(selectedRun, filter)) selectedRun = null;
       resetRunPages();
       syncRunFilters();
       pushRunFilter(filter);
@@ -1982,11 +2060,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (view && typeof view.addEventListener === 'function') {
     view.addEventListener('popstate', () => {
       const wanted = runFilterFromSearch(readSearch());
-      if (wanted === runFilter) return;
+      const linked = automationTargetFromSearch(readSearch());
+      const target = runScope();
+      const inEditor = currentRunScope(target) && linked?.automation === target.automation && linked.workspace === target.workspace;
+      const selectionChanged = inEditor && (selectedRun?.id || linkedRunRequest?.id) !== linked.run;
+      if (wanted === runFilter && !selectionChanged) return;
       runIntent += 1;
+      clearRunLinkStatus();
       runFilter = wanted;
       resetRunPages();
       syncRunFilters();
+      if (selectionChanged) {
+        selectedRun = null;
+        if (linked.run) void openLinkedRun(target, linked.run);
+      }
       loadRuns();
     });
   }

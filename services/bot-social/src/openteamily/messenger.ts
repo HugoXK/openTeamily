@@ -677,12 +677,15 @@ function conversationAgents(ot: OtContext, conversationId: string) {
 
 const MAX_INFERRED_AGENTS = 20;
 const TYPED_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@][\p{L}\p{N}_]/u;
+const MENTION_START = /(?:^|[\s(（\[，。！？、,:：;；])[＠@]/gu;
+const MENTION_HANDLE = /^[\p{L}\p{N}._-]{1,40}/u;
+const NAME_CONTINUES = /^(?:[\p{L}\p{N}\p{M}_/\\-]|\.[\p{L}\p{N}\p{M}_-])/u;
 const ALL_PEOPLE_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@](?:all|everyone|所有人|全体)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/iu;
 const ALL_AGENT_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@]所有智能体(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/u;
 
 function mentionText(body: string) {
-  // Match the literal forms skipped by the DS-Bot group composer.
-  return body.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^\s)]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g, " ");
+  // Skip the DS-Bot composer's literal forms without joining pieces of a name across them.
+  return body.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^\s)]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g, "\0");
 }
 
 function ordinaryAgentGroup(conv: {kind: string; dm_key?: string | null; group_archived_at?: unknown}) {
@@ -793,12 +796,52 @@ function agentMentioned(mentions: string[], agent: ReplyAgent) {
     : mentions.includes(agent.agent_ref.toLowerCase()) || mentions.includes(agent.name.toLowerCase());
 }
 
-function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, addressText: string, selectedAgents: unknown,
+function groupNameMentions(addressText: string, handles: Set<string>, members: Set<string>, agents: ConversationAgent[]) {
+  const byRef = new Map<string, string | null>();
+  const byName = new Map<string, string | null>();
+  for (const agent of agents) {
+    const key = agentMentionKey(agent.owner_id, agent.agent_ref);
+    const ref = agent.agent_ref.toLowerCase(), name = agent.name.toLowerCase();
+    byRef.set(ref, byRef.has(ref) ? null : key);
+    byName.set(name, byName.has(name) ? null : key);
+  }
+  const aliases = new Map([...byRef, ...byName]);
+  const names = [...aliases.keys()].sort((a, b) => b.length - a.length);
+  const mentions = new Set<string>();
+  for (const handle of handles) {
+    const key = members.has(handle) ? handle : aliases.get(handle);
+    if (key) mentions.add(key);
+  }
+  let named = false;
+  let consumed = 0;
+  const plain = addressText.toLowerCase();
+  for (const match of plain.matchAll(MENTION_START)) {
+    const start = match.index + match[0].length;
+    if (start <= consumed) continue;
+    const alias = names.find(name => plain.startsWith(name, start));
+    const handle = MENTION_HANDLE.exec(plain.slice(start))?.[0] ?? "";
+    if (members.has(handle) && (!alias || handle.length >= alias.length)) {
+      mentions.add(handle);
+    } else if (alias) {
+      consumed = start + alias.length;
+      named = true;
+      const key = aliases.get(alias);
+      if (key && !NAME_CONTINUES.test(plain.slice(consumed))) mentions.add(key);
+    }
+  }
+  return {mentions:[...mentions], named};
+}
+
+function parseMentions(ot: OtContext, conv: Group, raw: unknown, bodyText: string, addressText: string, selectedAgents: unknown,
   agents: ConversationAgent[], scope?: "group" | "direct", studio = false) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
+  const members = new Set(ot.all<{handle:string}>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", conv.id).map(r => r.handle));
+  if (selectedAgents === undefined && ordinaryAgentGroup(conv) && agents.length && (handles.size || /[@＠]/u.test(addressText))) {
+    const {mentions, named} = groupNameMentions(addressText, handles, members, agents);
+    return {mentions, named, body:bodyText, agents:agents.filter(agent => mentions.includes(agentMentionKey(agent.owner_id, agent.agent_ref)))};
+  }
   for (const m of addressText.matchAll(/(?:^|[\s(（\[，。！？、,:：;；])[＠@]([\p{L}\p{N}._-]{1,40})/gu)) handles.add(handleKey(m[1]));
-  const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
   if (selectedAgents === undefined) {
     const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
     const mentions = [...handles].filter(h => members.has(h) || legacy.has(h));
@@ -1431,8 +1474,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const roster = ordinaryDm && scope !== "direct" ? [] : conversationAgents(ot, conv.id);
       const selected = Array.isArray(b.agent_mentions) && b.agent_mentions.length === 0 ? undefined : b.agent_mentions;
       const addressText = conv.kind === "group" ? mentionText(bodyText) : bodyText;
-      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
-      const addressed = selected !== undefined || parsed.mentions.length > 0 || TYPED_ADDRESS.test(addressText);
+      const parsed = parseMentions(ot, conv, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
+      const addressed = selected !== undefined || parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
       const canQueueGroup = ordinaryAgentGroup(conv) && !voice && !file && !sourceConversation;
       const allPeople = ordinaryAgentGroup(conv) && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
@@ -1440,7 +1483,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const unaddressed = canQueueGroup && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
       const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
-      const suppressed = canQueueGroup && targets.length === 0 && (policy.mode !== "default" || quote?.author_kind === "agent");
+      const suppressed = canQueueGroup && targets.length === 0 && (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {memoryCitationFromSearch, mount} from '../openteamily/static/memory/app.mjs';
-import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt} from '../openteamily/static/memory/action-review.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt, decodeActionEdit,
+  advanceActionEdit, reconcileActionEdit} from '../openteamily/static/memory/action-review.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -26,6 +27,34 @@ test('directory and action queries encode filters and omit empty values', () => 
   assert.equal(actionQuery('', 'open'), '?status=open');
   assert.equal(actionQuery('跟进', 'done'), '?q=%E8%B7%9F%E8%BF%9B&status=done');
   assert.equal(actionQuery('', ''), '');
+});
+
+test('action edit drafts preserve concurrent changes and isolate overlapping fields for review', () => {
+  const base = {title:'旧标题', notes:'原备注', status:'open', due:'', memory_page_id:''};
+  const fields = {...base, title:'我的标题', notes:'我的备注'};
+  const saved = {...base, notes:'另一设备的备注', status:'done'};
+  assert.deepEqual(decodeActionEdit(JSON.stringify({base,fields})), {base,fields});
+  assert.equal(decodeActionEdit(JSON.stringify({base,fields:{...fields, memory_page_id:'malformed'}})), null);
+  assert.deepEqual(reconcileActionEdit(base,fields,saved), {
+    fields:{...saved,title:'我的标题'}, conflicts:['notes'],
+  });
+  assert.deepEqual(reconcileActionEdit(base,fields,fields), {fields,conflicts:[]});
+});
+
+test('an in-flight action edit keeps a return to the old value as a new draft after its save commits', () => {
+  const base = {title:'标题', notes:'原备注', status:'open', due:'', memory_page_id:''};
+  const submitted = {...base, notes:'提交的备注'};
+  const pending = {revision:1, submitted};
+  const draft = {base, fields:base, pending};
+  assert.deepEqual(decodeActionEdit(JSON.stringify(draft)), draft);
+  assert.deepEqual(advanceActionEdit(draft, base, 1), draft);
+  const saved = {...submitted, status:'done'};
+  const confirmed = advanceActionEdit(draft, saved, 2);
+  assert.deepEqual(confirmed, {base:submitted, fields:base});
+  assert.deepEqual(reconcileActionEdit(confirmed.base, confirmed.fields, saved), {fields:{...base,status:'done'}, conflicts:[]});
+  const concurrent = {...saved, notes:'另一设备修改'};
+  const newer = advanceActionEdit(draft, concurrent, 3);
+  assert.deepEqual(reconcileActionEdit(newer.base, newer.fields, concurrent).conflicts, ['notes']);
 });
 
 test('recovered action review retains the original request and only resends the previously selected actions', () => {

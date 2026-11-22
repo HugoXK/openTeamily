@@ -11,7 +11,11 @@ const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
     'cf6f9ddbf898ded9429c6895c43eea8175c9b57e2777f4800c8c4f89acd97035',
-    'd182b56b39b7c1b4ff2494c7413118807b9adf428bc2ba9f27c1e91c1e3c1e17',
+    'e62dccc37a0c02e962468eab381fd8b5e8334f1ee6b51f3bd94fae3fba904f8a',
+  ],
+  'src/client/at-menu.js': [
+    'a0feee8fdb684324e7160f422c7930ec4ae032ef214d5d4651a7f6ede3c82124',
+    '774bc40c1b6894be3913d9c7161d3f89c125038c8e81874ee9b6dbc0ec0c5bb7',
   ],
   'src/client/group-settings.js': [
     '4f4aa19f4972f734c6fe8d71553a6c17386d9418bd84e56106ed4e48b9b7fdca',
