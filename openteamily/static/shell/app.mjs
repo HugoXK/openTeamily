@@ -293,10 +293,6 @@ function bindAccountMenu(doc) {
   const menu = doc.getElementById('account-menu');
   if (!button || !menu || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
-  if (!button.hasAttribute('data-account-icon')) {
-    button.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg>';
-    button.setAttribute('data-account-icon', '');
-  }
   const items = () => [...menu.querySelectorAll('a[href], button:not(:disabled)')]
     .filter(item => item.getClientRects().length > 0);
   const openMenu = () => {
@@ -425,22 +421,6 @@ function bindAppearanceToggle(doc) {
   });
 }
 
-function arrangeRail(doc) {
-  const rail = doc.querySelector('body.app-workspace > .app-rail');
-  const account = rail?.querySelector(':scope > .account-slot');
-  if (!account || rail.querySelector(':scope > .rail-actions')) return;
-  const actions = doc.createElement('div');
-  actions.className = 'rail-actions';
-  const appearance = rail.querySelector(':scope > #appearance-toggle');
-  const profile = rail.querySelector(':scope > a.rail-signed-in[href="/profile"]');
-  profile?.remove();
-  for (const child of [...rail.children]) {
-    if (!child.matches('.brand-mark, .rail-spacer') && child !== account && child !== appearance) actions.append(child);
-  }
-  rail.querySelector(':scope > .rail-spacer')?.remove();
-  rail.insertBefore(actions, appearance || account);
-}
-
 function enhanceChrome() {
   document.body.classList.add('app');
   if (!document.querySelector('.skip-link')) {
@@ -453,7 +433,6 @@ function enhanceChrome() {
   for (const nav of document.querySelectorAll('nav')) {
     if (!nav.getAttribute('aria-label')) nav.setAttribute('aria-label', '管理导航');
   }
-  arrangeRail(document);
   bindMobileNavigation(document);
   markNavigation();
   decorateStatus(document.getElementById('status'));
