@@ -775,18 +775,22 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   assert.equal(interrupted.error_code, 'interrupted')
   assert.equal(interrupted.finished, clock.now)
   assert.equal(restored.ops.runs({workspace_id: W, id: first.id}).has_pending, false)
-  assert.equal(restored.ops.runs({workspace_id: W, id: second.id, status: 'queued'}).items[0].id, queuedId)
+  const queued = restored.ops.runs({workspace_id: W, id: second.id, status: 'queued'}).items[0]
+  assert.equal(queued.id, queuedId)
+  assert.equal(queued.automation_revision,undefined)
   assert.equal(restored.ops.cancel({workspace_id: W, id: third.id, run_id: cancelledId}).run.status, 'cancelled')
   restored.start()
   restored.start()
   await Promise.all(restored.inflight.values())
   assert.deepEqual(calls.map(item => item.requestId), [`ot-automation:${queuedId}`])
-  assert.equal(restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run.status, 'succeeded')
+  const result = restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run
+  assert.equal(result.status,'succeeded')
+  assert.equal(result.automation_revision,1)
   assert.deepEqual(restored.db.prepare('SELECT run_id,status FROM ot_automation_run_notices ORDER BY run_id').all()
     .map(row => [row.run_id, row.status]), [[claimedId, 'interrupted'], [queuedId, 'succeeded']])
 })
 
-test('an automation queued behind an active native run survives a process interruption', async t => {
+test('queued runs keep their accepted settings revision through edits and a process interruption', async t => {
   const {e, feature, dbPath, clock} = fixture(() => new Promise(() => {}))
   const draft = {workspace_id:W, template_id:'custom', prompt:'Respond once', participants:['alice'],
     schedule:{kind:'now',time_zone:'UTC'}}
@@ -799,6 +803,8 @@ test('an automation queued behind an active native run survives a process interr
   assert.equal(running.status,'running')
   assert.equal(waiting.status,'queued')
   assert.deepEqual([...feature.inflight.keys()],[running.id])
+  const changed = e['automations/update']({workspace_id:W,id:next.id,revision:1,
+    changes:{title:'New name after admission',prompt:'Use the new instructions only in later runs'}}).automation
   await flush()
   feature.stop()
   feature.db.close()
@@ -819,8 +825,18 @@ test('an automation queued behind an active native run survives a process interr
   runtimeReady = true
   restored.tick()
   await Promise.all(restored.inflight.values())
-  assert.deepEqual(calls.map(({requestId})=>requestId),[`ot-automation:${waiting.id}`])
+  assert.deepEqual(calls.map(({requestId,prompt})=>[requestId,prompt]),[
+    [`ot-automation:${waiting.id}`,'[OpenTeamily 自动化 · Waiting before restart]\nRespond once'],
+  ])
   assert.equal(restored.ops.run(scope).run.status,'succeeded')
+  assert.equal(restored.ops.run(scope).run.automation_revision,1)
+  assert.doesNotMatch(JSON.stringify(restored.ops.run(scope)),/Respond once|queued_prompt/)
+  assert.equal(restored.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(waiting.id).queued_prompt,null)
+  const later = restored.ops.runNow({workspace_id:W,id:next.id,idempotency_key:'new-settings-run-0001'}).run
+  assert.notEqual(later.id,waiting.id)
+  assert.equal(later.automation_revision,changed.revision)
+  await Promise.all(restored.inflight.values())
+  assert.equal(calls[1].prompt,'[OpenTeamily 自动化 · New name after admission]\nUse the new instructions only in later runs')
 })
 
 test('a cold clock leaves due slots and manual runs unclaimed until a native runtime is available', async t => {
@@ -845,6 +861,7 @@ test('a cold clock leaves due slots and manual runs unclaimed until a native run
   assert.equal(removing.status,'queued')
   assert.deepEqual(feature.ops.runs({workspace_id:W,id:daily.id}).items,[])
   assert.equal(feature.ops.cancel({workspace_id:W,id:cancelled.id,run_id:removing.id}).run.status,'cancelled')
+  assert.equal(feature.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(removing.id).queued_prompt,null)
   assert.deepEqual(calls,[])
 
   runtimeReady = true
@@ -867,7 +884,9 @@ test('older pending native rows have unknown delivery and become interrupted aft
     prompt: 'Check once', participants: ['alice'], schedule: {kind: 'now', time_zone: 'UTC'}, idempotency_key: 'r'.repeat(16)})
   const id = 'f'.repeat(32)
   feature.db.exec(`DROP TRIGGER ot_automation_notice_on_finish; DROP INDEX ot_automation_unclaimed_work;
-    ALTER TABLE ot_automation_runs DROP COLUMN claimed_at`)
+    ALTER TABLE ot_automation_runs DROP COLUMN claimed_at;
+    ALTER TABLE ot_automation_runs DROP COLUMN automation_revision;
+    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt`)
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()

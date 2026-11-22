@@ -12,7 +12,7 @@ import { BODY_MAX, TITLE_MAX, validBody } from '../artifacts/model.js'
 import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { openDatabase, newId } from '../../src/store.js'
-import { teamRunSource } from '../shares/team-run-source.js'
+import { teamRunSource, teamRunWorkKey } from '../shares/team-run-source.js'
 
 export const MIN_STEPS = 2
 export const MAX_STEPS = 8
@@ -177,6 +177,21 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     return out
   }
 
+  async function withSavedWorks(receipt) {
+    const run = receipt.run
+    const positions = run.steps.filter(step => step.status === 'succeeded' && step.output.trim()).map(step => step.position)
+    if (!positions.length) return receipt
+    try {
+      const {items} = await host.call('artifacts/savedTeamRunWorks', {workspace_id: run.workspace_id, run_id: run.id, positions})
+      const found = new Map(items.map(item => [item.position, item.id]))
+      for (const step of run.steps) {
+        const id = found.get(step.position)
+        if (typeof id === 'string' && ID.test(id)) step.saved_artifact_id = id
+      }
+    } catch { /* The run is still readable if the work library is unavailable. */ }
+    return receipt
+  }
+
   async function sourceContext(workspaceId, source) {
     try {
       return await host.call('shares/teamRunContext', {workspace_id: workspaceId, source})
@@ -286,7 +301,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         FROM team_runs r WHERE r.workspace_id=? ORDER BY r.created DESC,r.id DESC LIMIT ?`, workspaceId, LIMITS.runs)
       return { items: rows.map(row => view(row, false)) }
     },
-    get: async (p) => ({ run: view(loadRun(await workspace(p), p.id)) }),
+    get: async (p) => withSavedWorks({run: view(loadRun(await workspace(p), p.id))}),
     async create(p) {
       const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)
@@ -305,7 +320,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         return { status: 200, run: view(prior) }
       }
       const prior = existing()
-      if (prior) return prior
+      if (prior) return withSavedWorks(prior)
       const heads = new Map()
       for (const id of new Set(parsed.map(s => s.agent_id))) {
         let agent
@@ -319,7 +334,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
           await sourceContext(workspaceId, source)
         } catch (error) {
           const concurrent = existing()
-          if (concurrent) return concurrent
+          if (concurrent) return withSavedWorks(concurrent)
           throw error
         }
       }
@@ -339,7 +354,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         }
         return { id }
       })
-      return saved.run ? saved : { status: 201, run: view(advance(saved.id)) }
+      return saved.run ? withSavedWorks(saved) : { status: 201, run: view(advance(saved.id)) }
     },
     async cancel(p) {
       const row = loadRun(await workspace(p), p.id)
@@ -351,7 +366,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         })
         for (const {position} of steps(row.id)) previews.delete(stepKey(row.id, position))
       }
-      return { run: view(one('SELECT * FROM team_runs WHERE id=?', row.id)) }
+      return withSavedWorks({run: view(one('SELECT * FROM team_runs WHERE id=?', row.id))})
     },
     async remove(p) {
       const row = loadRun(await workspace(p), p.id)
@@ -385,7 +400,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         for (const index of reset) setStep(row.id, index, { status: 'waiting', error_code: null, started: null, finished: null })
         run("UPDATE team_runs SET status='running', updated=? WHERE id=?", clock(), row.id)
       })
-      return { run: view(advance(row.id)) }
+      return withSavedWorks({run: view(advance(row.id))})
     },
     async 'step-artifact'(p) {
       const row = loadRun(await workspace(p), p.id)
@@ -393,7 +408,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       if (!step || step.status !== 'succeeded' || !step.output.trim()) fail('conflict', 'Only a finished step with output can be saved', 409)
       if (!validBody(step.output)) fail('too_large', `步骤结果无法保存为 ${BODY_MAX} 字以内的文档。`, 413)
       const base = `${row.title} · 第 ${step.position + 1} 步`.slice(0, TITLE_MAX).toWellFormed()
-      const key = sha(`artifact-source:team_run:${row.id}:${step.position}`)
+      const key = teamRunWorkKey(row.id, step.position)
       const save = title => host.call('artifacts/v1', { method: 'POST', path: `/v1/workspaces/${row.workspace_id}/artifacts`,
         body: { title, body: step.output, kind: 'document' }, idempotency_key: key })
       try {

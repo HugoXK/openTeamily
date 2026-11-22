@@ -48,7 +48,7 @@ test('Studio copy verifies the reviewed private revision and keeps a stable per-
   assert.equal((await other.call('artifacts', 'POST', path, input)).status, 404)
   assert.equal(outgoing.length, 0)
   assert.equal((await call('POST', path, input)).body.error.code, 'studio_copy_unconfirmed')
-  assert.deepEqual((await call('POST', path, input)).body, {id:studioId})
+  assert.deepEqual((await call('POST', path, input)).body, {id:studioId,workspace_id:WS})
   assert.deepEqual(outgoing[0], {title:input.title, body:privateBody, client_key:outgoing[1].client_key})
   assert.match(outgoing[1].client_key, /^[a-f0-9]{64}$/)
   const originalPath = base('/' + original.id)
@@ -59,6 +59,37 @@ test('Studio copy verifies the reviewed private revision and keeps a stable per-
   assert.equal(outgoing.length, 2)
   await call('POST', path, {...input, revision:original.revision + 1, body:'Updated later'})
   assert.notEqual(outgoing[2].client_key, outgoing[1].client_key)
+})
+
+test('Studio copies from the personal runtime and a verified named source scope use distinct target receipts', async (t) => {
+  const bot = await boot()
+  const personal = bot.identity.instanceId
+  const destinations = ['b'.repeat(32), 'd'.repeat(32)]
+  const contents = {title:'Reviewed document',body:'Text from the saved version'}
+  const create = workspace => bot.call('artifacts','POST',base('',workspace),contents,key())
+  const [{body:{artifact:local}}, {body:{artifact:team}}] = await Promise.all([create(personal),create(WS)])
+  const sent = []
+  setSharedBotSocial({
+    async request(method, path, payload) {
+      sent.push({method,path,payload})
+      return {document:{id:'e'.repeat(32)}}
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  const copy = (artifact,target) => bot.call('artifacts','POST',base('/'+artifact.id+'/studio-copy',artifact.workspace_id),
+    {...contents,revision:artifact.revision,target_workspace_id:target})
+  assert.equal((await copy(local,'invalid')).status,400)
+  assert.equal(sent.length,0)
+  assert.equal((await copy(local,destinations[0])).body.workspace_id,destinations[0])
+  await copy(local,destinations[0])
+  await copy(local,destinations[1])
+  await copy(team,destinations[1])
+  assert.deepEqual(sent.map(entry=>entry.path),[destinations[0],destinations[0],destinations[1],destinations[1]]
+    .map(target=>`/v1/ot/teams/${target}/studio/documents`))
+  assert.equal(sent[0].payload.client_key,sent[1].payload.client_key)
+  assert.notEqual(sent[0].payload.client_key,sent[2].payload.client_key)
+  assert.deepEqual(sent.map(entry=>entry.payload.source_workspace_id),[undefined,undefined,undefined,WS])
 })
 
 test('copying a saved work version creates a separate private artifact and replays after the source is removed', async () => {

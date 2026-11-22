@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS ot_automation_runs (
  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
  status TEXT NOT NULL CHECK(status IN ('queued','succeeded','failed','skipped')), error_code TEXT,
- dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER, UNIQUE(automation_id, due_at));
+ dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER,
+ automation_revision INTEGER, queued_prompt TEXT, UNIQUE(automation_id, due_at));
 CREATE INDEX IF NOT EXISTS ot_automation_runs_recent ON ot_automation_runs(automation_id, started DESC, id DESC);
 CREATE INDEX IF NOT EXISTS ot_automation_runs_status_recent ON ot_automation_runs(status, automation_id, started DESC, id DESC);
 CREATE INDEX IF NOT EXISTS ot_automation_active_run ON ot_automation_runs(automation_id, started DESC, id DESC) WHERE status='queued';
@@ -193,8 +194,11 @@ export function runView(row) {
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
   if (HEX32.test(row.attempt_of || '')) out.retry_of = row.attempt_of
+  if (Number.isSafeInteger(row.automation_revision) && row.automation_revision > 0) out.automation_revision = row.automation_revision
   return out
 }
+
+const executionPrompt = ({title,prompt}) => `[OpenTeamily 自动化 · ${title}]\n${prompt}`
 
 export function createAutomations({ db, turn, runtimeReady = () => true, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
   readMeetingAction, readMemoryAction, studioRequest, requireWorkspace, readSavedWorks }) {
@@ -264,14 +268,17 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     if (!all('PRAGMA table_info(ot_automations)').some(column => column.name === 'notification_policy')) {
       run("ALTER TABLE ot_automations ADD COLUMN notification_policy TEXT NOT NULL DEFAULT 'scheduled' CHECK(notification_policy IN ('scheduled','all','off'))")
     }
-    const legacyPending = !all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')
+    const runColumns = new Set(all('PRAGMA table_info(ot_automation_runs)').map(column => column.name))
+    if (!runColumns.has('automation_revision')) run('ALTER TABLE ot_automation_runs ADD COLUMN automation_revision INTEGER')
+    if (!runColumns.has('queued_prompt')) run('ALTER TABLE ot_automation_runs ADD COLUMN queued_prompt TEXT')
+    const legacyPending = !runColumns.has('claimed_at')
     if (legacyPending) {
       run('ALTER TABLE ot_automation_runs ADD COLUMN claimed_at INTEGER')
       // Older pending rows combined queued and running; their delivery is uncertain.
       run("UPDATE ot_automation_runs SET claimed_at=started WHERE status='queued'")
     } else db.exec(NOTICE_TRIGGER)
     const dispatch = { backend: 'ds-bot', result: { error: '上次运行因 DS-Bot 重启而中断。请检查已有结果，再决定是否重试。' } }
-    run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?
+    run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?, queued_prompt=NULL
       WHERE status='queued' AND claimed_at IS NOT NULL`, clock(), JSON.stringify(dispatch))
     if (legacyPending) db.exec(NOTICE_TRIGGER)
   })
@@ -451,16 +458,26 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   // Claim before publishing a receipt; run the model outside the dispatch call.
   function execute(runId) {
     if (inflight.has(runId)) return inflight.get(runId)
-    const claimed = run("UPDATE ot_automation_runs SET claimed_at=? WHERE id=? AND status='queued' AND claimed_at IS NULL", clock(), runId)
-    if (!claimed.changes) return
+    const item = tx(db, () => {
+      const row = one(`SELECT r.workspace_id, r.automation_id, r.automation_revision, r.queued_prompt,
+        a.revision, a.title, a.prompt FROM ot_automation_runs r JOIN ot_automations a
+        ON a.id=r.automation_id AND a.workspace_id=r.workspace_id
+        WHERE r.id=? AND r.status='queued' AND r.claimed_at IS NULL`, runId)
+      if (!row) return
+      // Pre-upgrade pending runs have no accepted snapshot. Record the settings
+      // actually used and keep the new snapshot only while its run is queued.
+      run('UPDATE ot_automation_runs SET claimed_at=?, automation_revision=?, queued_prompt=NULL WHERE id=?',
+        clock(), row.automation_revision ?? row.revision, runId)
+      return {workspace_id:row.workspace_id, automation_id:row.automation_id, prompt:row.queued_prompt ?? executionPrompt(row)}
+    })
+    if (!item) return
     const job = Promise.resolve().then(async () => {
-      const item = one('SELECT r.*, a.title, a.prompt FROM ot_automation_runs r JOIN ot_automations a ON a.id=r.automation_id WHERE r.id=?', runId)
-      if (!item || item.status !== 'queued') return
+      if (!one("SELECT 1 FROM ot_automation_runs WHERE id=? AND status='queued'", runId)) return
       try {
         const reply = await turn({
           skillScope: `automation:${item.workspace_id}:${item.automation_id}`,
           conversation: `automation:${item.automation_id}`,
-          prompt: `[OpenTeamily 自动化 · ${item.title}]\n${item.prompt}`,
+          prompt: item.prompt,
           requestId: `ot-automation:${runId}`,
         })
         const text = String(reply?.text ?? '').trim()
@@ -497,8 +514,9 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   function insertRun(row, due, attemptOf = null) {
     const id = newId()
     run(`INSERT INTO ot_automation_runs
-      (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`, id, row.id, row.workspace_id, due, clock(), null, 'queued', null, JSON.stringify({ backend: 'ds-bot' }), attemptOf)
+      (id,automation_id,workspace_id,due_at,started,status,dispatch,attempt_of,automation_revision,queued_prompt)
+      VALUES(?,?,?,?,?,'queued',?,?,?,?)`, id, row.id, row.workspace_id, due, clock(),
+      JSON.stringify({backend:'ds-bot'}), attemptOf, row.revision, executionPrompt(row))
     return id
   }
 
@@ -932,7 +950,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     const row = load(workspaceOf(payload), payload.id)
     const item = loadRun(row, payload.run_id)
     const dispatch = JSON.stringify({ backend: 'ds-bot', result: { cancelled: true } })
-    const cancelled = run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='cancelled', dispatch=?
+    const cancelled = run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='cancelled', dispatch=?, queued_prompt=NULL
       WHERE id=? AND status='queued' AND claimed_at IS NULL`, clock(), dispatch, item.id)
     if (!cancelled.changes) refuse(409, 'conflict', '只有尚未启动的运行可以取消。')
     return { run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', item.id)) }

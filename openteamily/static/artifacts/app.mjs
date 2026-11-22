@@ -691,7 +691,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const studioCopy = mountStudioCopy(document, {
     source: () => ({
       selection: editor, item: current,
-      team: nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+      workspaces: nativeCatalog ? studioWorkspaces : [],
     }),
     ready(selection) {
       if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';

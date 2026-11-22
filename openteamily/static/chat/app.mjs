@@ -10,7 +10,8 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
+  signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
@@ -1496,10 +1497,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
   }
 
-  function makeSendJob(queue, message, files, reply, sticker) {
+  function makeSendJob(queue, message, files, reply, sticker, sendKey) {
     const firstText = servedByDsbot && !queue.social && !queue.conversationId &&
       !queue.jobs.length && !files.length && !reply && !sticker;
-    const key = firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+    const key = sendKey || (firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-'));
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
@@ -1548,8 +1549,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return job;
   }
 
-  function removeSendJob(queue, job) {
+  function removeSendJob(queue, job, {keepStored = false} = {}) {
     queue.jobs = queue.jobs.filter(item => item !== job);
+    if (job.storedText && !keepStored) savePendingPrivateText(document.defaultView, queue.scope, job.key);
     job.bubble.remove();
     job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
@@ -1561,7 +1563,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopGroupReplyProgress();
     stopPolling();
     for (const queue of pendingSends.values()) {
-      for (const job of queue.jobs) removeSendJob(queue,job);
+      for (const job of queue.jobs) removeSendJob(queue,job,{keepStored:true});
     }
     pendingSends.clear();
     privateReplyRetries.clear();
@@ -1594,10 +1596,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? {message, reply} : null;
   }
 
-  async function privateSendReceipt(target, key, current, accept = () => true) {
+  async function privateSendReceipt(target, key, current, accept = () => true, delays = [0, 350, 800]) {
     const query = new URLSearchParams({key, receipt: '1'});
     const path = `${target.base}/${target.conversationId}/reply-progress?${query}`;
-    for (const delay of [0, 350, 800]) {
+    for (const delay of delays) {
       if (delay) await new Promise(resolve => globalThis.setTimeout(resolve, delay));
       if (!current()) return null;
       const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(3000)).catch(() => null);
@@ -3007,6 +3009,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentReplyViews.clear();
     lastAgentItems = items || [];
     syncCaptureButton();
+    restorePendingPrivateText(lastAgentItems);
     const queue = pendingSends.get(sendScope());
     if (queue && !queue.social) {
       const delivered = new Set(lastAgentItems.filter(item => item.role === 'user').map(item => item.client_key).filter(Boolean));
@@ -8528,22 +8531,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function queueChatMessage(message, files, reply, sticker) {
-    const field = document.getElementById('chat-body');
-    const social = currentSource === 'social';
-    const scope = sendScope();
-    let queue = pendingSends.get(scope);
-    if (!queue) {
-      queue = {
-        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
-        base: social ? socialBase() : `${agentBase()}/conversations`,
-        conversationId: currentConversation?.id, jobs: [], active: false,
-        createKey: currentConversation ? null : idempotencyKey('chat-'),
-        memoryScope: memoryDrafts.get(scope),
-      };
-      pendingSends.set(scope, queue);
-    }
+    const queue = currentChatSendQueue();
+    const {social,scope} = queue;
     const job = makeSendJob(queue, message, files, reply, sticker);
     if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
+    if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+      // A reload can interrupt the request after the composer clears.
+      job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+    }
+    const field = document.getElementById('chat-body');
     queue.jobs.push(job);
     if (!sticker) {
       field.value = '';
@@ -8562,6 +8558,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     scroller.scrollTop = scroller.scrollHeight;
     if (!social) resumePrivateSending();
     void drainSends(queue);
+  }
+
+  function currentChatSendQueue() {
+    const social = currentSource === 'social', scope = sendScope();
+    let queue = pendingSends.get(scope);
+    if (!queue) {
+      queue = {
+        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
+        base: social ? socialBase() : `${agentBase()}/conversations`,
+        conversationId: currentConversation?.id, jobs: [], active: false,
+        createKey: currentConversation ? null : idempotencyKey('chat-'),
+        memoryScope: memoryDrafts.get(scope),
+      };
+      pendingSends.set(scope, queue);
+    }
+    return queue;
+  }
+
+  function restorePendingPrivateText(items) {
+    if (!currentPrivateThread()) return;
+    const scope = sendScope();
+    const stored = readPendingPrivateText(document.defaultView, scope);
+    if (!stored.length) return;
+    const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
+    for (const {key,message} of stored) {
+      if (delivered.has(key)) {
+        savePendingPrivateText(document.defaultView, scope, key);
+        continue;
+      }
+      const queue = currentChatSendQueue();
+      if (queue.jobs.some(job => job.key === key)) continue;
+      const job = makeSendJob(queue, message, [], null, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      const checking = () => pendingSends.get(scope) === queue && queue.jobs.includes(job) && job.failed && currentUser?.id === queue.owner;
+      void privateSendReceipt(queue, key, checking, () => true, [0]).then(pair => {
+        if (!pair || !checking()) return;
+        removeSendJob(queue, job);
+        if (scope !== sendScope()) return;
+        renderPendingSend();
+        if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
+      });
+    }
   }
 
   async function drainSends(queue) {
@@ -8602,6 +8643,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
+            if (job.storedText) savePendingPrivateText(document.defaultView, queue.scope, job.key, job.message);
             job.preferences = null;
           }
           if (!queue.conversationId) {

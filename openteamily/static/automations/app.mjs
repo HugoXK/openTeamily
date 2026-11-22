@@ -140,6 +140,9 @@ export function runDetailFields(run) {
   if (typeof result.source === 'string' && result.source) fields.push({label: '来源', value: result.source});
   const trigger = {manual: '手动运行', scheduled: '定时触发', retry: '重新运行'}[run.trigger];
   if (typeof trigger === 'string') fields.push({label: '触发方式', value: trigger});
+  if (Number.isSafeInteger(run.automation_revision) && run.automation_revision > 0) {
+    fields.push({label: '设置版本', value: '第 ' + run.automation_revision + ' 版'});
+  }
   const dispatch = run.dispatch || {};
   if (typeof dispatch.backend === 'string' && dispatch.backend) {
     const location = dispatch.backend === 'ds-bot' ? '个人 DS-Bot'

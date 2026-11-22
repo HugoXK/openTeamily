@@ -200,8 +200,10 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
 
 async function copyToStudio(req, workspaceId, artifactId) {
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid Studio copy request')
-  const {revision, title, body} = requireBodyKeys(await req.json(70_000), ['revision', 'title', 'body'])
-  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string') {
+  const {revision, title, body, target_workspace_id:target = workspaceId} = requireBodyKeys(await req.json(70_000),
+    ['revision', 'title', 'body', 'target_workspace_id'])
+  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string' ||
+      typeof target !== 'string' || !HEX32.test(target)) {
     refuse(400, 'invalid', 'Invalid Studio copy review')
   }
   const source = mustLoad(req, workspaceId, artifactId)
@@ -212,12 +214,15 @@ async function copyToStudio(req, workspaceId, artifactId) {
   }
   // The team service checks active membership and consumes the same key even
   // if the client did not receive the original acknowledgment.
-  const clientKey = digest(JSON.stringify(['artifact-studio-copy', workspaceId, artifactId, revision]))
+  const originalKey = ['artifact-studio-copy', workspaceId, artifactId, revision]
+  const clientKey = digest(JSON.stringify(target === workspaceId ? originalKey : [...originalKey,target]))
+  const scopedSource = target !== workspaceId && workspaceId !== req.identity?.instanceId
   try {
-    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${workspaceId}/studio/documents`, {
+    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${target}/studio/documents`, {
       title: studioTitle, body: source.body, client_key: clientKey,
+      ...(scopedSource ? {source_workspace_id:workspaceId} : {}),
     })
-    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id}}
+    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id, workspace_id:target}}
   } catch (error) {
     const code = /^social\/([a-z][a-z0-9_]{0,59})$/.exec(error?.code || '')?.[1]
     if (code && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {

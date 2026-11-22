@@ -1434,6 +1434,7 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #duplicate-artifact-title { width: 100%; margin-top: .3rem; }
 #studio-copy-open { justify-self: start; }
 #studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
+#studio-copy-target-workspace { max-width: 100%; }
 #shared-work-copy-dialog { box-sizing: border-box; }
 #work-version-dialog {
   box-sizing: border-box;

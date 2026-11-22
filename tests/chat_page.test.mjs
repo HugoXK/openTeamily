@@ -8,7 +8,8 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
-import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
+import {pendingSignupSession, readChatDrafts, readPendingPrivateText, rememberSignupSession, savePendingPrivateText,
+  writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
 import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
 
 const alice = 'a'.repeat(32);
@@ -3768,6 +3769,23 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
     chat: {items: [fixture.agent], conversations},
   });
 }
+
+test('pending private text keeps its send key alongside an independent newer draft', () => {
+  const {view} = publicOpeningView();
+  const scope = JSON.stringify([alice,linkWork,'agent',linkAgent,linkThread]);
+  const other = JSON.stringify([bob,linkWork,'agent',linkAgent,linkThread]);
+  const fresh = JSON.stringify([alice,linkWork,'agent',linkAgent,null]);
+  const key = 'msg-confirm-original-key';
+  const message = {body:'先发出的消息',chat_language:'zh-CN'};
+  assert.equal(savePendingPrivateText(view,scope,key,message),true);
+  assert.equal(writeChatDrafts(view,alice,new Map([[scope,'后写的草稿']])),true);
+  assert.deepEqual(readPendingPrivateText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingPrivateText(view,other),[]);
+  assert.equal(savePendingPrivateText(view,fresh,key,message),false);
+  assert.equal(savePendingPrivateText(view,scope,key),true);
+  assert.deepEqual(readPendingPrivateText(view,scope),[]);
+  assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
+});
 
 test('a reloaded quote keeps its text scoped and ignores a late lookup after changing workspaces', async () => {
   const initial = `#workspace=${linkTeam}&social=${linkSocial}`;
