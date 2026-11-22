@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  conversationLabel, sortConversations, validMessage, memberChoices,
-} from '../openteamily/static/messenger/app.mjs';
+  conversationLabel, validMessage, memberChoices,
+} from '../openteamily/static/shell/chat-utils.mjs';
 
 const current = 'a'.repeat(32);
 
@@ -14,12 +14,6 @@ test('conversationLabel names a DM by the other members', () => {
   assert.equal(conversationLabel(dm, current), 'bob');
   assert.equal(conversationLabel({kind: 'group', title: '产品群', members: []}, current), '产品群');
   assert.equal(conversationLabel(null, current), '');
-});
-
-test('sortConversations orders newest first and does not mutate input', () => {
-  const rows = [{id: 'a', updated: 1}, {id: 'b', updated: 3}, {id: 'c', updated: 2}];
-  assert.deepEqual(sortConversations(rows).map((row) => row.id), ['b', 'c', 'a']);
-  assert.deepEqual(rows.map((row) => row.id), ['a', 'b', 'c']);
 });
 
 test('validMessage enforces a non-empty bounded body', () => {

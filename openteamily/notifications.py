@@ -4,9 +4,10 @@ Self-written for OpenTeamily; no upstream or Teamily source. A notification is
 created only when a human message names another human member of the same
 conversation as ``@username``. Visibility is re-checked on every read: a
 recipient who left the conversation or a retracted message stops showing.
-Group agent request completion is also listed for the requester. User-agent
-conversation unread aggregation and server push are not implemented here; do not describe this as Teamily notification parity.
+Group agent request completion and due message reminders are also listed.
+Work shares and creator publication notices live on Bot Social.
 """
+import json
 import re
 from uuid import uuid4
 
@@ -29,6 +30,10 @@ CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  PRIMARY KEY(reply_id, user_id));
+CREATE TABLE IF NOT EXISTS automation_reminder_reads (
+ run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(run_id, user_id));
 '''
 
 # Task-completion notifications are derived from the requester's own group agent
@@ -39,7 +44,6 @@ EXCERPT = 140
 # A mention starts at the beginning or after whitespace/punctuation and must end
 # at a boundary, so e-mail addresses and "@bobby" never notify "bob".
 MENTION = re.compile(r'(?<![\w@.])@([A-Za-z0-9_.-]{1,64})(?![\w-])')
-HEX32 = re.compile(r'[0-9a-f]{32}')
 
 
 def mentioned_names(text):
@@ -113,7 +117,64 @@ def reply_view(row):
             'created': row['updated'], 'read': row['is_read'] == 1}
 
 
-def listing(db, workspace_id, user_id, unread_only=False):
+# A due one-shot reminder is a derived notification as well: the automation run is the
+# fact and only the read marker is stored. It is addressed to the automation's own
+# participants, so another member of the same workspace never sees it.
+REMINDERS = '''
+ FROM automation_runs r
+ JOIN automations a ON a.id=r.automation_id
+ LEFT JOIN automation_reminder_reads rr ON rr.run_id=r.id AND rr.user_id=?
+ WHERE r.workspace_id=? AND a.template_id='reminder' AND r.due_at<=?
+'''
+REMINDER_KIND = 'automation_reminder'
+
+
+def _participants(raw):
+    try:
+        names = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(names, list):
+        return []
+    found = []
+    for name in names:
+        if isinstance(name, str):
+            found.append(name)
+        elif isinstance(name, dict) and isinstance(name.get('username'), str):
+            found.append(name['username'])
+    return found
+
+
+def reminder_view(row):
+    prompt = row['prompt']
+    return {'id': row['id'], 'kind': REMINDER_KIND, 'conversation_id': None, 'conversation_kind': None,
+            'conversation_title': None, 'message_id': None, 'automation_id': row['automation_id'],
+            'actor_id': None, 'actor_username': None, 'title': row['title'],
+            'excerpt': prompt if len(prompt) <= EXCERPT else prompt[:EXCERPT - 1] + '…',
+            'created': row['due_at'], 'read': row['is_read'] == 1}
+
+
+def _reminder_rows(db, workspace_id, user_id, now, extra=''):
+    user = db.execute('SELECT username FROM users WHERE id=?', (user_id,)).fetchone()
+    if user is None:
+        return []
+    rows = db.execute(
+        'SELECT r.id, r.automation_id, r.due_at, a.title, a.prompt, a.participants, '
+        '(rr.run_id IS NOT NULL) AS is_read' + REMINDERS + extra
+        + ' ORDER BY r.due_at DESC, r.id DESC LIMIT ?',
+        (user_id, workspace_id, int(now or 0), LIMIT)).fetchall()
+    return [row for row in rows if user['username'] in _participants(row['participants'])]
+
+
+def _mark_reminders(db, workspace_id, user_id, now, run_id=None):
+    extra = ' AND rr.run_id IS NULL' if run_id is None else ''
+    for row in _reminder_rows(db, workspace_id, user_id, now, extra):
+        if run_id is not None and row['id'] != run_id:
+            continue
+        db.execute('INSERT OR IGNORE INTO automation_reminder_reads(run_id,user_id) VALUES(?,?)',
+                   (row['id'], user_id))
+
+def listing(db, workspace_id, user_id, unread_only=False, now=0):
     rows = db.execute(
         'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
         'a.username AS actor_username' + VISIBLE + (' AND n.read=0' if unread_only else '')
@@ -122,15 +183,18 @@ def listing(db, workspace_id, user_id, unread_only=False):
         'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
         '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
         + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    items = [view(row) for row in rows] + [reply_view(row) for row in replies]
+    reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL' if unread_only else '')
+    items = ([view(row) for row in rows] + [reply_view(row) for row in replies]
+             + [reminder_view(row) for row in reminders])
     items.sort(key=lambda item: item['created'], reverse=True)
     return items[:LIMIT]
 
 
-def unread_count(db, workspace_id, user_id):
+def unread_count(db, workspace_id, user_id, now=0):
     mentions = db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
     replies = db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL', (workspace_id, user_id)).fetchone()[0]
-    return mentions + replies
+    reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL')
+    return mentions + replies + len(reminders)
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -138,11 +202,12 @@ def _mark_replies(db, workspace_id, user_id, extra='', args=()):
                + REPLIES + extra, (workspace_id, user_id, *args))
 
 
-def mark_read(db, workspace_id, user_id, notification_id=None):
+def mark_read(db, workspace_id, user_id, notification_id=None, now=0):
     if notification_id is None:
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_replies(db, workspace_id, user_id)
+        _mark_reminders(db, workspace_id, user_id, now)
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
                         (notification_id, workspace_id, user_id))
@@ -150,6 +215,12 @@ def mark_read(db, workspace_id, user_id, notification_id=None):
         return True
     if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
         _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))
+        return True
+    if db.execute('UPDATE artifact_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
+                  (notification_id, workspace_id, user_id)).rowcount == 1:
+        return True
+    if any(row['id'] == notification_id for row in _reminder_rows(db, workspace_id, user_id, now)):
+        _mark_reminders(db, workspace_id, user_id, now, notification_id)
         return True
     return False
 

@@ -83,6 +83,12 @@ deliberately conservative: a merged slice does not mean the whole domain is done
 
 ## Architecture
 
+- **Management server:** accounts, authentication, runtime lifecycle and routing to the authorized user’s DS-Bot.
+- **DS-Bot:** each user has one isolated instance for agents and personal workloads. The same instance serves that user across workspaces.
+- **Dedicated Bot Social:** manages shared workspaces, membership, group messaging and public sharing.
+- Instance IDs are independent of user and workspace IDs. See the [architecture](docs/ARCHITECTURE.md) for service boundaries.
+- FlyBot customization (the social plugin and instance docker helpers) and Bot Social protocol source are imported as isolated snapshots under [`runtime/flybot`](runtime/flybot/ORIGIN.md) and [`services/bot-social`](services/bot-social/ORIGIN.md); they keep their original licenses and are not relicensed as OpenTeamily MIT. This tree does not vendor the old FlyBot `core/` fork. The runtime baseline is the pinned upstream DS-Bot v0.3.8 tree under [`runtime/ds-bot-upstream`](runtime/ds-bot-upstream/UPSTREAM.md). See [migration notes](docs/upstream/MIGRATION.md), [gaps](docs/upstream/GAPS.md) and [licensing](docs/LICENSING.md).
+
 ```mermaid
 flowchart LR
   B[Browser] -->|session cookie + CSRF| W[Python WSGI management]

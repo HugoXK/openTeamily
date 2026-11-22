@@ -4,6 +4,7 @@
 // file or env pointer. This image never bakes a key, never logs one, and does
 // not enforce credits or usage limits.
 import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { validateModelEndpoint } from './model-http-policy.mjs'
 
 export const DEFAULT_FILES = [
   '/run/secrets/openteamily-model-api.json',
@@ -90,6 +91,13 @@ export function parseModelApi(raw) {
       throw new ModelApiError('model API base_url must not include credentials')
     }
   }
+  try {
+    if (baseUrl !== undefined) {
+      if (data.http_endpoint_grant !== undefined && data.base_url !== baseUrl) throw new Error()
+      validateModelEndpoint(baseUrl, data.http_endpoint_grant)
+    }
+    else if (data.http_endpoint_grant !== undefined) throw new Error()
+  } catch { throw new ModelApiError('model API endpoint or HTTP task grant rejected') }
   if (model !== undefined && !MODEL.test(model)) throw new ModelApiError('model API model is invalid')
   // The management server resolves platform default vs optional user override
   // (override wins) and writes one file. The container does not merge, and it
@@ -101,7 +109,8 @@ export function parseModelApi(raw) {
       throw new ModelApiError('model API source must be platform or user')
     }
   }
-  return { provider, api_key: apiKey, base_url: baseUrl, model, source, api_key_env: keyRefFor(provider) }
+  return { provider, api_key: apiKey, base_url: baseUrl, model, source, api_key_env: keyRefFor(provider),
+    ...(data.http_endpoint_grant !== undefined ? {http_endpoint_grant: data.http_endpoint_grant} : {}) }
 }
 
 export function contentsToModelApi(raw) {
@@ -135,6 +144,15 @@ export function loadModelApi(env = process.env) {
 // Apply non-secret fields and the API key env var. Never log the key.
 export function applyModelApi(config, env = process.env, log = console) {
   if (!config) return env
+  if (config.http_endpoint_grant !== undefined) {
+    // The native DSH provider SDK has no audited exact/no-redirect transport.
+    // Do not export this plaintext credential to that SDK or a stale provider.
+    validateModelEndpoint(config.base_url, config.http_endpoint_grant)
+    delete env[config.api_key_env]
+    for (const name of ['PROVIDER', 'BASE_URL', 'NAME', 'SOURCE']) delete env['OPENTEAMILY_MODEL_' + name]
+    log.info?.('model API ready through the DS-Bot loopback proxy')
+    return env
+  }
   env[config.api_key_env] = config.api_key
   env.OPENTEAMILY_MODEL_PROVIDER = config.provider
   if (config.base_url) env.OPENTEAMILY_MODEL_BASE_URL = config.base_url

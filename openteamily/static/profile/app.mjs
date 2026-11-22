@@ -1,3 +1,7 @@
+import '../shell/dsbot-api.mjs';
+import { mountProfileSocial } from './social.mjs';
+export { FOLLOW_WORK_EMPTY, followWorkNotice, followWorkSwitchLabel } from './social.mjs';
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -43,6 +47,31 @@ export function monogram(name) {
   return (letters[0] + letters[1]).toUpperCase();
 }
 
+export const AVATAR_LIMIT = 2 * 1024 * 1024;
+
+// The server owns the rules (2 MB cap, PNG/JPG only, session required); the page
+// only turns its status codes into Chinese, and never reports success on failure.
+export function avatarNotice(status, error) {
+  if (status === 413) return '头像不能超过 2 MB。';
+  if (status === 415) return '头像只支持 PNG 或 JPG。';
+  if (status === 400) return '这张图片无法识别，请换一张 PNG 或 JPG。';
+  if (status === 401) return '登录状态已失效，请重新登录。';
+  if (status === 403) return '页面已过期，请刷新后重试。';
+  return messageFor(error, '头像上传失败，请稍后重试。');
+}
+
+export function paintAvatarImage(node, avatar) {
+  if (!node) return false;
+  if (avatar && avatar.url) {
+    node.setAttribute('src', avatar.url);
+    node.hidden = false;
+    return true;
+  }
+  node.setAttribute('src', '');
+  node.hidden = true;
+  return false;
+}
+
 function $(id) {
   return typeof document !== 'undefined' && document.getElementById ? document.getElementById(id) : null;
 }
@@ -57,9 +86,9 @@ function isEditPath() {
   return /\/profile\/edit\/?$/.test(location.pathname || '');
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, {signal} = {}) {
   const headers = { Accept: 'application/json' };
-  const options = { method, headers, credentials: 'same-origin' };
+  const options = { method, headers, credentials: 'same-origin', signal };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     headers['X-CSRF-Token'] = csrfCookie(document.cookie);
@@ -77,14 +106,28 @@ function mount() {
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('profile-form');
   if (!status || !loginPanel || !mainPanel || !form) return;
+  const social = hasHome() ? mountProfileSocial({document, request, avatarTone, monogram}) : null;
   const goals = ['health', 'finance', 'career', 'hobbies', 'family', 'productivity', 'other'];
   let revision = 0;
   let snapshot = '';
   let currentUsername = '';
+  let currentHandle = '';
+  let profileReady = false;
+  const editInitial = document.getElementById('profile-edit-initial');
+  const editStatus = document.getElementById('profile-edit-status');
+  const editRetry = document.getElementById('profile-edit-retry');
 
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
+  }
+
+  function showProfileInitial(text, failed = false) {
+    if (!hasHome() || !editInitial) return;
+    form.hidden = !profileReady;
+    editInitial.hidden = profileReady;
+    editStatus.textContent = text;
+    editRetry.hidden = !failed;
   }
 
   function syncView() {
@@ -96,10 +139,62 @@ function mount() {
     if (edit) edit.hidden = !editing;
   }
 
+  function publicProfileUrl(handle) {
+    const origin = (typeof location !== 'undefined' && location.origin) || '';
+    return origin + '/p/' + encodeURIComponent(handle);
+  }
+
+  function openEditView() {
+    if (typeof history === 'undefined' || typeof history.pushState !== 'function') return;
+    if (!isEditPath()) history.pushState({}, '', '/profile/edit');
+    syncView();
+  }
+
+  function showShareFallback(url) {
+    const box = document.querySelector && document.querySelector('#profile-share-fallback');
+    const code = document.querySelector && document.querySelector('#profile-share-link');
+    if (code) code.textContent = url;
+    if (box) box.hidden = false;
+  }
+
+  async function shareProfile() {
+    if (!currentHandle) {
+      show('', '先设置 Teamily ID 才能分享。');
+      openEditView();
+      const input = document.getElementById('profile-handle');
+      if (input && typeof input.focus === 'function') input.focus();
+      return;
+    }
+    const url = publicProfileUrl(currentHandle);
+    const clipboard = typeof navigator !== 'undefined' && navigator.clipboard;
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      try {
+        await clipboard.writeText(url);
+        show('ok', '公开主页链接已复制。');
+        return;
+      } catch {
+        // The browser refused the clipboard; fall through to the manual-copy line.
+      }
+    }
+    show('error', '浏览器没有给出剪贴板权限，请手动复制下面的链接。');
+    showShareFallback(url);
+  }
+
   function paintAvatar(node, name) {
     if (!node) return;
     node.textContent = monogram(name);
     if (node.dataset) node.dataset.tone = avatarTone(name);
+  }
+
+  function applyAvatar(avatar) {
+    const home = document.querySelector && document.querySelector('#profile-avatar-image');
+    const edit = document.querySelector && document.querySelector('#profile-edit-avatar-image');
+    const homeTone = document.querySelector && document.querySelector('#profile-avatar');
+    const editTone = document.querySelector && document.querySelector('#profile-edit-avatar');
+    const shown = paintAvatarImage(home, avatar);
+    paintAvatarImage(edit, avatar);
+    if (homeTone) homeTone.hidden = shown;
+    if (editTone) editTone.hidden = shown;
   }
 
   function updateCounters() {
@@ -158,6 +253,7 @@ function mount() {
       if (input) input.value = (value.goals && value.goals[key]) || '';
     }
     revision = Number(value.revision || 0);
+    currentHandle = value.handle || '';
     const meta = document.getElementById('profile-meta');
     meta.textContent = revision
       ? '修订 ' + revision + ' · Teamily ID 可用于公开资料地址'
@@ -167,57 +263,14 @@ function mount() {
     const hint = document.querySelector && document.querySelector('#handle-hint');
     if (hint) hint.textContent = value.handle ? '' : '首次设置后可以再改有限次数；这里不限制修改次数。';
     if (hasHome()) {
-      const label = username || value.name || '';
+      const label = value.name || username || '';
       const nameEl = document.getElementById('profile-username');
-      if (nameEl) nameEl.textContent = username || '';
+      if (nameEl) nameEl.textContent = label;
       paintAvatar(document.querySelector('#profile-avatar'), label);
       paintAvatar(document.querySelector('#profile-edit-avatar'), label);
-      const title = document.querySelector('#followers-dialog-title');
-      if (title) title.textContent = username || '';
       updateCounters();
       markClean();
     }
-  }
-
-  function setFeed(tab) {
-    const empty = document.querySelector && document.querySelector('#profile-feed-empty');
-    const tabs = {
-      posts: ['#tab-posts', '还没有帖子，发布你的第一篇吧。'],
-      saved: ['#tab-saved', '还没有收藏。收藏功能尚未接通。'],
-      liked: ['#tab-liked', '还没有点赞。点赞功能尚未接通。'],
-    };
-    const current = tabs[tab] || tabs.posts;
-    if (typeof document.querySelectorAll === 'function') {
-      for (const button of document.querySelectorAll('.profile-tabs [role="tab"]')) {
-        button.setAttribute('aria-selected', button.id === current[0].slice(1) ? 'true' : 'false');
-      }
-    }
-    if (empty) empty.textContent = current[1];
-  }
-
-  function openFollowers(tab) {
-    const dialog = document.querySelector && document.querySelector('#followers-dialog');
-    if (!dialog) return;
-    dialog.hidden = false;
-    const following = document.querySelector('#dialog-tab-following');
-    const followers = document.querySelector('#dialog-tab-followers');
-    const search = document.querySelector('#followers-search');
-    const empty = document.querySelector('#followers-dialog-empty');
-    const isFollowers = tab !== 'following';
-    if (following) following.setAttribute('aria-selected', isFollowers ? 'false' : 'true');
-    if (followers) followers.setAttribute('aria-selected', isFollowers ? 'true' : 'false');
-    if (search) {
-      search.placeholder = isFollowers ? '搜索粉丝' : '搜索关注';
-      search.value = '';
-    }
-    if (empty) empty.textContent = isFollowers
-      ? '还没有粉丝。关注和粉丝功能尚未接通。'
-      : '还没有关注。关注和粉丝功能尚未接通。';
-  }
-
-  function closeFollowers() {
-    const dialog = document.querySelector && document.querySelector('#followers-dialog');
-    if (dialog) dialog.hidden = true;
   }
 
   async function loadAgents() {
@@ -226,19 +279,19 @@ function mount() {
     if (!list) return;
     list.replaceChildren();
     try {
-      const workspaces = await request('GET', '/v1/workspaces?limit=100');
+      const workspaces = await request('GET', '/v1/workspaces?scope=personal');
       if (workspaces.status !== 200) throw new Error('workspaces');
       const items = workspaces.body.items || workspaces.body.workspaces || [];
       const first = items[0];
       if (!first || !first.id) throw new Error('empty');
       const listed = await request('GET', `/v1/workspaces/${first.id}/agents?limit=100`);
       if (listed.status !== 200) throw new Error('agents');
-      const agents = (listed.body.items || []).filter(item => item && item.name).slice(0, 5);
+      const agents = (listed.body.items || []).filter(item => item?.id && item.name && !item.archived && !item.native_deleted).slice(0, 5);
       if (!agents.length) throw new Error('empty');
       for (const agent of agents) {
         const row = document.createElement('li');
         const link = document.createElement('a');
-        link.href = '/agents';
+        link.href = '/chat#' + new URLSearchParams({workspace: first.id, agent: agent.id});
         const face = document.createElement('span');
         face.className = 'avatar';
         face.dataset.tone = avatarTone(agent.name);
@@ -258,6 +311,8 @@ function mount() {
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
+      social?.reset();
+      profileReady = false;
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -268,6 +323,10 @@ function mount() {
       return;
     }
     const username = session.body.user.username;
+    if (currentUsername && currentUsername !== username) {
+      social?.reset();
+      profileReady = false;
+    }
     currentUsername = username;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
@@ -278,13 +337,60 @@ function mount() {
     document.getElementById('profile-username').textContent = username;
     const email = document.querySelector && document.querySelector('#profile-email');
     if (email) email.textContent = '未设置';
-    const result = await request('GET', '/v1/profile');
+    if (social && !isEditPath()) {
+      social.load(session.body.user.id || username);
+      void loadAgents();
+    }
+    showProfileInitial('正在读取资料…');
+    const result = await request('GET', '/v1/profile').catch(() => ({status: 0, body: {}}));
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法读取资料。'));
+      const error = messageFor(result.body.error, '无法读取资料。');
+      showProfileInitial(error, true);
+      if (!isEditPath() || profileReady) show('error', error);
       return;
     }
     fill(result.body.profile, username);
-    if (hasHome()) await loadAgents();
+    applyAvatar(result.body.avatar);
+    profileReady = true;
+    showProfileInitial('');
+  }
+
+  const changeAvatar = document.getElementById('profile-change-avatar');
+  const avatarInput = document.getElementById('profile-avatar-input');
+  if (changeAvatar && avatarInput) {
+    changeAvatar.addEventListener('click', () => {
+      if (changeAvatar.disabled) return;
+      avatarInput.click();
+    });
+    avatarInput.addEventListener('change', async () => {
+      const file = avatarInput.files && avatarInput.files[0];
+      avatarInput.value = '';
+      if (!file || changeAvatar.disabled) return;
+      changeAvatar.disabled = true;
+      show('', '正在上传头像…');
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name || 'avatar.png');
+        const response = await fetch('/v1/profile/avatar', {
+          method: 'POST',
+          headers: {Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)},
+          credentials: 'same-origin',
+          body: form,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (response.status !== 200 || !payload.avatar) {
+          show('error', avatarNotice(response.status, payload && payload.error));
+          return;
+        }
+        applyAvatar(payload.avatar);
+        show('ok', '头像已更新。');
+      } catch {
+        show('error', '头像上传失败，请检查网络后重试。');
+      } finally {
+        changeAvatar.disabled = false;
+      }
+    });
   }
 
   const save = document.getElementById('profile-save');
@@ -303,7 +409,7 @@ function mount() {
       const result = await request('POST', '/v1/profile', {revision, changes});
       if (result.status === 409) {
         const current = result.body && result.body.error && result.body.error.current;
-        if (current) fill(current, document.getElementById('profile-username').textContent);
+        if (current) fill(current, currentUsername);
         show('error', current
           ? '资料已在别处更新，已重新加载。'
           : '保存失败：资料已在别处更新或 Teamily ID 不可用，请刷新后重试。');
@@ -313,7 +419,7 @@ function mount() {
         show('error', messageFor(result.body.error, '保存失败。'));
         return;
       }
-      fill(result.body.profile, document.getElementById('profile-username').textContent);
+      fill(result.body.profile, currentUsername);
       show('ok', '资料已保存。');
     } finally {
       saving = false;
@@ -353,6 +459,15 @@ function mount() {
       }
     });
   }
+  editRetry?.addEventListener('click', async () => {
+    if (editRetry.disabled) return;
+    editRetry.disabled = true;
+    try {
+      await load();
+    } finally {
+      editRetry.disabled = false;
+    }
+  });
 
   const cancel = document.querySelector && document.querySelector('#profile-cancel');
   if (cancel) {
@@ -402,32 +517,9 @@ function mount() {
   }
 
   if (hasHome()) {
-    setFeed('posts');
-    const tabPosts = document.querySelector('#tab-posts');
-    const tabSaved = document.querySelector('#tab-saved');
-    const tabLiked = document.querySelector('#tab-liked');
-    if (tabPosts) tabPosts.addEventListener('click', () => setFeed('posts'));
-    if (tabSaved) tabSaved.addEventListener('click', () => setFeed('saved'));
-    if (tabLiked) tabLiked.addEventListener('click', () => setFeed('liked'));
-    const following = document.querySelector('#stat-following');
-    const followers = document.querySelector('#stat-followers');
-    if (following) following.addEventListener('click', () => openFollowers('following'));
-    if (followers) followers.addEventListener('click', () => openFollowers('followers'));
-    const close = document.querySelector('#followers-dialog-close');
-    if (close) close.addEventListener('click', closeFollowers);
-    const dialog = document.querySelector('#followers-dialog');
-    if (dialog) {
-      dialog.addEventListener('click', event => {
-        if (event.target === dialog) closeFollowers();
-      });
-    }
-    const tabF = document.querySelector('#dialog-tab-following');
-    const tabR = document.querySelector('#dialog-tab-followers');
-    if (tabF) tabF.addEventListener('click', () => openFollowers('following'));
-    if (tabR) tabR.addEventListener('click', () => openFollowers('followers'));
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') closeFollowers();
-    });
+    const share = document.querySelector('#profile-share');
+    if (share) share.addEventListener('click', shareProfile);
+
   }
 
   syncView();

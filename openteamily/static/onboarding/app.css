@@ -48,8 +48,7 @@
 #custom-industry-label,
 #custom-role-label { margin-top: 0.5rem; }
 
-/* Step one follows the captured layout. Steps 2-4 below are a functional flow without a compared layout. */
-body.app-workspace:not(.chat-open) > main > #main-panel { max-width: 46rem; width: 100%; margin: 0 auto; padding: 2rem 1.25rem; box-sizing: border-box; }
+body.app-workspace:not(.chat-open) > main > #main-panel { min-width: 0; width: 100%; margin: 0 auto; box-sizing: border-box; }
 .onboarding-card { max-width: none; border: 0; box-shadow: none; padding: 1.5rem; }
 .onboarding-card h2 { font-size: 1.4rem; font-weight: 600; }
 .onboarding-card > .note { line-height: 1.65; }
@@ -121,11 +120,10 @@ html[data-theme-resolved="dark"] .choice-tile[data-tone] { background: var(--ot-
 .role-choices.choice-cards label { padding: .625rem; min-height: 5.25rem; }
 .onboarding-actions { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; margin-top: 1.5rem; padding-top: 0; border-top: 0; }
 .onboarding-actions > :first-child.secondary { margin-right: auto; }
-.onboarding-actions button, .onboarding-enter { height: 2.25rem; min-height: 0; padding: 0 1.125rem; border-radius: 999px; font-size: .8125rem; font-weight: 650; }
+.onboarding-actions button { min-height: 2.5rem; padding: .375rem 1rem; border-radius: 999px; font-size: .8125rem; font-weight: 650; }
 .onboarding-actions button.secondary { border: 0; background: var(--ot-bg-accent); color: var(--ot-ink); box-shadow: none; }
-.onboarding-actions button:not(.secondary), .onboarding-enter { border: 0; background: var(--ot-accent); color: var(--ot-on-accent); }
-.onboarding-actions button:not(.secondary):hover, .onboarding-enter:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
-.onboarding-enter { display: inline-flex; align-items: center; gap: .25rem; text-decoration: none; }
+.onboarding-actions button:not(.secondary) { border: 0; background: var(--ot-accent); color: var(--ot-on-accent); }
+.onboarding-actions button:not(.secondary):hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
 #onboarding-steps { margin: 0; padding: 0; border: 0; }
 #onboarding-steps form { margin: 0; padding: 0; border: 0; }
 #onboarding-steps h2 { font-size: 1.375rem; }
@@ -136,9 +134,11 @@ html[data-theme-resolved="dark"] .choice-tile[data-tone] { background: var(--ot-
 .app-copy { flex: 1 1 auto; min-width: 0; }
 .app-copy strong { font-weight: 650; }
 .app-state { color: var(--ot-muted); font-size: .75rem; }
-.app-connect { height: 1.75rem; min-height: 0; padding: 0 .75rem; border: 1px solid var(--ot-line-strong); border-radius: 999px; background: var(--ot-surface); font-size: .75rem; box-shadow: none; }
-.app-connect:disabled { opacity: 1; color: var(--ot-muted); cursor: not-allowed; }
-.onboarding-hint { margin: .75rem 0 0; padding: .5rem .75rem; border-radius: .625rem; background: var(--ot-surface-2); font-size: .75rem; color: var(--ot-muted); }
+.app-connect {
+  display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 2.25rem; padding: 0 .75rem;
+  border: 1px solid var(--ot-line-strong); border-radius: 999px; font-size: .75rem; text-decoration: none;
+}
+.app-connect:hover { background: var(--ot-accent-soft); }
 .pick-groups { display: grid; gap: .25rem; }
 .pick-list { display: grid; gap: .375rem; }
 .pick-card { display: flex; align-items: flex-start; gap: .625rem; padding: .625rem .75rem; border-radius: .75rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); cursor: pointer; }
@@ -150,29 +150,12 @@ html[data-theme-resolved="dark"] .choice-tile[data-tone] { background: var(--ot-
 .look-layout { display: grid; grid-template-columns: minmax(0, 13rem) minmax(0, 1fr); gap: 1rem; padding: 1rem; border-radius: 1rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 6px 20px rgba(20, 40, 30, .06); }
 .look-preview { margin: 0; display: grid; place-items: center; align-content: center; gap: .5rem; padding: 1rem; border-radius: .875rem; background: linear-gradient(160deg, var(--ot-surface-2), var(--ot-accent-soft)); }
 .look-preview figcaption { font-size: .75rem; font-weight: 650; }
-#look-avatar .look-bg { fill: rgba(255, 255, 255, .7); }
-#look-avatar .look-head { fill: #6fcf9f; }
-#look-avatar[data-color="珊瑚橙"] .look-head { fill: #f28b66; }
-#look-avatar[data-color="天空蓝"] .look-head { fill: #6db3ea; }
-#look-avatar[data-color="葡萄紫"] .look-head { fill: #a68be0; }
-#look-avatar[data-color="柠檬黄"] .look-head { fill: #f2cf5b; }
-#look-avatar[data-color="石墨灰"] .look-head { fill: #8a949c; }
-#look-avatar .look-face circle { fill: #1f2a24; }
-#look-avatar .look-face path { stroke: #1f2a24; }
-#look-avatar[data-expression="酷"] .look-face path { d: path("M50 71h20"); }
-#look-avatar[data-expression="好奇"] .look-face path { d: path("M54 72q6 -5 12 0"); }
-#look-avatar .look-hat, #look-avatar .look-glasses, #look-avatar .look-hand { display: none; }
-#look-avatar:not([data-headwear="无"]) .look-hat { display: inline; fill: #1f2a24; }
-#look-avatar[data-headwear="耳机"] .look-hat { fill: #4d6157; }
-#look-avatar:not([data-glasses="无"]) .look-glasses { display: inline; stroke: #1f2a24; }
-#look-avatar[data-glasses="墨镜"] .look-glasses circle { fill: #1f2a24; }
-#look-avatar:not([data-hand="无"]) .look-hand { display: inline; fill: #ffffff; stroke: #1f2a24; stroke-width: 2; }
+#look-avatar { --look-size: 8.25rem; inline-size: var(--look-size); block-size: var(--look-size); }
 .look-options { display: grid; gap: .625rem; align-content: start; }
 #onboarding-look.look-options label { display: grid; gap: .25rem; font-size: .75rem; font-weight: 600; color: var(--ot-ink); }
 #onboarding-look.look-options select { height: 2rem; min-height: 0; padding: 0 1.75rem 0 .625rem; border: 1px solid var(--ot-line); border-radius: .625rem; font-size: .8125rem; width: 100%; }
 #onboarding-look-preview { margin: .75rem 0 0; background: transparent; padding: 0; font-size: .75rem; color: var(--ot-muted); }
 #onboarding-steps-meta { margin: .75rem 0 0; font-size: .6875rem; color: var(--ot-muted); text-align: right; }
-@media (max-width: 600px) { .look-layout { grid-template-columns: minmax(0, 1fr); } .choice-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .choice-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .choice-cards > .choice-card { width: 100%; margin: 0; }
 .choice-card .choice-name { line-height: 1.35; }
@@ -185,3 +168,30 @@ label.choice-card { position: relative; }
 label.choice-card input { inset: 0; width: 100%; height: 100%; margin: 0; z-index: 1; pointer-events: auto; cursor: pointer; }
 .role-choices.choice-cards label.choice-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; text-align: left; font-size: .75rem; font-weight: 600; color: var(--ot-ink); }
 .role-choices.choice-cards label.choice-card .choice-name { font-size: .75rem; font-weight: 600; line-height: 1.35; }
+
+.onboarding-automation-choices { border: 1px solid var(--border, #dedad3); border-radius: 12px; padding: 16px; margin: 20px 0; min-width: 0; }
+.onboarding-automation-choices legend { font-weight: 600; padding: 0 6px; }
+#onboarding-automation-links:empty { display: none; }
+#onboarding-automation-links { margin-block: .65rem; padding-inline-start: 1.25rem; }
+
+.onboarding-first-task:not([hidden]) {
+  display: grid;
+  gap: .5rem;
+  margin-top: 1rem;
+}
+.onboarding-first-task label { margin: 0; font-size: .875rem; font-weight: 650; }
+.onboarding-first-task .note { margin: 0; }
+.onboarding-first-task textarea { display: block; width: 100%; margin-top: .35rem; box-sizing: border-box; }
+#onboarding-first-task-status { color: var(--ot-danger); }
+#onboarding-first-task-status:empty { display: none; }
+
+@media (max-width: 600px) {
+  body.app-workspace:not(.chat-open) > main > #main-panel { padding: 1.25rem 1rem 2rem; }
+  .look-layout { grid-template-columns: minmax(0, 1fr); }
+  .choice-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .onboarding-actions button, .app-connect, .industry-list-pick select, #onboarding-look.look-options select { min-height: 2.75rem; }
+  .onboarding-actions > :first-child.secondary { margin-right: 0; }
+  .onboarding-actions button:not(.secondary) { margin-inline-start: auto; }
+  .onboarding-automation-choices { padding: .8rem; }
+  #create-onboarding-automations { min-height: 2.75rem; white-space: normal; }
+}

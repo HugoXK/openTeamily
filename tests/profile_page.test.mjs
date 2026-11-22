@@ -31,11 +31,34 @@ class FakeElement {
     this.textContent = '';
     this.href = '';
     this.submits = 0;
+    this.children = [];
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  get childElementCount() { return this.children.length; }
+  showModal() { this.open = true; }
+  close() { this.open = false; for (const handler of this.handlers.close || []) handler(); }
   requestSubmit() { this.submits += 1; }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (typeof node === 'object') node.parentElement = this;
+      this.children.push(node);
+    }
+  }
+  appendChild(node) { this.append(node); return node; }
+  querySelector(selector) {
+    const tags = selector.toUpperCase().split(',');
+    for (const child of this.children) {
+      if (tags.includes(child.tagName)) return child;
+      const nested = child.querySelector?.(selector);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  remove() { this.parentElement.children = this.parentElement.children.filter(child => child !== this); }
 }
 
 const PROFILE_FIELDS = ['name', 'handle', 'bio', 'tags', 'gender', 'location', 'website'];
@@ -59,6 +82,51 @@ function fakeDocument() {
   };
 }
 
+function homeDocument() {
+  const doc = fakeDocument();
+  const bySelector = new Map();
+  doc.querySelector = selector => {
+    if (String(selector).startsWith('#')) return doc.getElementById(String(selector).slice(1));
+    if (!bySelector.has(selector)) bySelector.set(selector, new FakeElement('div'));
+    return bySelector.get(selector);
+  };
+  doc.querySelectorAll = () => [];
+  doc.addEventListener = () => {};
+  doc.createElement = tag => new FakeElement(tag);
+  return doc;
+}
+
+function installShareGlobals({pathname = '/profile', clipboard = 'stub'} = {}) {
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const savedLocation = globalThis.location;
+  const savedHistory = globalThis.history;
+  const copied = [];
+  const pushes = [];
+  const loc = {pathname, origin: 'https://teamily.ai', search: '', href: 'https://teamily.ai' + pathname};
+  globalThis.location = loc;
+  globalThis.history = {
+    pushState(state, title, url) {
+      pushes.push(url);
+      const [path, query] = String(url).split('?');
+      loc.pathname = path;
+      loc.search = query ? '?' + query : '';
+    },
+  };
+  const nav = {};
+  if (clipboard === 'stub') nav.clipboard = {writeText: async text => { copied.push(text); }};
+  if (clipboard === 'reject') nav.clipboard = {writeText: async () => { throw new Error('clipboard denied'); }};
+  Object.defineProperty(globalThis, 'navigator', {value: nav, configurable: true, writable: true});
+  return {
+    copied, pushes, loc,
+    restore() {
+      if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator);
+      else delete globalThis.navigator;
+      if (savedLocation === undefined) delete globalThis.location; else globalThis.location = savedLocation;
+      if (savedHistory === undefined) delete globalThis.history; else globalThis.history = savedHistory;
+    },
+  };
+}
+
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function installGlobals(doc, fetcher) {
@@ -72,7 +140,7 @@ function installGlobals(doc, fetcher) {
 }
 
 async function mountProfile(options = {}) {
-  const doc = fakeDocument();
+  const doc = options.home ? homeDocument() : fakeDocument();
   const calls = [];
   let release = () => {};
   let releasePost = () => {};
@@ -82,6 +150,13 @@ async function mountProfile(options = {}) {
   const postCalls = () => calls.filter(([path, method]) => path === '/v1/profile' && method === 'POST').length;
   const fetcher = async (path, init) => {
     calls.push([path, init && init.method]);
+    if (path.startsWith('/v1/profile/social') || path.startsWith('/v1/profile/follow-work')) {
+      const result = await options.social?.(new URL(path, 'https://example.test'), init);
+      return {
+        status: result?.status ?? 200,
+        json: async () => result?.body ?? {items: [], following: 0, followers: 0},
+      };
+    }
     if (path === '/v1/auth/session') {
       if (options.session401) return {status: 401, json: async () => ({error: {message: 'not signed in'}})};
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
@@ -100,6 +175,7 @@ async function mountProfile(options = {}) {
       }
       return {status: 200, json: async () => ({profile: {name: 'Alice', handle: 'alice', revision: 4}})};
     }
+    if (profileCalls() === 1 && options.holdInitial) await gate;
     if (profileCalls() > 1) {
       if (options.holdRepeat) await gate;
       if (options.failRepeat) return {status: 500, json: async () => ({error: {message: options.failRepeat}})};
@@ -307,4 +383,206 @@ test('资料首次加载用用户名兜底显示名和 handle，并给出对应�
     assert.equal(doc.getElementById('profile-public').href, '/p/alice.smith',
       'a saved handle must link to the public profile page');
   } finally { saved.restore(); }
+});
+
+function shareHandler(doc) {
+  const share = doc.getElementById('profile-share');
+  assert.ok(Array.isArray(share.handlers.click) && share.handlers.click.length === 1,
+    'the 分享 button has no click handler, so clicking it does nothing');
+  return share.handlers.click[0];
+}
+
+test('有 Teamily ID 时分享按钮把公开主页链接复制到剪贴板', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-handle',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.deepEqual(env.copied, ['https://teamily.ai/p/alice.smith'],
+        'clicking 分享 must copy the public profile URL built from the saved handle');
+      const status = doc.getElementById('status');
+      assert.equal(status.dataset.kind, 'ok');
+      assert.equal(status.textContent, '公开主页链接已复制。');
+      assert.equal(doc.querySelector('#profile-share-fallback').hidden, true,
+        'a successful copy must not open the manual-copy fallback');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('没有 Teamily ID 时分享按钮不写剪贴板，先提示再切到编辑页', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-no-handle',
+      home: true,
+      profile: {name: 'Alice', handle: '', revision: 0},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(env.copied.length, 0,
+        'a profile without a handle has no public URL, so nothing must be copied');
+      assert.equal(doc.getElementById('status').textContent, '先设置 Teamily ID 才能分享。');
+      assert.deepEqual(env.pushes, ['/profile/edit'],
+        'without a handle the share button must take the person to the edit page');
+      assert.equal(env.loc.pathname, '/profile/edit');
+      assert.equal(doc.querySelector('#profile-home').hidden, true,
+        'the in-page edit view must replace the profile home after switching to /profile/edit');
+      assert.equal(doc.querySelector('#profile-edit').hidden, false);
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('剪贴板不可用时把链接显示出来让人手动复制', async () => {
+  const env = installShareGlobals({pathname: '/profile', clipboard: 'reject'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-clipboard-denied',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(doc.getElementById('status').dataset.kind, 'error');
+      assert.match(doc.getElementById('status').textContent, /手动复制/);
+      const fallback = doc.querySelector('#profile-share-fallback');
+      assert.equal(fallback.hidden, false,
+        'when the clipboard refuses the copy the URL must be shown for manual copying');
+      assert.equal(doc.querySelector('#profile-share-link').textContent,
+        'https://teamily.ai/p/alice.smith');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('编辑表单等资料加载完成才可输入，昵称更新同步显示在主页', async () => {
+  const env = installShareGlobals({pathname: '/profile/edit'});
+  try {
+    const {doc, release, restore} = await mountProfile({tag: 'edit-first-load', home: true, holdInitial: true});
+    try {
+      const form = doc.getElementById('profile-form');
+      assert.equal(form.hidden, true);
+      assert.equal(doc.getElementById('profile-edit-initial').hidden, false);
+      release();
+      await flush();
+      assert.equal(form.hidden, false);
+      assert.equal(doc.getElementById('profile-edit-initial').hidden, true);
+      assert.equal(doc.getElementById('profile-username').textContent, 'Alice');
+      assert.equal(doc.getElementById('whoami').textContent, 'alice');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('switching profile feeds aborts the stale view and replacing a failed next page preserves earlier results', async () => {
+  const env = installShareGlobals();
+  let releaseLiked;
+  const liked = new Promise(resolve => { releaseLiked = resolve; });
+  let likedSignal;
+  let attempts = 0;
+  const work = slug => ({slug, title: slug, kind: 'work'});
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-feeds',
+    home: true,
+    social(url, init) {
+      const view = url.searchParams.get('view');
+      if (view === 'liked') {
+        likedSignal = init.signal;
+        return liked;
+      }
+      if (view !== 'collected') return;
+      if (!url.searchParams.has('cursor')) return {body: {items: [work('work-first')], next_cursor: 'page2'}};
+      if (++attempts === 1) return {status: 503, body: {}};
+      return {body: {items: [work('work-second')], next_cursor: null}};
+    },
+  });
+  try {
+    const click = id => doc.getElementById(id).handlers.click[0]();
+    const list = doc.getElementById('profile-feed-list');
+    const delayed = click('tab-liked');
+    assert.equal(doc.getElementById('profile-feed-empty').textContent, '正在加载…');
+    await click('tab-saved');
+    assert.equal(likedSignal.aborted, true);
+    releaseLiked({body: {items: [work('stale-like')]}});
+    await delayed;
+    assert.equal(list.children[0].children[0].href, '/discover?work=work-first');
+    await click('profile-feed-more');
+    assert.equal(list.children.length, 1);
+    assert.equal(doc.getElementById('profile-feed-retry').hidden, false);
+    await click('profile-feed-retry');
+    assert.equal(list.children[1].children[0].href, '/discover?work=work-second');
+    assert.equal(doc.getElementById('profile-feed-more').hidden, true);
+  } finally { restore(); env.restore(); }
+});
+
+test('作品通知 reads the current followed creator and saves by Bot Social handle', async () => {
+  const env = installShareGlobals();
+  const changes = [];
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-work-notices', home: true,
+    social(url, init) {
+      if (url.pathname !== '/v1/profile/follow-work') return;
+      if (init.method === 'POST') {
+        changes.push(JSON.parse(init.body));
+        return {body: {enabled: false}};
+      }
+      return {body: {items: [{handle: 'vera.home', display_name: 'Vera', enabled: true}]}};
+    },
+  });
+  try {
+    await doc.getElementById('profile-notify-open').handlers.click[0]();
+    await flush();
+    const toggle = doc.getElementById('follow-work-list').children[0].children[0].children[1];
+    assert.equal(toggle.checked, true);
+    assert.equal(toggle.getAttribute('aria-label'), 'Vera 的作品通知');
+    toggle.checked = false;
+    await toggle.handlers.change[0]();
+    assert.deepEqual(changes, [{handle: 'vera.home', enabled: false}]);
+    assert.equal(doc.getElementById('follow-work-status').textContent, '已关闭作品通知。');
+  } finally { restore(); env.restore(); }
+});
+
+test('收藏和点赞条目只能从对应标签取消，失败保留原条目', async () => {
+  const env = installShareGlobals();
+  const mutations = [];
+  const item = {id: 'otl_' + 'T'.repeat(26), title: '示例条目', slug: 'some-listing', kind: 'agent', collected: true, liked: true};
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-reaction-removal', home: true,
+    social(url, init) {
+      if (init.method === 'POST') {
+        const change = JSON.parse(init.body);
+        mutations.push(change);
+        if (mutations.length === 1) return {status: 503};
+        return {body: change.action === 'like' ? {liked: false} : {collected: false}};
+      }
+      return url.searchParams.get('view') === 'counts' ? {body: {following: 0, followers: 0}} : {body: {items: [item]}};
+    },
+  });
+  try {
+    const click = id => doc.getElementById(id).handlers.click[0]();
+    const list = doc.getElementById('profile-feed-list');
+    assert.equal(list.children[0].querySelector('button'), null);
+    await click('tab-saved');
+    assert.equal(list.children[0].children[0].href, '/a/some-listing');
+    const first = list.children[0].querySelector('button');
+    assert.equal(first.textContent, '取消收藏');
+    await first.handlers.click[0]();
+    assert.equal(list.children.length, 1);
+    assert.equal(first.disabled, false);
+    assert.equal(doc.getElementById('profile-feed-action-status').textContent, '无法取消收藏，请重试。');
+    await first.handlers.click[0]();
+    assert.equal(list.children.length, 0);
+    assert.equal(doc.getElementById('profile-feed-explore').hidden, false);
+    await click('tab-liked');
+    const second = list.children[0].querySelector('button');
+    assert.equal(second.textContent, '取消点赞');
+    await second.handlers.click[0]();
+    assert.equal(list.children.length, 0);
+    assert.deepEqual(mutations, [
+      {listing_id: item.id, action: 'collect'},
+      {listing_id: item.id, action: 'collect'},
+      {listing_id: item.id, action: 'like'},
+    ]);
+  } finally { restore(); env.restore(); }
 });
