@@ -2960,3 +2960,14 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 #private-archive-list > li > div:first-child > span { color: var(--ot-muted); font-size: .8rem; }
 #private-thread-dialog [hidden],
 #private-archive-dialog [hidden] { display: none; }
+
+#group-invite-link-panel {
+  border-top: 1px solid var(--ot-line);
+  padding-top: .75rem;
+}
+#group-invite-link-heading { margin: 0 0 .5rem; font-size: .875rem; }
+.group-invite-link-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+#group-invite-link { box-sizing: border-box; width: 100%; margin-top: .5rem; }
+#group-invite-link-copy { margin-top: .5rem; }
+#group-invite-link-panel button { min-height: 2.75rem; }
+#group-invite-dialog #group-invite-link-status { margin-top: .375rem; }

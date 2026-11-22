@@ -347,6 +347,16 @@
         <label><span class="sr-only" data-ui-text="chat.group.search_eligible">搜索可添加的工作区成员</span><input type="search" id="group-invite-query" placeholder="搜索工作区成员" maxlength="80" autocomplete="off" data-ui-placeholder="chat.group.search_workspace"></label>
         <div class="member-choices" id="group-invite-choices"></div>
         <p id="group-invite-status" role="status"></p>
+        <section id="group-invite-link-panel" hidden aria-labelledby="group-invite-link-heading">
+          <h3 id="group-invite-link-heading">群邀请链接</h3>
+          <div class="group-invite-link-actions">
+            <button type="button" id="group-invite-link-create">生成群邀请链接</button>
+            <button type="button" id="group-invite-link-revoke" hidden>停用链接</button>
+          </div>
+          <input id="group-invite-link" type="text" aria-label="群邀请链接" readonly hidden>
+          <button type="button" id="group-invite-link-copy" hidden>复制链接</button>
+          <p id="group-invite-link-status" class="note" role="status"></p>
+        </section>
         <div class="actions">
           <button type="button" id="group-invite-cancel"><span data-ui-text="chat.cancel">取消</span></button>
           <button type="submit" id="group-invite-submit" disabled><span data-ui-text="chat.add">添加</span></button>

@@ -392,6 +392,23 @@ function invitesRoutes(host) {
       },
     },
     {
+      method: 'POST', path: /^\/v1\/invites\/group\/(preview|accept)$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const accepted = match[1] === 'accept'
+          const binding = accepted ? await host.call('agents/personal-binding', {}) : null
+          if (accepted && !HEX.test(binding?.workspace_id || '')) {
+            throw new Fault(503, 'personal_binding_unavailable', '请等待个人工作区启动后重试。')
+          }
+          const result = await client(host).post('/v1/ot/group-invites/' + match[1], {code: body?.token})
+          return [200, accepted ? {
+            conversation_id: result.conversation_id,
+            workspace_id: result.workspace_id || binding.workspace_id,
+          } : result]
+        })
+      },
+    },
+    {
       method: 'POST', path: /^\/v1\/invites\/preview$/,
       async handle({ body }) {
         return wrap(async () => {
@@ -1019,6 +1036,18 @@ function messengerExtraRoutes(host, wakeReplies) {
       method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
       handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
     },
+    ...['GET', 'POST', 'DELETE'].map(method => ({
+      method, path: re('\\/group-invite'),
+      handle: ({ match }) => wrap(async () => {
+        const [, workspace, conversation] = match
+        const bs = client(host)
+        await requireSharedGroupScope(host, bs, workspace, conversation)
+        const path = conv(conversation) + '/invite'
+        if (method === 'GET') return [200, await bs.get(path)]
+        if (method === 'POST') return [201, await bs.post(path, {})]
+        return [200, await bs.del(path)]
+      }),
+    })),
     {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/agent-retry'),
       handle: ({match, body}) => wrap(async () => {

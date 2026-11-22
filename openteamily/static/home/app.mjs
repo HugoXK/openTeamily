@@ -3,6 +3,7 @@ import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/pub
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { discoverIntentFromHash } from '../shell/discover-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
+import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
 import { socialMessageFromHash } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -74,6 +75,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('login-form');
+  const feedback = document.getElementById('login-feedback');
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
@@ -349,7 +351,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
-        const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
+        const continuation = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
           (intent ? publicAgentContinuation(intent) : work?.continuation || discover?.continuation);
         const register = loginPanel.querySelector?.('.login-register-button');
         if (register) register.href = '/register' + (continuation || '');
@@ -379,13 +381,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       try { view.sessionStorage.removeItem(pendingKey); } catch {}
       if (view.location?.pathname === '/login') {
         const hash = view.location.hash;
-        const invite = teamInviteFromHash(hash);
+        const invite = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash));
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
         const message = socialMessageFromHash(hash);
         if (invite) {
-          const destination = '/members' + teamInviteHash(invite);
+          const destination = '/members' + invite;
           if (await initializePersonalAgent(destination) && view.location.hash === hash) {
             view.location.replace(destination);
           }
@@ -471,25 +473,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     if (signingIn) return;
     signingIn = true;
     const submit = form.querySelector?.('button[type="submit"]');
-    if (submit) submit.disabled = true;
-    show(document, 'loading', '正在登录…');
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = '正在登录…';
+    }
+    show(document, '', '');
+    if (feedback) feedback.textContent = '';
     try {
       const result = await request('POST', '/v1/auth/login', {
         username: form.elements.username.value,
         password: form.elements.password.value,
       });
       if (result.status !== 200) {
-        show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
-          : (result.body.error && result.body.error.message) || '无法登录。');
+        if (feedback) {
+          feedback.dataset.kind = 'error';
+          feedback.textContent = result.status === 401 ? '用户名或密码不正确。'
+            : result.status === 429 ? '登录尝试过多，请稍后再试。' : '暂时无法登录，请重试。';
+        }
         return;
       }
       form.reset();
       await load();
     } catch {
-      show(document, 'error', '无法连接到本实例，请重试。');
+      if (feedback) {
+        feedback.dataset.kind = 'error';
+        feedback.textContent = '无法连接，请检查网络后重试。';
+      }
     } finally {
       signingIn = false;
-      if (submit) submit.disabled = false;
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = '登录';
+      }
     }
   });
 

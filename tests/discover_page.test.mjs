@@ -153,6 +153,8 @@ class Element {
   prepend(...nodes) { this.children.unshift(...nodes); }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
+  focus() {}
+  select() {}
   replaceChildren(...nodes) { this.children = nodes; }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; }
@@ -1182,7 +1184,8 @@ test('feed covers load from the public work preview path, never for images or od
 });
 
 
-async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{id:'space-1',name:'我的工作区'}], signedIn = true} = {}) {
+async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{id:'space-1',name:'我的工作区'}],
+  signedIn = true, preview, submit} = {}) {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
   const calls = [];
@@ -1192,8 +1195,10 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
     if (path === '/v1/auth/session') return response(signedIn ? 200 : 401, {user:{username:'alice'}});
     if (path === '/v1/workspaces?limit=100') return response(workspaceStatus, {items:workspaces});
     if (path === '/v1/discover/agents/weekly-digest/remix' && options.method === 'GET') {
+      if (preview) return preview();
       return response(200, {template:{revision:'public-revision',name:'竞品周报助手',summary:'每周竞品摘要',instructions:'公开指令'}});
     }
+    if (options.method === 'POST' && submit) return submit();
     if (options.method === 'POST') return response(status, status === 201
       ? {agent:{id:'agent-1',workspace_id:'space-1',name:'竞品周报助手'}}
       : {error:{code:'name_conflict',message:'工作区已有同名智能体，请换个名称。'}});
@@ -1228,6 +1233,58 @@ test('copy presents a duplicate name error in the preview dialog', async () => {
   await el('catalog-remix-form').handlers.submit({preventDefault() {}});
   assert.match(el('catalog-remix-status').textContent,/已有同名智能体/);
   assert.deepEqual(navigation,[]);
+});
+
+test('copy retains the draft name through a slow preview and a stale release', async () => {
+  const firstPreview = Promise.withResolvers();
+  const template = {revision:'initial-revision',name:'原发布名称',summary:'每周竞品摘要',instructions:'旧指令'};
+  let reads = 0;
+  const {calls, el, use} = await setupRemix({
+    preview: () => ++reads === 1 ? firstPreview.promise : commentResponse({template:{...template,revision:'new-revision',instructions:'新指令'}}),
+    submit: () => commentResponse({error:{code:'listing_changed'}},409),
+  });
+  const opening = use.handlers.click();
+  el('catalog-remix-name').value = '我的名称';
+  firstPreview.resolve(commentResponse({template}));
+  await opening;
+  assert.equal(el('catalog-remix-name').value,'我的名称');
+  el('catalog-remix-workspace').value = 'space-1';
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(el('catalog-remix-dialog').open,true);
+  assert.equal(el('catalog-remix-refresh').hidden,false);
+  assert.equal(el('catalog-remix-submit').disabled,true);
+  await el('catalog-remix-refresh').handlers.click();
+  assert.equal(el('catalog-remix-name').value,'我的名称');
+  assert.equal(el('catalog-remix-prompt').textContent,'新指令');
+  assert.equal(el('catalog-remix-submit').disabled,false);
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const [first,last] = calls.filter(([,method])=>method==='POST').map(([, ,options])=>options);
+  assert.notEqual(first.headers['Idempotency-Key'],last.headers['Idempotency-Key']);
+  assert.equal(JSON.parse(last.body).revision,'new-revision');
+});
+
+test('copy reuses the request key after an ambiguous response for the same submission', async () => {
+  let writes = 0;
+  const {calls, el, use, navigation} = await setupRemix({
+    submit: () => {
+      if (++writes === 1) throw new Error('connection interrupted');
+      return commentResponse({agent:{id:'agent-1',workspace_id:'space-1'}});
+    },
+  });
+  await use.handlers.click();
+  el('catalog-remix-workspace').value = 'space-1';
+  const submit = () => el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const pending = submit();
+  assert.equal(el('catalog-remix-name').disabled,true);
+  assert.equal(el('catalog-remix-cancel').disabled,true);
+  await pending;
+  assert.match(el('catalog-remix-status').textContent,/暂时无法确认/);
+  assert.equal(el('catalog-remix-name').disabled,false);
+  await submit();
+  const keys = calls.filter(([,method])=>method==='POST').map(([, ,{headers}])=>headers['Idempotency-Key']);
+  assert.equal(keys.length,2);
+  assert.equal(keys[0],keys[1]);
+  assert.deepEqual(navigation,['/chat#workspace=space-1&agent=agent-1']);
 });
 
 test('copy distinguishes a failed workspace read from an empty workspace list', async () => {

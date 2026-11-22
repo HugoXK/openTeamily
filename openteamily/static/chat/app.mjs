@@ -2,6 +2,7 @@ import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
+import { mountGroupInviteLink } from './group-invite-link.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
@@ -4422,8 +4423,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let inviteTarget = null;
   let invitingMembers = false;
 
-  const inviteMatches = (target) => target && target.workspace === workspaceId() &&
+  const inviteMatches = (target) => target && target.owner === currentUser?.id && target.workspace === workspaceId() &&
     currentSource === 'social' && currentConversation?.id === target.conversation;
+  const showGroupInviteLink = mountGroupInviteLink(document, request, target =>
+    groupInvite.open && inviteTarget === target && inviteMatches(target));
   const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
 
   function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
@@ -4449,17 +4452,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openGroupInvite() {
     const conversation = currentConversation;
     if (currentSource !== 'social' || conversation?.kind !== 'group' || groupInvite.open) return;
-    const target = {workspace: workspaceId(), conversation: conversation.id};
+    const target = {workspace: workspaceId(), conversation: conversation.id, owner: currentUser?.id};
     inviteTarget = target;
     groupInviteQuery.value = '';
     groupInviteChoices.replaceChildren();
     groupInviteSubmit.disabled = true;
     const personal = Boolean(conversation.account_group);
     const roster = personal ? '联系人' : '工作区成员';
+    const searchLabel = personal ? uiLabel('搜索联系人', 'Search contacts') : uiLabel('搜索工作区成员', 'Search workspace members');
+    groupInviteQuery.placeholder = searchLabel;
+    groupInviteQuery.setAttribute('aria-label', searchLabel);
     groupInviteStatus.textContent = '正在加载' + roster + '…';
     document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
     groupInvite.showModal();
     groupInviteQuery.focus();
+    showGroupInviteLink(target, conversation);
     const result = await request('GET', personal ? '/v1/contacts' : `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
     if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
     if (result.status !== 200) {
@@ -4484,7 +4491,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('chat-group-invite').addEventListener('click', openGroupInvite);
   document.getElementById('group-info-invite').addEventListener('click', openGroupInvite);
   document.getElementById('group-invite-cancel').addEventListener('click', () => groupInvite.close());
-  groupInvite.addEventListener('close', () => { if (!groupInvite.open) inviteTarget = null; });
+  groupInvite.addEventListener('close', () => {
+    if (groupInvite.open) return;
+    inviteTarget = null;
+    showGroupInviteLink(null);
+  });
   groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
   groupInviteQuery.addEventListener('input', syncGroupInvite);
   groupInviteChoices.addEventListener('change', syncGroupInvite);

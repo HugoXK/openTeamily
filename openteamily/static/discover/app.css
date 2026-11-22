@@ -769,6 +769,7 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 .catalog-dialog :is(input, select) { width: 100%; box-sizing: border-box; font-size: 1rem; }
 .catalog-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 #catalog-remix-summary, #catalog-remix-description { color: var(--ot-muted); }
+#catalog-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 #catalog-remix-submit { background: var(--ot-accent); color: var(--ot-on-accent); }
 #catalog-remix-status:empty { display: none; }
 #catalog-category-options { display: flex; flex-wrap: wrap; gap: .375rem; margin: .75rem 0 1rem; }

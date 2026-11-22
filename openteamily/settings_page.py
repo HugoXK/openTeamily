@@ -61,6 +61,7 @@ class SettingsPage:
         '/contacts/app.css': ('contacts', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
         '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/members/group-invite.mjs': ('members', 'group-invite.mjs', 'text/javascript; charset=utf-8'),
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -96,10 +97,12 @@ class SettingsPage:
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/discover-link.mjs': ('shell', 'discover-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/group-invite-link.mjs': ('shell', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/group-management.mjs': ('chat', 'group-management.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/group-invite-link.mjs': ('chat', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/chat/stickers.mjs': ('chat', 'stickers.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -148,6 +151,7 @@ class SettingsPage:
         '/home': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
+        '/home/auth.css': ('home', 'auth.css', 'text/css; charset=utf-8'),
     }
     PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/contacts', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
