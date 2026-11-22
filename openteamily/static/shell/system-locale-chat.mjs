@@ -329,7 +329,6 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.format.bold_hint": ["把选中的字包进 **…**", "Wrap selected text in **…**"],
   "chat.format.bold": ["加粗", "Bold"],
   "chat.format.select_first": ["先选中文字再点；发出的消息里显示为粗体。", "Select text first. It appears in bold when sent."],
-  "chat.emoji.insert": ["插入表情", "Insert emoji"],
   "chat.emoji.emoji": ["表情", "Emoji"],
   "chat.emoji.picker": ["表情和贴纸", "Emoji and stickers"],
   "chat.stickers.tab": ["贴纸", "Stickers"],
