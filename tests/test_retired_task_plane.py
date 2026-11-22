@@ -39,7 +39,10 @@ class RetiredTaskPlaneTests(unittest.TestCase):
                 ('POST', f'/v1/agent/tasks/{task}/claim'),
                 ('POST', f'/v1/agent/tasks/{task}/tools'),
                 ('GET', '/v1/runtime-keys'),
+                ('GET', '/v1/runtime/tasks'),
                 ('POST', '/v1/runtime/tasks'),
+                ('GET', '/v1/runtime/connections'),
+                ('POST', f'/v1/runtime/tasks/{task}/artifact'),
                 ('GET', '/v1/composio/approvals'),
                 ('POST', '/v1/mcp/servers'),
             ):

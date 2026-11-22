@@ -285,12 +285,10 @@ export function artifactDeletePrompt(artifact) {
   };
 }
 
-export function savableTaskArtifacts(tasks) {
-  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
-    const result = task && task.result;
-    const text = result && (typeof result.text === 'string' ? result.text : result.echo);
-    return Boolean(task) && task.status === 'succeeded' && typeof text === 'string' && text.trim() !== '';
-  });
+export function savableTaskArtifacts(runs) {
+  return (Array.isArray(runs) ? runs : []).filter(run =>
+    run?.verified === true && /^[a-f0-9]{32}$/.test(run.task?.id || '')
+  ).map(run => run.task);
 }
 
 export function taskArtifactTitle(task) {
@@ -3901,7 +3899,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const failed = () => ({status: 0, body: {}});
     if (typeof close.focus === 'function') close.focus();
 
-    const listed = await request('GET', '/v1/runtime/tasks').catch(failed);
+    const listed = await request('GET', '/v1/skills/runs').catch(failed);
     if (!active()) return;
     if (listed.status !== 200) {
       note.hidden = false;
@@ -3925,7 +3923,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         if (!active()) return;
         save.disabled = true;
         note.hidden = true;
-        const saved = await request('POST', `/v1/runtime/tasks/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
+        const saved = await request('POST', `/v1/skills/runs/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
         if (!active()) return;
         if (saved.status === 200 || saved.status === 201) {
           closeAgentTaskDialog();

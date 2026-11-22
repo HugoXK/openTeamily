@@ -85,6 +85,16 @@ class GatewayTest(unittest.TestCase):
             db.execute("UPDATE instances SET health='unknown' WHERE id=?", (canonical,))
         self.assertEqual(self.call(self.tokens[owner])[0], 503)
 
+    def test_skill_runs_use_own_runtime_and_the_old_namespace_is_retired_at_the_edge(self):
+        task = 'a' * 32
+        token = self.tokens['a' * 32]
+        status, headers = self.call(token, uri=f'/v1/skills/runs/{task}/artifact')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=skills', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(token, uri=f'/v1/runtime/tasks/{task}/artifact')[0], 404)
+        config = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key=KEY)
+        self.assertIn('location ^~ /v1/runtime/ {\n    default_type application/json;\n    return 410', config)
+
     def test_each_user_reaches_only_their_own_dsbot(self):
         a, b = self.tokens['a' * 32], self.tokens['b' * 32]
         status, headers = self.call(a)

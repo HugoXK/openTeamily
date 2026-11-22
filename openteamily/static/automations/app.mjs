@@ -32,8 +32,7 @@ export function scheduleFromForm(data) {
   return schedule;
 }
 
-export function readEditor(form) {
-  const data = new FormData(form);
+function editorFields(data) {
   return {
     title: (data.get('title') || '').trim(),
     template_id: data.get('template_id') || 'custom',
@@ -45,6 +44,10 @@ export function readEditor(form) {
     prompt: data.get('prompt') || '',
     enabled: data.has('enabled'),
   };
+}
+
+export function readEditor(form) {
+  return editorFields(new FormData(form));
 }
 
 export function tabCategory(value) {
@@ -525,6 +528,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newButton = document.getElementById('new-automation');
   const saveButton = document.getElementById('save-automation');
   const backButton = document.getElementById('cancel-editor');
+  const editorConfirm = document.getElementById('editor-head-confirm') || form;
   const manualRunNote = document.getElementById('manual-run-note');
   const manualRunStatus = document.getElementById('manual-run-status');
   const viewWatchedRun = document.getElementById('view-watched-run');
@@ -559,6 +563,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let nextRunCursor = '';
   let activeRun = false;
   let editorRequest = 0;
+  let editorInitial = '';
   let runIntent = 0;
   let runFingerprint = '';
   const savedRunResults = new Map();
@@ -698,6 +703,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (typeof event.preventDefault === 'function') event.preventDefault();
     closeConfirm();
   });
+
+  function editorSettings() {
+    const {elements} = form;
+    return JSON.stringify(editorFields({
+      get: name => elements[name]?.value,
+      has: name => Boolean(elements[name]?.checked),
+    }));
+  }
+
+  function editorHasChanges() {
+    return !form.hidden && !mainPanel.hidden && editorInitial && editorInitial !== editorSettings();
+  }
+
+  function warnBeforeLeaving(event) {
+    if (!editorHasChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
+  function watchEditorExit() {
+    if (editorHasChanges()) view?.addEventListener?.('beforeunload', warnBeforeLeaving);
+    else view?.removeEventListener?.('beforeunload', warnBeforeLeaving);
+  }
+
+  function rememberEditorSettings() {
+    editorInitial = editorSettings();
+    watchEditorExit();
+  }
 
   function stopRunPoll() {
     if (runTimer) {
@@ -934,7 +967,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const watched = watchedRuns.get(target.key);
     const uncertain = submission?.state === 'uncertain';
     const pending = submission?.state === 'pending';
-    runButton.disabled = pending || (activeRun && !uncertain);
+    runButton.disabled = saveButton.disabled || pending || (activeRun && !uncertain);
     runButton.textContent = pending ? '正在提交…' : uncertain ? '确认并重试' : activeRun ? '已有运行' : '运行一次';
     const label = pending ? '正在提交本次运行…' : uncertain ? '暂时无法确认是否提交成功，可以重试。' : runStatusLabel(watched);
     if (manualRunStatus) {
@@ -1139,6 +1172,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(form, null, '');
     renderMeetingSource(null);
     form.hidden = true;
+    watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
   }
@@ -1180,6 +1214,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderMeetingSource(source || savedMeetingSource(item));
     renderEditorSchedule();
     form.elements.template_id.disabled = Boolean(item?.id);
+    rememberEditorSettings();
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = item?.id ? item.title : source ? '创建会议跟进' : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
@@ -1404,6 +1439,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       stopRunPoll();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
+      watchEditorExit();
       show('', '');
       await renderProviders();
       return;
@@ -1450,6 +1486,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     newButton.disabled = false;
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
+    watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
     void supplemental?.then(result => {
@@ -1504,6 +1541,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     discardMeetingDraft();
     current = null;
     form.hidden = true;
+    watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
     if (runPanel) runPanel.hidden = true;
@@ -1575,6 +1613,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selectCategory(tabCategory(tab.dataset.category));
       discardMeetingDraft();
       form.hidden = true;
+      watchEditorExit();
       listPanel.hidden = false;
       closeConfirm({restoreFocus: false});
       mainPanel.classList.remove('is-editing');
@@ -1592,7 +1631,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
   scheduleSettings?.addEventListener('input', renderEditorSchedule);
 
-  backButton.addEventListener('click', async () => {
+  async function returnToList() {
     const transition = ++editorRequest;
     const position = listReturn;
     listReturn = null;
@@ -1601,6 +1640,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     discardMeetingDraft();
     current = null;
     form.hidden = true;
+    watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');
@@ -1622,7 +1662,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const focused = document.activeElement;
     await loadList({quiet: restore});
     if (editorRequest === transition && focused && !focused.isConnected && document.activeElement === document.body) returnFocus();
+  }
+
+  backButton.addEventListener('click', () => {
+    if (!editorHasChanges()) return returnToList();
+    const editor = editorRequest;
+    openConfirm({
+      parent: editorConfirm,
+      trigger: backButton,
+      prompt: {question: '有未保存的修改。要放弃修改并返回列表吗？', confirmLabel: '放弃修改'},
+      action: () => {
+        if (editor === editorRequest && !form.hidden) return returnToList();
+      },
+    });
   });
+  form.addEventListener('input', watchEditorExit);
+  form.addEventListener('change', watchEditorExit);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -1645,9 +1700,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (source) values.enabled = false;
     const path = `/v1/workspaces/${workspace}/automations`;
     const {template_id, ...changes} = values;
+    closeConfirm({restoreFocus: false});
     saveButton.disabled = true;
     backButton.disabled = true;
     saveButton.textContent = '保存中…';
+    syncRunControls();
     let result;
     try {
       if (item) {
@@ -1667,6 +1724,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         saveButton.disabled = false;
         backButton.disabled = false;
         saveButton.textContent = '保存';
+        syncRunControls();
       }
     }
     if (!isCurrent()) return;
@@ -1697,6 +1755,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(form, current, currentUser && currentUser.username);
     renderEditorSchedule();
     form.elements.template_id.disabled = true;
+    rememberEditorSettings();
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
@@ -1711,7 +1770,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   runButton.addEventListener('click', () => {
     if (runButton.disabled) return;
     const target = runScope();
-    return submitRun(target, runSubmissions.get(target.key)?.source);
+    const submission = runSubmissions.get(target.key);
+    if (!submission && editorHasChanges()) {
+      openConfirm({
+        parent: editorConfirm,
+        trigger: runButton,
+        prompt: {question: '有未保存的修改。使用已保存的设置运行一次？', confirmLabel: '运行已保存版本'},
+        action: () => {
+          if (!saveButton.disabled) return submitRun(target);
+        },
+      });
+      return;
+    }
+    return submitRun(target, submission?.source);
   });
 
   const removeButton = document.getElementById('remove-automation');
@@ -1726,6 +1797,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     clearEditorLink();
     form.hidden = true;
+    watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');

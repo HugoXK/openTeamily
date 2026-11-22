@@ -186,15 +186,24 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
       throw new FeatureError(400, 'invalid', 'Invalid conversation request')
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/archive$`), handle: wrap(async (req, workspaceId, id) => {
-      const body = await req.json()
-      const { agent } = await call('get', { workspace_id: workspaceId, id })
-      if (Number.isInteger(body.revision) && body.revision !== agent.revision) throw new FeatureError(409, 'conflict', 'Agent was updated; reload and retry')
-      const result = await call('archive', { workspace_id: workspaceId, id })
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const { archived, revision } = requireBodyKeys(await req.json(1024), ['archived', 'revision'])
+      if ((archived !== undefined && typeof archived !== 'boolean') ||
+          (revision !== undefined && (!Number.isInteger(revision) || revision < 1)) ||
+          (archived === false && revision === undefined)) {
+        throw new FeatureError(400, 'invalid', 'Provide a valid agent archive state and revision')
+      }
+      const result = await call('archive', { workspace_id: workspaceId, id, archived, revision })
       return { status: 200, body: { agent: publicAgent(result.agent) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
         const includeArchived = req.query.get('include_archived') === '1'
+        const archivedOnly = req.query.get('archived')
+        if (archivedOnly !== null && (archivedOnly !== '1' || req.query.getAll('archived').length !== 1 ||
+            req.query.has('include') || req.query.has('include_archived'))) {
+          throw new FeatureError(400, 'invalid', 'Invalid agent archive filter')
+        }
         const cursor = req.query.get('cursor') || ''
         const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         if (req.query.get('include') === 'conversations') {
@@ -211,8 +220,9 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
           })
           return {body: {items: page.items.map(chatAgent), cursor: page.cursor, conversations}}
         }
-        const active = await call('list', { workspace_id: workspaceId })
-        const archived = includeArchived ? await call('list', { workspace_id: workspaceId, archived: true }) : { items: [] }
+        const active = archivedOnly ? {items: []} : await call('list', { workspace_id: workspaceId })
+        const archived = archivedOnly || includeArchived
+          ? await call('list', { workspace_id: workspaceId, archived: true }) : {items: []}
         const rows = [...active.items, ...archived.items].sort((a, b) => a.id.localeCompare(b.id))
         const sliced = rows.filter((row) => row.id > cursor).slice(0, limit + 1)
         const items = sliced.slice(0, limit).map(publicAgent)

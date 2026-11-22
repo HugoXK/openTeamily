@@ -18,7 +18,7 @@ from . import skill_packages, agents, artifacts, bot_social, composio, conversat
 from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
-GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
+GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys'})
 GONE_WORKSPACE_EVENTS = re.compile(r'/v1/workspaces/[0-9a-f]{32}/events')
 
 class APIError(Exception):
@@ -558,7 +558,7 @@ class App:
             refuse(404, 'not_found', 'Route not found')
         if GONE_WORKSPACE_EVENTS.fullmatch(path):
             refuse(410, 'retired', 'Workspace event streams have been retired')
-        if path.startswith(('/v1/agent/', '/v1/gateway/')) or path in GONE_PATHS or moved_api(path):
+        if path.startswith(('/v1/agent/', '/v1/gateway/', '/v1/runtime/')) or path in GONE_PATHS or moved_api(path):
             # Execution moved to each user's DS-Bot; public pages to Bot Social. Old clients get 410.
             refuse(410, 'moved_to_dsbot', 'This route now runs on your own DS-Bot')
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)

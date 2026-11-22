@@ -614,6 +614,9 @@ export function createAgents({ db, host }) {
     async archive(p) {
       const row = await native.ensure(load(ws(p), p.id))
       const archived = p.archived === false ? 0 : 1
+      if (p.revision !== undefined && p.revision !== row.revision) fail('conflict', 'Agent changed elsewhere; reload and retry', 409)
+      if (row.native_deleted) fail('native-deleted', 'The native agent was deleted and cannot be restored', 409)
+      if (archived === row.archived) return { agent: view(row) }
       await native.update(row, { archived: !!archived })
       run('UPDATE agents SET archived=?, revision=revision+1, updated=? WHERE id=?', archived, now(), row.id)
       return { agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', row.id))) }

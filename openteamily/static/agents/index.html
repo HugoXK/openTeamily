@@ -107,7 +107,15 @@
       </label>
     </div>
     <section id="list-panel">
-      <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
+      <div class="directory-list-heading">
+        <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
+        <label for="agent-status">状态
+          <select id="agent-status">
+            <option value="active">可用</option>
+            <option value="archived">已归档</option>
+          </select>
+        </label>
+      </div>
       <ul id="agent-list" class="card-grid"></ul>
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
@@ -126,7 +134,10 @@
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="new-agent-quick-starts-help"></textarea></label>
           <p class="note" id="new-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
-          <button type="submit">创建</button>
+          <div class="actions">
+            <button type="submit">创建</button>
+            <button type="button" id="cancel-create">取消</button>
+          </div>
         </fieldset>
       </form>
       <form id="edit-form" method="post" action="/v1/workspaces" hidden>
@@ -162,18 +173,6 @@
         </form>
         <p id="api-key-token" class="note" hidden></p>
         <ul id="api-key-list"></ul>
-      </section>
-      <section id="runtime-panel" hidden>
-        <h2>运行时绑定</h2>
-        <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>
-        <p id="runtime-status" class="note"></p>
-        <label>实例
-          <select id="runtime-instance"></select>
-        </label>
-        <div class="actions">
-          <button type="button" id="bind-runtime">绑定</button>
-          <button type="button" id="unbind-runtime">解除绑定</button>
-        </div>
       </section>
       <section id="chat-panel" hidden>
         <h2 id="chat-title">对话</h2>

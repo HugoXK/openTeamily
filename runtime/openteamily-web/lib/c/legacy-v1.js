@@ -1375,6 +1375,13 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const notices = match[1] === 'follow-work'
+          if (!notices && body && !Array.isArray(body) && Object.keys(body).length === 2
+            && typeof body.listing_id === 'string' && PUBLIC_LISTING_ID.test(body.listing_id)
+            && ['like', 'collect'].includes(body.action)) {
+            const result = await client(host).post(`/v1/ot/listings/${body.listing_id}/${body.action}`, {on: false})
+            const field = body.action === 'like' ? 'liked' : 'collected'
+            return [200, {[field]: result[field]}]
+          }
           const key = notices ? 'enabled' : 'on'
           if (!body || Array.isArray(body) || Object.keys(body).length !== 2
             || typeof body.handle !== 'string' || !PROFILE_HANDLE.test(body.handle) || typeof body[key] !== 'boolean') {

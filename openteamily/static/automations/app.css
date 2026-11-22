@@ -630,8 +630,17 @@ body.app-workspace #main-panel {
   min-height: 2.75rem;
 }
 
+#editor-head-confirm,
 .editor-head .manual-run-feedback {
   grid-column: 1 / -1;
+}
+
+#editor-head-confirm:empty {
+  display: none;
+}
+
+#editor-head-confirm .row-confirm button {
+  min-height: 2.75rem;
 }
 
 .editor-head .manual-run-feedback:has(#manual-run-status:empty):has(#view-watched-run[hidden]) {

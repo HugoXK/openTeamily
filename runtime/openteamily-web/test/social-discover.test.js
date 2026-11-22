@@ -188,6 +188,7 @@ test('profile social sends only actor-scoped queries and explicit follow request
     assert.equal(init.headers.authorization,'Bearer profile-fixture')
     calls.push({url:url.slice(SERVER.length), method:init.method, body:init.body && JSON.parse(init.body)})
     if (init.method === 'GET') return Response.json({items:[],next_cursor:null})
+    if (url.includes('/listings/')) return Response.json({collected:false,liked:false,unrelated:'not forwarded'})
     return Response.json(url.endsWith('/notifications') ? {enabled:false} : {following:false})
   }}))
   const route = discover({dataDir:dir}).endpoints.v1
@@ -202,6 +203,16 @@ test('profile social sends only actor-scoped queries and explicit follow request
   assert.deepEqual(await route({method:'POST',path,body:{handle:'ann.home',on:false}}), {
     status:200,body:{following:false},
   })
+  const listing = 'otl_' + 'V'.repeat(26)
+  assert.equal((await route({method:'POST',path,body:{listing_id:listing,action:'publish'}})).status,400)
+  assert.equal((await route({method:'POST',path,body:{listing_id:listing,action:'like',on:true}})).status,400)
+  assert.equal((await route({method:'POST',path,body:{listing_id:[listing],action:'like'}})).status,400)
+  assert.deepEqual(await route({method:'POST',path,body:{listing_id:listing,action:'collect'},owner_id:'forged'}),{
+    status:200,body:{collected:false},
+  })
+  assert.deepEqual(await route({method:'POST',path,body:{listing_id:listing,action:'like'}}),{
+    status:200,body:{liked:false},
+  })
   const notices = '/v1/profile/follow-work'
   assert.equal((await route({method:'GET',path:notices+'?view=liked'})).status,400)
   assert.equal((await route({method:'GET',path:notices+'?cursor=abc'})).status,200)
@@ -211,6 +222,8 @@ test('profile social sends only actor-scoped queries and explicit follow request
   assert.deepEqual(calls,[
     {url:'/v1/ot/profile/social?view=followers&q=Ann+Lee&limit=20',method:'GET',body:undefined},
     {url:'/v1/ot/follows',method:'POST',body:{handle:'ann.home',on:false}},
+    {url:'/v1/ot/listings/'+listing+'/collect',method:'POST',body:{on:false}},
+    {url:'/v1/ot/listings/'+listing+'/like',method:'POST',body:{on:false}},
     {url:'/v1/ot/profile/social?view=work-notices&cursor=abc',method:'GET',body:undefined},
     {url:'/v1/ot/follows/notifications',method:'POST',body:{handle:'ann.home',enabled:false}},
   ])

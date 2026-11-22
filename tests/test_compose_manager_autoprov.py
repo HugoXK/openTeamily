@@ -1,8 +1,10 @@
 """poll-once discovers server auto-provisioned instances over real loopback HTTP; Docker is a stub."""
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from dataclasses import replace
 import io
 import json
+from threading import Event, Lock
 import unittest
 from unittest.mock import patch
 
@@ -92,6 +94,39 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(by_id[auto]['status'], 'no_claim', second)
         manager_cfg = json.loads(self.cfgpath.read_text())
         self.assertNotIn(auto, manager_cfg['instances'])  # never written back
+
+    def test_pending_owners_use_two_fenced_worker_slots(self):
+        self.start_http()
+        assigned = [self.auto_instance(name, '127.0.0.' + str(peer))[1]
+                    for name, peer in (('alice2', 11), ('bob2', 12), ('carol2', 13))]
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['instances'] = {}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        started = []
+        entered_two, release = Event(), Event()
+        lock = Lock()
+
+        def slow_start(worker, iid):
+            with lock:
+                started.append(iid)
+                if len(started) == 2:
+                    entered_two.set()
+            if not release.wait(4):
+                raise AssertionError('independent owners did not enter both worker slots')
+            return {'status': 'observed', 'instance_id': iid, 'observed': 'running'}
+
+        with patch.object(ManagerWorker, 'run_once', new=slow_start), ThreadPoolExecutor(max_workers=1) as poller:
+            future = poller.submit(self.poll)
+            try:
+                self.assertTrue(entered_two.wait(2))
+                with lock:
+                    self.assertEqual(len(started), 2)
+            finally:
+                release.set()
+            code, result = future.result(timeout=5)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(started), sorted(assigned))
+        self.assertEqual([row['instance_id'] for row in result['results']], sorted(assigned))
 
     def test_new_accounts_inherit_platform_model_and_restart_picks_up_rotation(self):
         client = self.start_http()

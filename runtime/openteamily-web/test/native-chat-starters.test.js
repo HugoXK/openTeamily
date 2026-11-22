@@ -340,3 +340,33 @@ test('the native Chat directory and thread observe live roster edits without a m
   assert.equal((await owner.request('GET', agentBase(WORKSPACE))).status, 500)
   assert.equal(startups, 1)
 })
+
+test('archived agents can be listed and restored without recreating or crossing owner scope', async t => {
+  const runtime = ownerRuntime(t)
+  const outsider = ownerRuntime(t)
+  const agent = await createAgent(runtime, WORKSPACE, 'Recoverable agent', ['Existing starter'])
+  const another = await createAgent(runtime, WORKSPACE, 'Active neighbour', [])
+  const archive = agentBase(WORKSPACE) + '/' + agent.id + '/archive'
+  const directory = agentBase(WORKSPACE) + '?limit=100'
+  const archivedList = directory + '&archived=1'
+  assert.equal((await runtime.request('GET', archive)).status, 405)
+  assert.equal((await runtime.request('POST', archive, {archived:'false', revision:agent.revision})).status, 400)
+  assert.equal((await runtime.request('POST', archive, {archived:false})).status, 400)
+  const saved = await runtime.request('POST', archive, {archived:true, revision:agent.revision})
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.agent.archived, 1)
+  assert.deepEqual((await runtime.request('GET', directory)).body.items.map(item=>item.id),[another.id])
+  assert.equal((await runtime.request('GET', archivedList+'&include_archived=1')).status,400)
+  const [hidden] = (await runtime.request('GET', archivedList)).body.items
+  assert.equal(hidden.id, agent.id)
+  assert.equal(runtime.bots[hidden.native_bot_id].hidden, true)
+  assert.equal((await outsider.request('POST', archive, {archived:false, revision:hidden.revision})).status, 404)
+  assert.equal((await runtime.request('POST', archive, {archived:false, revision:agent.revision})).status, 409)
+  const restored = await runtime.request('POST', archive, {archived:false, revision:hidden.revision})
+  assert.equal(restored.status, 200)
+  assert.equal(restored.body.agent.id, agent.id)
+  assert.equal(restored.body.agent.native_bot_id, agent.native_bot_id)
+  assert.deepEqual(restored.body.agent.quick_starts, ['Existing starter'])
+  assert.equal(runtime.bots[agent.native_bot_id].hidden, false)
+  assert.deepEqual((await runtime.request('GET', archivedList)).body.items,[])
+})

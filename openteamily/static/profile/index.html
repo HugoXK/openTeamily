@@ -100,6 +100,7 @@
           </div>
         </header>
         <div id="profile-feed" class="profile-feed" role="tabpanel" aria-labelledby="tab-posts" tabindex="0">
+          <p id="profile-feed-action-status" class="profile-inline-status" role="status"></p>
           <ul id="profile-feed-list" class="profile-work-list" hidden></ul>
           <div class="profile-list-controls">
             <p id="profile-feed-empty" class="profile-feed-empty" role="status"></p>
@@ -229,6 +230,10 @@
           <button type="button" id="follow-work-dialog-close" aria-label="关闭" autofocus>×</button>
         </header>
         <p class="profile-dialog-note">选择哪些作者发布公开作品时会通知你。</p>
+        <label class="profile-dialog-search">
+          <span class="visually-hidden">搜索关注的作者</span>
+          <input id="follow-work-search" type="search" placeholder="搜索关注的作者" autocomplete="off" maxlength="80">
+        </label>
         <p id="follow-work-status" class="profile-inline-status" role="status"></p>
         <ul id="follow-work-list" hidden></ul>
         <div class="profile-list-controls">

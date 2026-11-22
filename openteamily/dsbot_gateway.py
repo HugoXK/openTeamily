@@ -71,7 +71,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
     (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
-    (re.compile(r'^/v1/runtime/(?:connections|tasks(?:/[0-9a-f]{32}/(?:cancel|artifact))?)$'), 'skills'),
+    (re.compile(r'^/v1/skills/runs/[0-9a-f]{32}/(?:cancel|artifact)$'), 'skills'),
     (re.compile(r'^/v1/workspaces$'), 'teams'),
     (re.compile(r'^/v1/teams$'), 'teams'),
     (re.compile(r'^/v1/team-directory$'), 'teams'),
@@ -130,7 +130,6 @@ MOVED_API_LOCATIONS = (
     'location = /v1/invites/preview { return 418; }',
     'location = /v1/join-requests { return 418; }',
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ^~ /v1/runtime/ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
     'location = /v1/workspaces { return 418; }',
     'location = /v1/agent-homepages/start { return 410; }',
@@ -671,6 +670,10 @@ __KEY_SETTING__
   location = /v1/admin { return 404; }
   location ^~ /v1/admin/ { return 404; }
   location = /v1/platform/route { return 404; }
+  location ^~ /v1/runtime/ {
+    default_type application/json;
+    return 410 '{"error":{"code":"retired"}}';
+  }
 __SOCIAL_LOCATION__
   location = /_ot_authz {
     internal;
