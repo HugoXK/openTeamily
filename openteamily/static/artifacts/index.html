@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/artifacts/app.css">
   <link rel="modulepreload" href="/artifacts/notifications.mjs">
   <link rel="modulepreload" href="/artifacts/shared-studio.mjs">
+  <link rel="modulepreload" href="/artifacts/studio-copy.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
   <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/work-notification.mjs">
@@ -79,6 +80,7 @@
             <button type="button" id="mobile-editor-markdown" aria-controls="document-source" hidden>切换 Markdown</button>
             <button type="button" id="mobile-editor-version" aria-controls="version-panel" hidden>版本与导出</button>
             <button type="button" id="mobile-editor-share" aria-controls="share-panel" hidden>只读分享</button>
+            <button type="button" id="studio-copy-mobile" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
             <button type="button" id="mobile-editor-discover" aria-controls="discover-panel" hidden>公开到发现页</button>
             <button type="button" id="mobile-editor-reconnect">检查更新</button>
             <button type="button" id="mobile-editor-delete" class="danger" hidden>删除作品</button>
@@ -324,6 +326,7 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
+      <button type="button" id="studio-copy-open" class="secondary" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
       <div id="artifact-live-update" hidden>
         <p id="artifact-live-message" role="status"></p>
         <div class="artifact-live-actions">
@@ -537,6 +540,22 @@
         <button type="submit" class="primary" id="duplicate-artifact-submit">创建副本</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="studio-copy-dialog" class="send-dialog-card" aria-labelledby="studio-copy-heading" aria-describedby="studio-copy-description">
+    <h2 id="studio-copy-heading">复制到团队协作</h2>
+    <p id="studio-copy-description" class="note">确认后，团队成员可以编辑下方内容的副本。原文档仍保存在你的资料空间。</p>
+    <p id="studio-copy-scope"><strong id="studio-copy-target"></strong><span id="studio-copy-revision" class="note"></span></p>
+    <section id="studio-copy-preview" aria-label="要复制的内容">
+      <h3 id="studio-copy-title"></h3>
+      <pre id="studio-copy-body" tabindex="0"></pre>
+      <p id="studio-copy-empty" class="note" hidden>正文为空</p>
+    </section>
+    <p id="studio-copy-status" class="note" role="status"></p>
+    <div class="send-dialog-actions">
+      <button type="button" id="studio-copy-dismiss" autofocus>取消</button>
+      <button type="button" id="studio-copy-confirm" class="primary">确认复制</button>
+      <a id="studio-copy-result" hidden>打开团队文档</a>
+    </div>
   </dialog>
   <dialog id="artifact-notifications" aria-labelledby="artifact-notifications-heading">
     <div class="artifact-notifications-head">

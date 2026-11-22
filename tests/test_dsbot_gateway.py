@@ -174,6 +174,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/team/', gw.load_routes()), '/api/openteamily/page?path=%2Fteam%2F')
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/studio-copy'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/action'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
         work = '/v1/discover/works/work-demo'
@@ -328,7 +330,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /onboarding { return 418; }', conf)
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
-        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
+        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)

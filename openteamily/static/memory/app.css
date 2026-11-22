@@ -553,6 +553,17 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   margin-top: 0.4rem;
 }
 
+#action-editor-form > label {
+  display: grid;
+  gap: .35rem;
+}
+
+#action-editor-form > label > :is(input, select, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
 #action-editor-form textarea {
   min-height: 6rem;
 }

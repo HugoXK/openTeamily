@@ -196,6 +196,21 @@
   overflow-wrap: anywhere;
 }
 #shared-meeting-actions li > p { margin: .2rem 0; }
+.shared-meeting-action-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .75rem;
+  margin-top: .5rem;
+}
+.shared-meeting-action-controls a { color: var(--ot-accent-hover); }
+@media (max-width: 700px) {
+  .shared-meeting-action-controls :is(a, button) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+}
 #meeting-share-dialog {
   width: min(100% - 1.5rem, 37rem);
   max-height: calc(100dvh - 1.5rem);

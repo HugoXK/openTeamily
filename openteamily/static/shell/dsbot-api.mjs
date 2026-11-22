@@ -27,7 +27,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/memory\/capture$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/(?:attachments|reply-progress|messages(?:\/[0-9a-f]{32}\/(?:artifact|retry|files\/[0-3]))?))?)?))?)?$/, 'agents'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe|share-recipients|shared(?:\/[0-9a-f]{32}(?:\/revoke)?)?|[0-9a-f]{32}(?:\/(?:remove|export|shares|action|artifact|memory))?))?$/, 'meetings'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe|share-recipients|shared(?:\/[0-9a-f]{32}(?:\/(?:revoke|action))?)?|[0-9a-f]{32}(?:\/(?:remove|export|shares|action|artifact|memory))?))?$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings\/from-call\/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/draft(?:\/save)?$/, 'memory'],
@@ -35,7 +35,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/studio\/documents(?:\/[0-9a-f]{32}(?:\/(?:remove|restore|versions(?:\/[1-9][0-9]{0,15})?))?)?$/, 'studio'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/(?:activity|(?:spreadsheet|slides)\/draft)$/, 'artifacts'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
   // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],

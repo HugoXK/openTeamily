@@ -68,6 +68,7 @@ class SettingsPage:
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/shared-studio.mjs': ('artifacts', 'shared-studio.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),

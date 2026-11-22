@@ -21,6 +21,8 @@ const STEP_ERROR = {
   timeout: '该步骤运行超时。',
   runtime_failed: '运行时未能完成此步骤。',
   workspace_unavailable: '运行时已失去对该工作区的访问权限。',
+  source_changed: '共享结果已更新。请打开最新版并发起后续任务。',
+  source_unavailable: '无法读取引用的共享结果。',
 };
 
 export function teamRunTarget(hash = '') {
@@ -32,6 +34,15 @@ export function teamRunTarget(hash = '') {
       (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared)) ||
       (draft !== null && draft !== '1')) return {invalid: true};
   return {workspace, ...(run ? {run} : {}), ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
+}
+
+function readSource(value) {
+  if (!value || typeof value.id !== 'string' || !SHARED_ID.test(value.id) ||
+      typeof value.version !== 'string' || !/^[a-f0-9]{64}$/.test(value.version) ||
+      !Array.isArray(value.positions) || value.positions.length < 1 || value.positions.length > 3 ||
+      value.positions.some(position => !Number.isInteger(position) || position < 0 || position > 7) ||
+      new Set(value.positions).size !== value.positions.length) return null;
+  return {id: value.id, version: value.version, positions: [...value.positions].sort((a, b) => a - b)};
 }
 
 export function teamRunPayload(draft, agents) {
@@ -49,7 +60,9 @@ export function teamRunPayload(draft, agents) {
         depends_on.some(position => position === undefined || position >= index)) return null;
     steps.push({agent_id: step.agent, instruction, depends_on: depends_on.sort((a, b) => a - b)});
   }
-  return {title, goal, steps};
+  const source = draft.source && readSource(draft.source);
+  if (draft.source && !source) return null;
+  return {title, goal, steps, ...(source && {source})};
 }
 
 export function teamRunDraftFromHistory(run, nextKey) {
@@ -67,7 +80,8 @@ export function teamRunDraftFromHistory(run, nextKey) {
     steps.push({key:nextKey(), agent:source.agent_id, instruction:source.instruction,
       dependencies:new Set(source.depends_on.map(index => steps[index].key))});
   }
-  return {title:prefix + suffix, goal:run.goal, steps, sourceRun:run.id};
+  const source = readSource(run.source);
+  return {title:prefix + suffix, goal:run.goal, steps, sourceRun:run.id, ...(source && {source})};
 }
 
 export function removeDraftStep(steps, key) {
@@ -78,7 +92,7 @@ export function removeDraftStep(steps, key) {
 }
 
 function hasDraftContent(draft) {
-  return Boolean(draft && (draft.title || draft.goal || draft.steps.length !== LIMITS.minimum ||
+  return Boolean(draft && (draft.title || draft.goal || draft.source || draft.steps.length !== LIMITS.minimum ||
     draft.steps.some(step => step.agent || step.instruction || step.dependencies.size)));
 }
 
@@ -92,12 +106,13 @@ function readDraft(view, storageKey, nextKey) {
   try {
     const raw = view.sessionStorage.getItem(storageKey);
     if (!raw || raw.length > 65536) return null;
-    const {title, goal, steps, sourceRun, createKey} = JSON.parse(raw);
+    const {title, goal, steps, sourceRun, source: rawSource, createKey} = JSON.parse(raw);
+    const source = readSource(rawSource);
     if (typeof title !== 'string' || title.length > LIMITS.title || typeof goal !== 'string' ||
         goal.length > LIMITS.goal || !Array.isArray(steps) || steps.length < LIMITS.minimum ||
         steps.length > LIMITS.maximum || (sourceRun && !ID.test(sourceRun)) ||
-        (createKey && !CREATE_KEY.test(createKey))) return null;
-    const draft = {title, goal, steps: [], ...(sourceRun && {sourceRun})};
+        (rawSource !== undefined && !source) || (createKey && !CREATE_KEY.test(createKey))) return null;
+    const draft = {title, goal, steps: [], ...(sourceRun && {sourceRun}), ...(source && {source})};
     for (const [position, step] of steps.entries()) {
       if (!step || typeof step.agent !== 'string' || (step.agent && !ID.test(step.agent)) ||
           typeof step.instruction !== 'string' || step.instruction.length > LIMITS.instruction ||
@@ -125,7 +140,7 @@ function writeDraft(view, storageKey, draft, attempt) {
       const steps = draft.steps.map(step => ({agent: step.agent, instruction: step.instruction,
         dependsOn: [...step.dependencies].map(key => positions.get(key))}));
       view.sessionStorage.setItem(storageKey, JSON.stringify({title: draft.title, goal: draft.goal, steps,
-        sourceRun: draft.sourceRun, createKey: attempt?.key}));
+        sourceRun: draft.sourceRun, source: draft.source, createKey: attempt?.key}));
     }
     return true;
   } catch {
@@ -134,6 +149,10 @@ function writeDraft(view, storageKey, draft, attempt) {
 }
 
 function errorMessage(result, fallback) {
+  if (result.body?.error?.code === 'source_changed') return '共享结果已更新。请重新打开共享结果并选择步骤。';
+  if (result.body?.error?.code === 'source_unavailable') return result.status === 503
+    ? '暂时无法读取共享结果，请稍后重试。' : '共享结果已不可用。可以移除引用后继续。';
+  if (result.body?.error?.code === 'source_invalid') return '请选择有输出的已完成步骤。';
   if (result.status === 401) return '登录已失效，请重新登录。';
   if (result.status === 403) return '你没有权限操作此工作区的任务。';
   if (result.status === 404) return '找不到这条团队任务。';
@@ -215,7 +234,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   }
 
   const shares = createTeamRunShares({
-    document, request, selectAddress: id => updateLocation(id ? {shared: id} : {}),
+    document, request, adopt: adoptShare, selectAddress: id => updateLocation(id ? {shared: id} : {}),
   });
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
   const scope = () => ({viewer, workspace, epoch});
@@ -272,6 +291,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-results').replaceChildren();
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
+    node('team-run-open-source').hidden = true;
     show('team-run-progress', '');
     for (const key of saved.keys()) if (key.startsWith(workspace + '/')) saved.delete(key);
     shares.selectRun(null);
@@ -363,7 +383,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     tasks = [];
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
-    if (address) updateLocation();
+    if (address) updateLocation(shared ? {shared} : {});
     if (focus) node('team-runs-list-heading').focus();
     if (workspace) {
       show('status', '正在读取任务…');
@@ -377,6 +397,31 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function blankDraft() {
     return {title: '', goal: '', steps: [blankStep(), blankStep()]};
+  }
+
+  function adoptShare({workspaceId, source, name}, {replace = false} = {}) {
+    if (screen !== 'list' || workspaceId !== workspace || !readSource(source)) return 'unavailable';
+    hydrateDraft();
+    if (creates.has(workspace)) return 'pending';
+    if (!replace && hasDraftContent(drafts.get(workspace))) return 'replace';
+    const draft = blankDraft();
+    draft.title = ('后续任务 · ' + name).slice(0, LIMITS.title).toWellFormed();
+    draft.goal = '根据共享结果制定下一步行动计划。';
+    draft.steps[0].instruction = '梳理共享结果，找出仍需解决的问题和优先事项。';
+    draft.steps[1].instruction = '综合分析结果，给出具体的下一步行动计划。';
+    draft.steps[1].dependencies.add(draft.steps[0].key);
+    draft.source = source;
+    drafts.set(workspace, draft);
+    void showEditor();
+    return 'opened';
+  }
+
+  function renderDraftSource() {
+    const source = currentDraft.source;
+    const container = node('team-run-source');
+    container.hidden = !source;
+    if (source) show('team-run-source-status', `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
+    node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : source ? '发起后续任务' : '新建任务';
   }
 
   const missingDraftAgent = () => currentDraft.steps.some(step => step.agent && !agents.some(agent => agent.id === step.agent));
@@ -500,7 +545,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     currentDraft = drafts.get(workspace);
     title.value = currentDraft.title;
     goal.value = currentDraft.goal;
-    node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : '新建任务';
+    renderDraftSource();
     agents = [];
     renderDraft();
     persistDraft();
@@ -545,13 +590,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         currentDraft = blankDraft();
         drafts.set(workspace, currentDraft);
         title.value = goal.value = '';
+        renderDraftSource();
         persistDraft();
         renderDraft();
         show('team-run-start-status', '任务已启动，可返回任务列表查看。', 'ok');
       }
       return;
     }
-    const uncertain = accepted || isUncertain(result.status);
+    const uncertain = accepted || (isUncertain(result.status) && result.body?.error?.code !== 'source_unavailable');
     if (!uncertain) {
       creates.delete(target.workspace);
       persistDraft(target.viewer, target.workspace, sameDraft);
@@ -645,6 +691,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     cancel.hidden = run.status !== 'running';
     remove.hidden = run.status === 'running';
     reuse.hidden = !REUSABLE.has(run.status);
+    node('team-run-open-source').hidden = !readSource(run.source);
     cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
     if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
       const refocus = confirm.contains(document.activeElement);
@@ -682,6 +729,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (address) updateLocation({run: id});
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
+    node('team-run-open-source').hidden = true;
     cancel.hidden = remove.hidden = reuse.hidden = true;
     show('status', '');
     if (initial) renderDetail(initial);
@@ -717,7 +765,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       show('team-run-status', '');
       renderDetail(run);
     } else {
-      if (cannotRead(result.status)) {
+      if (cannotRead(result.status) && result.body?.error?.code !== 'source_unavailable') {
         clearInaccessibleRunData();
         show('team-run-status', errorMessage(result, '暂时无法读取任务。'), 'read-error');
         return;
@@ -859,6 +907,17 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     currentDraft.goal = goal.value;
     persistDraft();
   });
+  node('team-run-review-source').addEventListener('click', () => {
+    if (currentDraft?.source) showList({shared: currentDraft.source.id});
+  });
+  node('team-run-remove-source').addEventListener('click', () => {
+    if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.source) return;
+    delete currentDraft.source;
+    renderDraftSource();
+    persistDraft();
+    show('team-run-start-status', '');
+    node('team-run-form-heading').focus();
+  });
   node('team-run-add-step').addEventListener('click', () => {
     if (currentDraft.steps.length >= LIMITS.maximum) return;
     const step = blankStep();
@@ -881,6 +940,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   cancel.addEventListener('click', () => ask('cancel'));
   remove.addEventListener('click', () => ask('remove'));
   reuse.addEventListener('click', () => reuseRun());
+  node('team-run-open-source').addEventListener('click', () => {
+    const source = readSource(current?.source);
+    if (source) showList({shared: source.id});
+  });
   node('team-run-keep').addEventListener('click', () => hideQuestion(true));
   node('team-run-confirm-action').addEventListener('click', () => {
     if (question === 'reuse') return reuseRun({replace:true});

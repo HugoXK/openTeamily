@@ -194,7 +194,8 @@ test("personal receipts save distinct immutable versions, page privately and rev
     { id: second.id, title: payload.title, revision: 2, started_at: payload.started_at, created: second.created,
       organizer: author.name, action_count: 2, done_count: 1, shared: true },
   ]);
-  assert.deepEqual((await reader.ok("GET", shares + "/" + first.id)).meeting, first);
+  assert.deepEqual(await reader.ok("GET", shares + "/" + first.id), { meeting: first, received: true });
+  assert.deepEqual(await author.ok("GET", shares + "/" + first.id), { meeting: first, received: false });
   assert.deepEqual(await unselected.ok("GET", shares), { items: [], cursor: null });
   assert.equal((await unselected.call("GET", shares + "/" + first.id)).status, 404);
   assert.equal((await outsider.call("GET", shares + "/" + first.id)).status, 404);

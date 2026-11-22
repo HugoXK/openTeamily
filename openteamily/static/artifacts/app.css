@@ -1410,15 +1410,25 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: 1.05rem;
 }
 
-#duplicate-artifact-dialog {
+#duplicate-artifact-dialog, #studio-copy-dialog {
   width: min(26rem, calc(100% - 2rem));
   margin: auto;
   border: 1px solid var(--ot-line);
 }
 
-#duplicate-artifact-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+#duplicate-artifact-dialog::backdrop, #studio-copy-dialog::backdrop { background: rgb(15 23 42 / 32%); }
 #duplicate-artifact-source { overflow-wrap: anywhere; }
 #duplicate-artifact-title { width: 100%; margin-top: .3rem; }
+#studio-copy-open { justify-self: start; }
+#studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
+#studio-copy-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem; overflow-wrap: anywhere; }
+#studio-copy-preview { background: var(--ot-surface-2); border: 1px solid var(--ot-line); border-radius: .65rem; padding: .75rem; }
+#studio-copy-title { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+#studio-copy-body { max-height: min(13rem, 35dvh); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#studio-copy-status:empty { display: none; }
+#studio-copy-dialog .send-dialog-actions { margin-top: .75rem; align-items: center; flex-wrap: wrap; }
+#studio-copy-dialog :is(button, a) { min-height: 2.75rem; align-content: center; }
+#studio-copy-result { padding-inline: .75rem; }
 
 #send-to-chat-list {
   list-style: none;
@@ -2219,7 +2229,7 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
     padding: .75rem .875rem max(1.5rem, env(safe-area-inset-bottom));
     border-radius: 0;
   }
-  #editor-form :is(#document-save, #sheet-save, #sheet-back, #slides-save, #slides-back, #save-artifact, #cancel-editor, #remove-artifact) {
+  #editor-form :is(#document-save, #studio-copy-open, #sheet-save, #sheet-back, #slides-save, #slides-back, #save-artifact, #cancel-editor, #remove-artifact) {
     display: none;
   }
   #editor-form .document-toolbar {

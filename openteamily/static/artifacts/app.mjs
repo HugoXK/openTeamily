@@ -2,6 +2,7 @@ import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
 import { mountSharedStudio } from './shared-studio.mjs';
+import { mountStudioCopy } from './studio-copy.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -634,10 +635,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },
   });
+  const studioCopy = mountStudioCopy(document, {
+    source: () => ({
+      selection: editor, item: current,
+      team: nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+    }),
+    ready(selection) {
+      if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
+      if (selection.saving) return '作品正在保存，请稍候。';
+      if (hasEditorDraft()) return '请先保存修改，再预览要复制的版本。';
+      return '';
+    },
+    request: (selection, id, review) =>
+      request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
+    show,
+  });
 
   function syncStudioWorkspace() {
     studio?.setWorkspace(nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
       currentUser?.id);
+    studioCopy?.update();
   }
 
   async function renderProviders() {
@@ -2281,11 +2298,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+    studioCopy?.update();
   }
 
   function hideEditor() {
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
+    studioCopy?.close();
     editor?.controller.abort();
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;

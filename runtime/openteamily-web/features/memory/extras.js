@@ -19,7 +19,12 @@ export function actionView(store, row, includeNotes = true, user = usernames(sto
   const data = { id: row.id, workspace_id: row.workspace_id, title: row.title, status: row.status, due_at: row.due_at,
     memory_page_id: row.memory_page_id, memory_page_title: page?.title ?? null, revision: row.revision,
     created: row.created, updated: row.updated, created_by: user(row.created_by), updated_by: user(row.updated_by) }
-  if (includeNotes) data.notes = row.notes
+  if (includeNotes) {
+    data.notes = row.notes
+    const source = store.get(`SELECT workspace_id, share_id, revision, action_index
+      FROM memory_shared_meeting_action_sources WHERE action_id=?`, row.id)
+    if (source) data.source = {kind:'shared_meeting', ...source}
+  }
   return data
 }
 const loadAction = (store, ws, id) => store.get('SELECT * FROM memory_actions WHERE id=? AND workspace_id=?', id, ws)

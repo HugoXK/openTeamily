@@ -282,14 +282,13 @@ export function registerMeetingShares(app: FastifyInstance, ot: OtContext) {
     app.get(root + "/:id", async (req, reply) => {
       const { scope } = scopeFor(req, reply);
       const id = identifier(params(req).id, HEX, "share id");
-      let row = ot.get<Share>(`SELECT * FROM ot_meeting_shares
+      const sent = ot.get<Share>(`SELECT * FROM ot_meeting_shares
         WHERE id=? AND workspace_id IS ? AND sender_id=? AND revoked_at IS NULL`, id, scope.workspace, scope.owner);
-      if (!row) {
-        const access = recipientAccess(ot, scope);
-        row = ot.get<Share>(`SELECT s.* ${access.from} AND s.id=?`, ...access.bindings, id);
-      }
+      if (sent) return { meeting: detail(sent), received: false };
+      const access = recipientAccess(ot, scope);
+      const row = ot.get<Share>(`SELECT s.* ${access.from} AND s.id=?`, ...access.bindings, id);
       assert(row, 404, "not_found", "Meeting share not found");
-      return { meeting: detail(row) };
+      return { meeting: detail(row), received: true };
     });
     app.post(root + "/:id/revoke", async (req, reply) => {
       const { scope } = scopeFor(req, reply);

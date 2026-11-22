@@ -41,17 +41,42 @@ async function shared(req, workspace) {
   return {body:await social(req, workspace, 'GET', '/meeting-shares' + qs({limit,cursor:cursor || undefined,sent}))}
 }
 
-async function receipt(req, workspace, shareId, revoke) {
+async function receipt(req, workspace, shareId, subpath) {
   if (req.queryString) refuse(400, 'invalid', '无效的纪要分享请求。')
-  if (!revoke && req.method === 'GET') {
+  if (!subpath && req.method === 'GET') {
     const result = await social(req, workspace, 'GET', '/meeting-shares/' + shareId)
-    return {body:{...result, ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {})}}
+    const viewer = req.ownerUsername ? {viewer_username:req.ownerUsername} : {}
+    if (!result.received) return {body:{...result, ...viewer}}
+    const saved_actions = await req.host.call('memory/sharedMeetingActions', {
+      workspace_id:workspace, share_id:shareId, revision:result.meeting.revision,
+    }).catch(() => [])
+    return {body:{...result, ...viewer, saved_actions}}
   }
-  if (revoke && req.method === 'POST') {
+  if (subpath === 'revoke' && req.method === 'POST') {
     requireBodyKeys(await req.json(), [])
     return {body:await social(req, workspace, 'POST', '/meeting-shares/' + shareId + '/revoke', {})}
   }
+  if (subpath === 'action' && req.method === 'POST') return copyAction(req, workspace, shareId)
   refuse(405, 'method', 'Method not supported')
+}
+
+async function copyAction(req, workspace, shareId) {
+  const {revision, index} = requireBodyKeys(await req.json(), ['revision','index'])
+  if (!Number.isSafeInteger(revision) || revision < 1 || !Number.isInteger(index) || index < 0 || index >= 50) {
+    refuse(400, 'invalid', '请选择这份共享纪要中的行动项。')
+  }
+  const {meeting, received} = await social(req, workspace, 'GET', '/meeting-shares/' + shareId)
+  if (received !== true || meeting?.id !== shareId || meeting.shared !== true) {
+    refuse(404, 'not_found', '找不到这份收到的共享纪要。')
+  }
+  if (meeting.revision !== revision) refuse(409, 'conflict', '纪要版本不匹配，请重新打开。')
+  const item = meeting.action_items?.[index]
+  if (!item) refuse(404, 'not_found', '找不到这条行动项。')
+  if (item.done !== false) refuse(409, 'action_completed', '这条行动项已完成。')
+  const result = await req.host.call('memory/saveSharedMeetingAction', {
+    source:{workspace_id:workspace, share_id:shareId, revision, action_index:index}, meeting:meeting.title, item,
+  })
+  return {status:result.status, body:{...result.body, viewer_username:req.ownerUsername}}
 }
 
 async function outgoing(req, workspace, meetingId) {
@@ -87,6 +112,6 @@ async function outgoing(req, workspace, meetingId) {
 export const shareRoutes = [
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/share-recipients$/, handle:recipients},
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared$/, handle:shared},
-  {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared\/([0-9a-f]{32})(?:\/(revoke))?$/, handle:receipt},
+  {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared\/([0-9a-f]{32})(?:\/(revoke|action))?$/, handle:receipt},
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/shares$/, handle:outgoing},
 ]

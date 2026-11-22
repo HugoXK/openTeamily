@@ -93,6 +93,11 @@
         <p id="team-run-agent-status" class="note" role="status"></p>
         <fieldset id="team-run-fields" class="team-run-fields">
           <legend class="visually-hidden">任务与执行步骤</legend>
+          <div id="team-run-source" class="shared-run-source" hidden>
+            <p id="team-run-source-status" class="note"></p>
+            <button type="button" class="secondary" id="team-run-review-source">查看共享结果</button>
+            <button type="button" class="secondary" id="team-run-remove-source">移除引用</button>
+          </div>
           <label>任务名称 <input id="team-run-title" type="text" required maxlength="80"></label>
           <label>目标 <textarea id="team-run-goal" required rows="3" maxlength="2000"></textarea></label>
           <div class="team-run-steps-label">
@@ -118,6 +123,7 @@
         <p id="team-run-progress" role="status"></p>
         <p id="team-run-status" class="note" role="status"></p>
         <div class="team-run-actions">
+          <button type="button" class="secondary" id="team-run-open-source" hidden>查看引用的共享结果</button>
           <button type="button" class="secondary" id="team-run-reuse" hidden>复用为新任务</button>
           <button type="button" class="secondary" id="team-run-cancel" hidden>取消任务</button>
           <button type="button" class="secondary" id="team-run-remove" hidden>删除记录</button>

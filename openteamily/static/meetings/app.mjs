@@ -410,7 +410,14 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
   }};
 }
 
-export function renderSharedMeeting(document, meeting) {
+function sharedActionLink(document, action) {
+  const link = document.createElement('a');
+  link.href = '/memory?' + new URLSearchParams({workspace:action.workspace_id, page:'todos', action:action.id});
+  link.textContent = '打开我的待办';
+  return link;
+}
+
+export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) {
   const title = document.getElementById('shared-meeting-title');
   title.textContent = meeting.title;
   document.getElementById('shared-meeting-meta').textContent = [
@@ -421,7 +428,7 @@ export function renderSharedMeeting(document, meeting) {
   const actions = meeting.action_items || [];
   const list = document.getElementById('shared-meeting-actions');
   list.replaceChildren();
-  for (const item of actions) {
+  for (const [index, item] of actions.entries()) {
     const li = document.createElement('li');
     const text = document.createElement('p');
     text.textContent = item.text;
@@ -431,6 +438,39 @@ export function renderSharedMeeting(document, meeting) {
       item.done ? '已完成' : '待完成']
       .filter(Boolean).join(' · ');
     li.append(text, state);
+    if (copy && !item.done) {
+      const controls = document.createElement('div');
+      controls.className = 'shared-meeting-action-controls';
+      const savedAction = saved.find(action => action.index === index);
+      if (savedAction) {
+        controls.append(sharedActionLink(document, savedAction));
+      } else {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = '存入我的待办';
+        const feedback = document.createElement('span');
+        feedback.className = 'note';
+        feedback.setAttribute('role', 'status');
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          feedback.textContent = '正在保存…';
+          const result = await copy(index);
+          if (!result) return;
+          if (result.action) {
+            const link = sharedActionLink(document, result.action);
+            button.replaceWith(link);
+            feedback.textContent = '已保存到个人空间。';
+            link.focus({preventScroll:true});
+          } else {
+            button.disabled = false;
+            feedback.textContent = result.error;
+          }
+        });
+        controls.append(button, feedback);
+      }
+      li.append(controls);
+    }
     list.append(li);
   }
   list.hidden = !actions.length;
@@ -1533,7 +1573,8 @@ function mount() {
   }
 
   async function openSharedMeeting(id, read) {
-    const workspace = workspaceId(), pendingSelection = ++selection;
+    selection += 1;
+    const target = scope();
     resetSave();
     current = null;
     callDraft = null;
@@ -1551,14 +1592,25 @@ function mount() {
     emptyDetail.hidden = true;
     show('', '正在加载共享纪要…');
     const result = read || await request('GET', `${base()}/shared/${id}`).catch(() => unavailable);
-    if (workspaceId() !== workspace || pendingSelection !== selection) return;
+    if (!active(target)) return;
     const meeting = result.body.meeting;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         meeting?.id !== id || meeting.shared !== true) {
       show('error', result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。' : '无法打开共享纪要，请重试。');
       return;
     }
-    renderSharedMeeting(document, meeting);
+    const copy = native && result.body.received === true ? async index => {
+      if (!active(target)) return;
+      const saved = await saveRequest('POST', `/v1/workspaces/${target.workspace}/meetings/shared/${id}/action`,
+        {revision:meeting.revision, index});
+      if (!active(target)) return;
+      const action = saved.body.action;
+      if ([200, 201].includes(saved.status) && saved.body.viewer_username === target.viewer &&
+          meetingIdPattern.test(action?.id) && meetingIdPattern.test(action?.workspace_id)) return {action};
+      return {error:saved.status === 404 ? '这份共享纪要已撤回或你没有查看权限。'
+        : messageFor(saved.body.error, '暂时无法保存待办，请重试。')};
+    } : null;
+    renderSharedMeeting(document, meeting, {copy, saved:result.body.saved_actions});
     show('', '');
   }
 
