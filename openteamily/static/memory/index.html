@@ -282,6 +282,14 @@
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <section id="memory-page-draft" class="memory-page-draft" hidden>
+        <p id="memory-page-draft-status" role="status"></p>
+        <details id="memory-page-draft-details" hidden>
+          <summary>查看旧草稿</summary>
+          <textarea id="memory-page-draft-copy" aria-label="旧草稿内容" rows="5" readonly></textarea>
+        </details>
+        <button type="button" id="memory-page-draft-discard">清除草稿</button>
+      </section>
       <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
         <header class="page-history-head">

@@ -368,11 +368,6 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function applyTheme(settings) {
-  const appearance = settings && settings.appearance;
-  document.body.dataset.theme = appearance === 'dark' || appearance === 'light' ? appearance : '';
-}
-
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -1093,6 +1088,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   function showView(name, {sync = true} = {}) {
+    persistPageDraft();
     currentView = name || 'overview';
     if (currentView !== 'overview') setMobileGraph(false);
     if (mobileGraph) mobileGraph.hidden = currentView !== 'overview';
@@ -1444,11 +1440,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadSession() {
+    persistPageDraft();
     const seq = ++sessionRequest;
     const session = await request('GET', '/v1/auth/session');
     if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
+      persistPageDraft();
       currentUser = null;
+      currentPage = null;
       setCitation(null);
       cancelDirectorySearch();
       browseDirectory?.controller?.abort();
@@ -1466,6 +1465,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser?.id !== session.body.user.id) {
+      persistPageDraft();
+      currentPage = null;
+      editor.hidden = true;
       actionDrafts.clear();
       actionDraftPageScope = '';
     }
@@ -1475,9 +1477,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录：' + currentUser.username;
-    void request('GET', '/v1/settings').then(prefs => {
-      if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
-    }).catch(() => {});
     const linked = new URLSearchParams(document.defaultView?.location?.search || '');
     const citation = memoryCitationFromSearch(linked);
     const workspace = linked.get('workspace'), pageId = linked.get('page');
@@ -1542,6 +1541,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadWorkspace({syncView = true} = {}) {
+    persistPageDraft();
     directoryReturn = null;
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
@@ -1614,6 +1614,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncBodyFromRich() {
     if (!rich || sourceMode || !richDirty) return;
     const markdown = domToMarkdown(rich);
+    richDirty = false;
     editor.elements.body.value = markdown;
     const length = document.getElementById('editor-length');
     if (length) {
@@ -1650,6 +1651,128 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   if (sourceToggle) sourceToggle.addEventListener('click', () => setSourceMode(!sourceMode));
+
+  const draftPanel = document.getElementById('memory-page-draft');
+  const draftStatus = document.getElementById('memory-page-draft-status');
+  const draftDetails = document.getElementById('memory-page-draft-details');
+  const draftCopy = document.getElementById('memory-page-draft-copy');
+  const draftDiscard = document.getElementById('memory-page-draft-discard');
+  let draftTimer;
+
+  function pageDraftKey(page = currentPage, owner = currentUser) {
+    if (!page?.workspace_id || !page.id || !owner?.id) return '';
+    return 'openteamily.memory-draft:' + JSON.stringify([owner.id, page.workspace_id, page.id]);
+  }
+
+  function pageDraft(key) {
+    if (!key) return null;
+    try {
+      const value = JSON.parse(document.defaultView.sessionStorage.getItem(key));
+      if (Number.isSafeInteger(value?.revision) && value.revision > 0 &&
+          ['title','body','topics'].every(field => typeof value[field] === 'string')) return value;
+    } catch {}
+    return null;
+  }
+
+  function clearPageDraft(key) {
+    if (!key) return;
+    try { document.defaultView.sessionStorage.removeItem(key); } catch {}
+  }
+
+  function editorFields() {
+    syncBodyFromRich();
+    const {title, body, topics} = editor.elements;
+    return {title: title.value, body: body.value, topics: topics.value};
+  }
+
+  function sameFields(left, right) {
+    return Boolean(left && left.title === right.title && left.body === right.body && left.topics === right.topics);
+  }
+
+  function pageMatchesDraft(page, draft) {
+    return page.title === draft.title.trim() && (page.body || '') === draft.body &&
+      formatTopics(page.topics) === formatTopics(parseTopics(draft.topics));
+  }
+
+  function fillEditorFields(fields) {
+    editor.elements.title.value = fields.title;
+    editor.elements.body.value = fields.body;
+    editor.elements.topics.value = fields.topics;
+    loadRichBody(fields.body);
+  }
+
+  function updatePageSaveHint(page, dirty = false) {
+    const hint = document.getElementById('editor-saved');
+    if (!hint) return;
+    const when = memoryUpdatedLabel(page.updated);
+    hint.hidden = false;
+    hint.textContent = dirty ? '有未保存的修改' : '已保存 · ' + (when || '修订 ' + page.revision);
+  }
+
+  function showPageDraft({restore = false} = {}) {
+    if (!draftPanel) return;
+    const key = pageDraftKey();
+    const entry = pageDraft(key);
+    draftPanel.hidden = true;
+    draftDetails.open = false;
+    draftCopy.value = '';
+    if (!entry || pageMatchesDraft(currentPage, entry)) {
+      if (entry) clearPageDraft(key);
+      return;
+    }
+    const conflict = entry.revision !== currentPage.revision;
+    if (restore && !conflict) {
+      fillEditorFields(entry);
+      updatePageSaveHint(currentPage, true);
+    }
+    draftPanel.hidden = false;
+    draftDetails.hidden = !conflict;
+    draftStatus.textContent = conflict ? '此页已更新。旧草稿可复制，清除后可继续保存新的草稿。'
+      : '此标签页已保留草稿。点击保存后会更新记忆页。';
+    if (conflict) draftCopy.value = [entry.title, entry.body, entry.topics].join('\n\n');
+  }
+
+  function persistPageDraft() {
+    clearTimeout(draftTimer);
+    const key = pageDraftKey();
+    if (!key || editor.hidden) return;
+    const fields = editorFields();
+    const entry = pageDraft(key);
+    if (entry && entry.revision !== currentPage.revision) return;
+    if (pageMatchesDraft(currentPage, fields)) {
+      clearPageDraft(key);
+    } else {
+      try {
+        document.defaultView.sessionStorage.setItem(key, JSON.stringify({...fields, revision: currentPage.revision}));
+      } catch {}
+    }
+    // Leave an expanded revision-conflict preview alone while the user copies it.
+    if (!draftDetails?.open) showPageDraft();
+  }
+
+  function pageDraftChanged() {
+    if (!currentPage || editor.hidden) return;
+    updatePageSaveHint(currentPage, !pageMatchesDraft(currentPage, editorFields()));
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(persistPageDraft, 200);
+  }
+
+  editor.addEventListener('input', pageDraftChanged);
+  document.defaultView?.addEventListener?.('pagehide', persistPageDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistPageDraft();
+  });
+  draftDiscard?.addEventListener('click', () => {
+    const key = pageDraftKey();
+    const entry = pageDraft(key);
+    if (!entry) return;
+    clearTimeout(draftTimer);
+    clearPageDraft(key);
+    if (entry.revision === currentPage.revision) applyPageToEditor(currentPage);
+    else persistPageDraft();
+    showPageDraft();
+    editor.elements.title.focus();
+  });
 
   function richCommand(kind) {
     if (!rich) return;
@@ -1873,6 +1996,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openCitedRevision(citation, revision, isCurrent) {
+    persistPageDraft();
     showPageMode();
     currentPage = currentAction = null;
     editor.hidden = true;
@@ -1956,7 +2080,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function showPage(page, revision) {
-    currentPage = page;
+    persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
     const source = document.getElementById('memory-page-chat-source');
@@ -1975,20 +2099,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageMode();
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
-    editor.elements.title.value = currentPage.title;
-    editor.elements.body.value = currentPage.body || '';
-    loadRichBody(currentPage.body || '');
-    editor.elements.topics.value = formatTopics(currentPage.topics);
-    document.getElementById('editor-meta').textContent =
-      `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(currentPage.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
-    }
-
-    renderPageLinks();
+    applyPageToEditor(page);
+    showPageDraft({restore: true});
     syncExportButton();
     syncPageUrl(revision);
     syncDirectorySelection();
@@ -2058,18 +2170,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyPageToEditor(page) {
     currentPage = page;
-    editor.elements.title.value = page.title;
-    editor.elements.body.value = page.body || '';
-    loadRichBody(page.body || '');
-    editor.elements.topics.value = formatTopics(page.topics);
+    fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
       `修订 ${page.revision} · 作者 ${page.created_by} · 最近更新 ${page.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(page.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + page.revision);
-    }
+    updatePageSaveHint(page);
     renderPageLinks();
   }
 
@@ -2145,6 +2249,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!wid || !editing || !historySelection) return;
     const revision = historySelection;
     const status = document.getElementById('page-history-status');
+    if (!pageMatchesDraft(editing, editorFields())) {
+      if (status) status.textContent = '请先保存或清除当前草稿，再回滚历史版本。';
+      return;
+    }
     const result = await request(
       'POST', `/v1/workspaces/${wid}/memory/${editing.id}/versions/${revision}/restore`,
       {revision: editing.revision}).catch(() => ({status:0, body:{}}));
@@ -2162,7 +2270,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : '没有回滚成功。';
       return;
     }
+    persistPageDraft();
     applyPageToEditor(result.body.page);
+    showPageDraft();
     rememberPage(result.body.page);
     syncPageUrl();
     historySelection = 0;
@@ -2198,6 +2308,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
       return;
     }
+    persistPageDraft();
     currentAction = seen.body.action;
     currentPage = null;
     syncExportButton();
@@ -2565,9 +2676,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (sourceMode || !rich) {
         if (kind !== 'undo' && kind !== 'redo') applyMarkdown(editor.elements.body, kind);
         editor.elements.body.focus();
+        pageDraftChanged();
         return;
       }
       richCommand(kind);
+      pageDraftChanged();
     });
   }
 
@@ -2577,18 +2690,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const owner = currentUser;
     const editing = currentPage;
     if (!id || !editing) return;
-    syncBodyFromRich();
-    const submittedTopics = editor.elements.topics.value;
+    const key = pageDraftKey(editing, owner);
+    const submitted = editorFields();
+    persistPageDraft();
     const saved = await request('POST', `/v1/workspaces/${id}/memory/${editing.id}`, {
       revision: editing.revision,
       changes: {
-        title: editor.elements.title.value,
-        body: editor.elements.body.value,
-        topics: parseTopics(submittedTopics),
+        ...submitted,
+        topics: parseTopics(submitted.topics),
       },
     }).catch(() => ({status:0, body:{}}));
+    const page = saved.body.page;
+    if (saved.status === 200 && page) {
+      const entry = pageDraft(key);
+      if (entry && (pageMatchesDraft(page, entry) || (entry.revision === editing.revision && sameFields(entry, submitted)))) {
+        clearPageDraft(key);
+      }
+    }
     if (workspaceId() !== id || currentUser !== owner) return;
-    if (saved.status !== 200 || !saved.body.page) {
+    if (saved.status !== 200 || !page) {
       if (currentPage === editing) show('error', messageFor(saved.body.error, '无法保存记忆页。'));
       return;
     }
@@ -2598,20 +2718,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     closeDeleteConfirm({restoreFocus: false});
-    currentPage = saved.body.page;
+    const fields = editorFields();
+    currentPage = page;
+    if (sameFields(fields, submitted)) {
+      fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
+    } else {
+      const entry = pageDraft(key);
+      if (entry?.revision === editing.revision && sameFields(entry, fields)) clearPageDraft(key);
+    }
+    persistPageDraft();
+    updatePageSaveHint(page, !pageMatchesDraft(page, editorFields()));
     if (!historySelection) syncPageUrl();
     if (citationFor(currentPage.id)) setCitationStatus('已保存为修订 ' + currentPage.revision + '。');
     rememberPage(currentPage);
     syncExportButton();
-    if (editor.elements.topics.value === submittedTopics) editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(currentPage.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
-    }
 
     await loadGraph();
     if (workspaceId() !== id || currentUser !== owner || currentPage !== saved.body.page) return;
@@ -2684,6 +2806,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         kind === 'page' ? '无法删除记忆页。' : '无法删除下一步行动。'));
       return;
     }
+    if (kind === 'page') {
+      clearTimeout(draftTimer);
+      if (currentPage?.id === pending.id) editor.hidden = true;
+      clearPageDraft(pageDraftKey({workspace_id: pending.workspace, id: pending.id}, owner));
+    }
     show('ok', '已删除。');
     const restoreCitation = citation && activeCitation === citation;
     const directory = loadWorkspace({syncView: !restoreCitation});
@@ -2732,6 +2859,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function returnToList() {
+    persistPageDraft();
     const page = currentPage?.id;
     const action = currentAction?.id;
     const previous = directoryReturn;

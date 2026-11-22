@@ -174,11 +174,6 @@ async function loadSettings() {
   }
 }
 
-async function loadAppearance() {
-  const loaded = await loadSettings();
-  return loaded ? loaded.values : null;
-}
-
 export function accountNameFromLabel(text, dataset) {
   if (dataset && dataset.username) return String(dataset.username).trim();
   const raw = String(text || '').trim();
@@ -466,16 +461,30 @@ function valuesFromDom(doc) {
   return values;
 }
 
+export function shellValuesFromDocument(doc) {
+  const {shellAppearance, shellLanguage, shellStart, shellEnd} = doc.documentElement.dataset;
+  if (!['light', 'dark', 'auto', 'system'].includes(shellAppearance)) return null;
+  const values = {appearance: shellAppearance, language: shellLanguage};
+  if (shellAppearance === 'auto' && shellStart && shellEnd) {
+    values.appearance_schedule = 'custom';
+    values.appearance_start = shellStart;
+    values.appearance_end = shellEnd;
+  }
+  return values;
+}
+
 export function startShell(doc = document, options = {}) {
   const target = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const run = async () => {
     enhanceChrome();
     const guest = signedInPanel(doc)?.hasAttribute('data-guest-access') && !csrfCookie(doc.cookie);
-    const loaded = options.values !== undefined ? { values: options.values } : guest ? null : await loadSettings();
-    const values = (loaded && loaded.values) || { appearance: 'system' };
-    if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
-    applyResolvedTheme(doc, values, options.now, options.media);
-    syncAppearanceButton(doc, values, options.now, options.media);
+    const apply = values => {
+      if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
+      applyResolvedTheme(doc, values, options.now, options.media);
+      syncAppearanceButton(doc, values, options.now, options.media);
+    };
+    const initial = options.values ?? shellValuesFromDocument(doc);
+    apply(initial ?? valuesFromDom(doc));
     if (doc.body && typeof MutationObserver === 'function') {
       new MutationObserver(() => {
         if (doc.body && (doc.body.dataset.theme || doc.body.dataset.schedule)) {
@@ -490,6 +499,10 @@ export function startShell(doc = document, options = {}) {
       new MutationObserver(() => decorateStatus(status)).observe(status, {
         childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['data-kind'],
       });
+    }
+    if (!initial && !guest) {
+      const loaded = await loadSettings();
+      if (loaded) apply(loaded.values);
     }
   };
   if (doc.readyState === 'loading' && target) target.addEventListener('DOMContentLoaded', run);

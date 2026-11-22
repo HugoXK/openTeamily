@@ -214,7 +214,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  const shares = createTeamRunShares({document, request});
+  const shares = createTeamRunShares({
+    document, request, selectAddress: id => updateLocation(id ? {shared: id} : {}),
+  });
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
@@ -355,8 +357,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (tasks.some(item => item.status === 'running')) afterPoll(loadList);
   }
 
-  function showList({address = true, focus = false} = {}) {
+  function showList({address = true, focus = false, shared} = {}) {
     changeScreen('list');
+    shares.openTarget(shared);
     tasks = [];
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
@@ -769,7 +772,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     hydrateDraft();
     if (target.draft) return showEditor({address});
     if (target.run) return openDetail(target.run, null, {address});
-    return showList({address: address && !target.shared});
+    return showList({address: address && !target.shared, shared: target.shared});
   }
 
   function fillSpaces(items) {

@@ -64,13 +64,16 @@ test("personal receipts save distinct immutable versions, page privately and rev
     { id: reader.id, name: reader.name }, { id: unselected.id, name: unselected.name },
   ]);
   assert.equal((await outsider.call("GET", selector)).status, 404);
-  const payload = sharing(group.id, reader.id);
+  const originalPayload = sharing(group.id, reader.id);
+  const payload = {...originalPayload, action_items: originalPayload.action_items.map((item,index) =>
+    index ? item : {...item, due_date: "2032-02-29"})};
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [reader.id, outsider.id] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [reader.handle] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [author.id] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, transcript: "private" })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, live_code: "private" })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", done: "true" }] })).status, 400);
+  assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", due_date: "2031-02-29" }] })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", transcript: "private" }] })).status, 400);
   assert.deepEqual(await reader.ok("GET", shares), { items: [], cursor: null });
 
