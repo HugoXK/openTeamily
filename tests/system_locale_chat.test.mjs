@@ -4,6 +4,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {createPageHandler} from '../runtime/openteamily-web/src/pages.js';
 import {CHAT_MESSAGES} from '../openteamily/static/shell/system-locale-chat.mjs';
+import {SHELL_MESSAGES} from '../openteamily/static/shell/system-locale-catalog.mjs';
 
 const staticUrl = new URL('../openteamily/static/', import.meta.url);
 const chatHtml = await readFile(new URL('chat/index.html', staticUrl), 'utf8');
@@ -16,10 +17,10 @@ test('Chat locale keys are backed by Chinese source and English phrases', () => 
   for (const match of chatHtml.matchAll(markup)) {
     const [tag] = match;
     for (const [, kind, key] of tag.matchAll(markers)) {
-      assert.match(key, /^chat\.[a-z][a-z0-9_.]*$/);
-      const pair = CHAT_MESSAGES[key];
+      assert.match(key, /^(chat|shell)\.[a-z][a-z0-9_.]*$/);
+      const pair = CHAT_MESSAGES[key] ?? SHELL_MESSAGES[key];
       assert.ok(pair?.length === 2 && pair.every(phrase => typeof phrase === 'string' && phrase.trim()), key);
-      referenced.add(key);
+      if (Object.hasOwn(CHAT_MESSAGES, key)) referenced.add(key);
       if (kind === 'text') {
         const name = tag.match(/^<([\w-]+)/)[1];
         const end = chatHtml.indexOf(`</${name}>`, match.index + tag.length);
@@ -52,5 +53,6 @@ test('Native English Chat localizes controls and leaves dynamic identity slots o
   assert.match(html, /<h1 id="chat-title" tabindex="-1"><span[^>]*>Chat<\/span><\/h1>/);
   assert.match(html, /<h2 id="group-info-title"><span[^>]*>Group info<\/span><\/h2>/);
   assert.match(html, /id="account-menu-button"[^>]*aria-label="Account menu"/);
+  assert.match(html, /<nav class="mobile-primary-nav"[^>]*aria-label="Main navigation"/);
   assert.match(html, /<ol id="message-list"><\/ol>/);
 });

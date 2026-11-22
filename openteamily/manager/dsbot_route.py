@@ -88,31 +88,24 @@ def ensure_attached(runner, web_container, network, heartbeat):
         runner.run(['network', 'connect', network, web_container], heartbeat=heartbeat)
 
 
-def runtime_address(runner, iid, heartbeat, engine):
-    text, _ = engine.compose(iid, 'ps', heartbeat=heartbeat)
-    ids = text.split()
-    require(len(ids) == 1 and re.fullmatch('[0-9a-f]{64}', ids[0]), 'container_scope')
-    container = _inspect(runner, ids[0], heartbeat)
-    network = 'ot-' + iid + '_default'
-    ip = (((container.get('NetworkSettings') or {}).get('Networks') or {}).get(network) or {}).get('IPAddress')
-    require(isinstance(ip, str) and ip, 'runtime_address')
-    try:
-        return dsbot_gateway.validate_address(ip + ':8080')
-    except ValueError:
-        raise ManagerError('runtime_address') from None
-
-
 def publish(engine, client, iid, heartbeat=lambda: None, exchange=dsbot_gateway.exchange_launch_url):
     """Return a non-secret status dict; raise ManagerError on refusal."""
     cfg = gateway_config(engine.registry)
     if cfg is None:
         return {'status': 'gateway_disabled', 'instance_id': iid}
     state = engine.inspect(iid, heartbeat)
-    if not (state['present'] and state['healthy'] and state['process_ref']):
+    if not (state['present'] and state['healthy'] and state['process_ref']) or state.get('needs_recreate'):
         return {'status': 'not_running', 'instance_id': iid}
+    # This IP was inspected on the same validated container and process as the
+    # health state, avoiding a second ps/inspect and a mismatched route on restart.
+    ip = state.get('private_ip')
+    require(isinstance(ip, str) and ip, 'runtime_address')
+    try:
+        address = dsbot_gateway.validate_address(ip + ':8080')
+    except ValueError:
+        raise ManagerError('runtime_address') from None
     network = 'ot-' + iid + '_default'
     ensure_attached(engine.runner, cfg['web_container'], network, heartbeat)
-    address = runtime_address(engine.runner, iid, heartbeat, engine)
     url = launch_url(engine, iid, state['process_ref'], heartbeat)
     try:
         cookie = exchange(url, address)

@@ -1,5 +1,6 @@
 // Stream C discover feature maps to the shared catalog routes (fake Bot Social).
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -7,8 +8,177 @@ import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
 import { createDispatch } from '../src/dispatch.js'
+import { boot } from './helpers.js'
+import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
+
+test('editable publishing and remix copy only the selected canonical saved work', async () => {
+  const author = await boot()
+  const reader = await boot()
+  const authorSpace = 'd'.repeat(32)
+  const readerSpace = 'e'.repeat(32)
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:authorSpace})
+  reader.features.table['agents/personal-binding'] = async () => ({workspace_id:readerSpace})
+  const original = {schema:'openteamily.slides.v1',slides:[{title:'Discussion',bullets:['Visible point']}]}
+  const local = `/v1/workspaces/${authorSpace}/artifacts`
+  const recorded = await author.call('artifacts','POST',local,{title:'Workshop',kind:'slides',
+    slides:{...original,slides:[{...original.slides[0],speaker_notes:'private note'}]},
+    source:{kind:'agent_task',id:'c'.repeat(32),task_kind:'private-origin'}},'private-slide-origin')
+  assert.equal(recorded.status,201,JSON.stringify(recorded.body))
+  const sourceId = recorded.body.artifact.id
+  assert.equal(recorded.body.artifact.source.task_kind,'private-origin')
+  const publish = `${local}/${sourceId}/discover`
+  const slug = 'workshop-release'
+  const revision = 'c'.repeat(64)
+  let relayPut
+  let available = true
+  setSharedBotSocial({request:async (method,path,payload) => {
+    if (path.startsWith('/v1/ot/teams/by-workspace/')) throw Object.assign(new Error('Not a member'),{status:404})
+    if (path === '/v1/ot/listings/mine') return {listings:[]}
+    if (method === 'PUT') {
+      assert.equal(path,'/v1/ot/listings')
+      relayPut = payload
+      return {slug,listed:true,editable_remix:!!payload.editable_snapshot}
+    }
+    assert.equal(path,`/v1/ot/discover/${slug}/remix?revision=${revision}`)
+    if (!available) throw Object.assign(new Error('Withdrawn'),{status:404})
+    return {template:{kind:'slides',title:'Workshop',revision},source:{kind:'slides',slides:relayPut.editable_snapshot}}
+  }})
+  const opts = {slug,allow_editable_remix:true,revision:1,editable_snapshot:{private:'untrusted request body'}}
+  const originalBinding = author.features.table['agents/personal-binding']
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:'f'.repeat(32)})
+  assert.equal((await author.call('discover','POST',publish,opts)).status,409)
+  assert.equal(relayPut,undefined)
+  author.features.table['agents/personal-binding'] = originalBinding
+  assert.equal((await author.call('discover','POST',publish,{...opts,revision:2})).body.error.code,'artifact_changed')
+  assert.equal((await author.call('discover','POST',publish,{slug})).status,201)
+  assert.equal(relayPut.editable_snapshot,undefined)
+  assert.equal((await author.call('discover','POST',publish,opts)).body.discover.editable_remix,true)
+  assert.deepEqual(relayPut.editable_snapshot,original)
+  assert.doesNotMatch(JSON.stringify(relayPut),/private note|private-origin|untrusted request body/)
+  await author.call('artifacts','POST',local+'/'+sourceId,{revision:1,changes:{slides:{...original,slides:[{title:'Private new work',bullets:[]}]}}})
+  const remix = '/v1/discover/works/'+slug+'/remix'
+  const input = {revision,title:'My own workshop'}
+  const receipt = 'editable-remix-receipt'
+  const copied = await reader.call('discover','POST',remix,input,receipt)
+  assert.equal(copied.status,201,JSON.stringify(copied.body))
+  const copyPath = `/v1/workspaces/${readerSpace}/artifacts/${copied.body.artifact.id}`
+  const owned = (await reader.call('artifacts','GET',copyPath)).body.artifact
+  assert.deepEqual(owned.slides,original)
+  assert.equal(owned.source,undefined)
+  assert.equal((await author.call('artifacts','GET',copyPath)).status,404)
+  available = false
+  assert.equal((await reader.call('discover','POST',remix,input,receipt)).status,200)
+  assert.equal((await reader.call('discover','POST',remix,{...input,title:'Second copy'},'second-remix-receipt')).status,404)
+})
+
+test('private Space media remix imports exact bytes, revalidates signatures and retains committed receipts', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = '7'.repeat(64)
+  const wav = Buffer.alloc(3*1024*1024 + 44,0x80)
+  Buffer.from('RIFF').copy(wav)
+  wav.writeUInt32LE(wav.length-8,4)
+  Buffer.from('WAVEfmt ').copy(wav,8)
+  wav.writeUInt32LE(16,16)
+  wav.writeUInt16LE(1,20)
+  wav.writeUInt16LE(1,22)
+  wav.writeUInt32LE(22050,24)
+  wav.writeUInt32LE(22050,28)
+  wav.writeUInt16LE(1,32)
+  wav.writeUInt16LE(8,34)
+  Buffer.from('data').copy(wav,36)
+  wav.writeUInt32LE(wav.length-44,40)
+  const model = triangleGlb()
+  const media = (mime, filename, bytes) => ({kind:'media',mime,filename,bytes:bytes.length,data:bytes.toString('base64')})
+  let source = media('audio/wav','三兆字节.wav',wav)
+  const template = {kind:'media',title:'Public media',revision}
+  let withdrawn = false
+  let reads = 0
+  setSharedBotSocial({request:async () => {
+    reads++
+    if (withdrawn) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,source}
+  }})
+  const path = '/v1/discover/works/public-media/remix'
+  const call = (title,key) => bot.call('discover','POST',path,{title,revision},key)
+  const catalog = `/v1/workspaces/${workspace}/artifacts`
+  const first = await call('我的音频','media-remix-large')
+  assert.equal(first.status,201,JSON.stringify(first.body))
+  const audio = first.body.artifact
+  assert.equal(audio.kind,'media')
+  const file = catalog+'/'+audio.id+'/file'
+  const original = await bot.call('artifacts','GET',file)
+  assert.deepEqual(Buffer.from(original.download.data,'base64'),wav)
+  assert.equal((await other.call('artifacts','GET',file)).status,404)
+  const manual = await bot.call('artifacts','POST',catalog,{_multipart:true,fields:{title:'上传时仍限两兆字节'},
+    files:{file:{filename:source.filename,data:source.data}}},'oversize-upload-test')
+  assert.equal(manual.status,413)
+  assert.equal((await call('我的音频','media-remix-other-key')).body.error.code,'title_conflict')
+  assert.equal(reads,1)
+  source = {...source,mime:'image/png'}
+  assert.equal((await call('错误的类型','media-remix-mismatch')).status,400)
+  source = media('model/gltf-binary','外部模型.glb',triangleGlb({
+    customize(model) { model.buffers[0].uri = 'https://example.test/payload.bin' },
+  }))
+  assert.equal((await call('带外部地址的模型','media-remix-external')).status,400)
+  source = media('model/gltf-binary','三角模型.glb',model)
+  const glb = await call('我的模型','media-remix-glb-file')
+  assert.equal(glb.status,201,JSON.stringify(glb.body))
+  const saved = await bot.call('artifacts','GET',catalog+'/'+glb.body.artifact.id+'/file')
+  assert.equal(saved.download.content_type,'model/gltf-binary')
+  assert.deepEqual(Buffer.from(saved.download.data,'base64'),model)
+  withdrawn = true
+  assert.deepEqual((await call('我的音频','media-remix-large')).body,first.body)
+  assert.equal((await call('撤回后新副本','media-remix-closed')).status,404)
+})
+
+test('public work remix writes only verified publications to the viewer’s personal Space', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = 'b'.repeat(64)
+  const source = {kind:'document',body:'Published notes'}
+  const template = {revision,title:'Original',kind:source.kind}
+  let closed = false
+  let reads = 0
+  setSharedBotSocial({request:async (method,path) => {
+    assert.equal(method,'GET')
+    reads++
+    assert.match(path,/^\/v1\/ot\/discover\/public-notes\/remix(?:\?revision=b{64})?$/)
+    if (closed) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,...(path.includes('?') ? {source} : {})}
+  }})
+  const target = '/v1/discover/works/public-notes/remix'
+  const forged = await bot.endpoint('artifacts/remixPublicWork',{workspace_id:workspace,slug:'public-notes',revision,
+    title:'Forged source',source,idempotency_key:'fake-copy-assertion'})
+  assert.equal(forged.ok,false)
+  assert.deepEqual((await bot.call('discover','GET',target)).body,{template})
+  const input = {title:'Public notes copy',revision}
+  const key = 'work-remix-example'
+  assert.equal((await bot.call('discover','POST',target,{...input,workspace_id:'c'.repeat(32)},key)).status,400)
+  assert.equal((await bot.call('discover','POST',target,{...input,source:{...source,body:'Forged'}},key)).status,400)
+  const created = await bot.call('discover','POST',target,input,key)
+  assert.equal(created.status,201,JSON.stringify(created.body))
+  const copy = created.body.artifact
+  assert.equal(copy.workspace_id,workspace)
+  assert.equal(copy.body,undefined)
+  const detail = `/v1/workspaces/${workspace}/artifacts/${copy.id}`
+  const artifact = (await bot.call('artifacts','GET',detail)).body.artifact
+  assert.deepEqual([artifact.body,artifact.source,artifact.revision],[source.body,undefined,1])
+  assert.equal((await other.call('artifacts','GET',detail)).status,404)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'Different'},key)).status,409)
+  assert.equal(reads,2)
+  closed = true
+  assert.deepEqual(await bot.call('discover','POST',target,input,key),{status:200,body:created.body})
+  assert.equal(reads,2)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'New copy'},'another-remix-key')).status,404)
+  assert.equal(reads,3)
+})
 
 test('profile social sends only actor-scoped queries and explicit follow requests', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-profile-social-'))
@@ -19,6 +189,7 @@ test('profile social sends only actor-scoped queries and explicit follow request
     assert.equal(init.headers.authorization,'Bearer profile-fixture')
     calls.push({url:url.slice(SERVER.length), method:init.method, body:init.body && JSON.parse(init.body)})
     if (init.method === 'GET') return Response.json({items:[],next_cursor:null})
+    if (url.includes('/listings/')) return Response.json({collected:false,liked:false,unrelated:'not forwarded'})
     return Response.json(url.endsWith('/notifications') ? {enabled:false} : {following:false})
   }}))
   const route = discover({dataDir:dir}).endpoints.v1
@@ -33,6 +204,16 @@ test('profile social sends only actor-scoped queries and explicit follow request
   assert.deepEqual(await route({method:'POST',path,body:{handle:'ann.home',on:false}}), {
     status:200,body:{following:false},
   })
+  const listing = 'otl_' + 'V'.repeat(26)
+  assert.equal((await route({method:'POST',path,body:{listing_id:listing,action:'publish'}})).status,400)
+  assert.equal((await route({method:'POST',path,body:{listing_id:listing,action:'like',on:true}})).status,400)
+  assert.equal((await route({method:'POST',path,body:{listing_id:[listing],action:'like'}})).status,400)
+  assert.deepEqual(await route({method:'POST',path,body:{listing_id:listing,action:'collect'},owner_id:'forged'}),{
+    status:200,body:{collected:false},
+  })
+  assert.deepEqual(await route({method:'POST',path,body:{listing_id:listing,action:'like'}}),{
+    status:200,body:{liked:false},
+  })
   const notices = '/v1/profile/follow-work'
   assert.equal((await route({method:'GET',path:notices+'?view=liked'})).status,400)
   assert.equal((await route({method:'GET',path:notices+'?cursor=abc'})).status,200)
@@ -42,6 +223,8 @@ test('profile social sends only actor-scoped queries and explicit follow request
   assert.deepEqual(calls,[
     {url:'/v1/ot/profile/social?view=followers&q=Ann+Lee&limit=20',method:'GET',body:undefined},
     {url:'/v1/ot/follows',method:'POST',body:{handle:'ann.home',on:false}},
+    {url:'/v1/ot/listings/'+listing+'/collect',method:'POST',body:{on:false}},
+    {url:'/v1/ot/listings/'+listing+'/like',method:'POST',body:{on:false}},
     {url:'/v1/ot/profile/social?view=work-notices&cursor=abc',method:'GET',body:undefined},
     {url:'/v1/ot/follows/notifications',method:'POST',body:{handle:'ann.home',enabled:false}},
   ])
@@ -144,17 +327,19 @@ test('catalog publication is explicit and remix copies the previewed release in 
         return { agent }
       }
       if (endpoint === 'agents/personal-binding') return { workspace_id: workspaceId }
-      assert.equal(endpoint, 'agents/create')
+      assert.equal(endpoint, 'agents/createRemix')
       created.push(payload)
       return { status: 201, agent: { id: 'c'.repeat(32), name: payload.name } }
     },
   }).endpoints
   const publish = '/v1/workspaces/' + workspaceId + '/agents/' + agentId + '/discover'
   const remix = '/v1/discover/agents/writer/remix'
-  const call = (method, path, body) => E.v1({ method, path, body, idempotency_key: 'a-valid-remix-key' })
+  const call = (method, path, body, key = 'a-valid-remix-key') => E.v1({ method, path, body, idempotency_key: key })
   assert.equal((await call('POST', publish, { slug: 'writer' })).status, 200)
   assert.equal(row.snapshot, undefined)
-  assert.equal((await call('GET', remix)).body.template.instructions, '')
+  const blank = (await call('GET', remix)).body.template
+  assert.equal(blank.instructions, '')
+  assert.deepEqual(blank.quick_starts, [])
   const publicStart = '/v1/discover/agents/writer/start'
   const quick = {quick_start:0, quick_start_version:'a'.repeat(64)}
   assert.equal((await call('POST', publicStart, {...quick, body:'Forged'})).status, 400)
@@ -164,6 +349,39 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:true})).body.discover.publish_quick_starts,true)
   assert.deepEqual(JSON.parse(row.snapshot), {version:1, quick_starts:agent.quick_starts})
   assert.equal((await call('GET', publish)).body.discover.publish_quick_starts,true)
+  const withStarts = (await call('GET', remix)).body.template
+  assert.deepEqual(withStarts.quick_starts, ['Preview this plan'])
+  assert.notEqual(withStarts.revision, blank.revision)
+  agent.quick_starts = ['Private change since publication']
+  assert.deepEqual((await call('GET', remix)).body.template, withStarts)
+  assert.equal((await call('POST', remix, { revision:withStarts.revision, workspace_id:workspaceId, name:'Copy with starters',
+    quick_starts:['Unapproved override'], memory:'Private override' }, 'starts-remix-receipt')).status, 201)
+  assert.deepEqual(created[0], { workspace_id:workspaceId, idempotency_key:'starts-remix-receipt', name:'Copy with starters',
+    summary:agent.summary, category:agent.category, instructions:'', quick_starts:['Preview this plan'] })
+  assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:true})).status, 200)
+  assert.equal((await call('POST', remix, {revision:withStarts.revision, workspace_id:workspaceId})).body.error.code, 'listing_changed')
+
+  // Older instructions-only releases keep their existing remix receipt.
+  row.snapshot = JSON.stringify({version:1, instructions:agent.instructions})
+  const expected = {name:agent.name,summary:agent.summary,category:agent.category,instructions:agent.instructions}
+  const legacy = createHash('sha256').update(JSON.stringify([row.id,expected])).digest('hex')
+  assert.deepEqual((await call('GET', remix)).body.template,{...expected,quick_starts:[],revision:legacy})
+  assert.equal((await call('POST', remix, {revision:legacy, workspace_id:workspaceId, name:'Legacy copy'}, 'legacy-remix-receipt')).status, 201)
+  assert.deepEqual(created[1].quick_starts, [])
+
+  row.snapshot = JSON.stringify({version:1, quick_starts:['  Keep   spacing consistent  ', false, 'x'.repeat(81),
+    'private\u0000control', 'Second published starter', 'Outside the published limit'], private_notes:'Never export'})
+  const filtered = (await call('GET', remix)).body.template
+  assert.deepEqual(filtered.quick_starts,['Keep spacing consistent','Second published starter'])
+  assert.doesNotMatch(JSON.stringify(filtered),/private|Outside the published limit|Never export/)
+  assert.equal((await call('POST', remix, {revision:filtered.revision, workspace_id:workspaceId, name:'Filtered copy'},
+    'filtered-remix-receipt')).status,201)
+  assert.deepEqual(created[2].quick_starts,filtered.quick_starts)
+  for (const invalid of ['{broken', JSON.stringify({version:2,quick_starts:['Unsupported release']}),
+    JSON.stringify({quick_starts:['Unknown schema']}), JSON.stringify({version:1,quick_starts:'Invalid field'})]) {
+    row.snapshot = invalid
+    assert.deepEqual((await call('GET', remix)).body.template.quick_starts,[])
+  }
 
   assert.equal((await call('POST', publish, { slug: 'writer', revision: 5, copy_instructions: true })).status, 200)
   assert.equal(row.category, 'design')
@@ -176,16 +394,16 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('POST', remix, {
     revision: template.revision, workspace_id: workspaceId, name: 'My writer', instructions: 'Override ignored',
   })).status, 201)
-  assert.deepEqual(created, [{
+  assert.deepEqual(created[3], {
     workspace_id: workspaceId, idempotency_key: 'a-valid-remix-key', name: 'My writer',
-    summary: agent.summary, category: agent.category, instructions: agent.instructions,
-  }])
+    summary: agent.summary, category: agent.category, instructions: agent.instructions, quick_starts:[],
+  })
   assert.equal((await call('POST', publish, { slug: 'writer', revision: 4, copy_instructions: true })).status, 409)
   assert.equal((await call('POST', publish, { slug: 'writer', copy_instructions: false })).status, 200)
   assert.equal((await call('POST', remix, { revision: template.revision, workspace_id: workspaceId })).status, 409)
   row.listed = false
   assert.equal((await call('GET', remix)).status, 404)
-  assert.equal(created.length, 1)
+  assert.equal(created.length, 4)
 })
 
 test('native public agent starts pass only the selected listing identity and retain stale-listing errors', async () => {
@@ -286,6 +504,135 @@ test('native Discover forwards popularity cursors separately and publishes only 
   assert.equal(saved.body.discover.listed, true)
 })
 
+test('native Discover passes the full work query and scoped cursor while returning only bounded match fields', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-content-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const position = 'l.1761111000000.otl_' + 'A'.repeat(26) + '.' + '9'.repeat(24)
+  const query = '公开方案'.repeat(20)
+  const calls = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url) => {
+    const target = new URL(url)
+    assert.equal(target.pathname, '/v1/ot/discover')
+    calls.push(Object.fromEntries(target.searchParams))
+    const panel = {slug: 'work-panel', title: '公开看板', kind: 'work', work_kind: 'dashboard'}
+    const text = '内容中的检索结果'
+    return Response.json({items: [
+      {...panel, match: {kind: 'body', text, start: 4, end: 6, snapshot: 'out of contract'}},
+      {...panel, slug: 'bad-offsets', match: {kind: 'body', text, start: 4, end: text.length + 1}},
+    ], next_cursor: target.searchParams.has('cursor') ? null : position, next_before: 155})
+  }}))
+  const call = discover({dataDir: dir}).endpoints.v1
+  const path = '/v1/discover/me/works?' + new URLSearchParams({q: query, tab: 'following', kind: 'dashboard', limit: '12'})
+  const view = {request: new Request(SERVER, {headers: {'x-ot-owner-username': 'reader.qa'}})}
+  const first = await call({method: 'GET', path}, view)
+  assert.equal(first.status, 200)
+  assert.equal(first.body.cursor, position)
+  assert.equal(first.body.viewer_username, 'reader.qa')
+  assert.deepEqual(first.body.items[0].match, {kind: 'body', text: '内容中的检索结果', start: 4, end: 6})
+  assert.equal(first.body.items[1].match, undefined)
+  assert.equal((await call({method: 'GET', path: path + '&cursor=' + position})).body.cursor, null)
+  assert.equal((await call({method: 'GET', path: path + '&cursor=l.invalid'})).status, 400)
+  assert.deepEqual(calls, [
+    {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', limit: '12'},
+    {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', cursor: position, limit: '12'},
+  ])
+})
+
+test('publishing media exports the saved revision and Discover only projects its public file metadata', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-discover-media-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const workspace = 'c'.repeat(32)
+  const artifactId = '6'.repeat(32)
+  const bytes = Buffer.from('saved-media-fixture')
+  let media = {}
+  let mismatch = false
+  const puts = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url, init) => {
+    const {pathname} = new URL(url)
+    if (pathname.endsWith('/mine')) return Response.json({listings: []})
+    if (init.method === 'PUT') {
+      const doc = JSON.parse(init.body)
+      puts.push(doc)
+      return Response.json({...doc, listed: true})
+    }
+    assert.equal(pathname, '/v1/ot/discover/media-preview/detail')
+    return Response.json({work: {
+      kind: 'work', listed: true, slug: 'media-preview', title: '作品预览', work_kind: 'video',
+      file_available: true, file_mime: media.mime, file_bytes: bytes.length, media_data: bytes.toString('base64'),
+      media_filename: 'private-original.mp4',
+    }})
+  }}))
+  const call = discover({dataDir: dir, async call(endpoint, input) {
+    if (endpoint === 'artifacts/v1') {
+      assert.deepEqual(input, {method: 'GET', path: `/v1/workspaces/${workspace}/artifacts/${artifactId}`})
+      return {body: {artifact: {kind: 'media', title: '作品预览', revision: 7, media}}}
+    }
+    assert.equal(endpoint, 'artifacts/chatAttachment')
+    assert.deepEqual(input, {workspace_id: workspace, artifact_id: artifactId, revision: 7})
+    return {attachment: {mime: mismatch ? 'image/gif' : media.mime, data: bytes.toString('base64')}}
+  }}).endpoints.v1
+  const publish = {method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifactId}/discover`,
+    body: {slug: 'media-preview', media_data: 'must-use-saved-bytes', media_mime: 'text/html'}}
+  for (const [kind, mime, filename] of [['image','image/png','photo.png'], ['audio','audio/ogg','song.ogg'], ['video','video/mp4','clip.mp4']]) {
+    media = {mime, filename}
+    assert.equal((await call(publish)).status, 201)
+    assert.deepEqual(puts.at(-1), {kind: 'work', ref: artifactId, slug: 'media-preview', title: '作品预览',
+      work_kind: kind, summary: '', snapshot: '', media_data: bytes.toString('base64'), media_mime: mime, media_filename: filename})
+  }
+  mismatch = true
+  assert.equal((await call(publish)).status, 409)
+  const detail = {method: 'GET', path: '/v1/discover/works/media-preview'}
+  const {work} = (await call(detail)).body
+  assert.equal(work.file_available, true)
+  assert.equal(work.file_mime, 'video/mp4')
+  assert.equal(work.file_bytes, bytes.length)
+  assert.equal(work.media_data, undefined)
+  assert.equal(work.media_filename, undefined)
+  media = {mime: 'text/html', filename: 'unsafe.html'}
+  assert.equal((await call(publish)).status, 400)
+  assert.equal((await call(detail)).body.work.file_available, undefined)
+  assert.equal(puts.length, 3)
+})
+
+test('publishing native works sends only saved display content to the public catalog', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-discover-published-text-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const siteHtml = '<main><h1>可见 &amp; 导览</h1><p hidden>hidden</p><script>private()</script></main>'
+  const works = [
+    [{kind: 'whiteboard', board: {strokes: [{type: 'path', meta: 'internal'}, {type: 'text', text: '白板标注'}]}}, '白板标注'],
+    [{kind: 'slides', slides: {slides: [{title: '月度计划', bullets: ['第一目标'], notes: 'speaker notes'}]}}, '月度计划 第一目标'],
+    [{kind: 'dashboard', dashboard: {widgets: [{type: 'table', title: '概览', columns: ['阶段'], rows: [['验收']], source: 'internal'}]}}, '概览 阶段 验收'],
+    [{kind: 'spreadsheet', spreadsheet: {sheets: [{name: '季度', rows: [['销量', '80']]}]}}, '季度\n销量\t80'],
+    [{kind: 'website', body: siteHtml}],
+  ]
+  const puts = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url, init) => {
+    if (url.endsWith('/mine')) return Response.json({listings: []})
+    assert.equal(init.method, 'PUT')
+    const data = JSON.parse(init.body)
+    puts.push(data)
+    return Response.json({...data, listed: true})
+  }}))
+  const workspace = 'c'.repeat(32)
+  const artifact = '9'.repeat(32)
+  for (const [saved, summary] of works) {
+    const call = discover({dataDir: dir, async call(endpoint, request) {
+      assert.equal(endpoint, 'artifacts/v1')
+      assert.equal(request.path, `/v1/workspaces/${workspace}/artifacts/${artifact}`)
+      return {body: {artifact: {...saved, title: '对外发布', source: {title: 'private original'}}}}
+    }}).endpoints.v1
+    const result = await call({method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`, body: {slug: 'public-work'}})
+    assert.equal(result.status, 201)
+    assert.deepEqual(puts.at(-1), {
+      kind: 'work', ref: artifact, slug: 'public-work', title: '对外发布', work_kind: saved.kind,
+      ...(saved.kind === 'website' ? {site_html: siteHtml} : {summary, snapshot: summary}),
+    })
+  }
+})
+
 test('native work detail and comment routes forward the personal connector and return public projections', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-cd-comments-'))
   const credentialsPath = join(dir, 'connector.json')
@@ -375,7 +722,7 @@ test('native website publication copies the authorized saved HTML and exposes on
   assert.equal(publish.status, 201)
   assert.deepEqual(records.find(([method]) => method === 'PUT')?.[2], {
     kind: 'work', ref: artifact, slug: 'local-counter', title: '本地计数器',
-    summary: '本地计数器\n点按增加数值。', work_kind: 'website', site_html: html,
+    work_kind: 'website', site_html: html,
   })
   const detail = await run({method: 'GET', path: '/v1/discover/works/local-counter'})
   assert.equal(detail.body.work.site_available, true)

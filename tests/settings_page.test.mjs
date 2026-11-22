@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -475,6 +475,49 @@ function settingsDocument() {
 }
 
 function settingsJson(status, body) { return {status, json: async () => body}; }
+
+test('model settings show the ready platform model, keep personal credentials optional, and clear stale account state', () => {
+  const {doc} = settingsDocument();
+  const el = id => doc.getElementById(id);
+  const form = el('model-api-form');
+  doc.documentElement.lang = 'zh-CN';
+  const platform = {
+    model_api: {revision: 0, api_key_set: false},
+    effective: {source: 'platform', model: 'DeepSeek-V4.1-Flash', base_url: 'https://internal.example/v1'},
+  };
+  renderModelApi(doc, form, platform);
+  assert.equal(el('model-key-state').textContent, '平台默认');
+  assert.equal(el('model-effective-source').textContent, '正在使用平台默认配置');
+  assert.equal(el('model-effective-model').textContent, ' (DeepSeek-V4.1-Flash)');
+  assert.equal(el('model-platform-ready').hidden, false);
+  assert.equal(el('model-api-override').hidden, false);
+  assert.equal(el('model-api-override').open, false);
+  assert.equal(el('restore-platform-model').hidden, true);
+  assert.equal(form.elements.base_url.value, '', 'the platform endpoint is never placed in the personal form');
+  assert.equal(form.elements.api_key.value, '');
+  assert.equal(form.elements.api_key.required, true, 'creating an override requires a personal key');
+
+  doc.documentElement.lang = 'en';
+  renderModelApi(doc, form, {
+    model_api: {revision: 2, api_key_set: true, provider: 'custom', model: 'owner-model', base_url: 'https://owner.example/v1'},
+    effective: {source: 'account', model: 'owner-model'},
+  });
+  assert.equal(el('model-key-state').textContent, 'Personal configuration');
+  assert.equal(el('model-effective-source').textContent, 'Using your personal configuration');
+  assert.equal(el('model-api-override').open, true);
+  assert.equal(el('model-platform-ready').hidden, true);
+  assert.equal(el('restore-platform-model').hidden, false);
+  assert.equal(form.elements.model.value, 'owner-model');
+  assert.equal(form.elements.api_key.value, '');
+  assert.equal(form.elements.api_key.required, false);
+
+  renderModelApi(doc, form, null, true);
+  assert.equal(el('model-effective-source').textContent, 'Could not check model status');
+  assert.equal(el('model-effective-model').textContent, '');
+  assert.equal(el('model-api-override').hidden, true);
+  assert.equal(el('model-api-fields').disabled, true);
+  assert.equal(form.elements.model.value, '');
+});
 
 function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
   const calls = [];
