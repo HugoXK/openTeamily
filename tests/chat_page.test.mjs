@@ -698,20 +698,29 @@ for (const preset of [true,false]) {
     doc.querySelector = selector => selector === '#team-template-choices input:checked' ? templates().find(box=>box.checked) : null;
     const attempts = [];
     const path = '/v1/workspaces/ws-1/' + (preset ? 'team-templates/product-squad' : 'social/conversations');
-    const created = {id:'new-group',kind:'group',title:'调研协作群',members:[{user_id:alice,username:'alice'}]};
+    const created = {id:'new-group',kind:'group',workspace_id:'ws-1',title:'调研协作群',
+      members:[{user_id:alice,username:'alice'}], agent_members:[], last_seq:0};
+    const createFailure = Promise.withResolvers();
+    const openFailure = Promise.withResolvers();
+    let opens = 0;
     try {
       await mount(doc,{fetcher:async (url,options={})=>{
         if (url === '/v1/team-templates') return json(200,{items:[{slug:'product-squad',name:'产品研发小队',agents:[{name:'产品经理'}]}]});
         if (url.endsWith('/members')) return json(200,{items:[{user_id:bob,username:'bob'}]});
         if (url === path && options.method === 'POST') {
           attempts.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
-          if (attempts.length === 1) return json(500,{error:{code:'internal_error',message:'Internal service error'}});
+          if (attempts.length === 1) return createFailure.promise;
           if (preset && attempts.length === 2) return json(409,{error:{code:'team_template_role_conflict',
             message:'「产品经理助理」已归档。请在智能体中恢复后重试。'}});
           if (preset && attempts.length === 3) return json(429,{error:{code:'team_template_agent_quota'}});
-          return json(201,{conversation:created});
+          const {agent_members:_, ...raw} = created;
+          return json(201,{conversation:preset ? raw : created});
         }
-        if (url.endsWith('/new-group')) return json(200,{conversation:created,items:[]});
+        if (url.endsWith('/new-group')) {
+          opens += 1;
+          if (opens === 1) return openFailure.promise;
+          return json(200,{conversation:created,items:[]});
+        }
         return original(url,options);
       }});
       await fire(el('compose-new-group'),'click',{detail:1});
@@ -723,7 +732,18 @@ for (const preset of [true,false]) {
       choice.checked = true;
       await fire(preset ? templateChoices : memberChoices,'change');
       const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
+      const createdAttempt = submit();
+      await settle();
+      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建会话/ : /Creating the conversation/);
+      assert.equal(el('compose-dialog-submit').disabled,true);
+      assert.equal(el('compose-mode-switch').inert,true);
+      await fire(el('session-search'),'focus');
+      assert.equal(el('compose-dialog').hidden,false);
+      assert.equal(el('search-panel').hidden,true);
       await submit();
+      assert.equal(attempts.length,1);
+      createFailure.resolve(json(500,{error:{code:'internal_error',message:'Internal service error'}}));
+      await createdAttempt;
       const error = el('compose-dialog-error');
       assert.equal(error.hidden,false);
       assert.equal(error.focused,true);
@@ -742,7 +762,30 @@ for (const preset of [true,false]) {
         assert.equal(choice.checked,true);
         assert.equal(el('compose-dialog-submit').disabled,false);
       }
-      await submit();
+      const lastAttempt = submit();
+      if (preset) {
+        await settle();
+        assert.equal(opens,1);
+        assert.equal(el('compose-dialog').hidden,false);
+        assert.match(el('compose-dialog-progress').textContent,/已创建，正在打开会话/);
+        await submit();
+        assert.equal(attempts.length,4);
+        openFailure.resolve(json(500,{error:{code:'internal_error',message:'Internal service error'}}));
+        await lastAttempt;
+        assert.match(error.textContent,/会话已创建。暂时无法打开/);
+        assert.equal(el('compose-dialog-submit').disabled,false);
+        assert.equal(el('compose-dialog-submit').textContent,'重新打开');
+        assert.equal(el('compose-dialog-cancel').textContent,'关闭');
+        assert.equal(el('compose-dialog').hidden,false);
+        assert.equal(choice.checked,true);
+        assert.doesNotMatch(el('status').textContent,/Internal service error/);
+        await submit();
+        assert.equal(attempts.length,4);
+        assert.equal(opens,2);
+      } else {
+        await lastAttempt;
+        assert.equal(opens,0);
+      }
       for (const retry of attempts.slice(1)) assert.deepEqual(retry,attempts[0]);
       assert.equal(error.hidden,true);
       assert.equal(el('compose-dialog').hidden,true);
@@ -3844,7 +3887,7 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     assert.equal(el('group-agent-action').hidden, false);
     assert.equal(el('group-agent-form').hidden, true);
     assert.equal(el('group-studio').hidden, true);
-    assert.equal(el('conversation-agents-label').textContent, '私聊智能体');
+    assert.equal(el('conversation-agents-text').textContent, '私聊智能体');
     assert.equal(fixture.calls.some(call => call.path === catalogue), false);
     const sheet = el('conversation-agents-sheet');
     sheet.open = true;
@@ -3854,7 +3897,8 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     el('group-agent-add').value = linkAgent;
     await fire(el('group-agent-add-submit'), 'click');
     const rosterRows = el('group-agent-chips');
-    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice,bob]);
+    const removeControl = row => row.children.find(child => child.tagName === 'BUTTON');
+    assert.deepEqual(rosterRows.children.map(row => removeControl(row).dataset.agentOwnerId), [alice,bob]);
 
     const composer = el('chat-body');
     composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
@@ -3877,17 +3921,56 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     assert.equal(el('message-list').children.find(row => row.dataset.replyJobId === 'direct-job').children[0].textContent,
       '相同名称 · 小周 · AI 智能体');
 
-    const removePeer = rosterRows.children[1].children[1];
+    const removePeer = removeControl(rosterRows.children[1]);
     await fire(rosterRows, 'click', {target:removePeer});
     assert.equal(fixture.calls.some(call => call.path.endsWith('/remove')), false);
     await fire(rosterRows.children.at(-1).children[2], 'click');
-    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice]);
+    assert.deepEqual(rosterRows.children.map(row => removeControl(row).dataset.agentOwnerId), [alice]);
     await choose(0);
     await send('目标在发送前离开了');
     assert.equal(composer.value, '目标在发送前离开了');
     assert.equal(el('chat-agent-mention-status').hidden, false);
     await send(composer.value);
     assert.equal(sendPostBodies.length,3);
+  } finally {restore();}
+});
+
+test('group chat keeps roster tools near the header and shows the authority for ordinary, quoted and selected replies', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, restore} = fixture;
+  const reviewer = {id:linkAgent, name:'产品校对', owner_id:alice, mine:true};
+  const designer = {id:'design-agent', name:'设计助理', owner_id:bob, owner_name:'小周', mine:false};
+  const conversation = {id:linkSocial, workspace_id:linkTeam, title:'设计复盘', kind:'group', members:[linkMember],
+    agent_members:[reviewer, designer], group_agent_requests:true, group_agent_routing:{mode:'personal',default:'all'}};
+  const reply = {id:linkSocialLatest, role:'agent', agent_id:designer.id, agent_name:designer.name, agent_owner_id:bob,
+    reply_job_id:'design-reply', body:'已核对设计稿', created:1, seq:1};
+  routes.set(linkBase(linkTeam) + linkSocialPath, () => json(200, {conversation, items:[reply]}));
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    assert.equal(el('main-panel').dataset.chatKind, 'group');
+    assert.equal(el('chat-subtitle').textContent, '1 人 · 2 位智能体');
+    assert.equal(el('conversation-agents-count').textContent, '2');
+    assert.deepEqual(el('conversation-agents-preview').children.map(chip => chip.textContent), [reviewer.name, designer.name]);
+    assert.equal(el('conversation-agents-sheet').open, false);
+    await fire(el('chat-more'), 'click');
+    assert.equal(el('chat-more').getAttribute('aria-expanded'), 'true');
+    await fire(el('group-agent-manage'), 'click');
+    assert.equal(el('group-info-panel').hidden, false);
+    assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
+    assert.match(el('group-composer-routing-text').textContent, /群内智能体会回复/);
+    const agentRow = el('message-list').children.find(row => row.dataset.replyJobId === 'design-reply');
+    assert.equal(agentRow.dataset.chatAuthor, 'agent');
+    await fire(agentRow.children.find(child => child.getAttribute('aria-label') === '回复 设计助理'), 'click');
+    assert.match(el('group-composer-routing-text').textContent, /设计助理.*引用/);
+    const composer = el('chat-body');
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    composer.value = '@产品';
+    composer.setSelectionRange(3, 3);
+    await fire(composer, 'input');
+    await fire(el('chat-agent-mention-options').children[0], 'click');
+    assert.match(el('group-composer-routing-text').textContent, /已指定 1 位智能体/);
+    assert.equal(el('group-composer-routing').dataset.kind, 'targeted');
   } finally {restore();}
 });
 

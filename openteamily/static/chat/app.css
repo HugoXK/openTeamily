@@ -1287,8 +1287,8 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 #chat-empty { margin: 18vh auto 0; text-align: center; color: var(--ot-muted); }
 #chat-empty .empty-next { display: flex; justify-content: center; gap: .5rem; }
 #chat-empty .empty-next a { padding: .375rem .875rem; border-radius: 999px; background: var(--ot-bg-accent); color: var(--ot-ink); text-decoration: none; font-size: .8125rem; }
-#chat-empty[data-agent="true"] :is(.empty-generic, .empty-next),
-#chat-empty:not([data-agent="true"]) .empty-agent { display: none; }
+#chat-empty:is([data-agent="true"], [data-group="true"]) :is(.empty-generic, .empty-next),
+#chat-empty:not([data-agent="true"]) .empty-agent, #chat-empty:not([data-group="true"]) .empty-group { display: none; }
 
 #main-panel { display: flex; flex-direction: column; }
 #onboarding-banner {
@@ -1456,6 +1456,9 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 #compose-dialog .member-choices label:hover { background: var(--ot-surface-2); }
 #compose-dialog .member-choices input { flex: 0 0 auto; margin: 0; }
 #compose-dialog .compose-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; padding-top: .5rem; border-top: 1px solid var(--ot-line); }
+#compose-dialog-progress { margin: 0; }
+#compose-dialog-progress:not(:empty) { flex: 1 0 100%; color: var(--ot-muted); font-size: .8125rem; }
+#compose-dialog-progress:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 #compose-dialog-error { flex: 1 0 100%; box-sizing: border-box; margin: 0; padding: .625rem .75rem; border-radius: .55rem; color: var(--ot-danger); background: var(--ot-danger-bg); font-size: .8125rem; overflow-wrap: anywhere; }
 #compose-dialog .compose-dialog-actions button { min-height: 2.125rem; padding: 0 1rem; border-radius: 999px; }
 #compose-dialog-submit { background: var(--ot-accent); color: var(--ot-on-accent, #fff); border: 0; }
@@ -1951,13 +1954,42 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
   #compose-dialog #compose-title-label { padding: 0; border-radius: 0; box-shadow: none; }
 }
 
-/* Polish 5: the group-agent tools are one quiet collapsible line above the thread
-   (like Teamily's centred system lines), not a card wrapped around a card. */
-#group-agent-action.group-agent-panel { margin: 0 1rem; padding: .5rem 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-#group-agent-action .group-agent-sheet { width: min(46rem, 100%); box-sizing: border-box; margin: 0 auto; padding: 0 .75rem; border: 0; border-radius: .75rem; background: transparent; }
-#group-agent-action .group-agent-sheet > summary { width: max-content; margin: 0 auto; padding: .25rem .75rem; border-radius: 999px; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
-#group-agent-action .group-agent-sheet > summary:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
-#group-agent-action .group-agent-sheet[open] { padding: 0 .75rem .75rem; background: var(--ot-bg-accent); }
+#group-agent-action.group-agent-panel { margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--ot-surface); box-shadow: none; flex: none; }
+#group-agent-action .group-agent-sheet { width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+#conversation-agents-label {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-width: 0;
+  min-height: 2.625rem;
+  padding: .25rem clamp(.875rem, 2.3vw, 1.5rem);
+  border-bottom: 1px solid var(--ot-line);
+  font-size: .8125rem;
+  font-weight: 650;
+  list-style: none;
+}
+#conversation-agents-label::-webkit-details-marker { display: none; }
+#conversation-agents-label :is(.group-roster-icon,.group-roster-chevron) { flex: none; color: var(--ot-muted); }
+#conversation-agents-label:hover, #conversation-agents-sheet[open] > summary { background: var(--ot-bg-accent); }
+#conversation-agents-sheet[open] .group-roster-chevron { transform: rotate(180deg); }
+.group-roster-chevron { margin-inline-start: auto; }
+#conversation-agents-text { flex: none; }
+#conversation-agents-count { flex: none; min-width: 1.15rem; padding: .0625rem .25rem; border-radius: 999px; background: var(--ot-accent-soft); color: var(--ot-ink); text-align: center; font-size: .6875rem; }
+#conversation-agents-preview { display: flex; min-width: 0; align-items: center; gap: .3rem; margin-inline-start: .25rem; overflow: hidden; }
+.group-roster-preview-chip { min-width: 0; max-width: 9.5rem; padding: .15rem .4rem; border: 1px solid var(--ot-line); border-radius: .4rem; color: var(--ot-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .75rem; font-weight: 500; }
+.group-roster-preview-more { flex: none; color: var(--ot-muted); font-size: .75rem; }
+.group-agent-sheet-body { box-sizing: border-box; max-height: min(44dvh, 25rem); overflow: auto; overscroll-behavior: contain; padding: .6rem clamp(.875rem, 2.3vw, 1.5rem) .8rem; border-bottom: 1px solid var(--ot-line); }
+.group-roster-head { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .5rem; }
+#group-agent-manage { flex: none; min-height: 2.375rem; padding: .3rem .65rem; color: var(--ot-accent-hover); font-size: .75rem; }
+#group-agent-chips .agent-chip { min-height: 1.8rem; gap: .4rem; border-radius: .55rem; padding: .2rem .375rem; }
+.group-roster-glyph { display: grid; flex: none; place-items: center; width: 1.375rem; height: 1.375rem; border-radius: .375rem; background: var(--ot-accent-soft); color: var(--ot-accent-hover); font-size: .75rem; font-weight: 650; }
+.group-roster-name { min-width: 0; overflow-wrap: anywhere; }
+#group-agent-form { margin-top: .65rem; padding-top: .6rem; border-top: 1px solid var(--ot-line); }
+#group-agent-request-help { margin: 0 0 .5rem; }
+.group-composer-routing { display: flex; align-items: flex-start; gap: .45rem; margin: 0 .4rem .15rem; padding: .3125rem .5rem; border-radius: .5rem; color: var(--ot-muted); font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.group-composer-routing svg { flex: none; margin-top: .05rem; }
+.group-composer-routing[data-kind="targeted"] { background: var(--ot-accent-soft); color: var(--ot-ink); }
+.group-composer-routing[data-kind="attention"] { color: var(--ot-danger); }
 
 /* A message with no reactions yet should not grow a row just for the hover "+😊". */
 #message-list li { position: relative; }
@@ -2094,6 +2126,13 @@ html[data-theme-resolved="dark"] #message-list li.agent{
 
 #chat-call-incoming { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 #chat-call-incoming[hidden], #chat-call-dialog [hidden] { display: none; }
+#chat-call-recording { display: grid; gap: .375rem; min-width: 0; margin-top: .625rem; padding: .625rem .75rem; border: 1px solid var(--ot-line); border-radius: .65rem; }
+#chat-call-recording h3 { margin: 0; font-size: .875rem; }
+#chat-call-recording p { margin: 0; overflow-wrap: anywhere; }
+#chat-call-record-status:not(:empty) { font-size: .8125rem; font-weight: 600; }
+#chat-call-record-status:empty, #chat-call-recording .actions:not(:has(button:not([hidden]))) { display: none; }
+#chat-call-recording .actions { flex-wrap: wrap; gap: .375rem; margin: 0; }
+#chat-call-recording button { min-height: 2.75rem; }
 #chat-call-dialog {
   box-sizing: border-box;
   width: min(42rem, calc(100vw - 2rem));
@@ -2713,6 +2752,80 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
   position: fixed;
   inset: var(--chat-viewport-top) 0 auto;
   height: var(--chat-viewport-height);
+}
+
+#main-panel[data-chat-kind="group"] .chat-top {
+  position: relative;
+  z-index: 3;
+  flex: none;
+  flex-wrap: nowrap;
+  min-height: 3.375rem;
+  margin: 0;
+  padding: .3rem clamp(.625rem, 2vw, 1.25rem);
+  border: 0;
+  border-bottom: 1px solid var(--ot-line);
+  border-radius: 0;
+  background: var(--ot-surface);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+#main-panel[data-chat-kind="group"] #chat-title { font-size: 1rem; }
+#main-panel[data-chat-kind="group"] .chat-actions { flex: none; flex-wrap: nowrap; gap: .2rem; }
+#main-panel[data-chat-kind="group"] #chat-more { display: inline-flex; align-items: center; justify-content: center; }
+#main-panel[data-chat-kind="group"] :is(#chat-more, #chat-call, #group-info-toggle) {
+  width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: .5rem;
+  background: transparent;
+  color: var(--ot-ink);
+  box-shadow: none;
+}
+#main-panel[data-chat-kind="group"] :is(#chat-more, #chat-call, #group-info-toggle):hover,
+#main-panel[data-chat-kind="group"] :is(#chat-more, #group-info-toggle)[aria-expanded="true"] { background: var(--ot-bg-accent); }
+#main-panel[data-chat-kind="group"] #chat-extra-actions {
+  display: none;
+  position: absolute;
+  z-index: 4;
+  inset: calc(100% + .25rem) .5rem auto auto;
+  width: min(14rem, calc(100% - 1rem));
+  padding: .3rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .7rem;
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-lg);
+}
+#main-panel[data-chat-kind="group"] #chat-more[aria-expanded="true"] + #chat-extra-actions { display: grid; gap: .125rem; }
+#main-panel[data-chat-kind="group"] #chat-extra-actions > :is(button,a):not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: .4rem;
+  min-height: 2.75rem;
+  padding: .375rem .625rem;
+  border: 0;
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--ot-ink);
+  text-align: start;
+}
+#main-panel[data-chat-kind="group"] #chat-extra-actions > :is(button,a):hover { background: var(--ot-bg-accent); }
+#main-panel[data-chat-kind="group"] .chat-action-label { display: inline; }
+#main-panel[data-chat-kind="group"] #message-scroller { padding: .875rem clamp(.875rem, 3vw, 2.125rem) .65rem; background: var(--ot-surface-2); }
+#main-panel[data-chat-kind="group"] #message-scroller > #message-list { max-width: 54rem; margin-block-start: 0; gap: .65rem; }
+#main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] { border-inline-start: 2px solid var(--ot-accent); }
+#main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] > .role { color: var(--ot-ink); font-weight: 650; }
+#main-panel[data-chat-kind="group"] #chat-empty:not([hidden]) { margin: clamp(1.1rem, 5vh, 3.5rem) auto 0; }
+.empty-group { display: grid; gap: .35rem; padding: .75rem; font-size: .875rem; }
+.empty-group strong { color: var(--ot-ink); font-size: 1rem; }
+@media (max-width: 700px) {
+  #main-panel[data-chat-kind="group"] .chat-top { gap: .25rem; padding-inline: .25rem .375rem; }
+  #conversation-agents-label, #group-agent-manage { min-height: 2.75rem; }
+  #conversation-agents-preview { gap: .2rem; }
+  .group-roster-preview-chip { max-width: 7rem; padding-inline: .3rem; }
+  #group-agent-action .group-agent-sheet-body { max-height: min(39dvh, 21rem); }
+  .group-composer-routing { margin-inline: .125rem; padding-inline: .35rem; font-size: .6875rem; }
 }
 
 html[data-chat-keyboard] .composer-plus-sheet {

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
 import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
 import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
+import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
 
 test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
   const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],
@@ -63,6 +64,30 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('a handed-off call recording stays local until the user starts transcription', () => {
+  const document = meetingDocument();
+  const element = id => document.getElementById('meeting-audio-' + id);
+  element('preview').removeAttribute = name => { delete element('preview')[name]; };
+  const audio = mountMeetingAudio(document, {
+    request() { assert.fail('showing a recording should not upload audio'); },
+    base: () => '/v1/workspaces/fixture/meetings',
+    transcript: {value: ''},
+  });
+  const handedOff = new Blob(['browser audio'], {type:'audio/webm;codecs=opus'});
+  assert.equal(audio.acceptCallRecording(new Blob(['video'], {type:'video/webm'})), false);
+  assert.equal(audio.acceptCallRecording(handedOff), true);
+  const url = element('preview').src;
+  assert.match(url, /^blob:/);
+  assert.equal(element('preview').hidden, false);
+  assert.equal(audio.hasPendingWork(), true);
+  assert.equal(audio.acceptCallRecording(new Blob(['second recording'], {type:'audio/ogg'})), false);
+  assert.equal(element('preview').src, url);
+  assert.equal(element('start').disabled, true);
+  audio.reset();
+  assert.equal(audio.hasPendingWork(), false);
+  assert.equal(element('preview').hidden, true);
+});
 
 test('meeting transcript locate uses literal matches and never changes the saved text', () => {
   const document = meetingDocument();

@@ -53,6 +53,7 @@ async function templateFixture(t) {
   writeFileSync(credentialsPath, JSON.stringify({ token: 'ot-fake-token', server: SERVER }), { mode: 0o600 })
   const bots = { main: { id: 'main', model: 'fixture-model', name: 'Main', capabilities: [] } }
   const rooms = {}
+  const social = { role: 'admin', failures: 0, roomFailures: 0 }
   let nextBot = 0
   let nextRoom = 0
   attachRuntime({ ctx: {}, mainBot: async () => 'main', rt: {
@@ -63,7 +64,10 @@ async function templateFixture(t) {
     },
     updateBot: async (id, patch) => Object.assign(bots[id], patch),
     setFlags: async (id, patch) => Object.assign(bots[id], patch),
-    createSession: async () => 'room-' + ++nextRoom,
+    createSession: async () => {
+      if (social.roomFailures > 0) { social.roomFailures--; throw new Error('fixture native room unavailable') }
+      return 'room-' + ++nextRoom
+    },
     mobileEndpoint() {},
     sendUser: () => assert.fail('creating a template group must not send a message'),
     updateRoom() {},
@@ -72,9 +76,9 @@ async function templateFixture(t) {
   } })
   t.after(() => { detachRuntime(); setSharedBotSocial(null); rmSync(root, { recursive: true, force: true }) })
   const creates = []
-  const social = { role: 'admin', failures: 0 }
+  const groups = new Map()
   const fetch = async (url, init) => {
-    const path = url.slice(SERVER.length)
+    const path = new URL(url).pathname
     if (path === '/v1/ot/teams/by-workspace/' + TEAM_WORKSPACE) {
       return Response.json({ id: 'ott_fixture', role: social.role })
     }
@@ -84,15 +88,23 @@ async function templateFixture(t) {
     if (/^\/v1\/ot\/conversations\/otc_\d+\/announcement$/.test(path)) {
       return Response.json({ announcement: { body: '' } })
     }
+    if (init.method === 'GET' && path === '/v1/ot/me') {
+      return Response.json({ owner_id: 'fixture-owner', handle: 'fixture-member', display_name: 'Fixture Member' })
+    }
+    if (init.method === 'GET' && path.endsWith('/messages')) return Response.json({ messages: [] })
+    const group = groups.get(path)
+    if (init.method === 'GET' && group) return Response.json(group)
     assert.equal(path, '/v1/ot/conversations')
     assert.equal(init.method, 'POST')
     const body = JSON.parse(init.body)
     creates.push(body)
     if (social.failures > 0) { social.failures--; throw new Error('fixture transport loss') }
-    return Response.json({
-      id: 'otc_' + creates.length, kind: 'group', title: body.title, team_id: body.team_id,
+    const created = {
+      id: 'otc_' + creates.length, kind: 'group', title: body.title, team_id: body.team_id, account_group: body.account_group,
       agents: body.agents.map(agent => ({ ...agent, mine: true })),
-    })
+    }
+    groups.set(path + '/' + created.id, created)
+    return Response.json(created)
   }
   setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath, fetch }))
   const apply = (slug, { workspace = WS, requestKey = key(), body = {} } = {}) =>
@@ -171,6 +183,32 @@ test('partial retry reuses native template agents, handles archives and allows a
   assert.equal(removed.status, 409)
   assert.equal(removed.body.error.code, 'team_template_role_conflict')
   assert.equal(creates.length, 3)
+})
+
+test('a committed template group survives a native room outage and reopens without duplicating its roster', async t => {
+  const { bot, bots, creates, rooms, social, apply } = await templateFixture(t)
+  const requestKey = key()
+  social.roomFailures = 1
+  const first = await apply('product-squad', { requestKey })
+  assert.equal(first.status, 201)
+  const {conversation, created_agents} = first.body
+  assert.equal(conversation.id, 'otc_1')
+  assert.equal(conversation.native_room_id, undefined)
+  assert.equal(created_agents.length, 3)
+  assert.deepEqual(conversation.agents.map(agent => agent.agent_ref), created_agents)
+  assert.equal(Object.keys(rooms).length, 0)
+  assert.deepEqual(await apply('product-squad', { requestKey }), {status: 200, body: first.body})
+  assert.equal(creates.length, 1)
+  assert.equal(Object.keys(bots).length, 4)
+
+  const reopened = await bot.call('messenger', 'GET', `/v1/workspaces/${WS}/social/conversations/${conversation.id}`)
+  assert.equal(reopened.status, 200)
+  assert.equal(reopened.body.conversation.id, conversation.id)
+  assert.deepEqual(reopened.body.conversation.agent_members.map(agent => agent.id), created_agents)
+  const room = rooms[reopened.body.conversation.native_room_id]
+  assert.equal(room.openteamily.conversation_id, conversation.id)
+  assert.deepEqual(room.members.map(id => bots[id].openteamily.agent_id), created_agents)
+  assert.equal(creates.length, 1)
 })
 
 test('only active team managers can create a template group with authorized team participants', async t => {

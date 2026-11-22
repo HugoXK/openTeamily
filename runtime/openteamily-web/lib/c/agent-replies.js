@@ -15,6 +15,7 @@ const PROGRESS_INTERVAL = 250
 const INBOX_INTERVAL = 2500
 const INBOX_WAIT_MS = 8000
 const MANAGED_RETRY_DELAY = 150
+const MAX_GROUP_FANOUT = 3
 
 export function selectGroupMemories(query, items) {
   if (!Array.isArray(items)) return []
@@ -175,6 +176,72 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
     }
   }
 
+  async function replyItem(item) {
+    const id = item.message?.id
+    if (!id || !item.agent_ref) return false
+    const claimId = item.job_id ? randomUUID() : null
+    const claim = claimId ? await changeJob(item, 'start', claimId) : null
+    if (claimId && !claim) return false
+    const thirdParty = item.group_text_only === true
+    const restricted = claim?.group_text_only === true
+    const direct = item.direct_text_only === true
+    const directClaim = claim?.direct_text_only === true
+    const studio = claimedStudioReference(item, claim)
+    if (thirdParty !== restricted || direct !== directClaim ||
+        ((restricted || direct) && item.mode !== 'mention') ||
+        (direct && (restricted || studio || typeof claim.direct_prompt !== 'string' || !claim.direct_prompt.trim())) ||
+        claim?.studio_reference_unavailable === true ||
+        (!studio && (item.message.studio_reference !== undefined || claim?.studio_reference !== undefined))) {
+      if (claimId) await changeJob(item, 'fail', claimId)
+      return false
+    }
+    const requestId = item.job_id ? `ots:${item.job_id}:${item.attempt}` : `ots:${id}:${item.agent_ref}`
+    const replyKey = `r:${createHash('sha256').update(JSON.stringify([id, item.agent_ref])).digest('hex')}`
+    const memories = item.mode === 'public' || direct ? [] : selectGroupMemories(item.message?.body,item.group_memories)
+    const progress = claimId && item.mode !== 'public' ? replyProgress(bs, item, claimId, log) : null
+    const params = {agent_id:item.agent_ref, key:`social:${item.conversation_id}`, request_id:requestId}
+    let text
+    try {
+      let turn
+      if (item.mode === 'public') {
+        turn = await host.call('agents/publicReply', { agent_id: item.agent_ref, prompt: publicReplyPrompt(item) })
+      } else if (direct) {
+        turn = await host.call('agents/groupTextTurn', {agent_id:item.agent_ref, direct:true,
+          text:directReplyPrompt(claim.direct_prompt,claim.quoted_message), onProgress:progress.write})
+      } else {
+        const prompt = replyPrompt(item, memories, claim?.quoted_message, studio)
+        turn = (studio || restricted)
+          ? await host.call('agents/groupTextTurn', {agent_id:item.agent_ref, text:prompt,
+            includePersona:!restricted, onProgress:progress.write})
+          : await host.call(progress ? 'agents/groupTurn' : 'agents/turn', {...params, text:prompt,
+            ...(progress ? {onProgress:progress.write} : {})})
+      }
+      text = String(turn?.text ?? '').trim()
+    } catch (error) {
+      log(`agent turn failed: ${String(error?.code ?? error?.name ?? 'error')}`)
+      if (item.mode === 'public') text = '这次回复失败，请稍后重试。'
+    } finally { progress?.close() }
+    if (!text) {
+      if (claimId) await changeJob(item, 'fail', claimId)
+      return false
+    }
+    try {
+      const path = `/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`
+      const payload = {
+        agent_ref: item.agent_ref, body: text.slice(0, REPLY_TEXT_LIMIT).toWellFormed(), reply_to: id, mode: item.mode, client_key: replyKey,
+        ...(claimId ? {job_id: item.job_id, attempt: item.attempt, claim_id: claimId} : {}),
+        ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
+      }
+      if (claimId) await replayManagedPost(bs, path, payload)
+      else await bs.post(path, payload)
+      return true
+    } catch (error) {
+      if (claimId) await changeJob(item, 'fail', claimId)
+      if (!['social/agent_reply_limit', 'social/auto_reply_disabled', 'social/public_chat_closed', 'social/reply_job_unavailable'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
+    }
+    return false
+  }
+
   async function readAndReply({ signal, wait = false } = {}) {
     if (running) return { skipped: true }
     running = true
@@ -195,68 +262,26 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       }
       if (signal?.aborted) return { skipped: 'interrupted' }
       let replied = 0
-      for (const item of [...(inbox.jobs ?? []), ...(inbox.items ?? [])]) {
-        const id = item.message?.id
-        if (!id || !item.agent_ref) continue
-        const claimId = item.job_id ? randomUUID() : null
-        const claim = claimId ? await changeJob(item, 'start', claimId) : null
-        if (claimId && !claim) continue
-        const thirdParty = item.group_text_only === true
-        const restricted = claim?.group_text_only === true
-        const direct = item.direct_text_only === true
-        const directClaim = claim?.direct_text_only === true
-        const studio = claimedStudioReference(item, claim)
-        if (thirdParty !== restricted || direct !== directClaim ||
-            ((restricted || direct) && item.mode !== 'mention') ||
-            (direct && (restricted || studio || typeof claim.direct_prompt !== 'string' || !claim.direct_prompt.trim())) ||
-            claim?.studio_reference_unavailable === true ||
-            (!studio && (item.message.studio_reference !== undefined || claim?.studio_reference !== undefined))) {
-          if (claimId) await changeJob(item, 'fail', claimId)
-          continue
+      const items = [...(inbox.jobs ?? []), ...(inbox.items ?? [])]
+      const managedGroup = item => item?.job_id && item.mode === 'mention' && item.direct_text_only !== true
+      for (let index = 0; index < items.length;) {
+        const first = items[index++]
+        const batch = [first]
+        const agents = new Set([first.agent_ref])
+        // Different agents handling one group message run independently in this
+        // owner's DS-Bot. Keep consecutive messages to the same agent ordered.
+        while (batch.length < MAX_GROUP_FANOUT && managedGroup(first) && managedGroup(items[index])) {
+          const next = items[index]
+          if (next.conversation_id !== first.conversation_id || next.message?.id !== first.message?.id ||
+              agents.has(next.agent_ref)) break
+          agents.add(next.agent_ref)
+          batch.push(next)
+          index++
         }
-        const requestId = item.job_id ? `ots:${item.job_id}:${item.attempt}` : `ots:${id}:${item.agent_ref}`
-        const replyKey = `r:${createHash('sha256').update(JSON.stringify([id, item.agent_ref])).digest('hex')}`
-        const memories = item.mode === 'public' || direct ? [] : selectGroupMemories(item.message?.body,item.group_memories)
-        const progress = claimId && item.mode !== 'public' ? replyProgress(bs, item, claimId, log) : null
-        const params = {agent_id:item.agent_ref, key:`social:${item.conversation_id}`, request_id:requestId}
-        let text
-        try {
-          let turn
-          if (item.mode === 'public') {
-            turn = await host.call('agents/publicReply', { agent_id: item.agent_ref, prompt: publicReplyPrompt(item) })
-          } else if (direct) {
-            turn = await host.call('agents/groupTextTurn', {agent_id:item.agent_ref, direct:true,
-              text:directReplyPrompt(claim.direct_prompt,claim.quoted_message), onProgress:progress.write})
-          } else {
-            const prompt = replyPrompt(item, memories, claim?.quoted_message, studio)
-            turn = (studio || restricted)
-              ? await host.call('agents/groupTextTurn', {agent_id:item.agent_ref, text:prompt,
-                includePersona:!restricted, onProgress:progress.write})
-              : await host.call(progress ? 'agents/groupTurn' : 'agents/turn', {...params, text:prompt,
-                ...(progress ? {onProgress:progress.write} : {})})
-          }
-          text = String(turn?.text ?? '').trim()
-        } catch (error) {
-          log(`agent turn failed: ${String(error?.code ?? error?.name ?? 'error')}`)
-          if (item.mode === 'public') text = '这次回复失败，请稍后重试。'
-        } finally { progress?.close() }
-        if (!text) {
-          if (claimId) await changeJob(item, 'fail', claimId)
-          continue
-        }
-        try {
-          const path = `/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`
-          const payload = {
-            agent_ref: item.agent_ref, body: text.slice(0, REPLY_TEXT_LIMIT).toWellFormed(), reply_to: id, mode: item.mode, client_key: replyKey,
-            ...(claimId ? {job_id: item.job_id, attempt: item.attempt, claim_id: claimId} : {}),
-            ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
-          }
-          if (claimId) await replayManagedPost(bs, path, payload)
-          else await bs.post(path, payload)
-          replied++
-        } catch (error) {
-          if (claimId) await changeJob(item, 'fail', claimId)
-          if (!['social/agent_reply_limit', 'social/auto_reply_disabled', 'social/public_chat_closed', 'social/reply_job_unavailable'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
+        const results = await Promise.allSettled(batch.map(replyItem))
+        for (const result of results) {
+          if (result.status === 'rejected') throw result.reason
+          if (result.value) replied++
         }
       }
       if (typeof inbox.cursor === 'number' && inbox.cursor > after) writeCursor(inbox.cursor)

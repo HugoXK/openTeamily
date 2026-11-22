@@ -6,6 +6,12 @@ const ORIGIN = 'https://openteamily.example';
 const WS = 'a'.repeat(32);
 const ID = 'b'.repeat(32);
 
+test('call recording consent uses the owner runtime on both call roots', () => {
+  for (const path of ['/v1/meeting-calls/recording', `/v1/workspaces/${WS}/social/conversations/otc_call/call/recording`]) {
+    assert.deepEqual(movedTarget(path, ORIGIN), {feature:'messenger', path});
+  }
+});
+
 test('the personal sticker library routes only canonical paths to the owner runtime', () => {
   for (const path of ['/v1/stickers?limit=20', `/v1/stickers/${ID}`, `/v1/stickers/${ID}/file`]) {
     assert.deepEqual(movedTarget(path, ORIGIN), {feature:'stickers', path});

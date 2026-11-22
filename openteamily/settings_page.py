@@ -98,6 +98,7 @@ class SettingsPage:
         '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/call-audio-handoff.mjs': ('shell', 'call-audio-handoff.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),

@@ -391,6 +391,11 @@ export function groupAgentSummary(conversation) {
     + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
 }
 
+function activeGroupAgent(conversation, target) {
+  return target && (conversation?.agent_members || []).find(agent => !agent.archived &&
+    agent.owner_id === target.owner_id && (agent.id || agent.agent_id) === target.agent_id);
+}
+
 // Personal-runtime states from server-side auto-provisioning (operator opt-in).
 export const RUNTIME_WAIT_ERRORS = {
   runtime_starting: '你的专属运行时正在创建或启动，就绪后会自动回复',
@@ -922,11 +927,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     },
   };
+  let groupMentions = null;
   const agentMentions = mountAgentMentions(document, () => {
     const direct = directAgentRoom(currentConversation);
     if (!currentUser || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
         (currentConversation.kind !== 'group' && !direct)) return null;
     return {scope: sendScope(), agents: currentConversation.agent_members || [], direct};
+  }, (targets, stale) => {
+    groupMentions = {scope:sendScope(), targets, stale};
+    renderGroupComposerRouting();
   });
   function voiceContext() {
     if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -1085,6 +1094,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const replyDraftTitle = document.getElementById('chat-reply-author');
   const replyDraftBody = document.getElementById('chat-reply-excerpt');
 
+  function renderGroupComposerRouting() {
+    const node = document.getElementById('group-composer-routing');
+    const conversation = currentSource === 'social' && currentConversation?.kind === 'group' &&
+      !currentConversation.public_agent ? currentConversation : null;
+    const scope = sendScope();
+    const mentions = groupMentions?.scope === scope ? groupMentions : null;
+    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived);
+    node.hidden = !conversation || (!agents.length && !mentions?.stale);
+    if (node.hidden) return;
+    const routing = conversation.group_agent_routing;
+    const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
+    const auto = agents.some(agent => agent.auto_reply);
+    let text, kind = 'default';
+    if (mentions?.stale) {
+      kind = 'attention';
+      text = uiLabel('请移除不可用的智能体后再发送。', 'Remove unavailable agents before sending.');
+    } else if (mentions?.targets.length) {
+      kind = 'targeted';
+      const count = mentions.targets.length;
+      text = uiLabel(`已指定 ${count} 位智能体回复`, `${count} ${count === 1 ? 'agent' : 'agents'} selected to reply`);
+    } else if (quote) {
+      kind = 'targeted';
+      text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
+    } else if (routing?.mode === 'personal') {
+      text = auto || routing.default === 'auto' ? uiLabel('按群内自动回复设置运行 · 说「你们好」可请全员回复',
+        'Group auto-reply settings apply · Say “hello everyone” to ask all agents')
+        : routing.default === 'all' ? uiLabel('群内智能体会回复 · 用 @ 可指定回复对象', 'Group agents reply by default · Use @ to pick who replies')
+          : uiLabel('用 @ 指定群内智能体回复', 'Use @ to choose which group agents reply');
+    } else if (routing?.mode === 'shared') {
+      text = auto ? uiLabel('按群内自动回复设置运行 · 用 @ 指定回复', 'Group auto-reply settings apply · Use @ to pick who replies')
+        : uiLabel('用 @ 指定回复 · 说「让智能体都回复」可请全员回复', 'Use @ to pick who replies · Ask all agents to reply for a group answer');
+    } else text = uiLabel('用 @ 指定群内智能体回复', 'Use @ to choose which group agents reply');
+    const label = document.getElementById('group-composer-routing-text');
+    if (label.textContent !== text) label.textContent = text;
+    node.dataset.kind = kind;
+  }
+
   function renderReplyDraft() {
     if (!replyPanel) return;
     const reply = currentSource === 'social' && replyDrafts.get(sendScope());
@@ -1093,12 +1139,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const excerpt = reply ? reply.excerpt : '';
     if (replyDraftTitle.textContent !== title) replyDraftTitle.textContent = title;
     if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
+    renderGroupComposerRouting();
   }
 
   function composerReply(item, author) {
     const excerpt = String(item.body || item.attachment?.title || (item.voice ? '语音消息' : '消息'))
       .replace(/\s+/g, ' ').trim().slice(0, 120);
-    return {message_id: item.id, author, excerpt, available: true};
+    const agentTarget = item.role === 'agent' && item.agent_id && item.agent_owner_id ?
+      {agent_id:item.agent_id, owner_id:item.agent_owner_id} : undefined;
+    return {message_id: item.id, author, excerpt, available: true, agentTarget};
   }
 
   function composeReply(item, author) {
@@ -1744,20 +1793,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const agent of saved) {
       const li = document.createElement('li');
       li.className = 'agent-chip';
+      const glyph = document.createElement('span');
+      glyph.className = 'group-roster-glyph';
+      glyph.setAttribute('aria-hidden', 'true');
+      glyph.textContent = leadGlyph(agent.name);
       const name = document.createElement('span');
       const fullName = paired ? groupAgentName(agent.name, groupAgentOwnerLabel(agent), agent.owner_id,
         agent.mine === false ? agent.owner_handle : '') : agent.name;
-      name.textContent = fullName + (agent.archived ? '（已归档）' : '');
+      name.className = 'group-roster-name';
+      name.textContent = fullName + (agent.archived ? uiLabel('（已归档）', ' (archived)') : '');
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = uiLabel('移除', 'Remove');
       const id = agent.id || agent.agent_id;
       remove.dataset.removeAgent = id;
+      remove.setAttribute('aria-label', uiLabel(`移除 ${fullName}`, `Remove ${fullName}`));
       if (direct) {
         remove.dataset.agentOwnerId = agent.owner_id;
-        remove.setAttribute('aria-label', uiLabel(`移除 ${fullName}`, `Remove ${fullName}`));
       }
-      li.append(name);
+      li.append(glyph, name);
       if (direct ? Boolean(agent.owner_id && groupAgentKey(id, agent.owner_id)) : agent.mine !== false) li.append(remove);
       chips.append(li);
     }
@@ -1834,17 +1888,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     panel.hidden = !isGroup && !direct;
     if (panel.hidden) {
-      if (agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterSheet.open = false;
       agentRosterView = null;
       setGroupStudio();
       return;
     }
     if (agentRosterView?.scope !== scope || agentRosterView.direct !== direct) {
-      if (direct || agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterSheet.open = false;
       agentRosterView = {scope, direct};
     }
     const label = direct ? uiLabel('私聊智能体', 'Chat agents') : uiLabel('群内智能体', 'Group agents');
-    document.getElementById('conversation-agents-label').textContent = label;
+    document.getElementById('conversation-agents-text').textContent = label;
     document.getElementById('conversation-agents-heading').textContent = label;
     document.getElementById('group-agent-request-help').hidden = direct;
     document.getElementById('direct-agent-help').hidden = !direct;
@@ -1852,6 +1906,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('group-agent-requests');
     list.hidden = direct;
     const saved = currentConversation.agent_members || [];
+    renderGroupRosterSummary(saved, {direct});
     const paired = direct || currentConversation.group_agent_requests === true;
     renderAgentRoster(saved, {direct, paired});
     if (direct) {
@@ -1941,6 +1996,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     setGroupStudio(namedTeamGroup() ? scope : '');
     syncGroupReplySubmit(scope);
+  }
+
+  function renderGroupRosterSummary(saved, {direct}) {
+    const count = document.getElementById('conversation-agents-count');
+    const preview = document.getElementById('conversation-agents-preview');
+    const help = document.getElementById('social-agent-members');
+    const available = saved.filter(agent => !agent.archived);
+    count.hidden = false;
+    count.textContent = String(available.length);
+    const previews = available.slice(0, 2).map(agent => {
+      const chip = document.createElement('span');
+      chip.className = 'group-roster-preview-chip';
+      chip.textContent = agent.name;
+      return chip;
+    });
+    if (available.length > previews.length) {
+      const extra = document.createElement('span');
+      extra.className = 'group-roster-preview-more';
+      extra.textContent = `+${available.length - previews.length}`;
+      previews.push(extra);
+    }
+    preview.replaceChildren(...previews);
+    preview.hidden = !available.length;
+    document.getElementById('group-agent-manage').hidden = direct;
+    help.textContent = available.length ? (!currentConversation.group_agent_routing && !direct ? groupAgentSummary(currentConversation) : '')
+      : uiLabel('还没有可回复的智能体。', 'There are no agents available to reply.');
+    help.hidden = !help.textContent;
+  }
+
+  function groupHeaderSubtitle(conversation) {
+    const {people, agents} = groupInfoCounts(conversation);
+    return uiLabel(`${people} 人`, `${people} ${people === 1 ? 'person' : 'people'}`) +
+      (agents ? uiLabel(` · ${agents} 位智能体`, ` · ${agents} ${agents === 1 ? 'agent' : 'agents'}`) : '');
   }
 
   function stopPolling() {
@@ -4009,6 +4097,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const previewBefore = sameAttempt ? previous?.preview : null;
     const wasRunning = sameAttempt && row.dataset.state === 'running';
     row.className = 'other group-reply-job';
+    row.dataset.chatAuthor = 'agent';
     row.tabIndex = -1;
     row.dataset.replyJobId = job.id;
     row.dataset.state = job.status;
@@ -4291,7 +4380,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       li.dataset.messageId = item.id;
       if (Number.isSafeInteger(item.seq)) li.dataset.messageSeq = String(item.seq);
-      const mine = item.user_id === (currentUser && currentUser.id);
+      const mine = item.role !== 'agent' && item.user_id === (currentUser && currentUser.id);
+      li.dataset.chatAuthor = item.role === 'agent' ? 'agent' : 'person';
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
@@ -4928,7 +5018,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
         conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
     const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
-    const fields = Object.fromEntries(['title','members','agent_members','group_management','updated'].map(name => [name,conversation[name]]));
+    const fields = Object.fromEntries(['title','members','agent_members','group_management','group_agent_routing','updated']
+      .filter(name => Object.hasOwn(conversation, name)).map(name => [name,conversation[name]]));
     const revision = conversation.group_management.revision;
     if (revision < (groupManagementReceipts.get(key)?.revision ?? -1)) return;
     groupManagementReceipts.set(key,{revision,fields});
@@ -4938,8 +5029,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!groupMatches(target) || currentConversation.group_management.revision > revision) return;
     Object.assign(currentConversation, fields);
     applyChatIdentity(document, conversationLabel(currentConversation,currentUser.id), currentConversation);
-    setChatSubtitle(groupInfoCounts(currentConversation).text);
+    setChatSubtitle(groupHeaderSubtitle(currentConversation));
     setGroupInfo(currentConversation);
+    renderGroupRosterSummary(currentConversation.agent_members || [], {direct:false});
+    agentMentions.refresh();
+    renderGroupComposerRouting();
   }
 
   function forgetGroup(target, revoked = false) {
@@ -5246,8 +5340,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentConversation = result.body.conversation;
       const title = conversationLabel(currentConversation, currentUser?.id);
       applyChatIdentity(document, title, currentConversation);
-      setChatSubtitle(groupInfoCounts(currentConversation).text);
+      setChatSubtitle(groupHeaderSubtitle(currentConversation));
       setGroupInfo(currentConversation);
+      renderGroupRosterSummary(currentConversation.agent_members || [], {direct:false});
+      agentMentions.refresh();
+      renderGroupComposerRouting();
       groupInvite.close();
       show('ok', '群成员已更新。');
     } catch {
@@ -5294,6 +5391,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (result.status !== 200 || result.body.auto_reply !== enabled) throw new Error('Automatic replies were not updated');
         const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
         if (currentAgent) currentAgent.auto_reply = enabled;
+        renderGroupComposerRouting();
         if (currentConversation === activeConversation && currentAgent === agent) {
           toggle.setAttribute('aria-checked', String(enabled));
           const description = row.children[1]?.children[1];
@@ -5392,6 +5490,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
     const group = social && currentConversation?.kind === 'group' && !publicChat;
+    const kind = group ? 'group' : '';
+    if (mainPanel.dataset.chatKind !== kind) document.getElementById('chat-more').setAttribute('aria-expanded', 'false');
+    mainPanel.dataset.chatKind = kind;
+    document.getElementById('chat-empty').dataset.group = String(group);
+    if (!social) {
+      document.getElementById('group-agent-action').hidden = true;
+      agentRosterSheet.open = false;
+      agentRosterView = null;
+    }
     document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
     if (invite) invite.hidden = !social || group || Boolean(publicChat);
@@ -5591,7 +5698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -5607,7 +5714,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
     const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = await request('GET', path).catch(() => ({status: 0, body: {}}));
+    const result = initialRead || await request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -5619,14 +5726,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         scheduleSocialPoll(currentConversation);
         return false;
       }
-      show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
+      if (!quiet) show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
         : messageFor(result.body?.error, '无法打开会话。'));
       if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
     const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
-    if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
+    if (updated?.id !== conversationId || ((link || initialRead) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
     }
@@ -5643,6 +5750,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return true;
     }
     if (currentSource !== 'social' || currentConversation?.id !== updated.id) {
+      document.getElementById('chat-more').setAttribute('aria-expanded', 'false');
       voiceRecorder.clear();
       closeInChatSearch({restoreScroll: false, focus: false});
     }
@@ -5671,9 +5779,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     voiceRecorder.refresh();
     setSessionsOpen(false);
     syncMuteButton(currentConversation);
-    const agentNote = document.getElementById('social-agent-members');
-    agentNote.textContent = groupAgentSummary(currentConversation);
-    agentNote.hidden = currentConversation.kind !== 'group' || Boolean(currentConversation.public_agent) || !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social', public_agent: currentConversation.public_agent});
@@ -5688,7 +5793,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageUtilities.refreshAnnouncement();
     const publicChat = currentConversation.public_agent;
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
-      : currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+      : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items, {refresh});
     renderGroupReplyAction(result.body.agent_replies || []);
@@ -5870,8 +5975,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return document.querySelectorAll('#member-choices input:checked').length;
   }
 
-  let composing = false;
+  let composePhase = '';
   let composeAttempt = null;
+  let composeReceipt = null;
   let composeView = 0;
   const composeError = document.getElementById('compose-dialog-error');
   function setComposeError(text = '') {
@@ -5908,7 +6014,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncComposeCreate() {
     const button = document.getElementById('compose-dialog-submit');
-    button.disabled = composing || !composeCreateEnabled({
+    const cancel = document.getElementById('compose-dialog-cancel');
+    const progress = document.getElementById('compose-dialog-progress');
+    const busy = Boolean(composePhase);
+    button.disabled = busy || (!composeReceipt && !composeCreateEnabled({
       composeMode,
       groupMode,
       personal: inPersonalWorkspace(),
@@ -5916,7 +6025,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
       templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
-    });
+    }));
+    button.textContent = composePhase === 'opening' ? uiLabel('打开中…', 'Opening…')
+      : busy ? uiLabel('创建中…', 'Creating…')
+        : composeReceipt ? uiLabel('重新打开', 'Reopen') : uiLabel('创建', 'Create');
+    cancel.disabled = busy;
+    cancel.textContent = composeReceipt ? uiLabel('关闭', 'Close') : uiLabel('取消', 'Cancel');
+    progress.textContent = composePhase === 'opening' ? uiLabel('已创建，正在打开会话…', 'Created. Opening the conversation…')
+      : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
+    const locked = busy || Boolean(composeReceipt);
+    for (const id of ['compose-mode-switch', 'compose-team-templates', 'compose-title-label', 'compose-member-picker']) {
+      document.getElementById(id).inert = locked;
+    }
   }
 
   function applyMemberFilter() {
@@ -5995,6 +6115,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let composeOpener;
   function closeComposeDialog({focus = false} = {}) {
     composeView += 1;
+    const saved = composeReceipt;
+    composeReceipt = null;
+    composePhase = '';
     const opener = composeOpener;
     composeOpener = null;
     document.getElementById('compose-dialog').hidden = true;
@@ -6003,6 +6126,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyMemberFilter();
     syncSelectedCount();
     if (focus && opener?.isConnected !== false) opener?.focus({preventScroll: true});
+    if (focus && saved) void loadSessions();
   }
 
   function renderMemberChoices(single, preserveSelection = false) {
@@ -6044,6 +6168,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openComposeDialog(mode, {keyboard = false} = {}) {
+    if (composePhase || composeReceipt) return;
     composeView += 1;
     composeMenu.close({focus: true});
     composeOpener = document.activeElement || composeMenuButton;
@@ -6077,6 +6202,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openSearchPanel(tab, conversationId = '', {fromSessionList = true} = {}) {
+    if (composePhase) return;
+    if (!document.getElementById('compose-dialog').hidden) {
+      const saved = composeReceipt;
+      closeComposeDialog();
+      if (saved) void loadSessions();
+    }
     searchFromSessionList = fromSessionList;
     searchConversation = conversationId;
     searchConversationTitle = document.getElementById('chat-title').textContent;
@@ -6084,7 +6215,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('search-close').hidden = false;
     document.getElementById('conversation-group').hidden = true;
     document.getElementById('pinned-group').hidden = true;
-    document.getElementById('compose-dialog').hidden = true;
     composeMenu.close();
     setFilterOpen(false, {focus: false});
     setNotificationsOpen(false);
@@ -7067,7 +7197,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
     closeInChatSearch({restoreScroll: false, focus: false});
     applyChatIdentity(document, '聊天');
-    showPublicChatState(null);
+    setSocialHeaderTools(false);
     renderReplyDraft();
     document.getElementById('message-list').replaceChildren();
     document.getElementById('chat-empty').hidden = false;
@@ -7416,6 +7546,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-agent-manage').addEventListener('click', () => {
+      if (!agentRosterCurrent(agentRosterView) || agentRosterView.direct) return;
+      agentRosterSheet.open = false;
+      closeInChatSearch({restoreScroll:false, focus:false});
+      setGroupInfoOpen(true);
+      setGroupInfoTab('agents');
+      document.getElementById('group-info-tab-agents').focus({preventScroll:true});
+    });
     document.getElementById('group-info-search').addEventListener('click', () => {
       setGroupInfoOpen(false);
       document.getElementById('conversation-search-open').click();
@@ -7870,10 +8008,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
-  document.getElementById('compose-dialog-cancel').addEventListener('click', () => closeComposeDialog({focus: true}));
+  document.getElementById('compose-dialog-cancel').addEventListener('click', () => {
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
   document.getElementById('compose-mode-switch').addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
-    if (!button || composeMode !== 'group') return;
+    if (!button || composeMode !== 'group' || composePhase || composeReceipt) return;
     setGroupMode(button.dataset.groupMode);
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
@@ -7891,50 +8031,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
     const submit = document.getElementById('compose-dialog-submit');
-    if (composing || submit.disabled) return;
+    if (composePhase || submit.disabled) return;
     const wid = workspaceId();
     const owner = currentUser;
     const view = composeView;
     const current = () => wid === workspaceId() && owner === currentUser && view === composeView &&
       !document.getElementById('compose-dialog').hidden;
-    const template = composeMode === 'group' && groupMode === 'team';
-    const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
-    const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
-    const title = document.getElementById('compose-title').value.trim();
-    const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
-    if (template && !picked) return;
-    const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
-    const body = template ? {} : composeMode === 'contact'
-      ? {kind:'dm', member_ids:memberIds}
-      : composeGroupPayload(memberIds, title, agentIds);
-    const fingerprint = JSON.stringify([owner?.id, path, body]);
-    if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
-    const cancel = document.getElementById('compose-dialog-cancel');
+    const template = composeReceipt?.template ?? (composeMode === 'group' && groupMode === 'team');
     setComposeError();
-    composing = true;
-    cancel.disabled = true;
-    submit.textContent = uiLabel('创建中…', 'Creating…');
-    syncComposeCreate();
     try {
-      const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key});
+      let initialRead;
+      if (!composeReceipt) {
+        const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
+        const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
+        const title = document.getElementById('compose-title').value.trim();
+        const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
+        if (template && !picked) return;
+        const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
+        const body = template ? {} : composeMode === 'contact'
+          ? {kind:'dm', member_ids:memberIds} : composeGroupPayload(memberIds, title, agentIds);
+        const fingerprint = JSON.stringify([owner?.id, path, body]);
+        if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
+        composePhase = 'creating';
+        syncComposeCreate();
+        const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key},
+          AbortSignal.timeout(template ? 60000 : 20000));
+        if (!current()) return;
+        const conversation = result.body.conversation;
+        if (![200,201].includes(result.status) || !conversation?.id) {
+          setComposeError(composeCreateError(result.status, template, result.body.error));
+          return;
+        }
+        composeAttempt = null;
+        composeReceipt = {id:conversation.id, template};
+        if (!template && result.status === 201 && conversation.kind === 'group' && conversation.last_seq === 0 &&
+            conversation.workspace_id === wid && Array.isArray(conversation.members) && Array.isArray(conversation.agent_members)) {
+          initialRead = {status:200, body:{conversation, items:[]}};
+        }
+      }
+      composePhase = 'opening';
+      syncComposeCreate();
+      const opened = await openSocialConversation(composeReceipt.id,
+        {quiet:true, initialRead, signal:AbortSignal.timeout(12000)}).catch(() => false);
       if (!current()) return;
-      if (![200,201].includes(result.status) || !result.body.conversation?.id) {
-        setComposeError(composeCreateError(result.status, template, result.body.error));
+      if (!opened) {
+        setComposeError(uiLabel('会话已创建。暂时无法打开，请重试。', 'The conversation is saved. Try opening it again.'));
         return;
       }
-      composeAttempt = null;
       closeComposeDialog();
-      if (await openSocialConversation(result.body.conversation.id)) {
-        void loadSessions();
-        show('ok', template ? '智能体团队已创建。' : '会话已创建。');
-      }
+      void loadSessions();
+      show('ok', template ? '智能体团队已创建。' : '会话已创建。');
     } catch {
       if (current()) setComposeError(composeCreateError(0, template));
     } finally {
-      composing = false;
-      cancel.disabled = false;
-      submit.textContent = uiLabel('创建', 'Create');
-      syncComposeCreate();
+      if (current()) {
+        composePhase = '';
+        syncComposeCreate();
+      }
     }
   });
 
@@ -8273,7 +8426,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatMore.focus();
       return;
     }
-    if (!document.getElementById('compose-dialog').hidden && !composing) {
+    if (!document.getElementById('compose-dialog').hidden && !composePhase) {
       event.preventDefault();
       closeComposeDialog({focus: true});
       return;

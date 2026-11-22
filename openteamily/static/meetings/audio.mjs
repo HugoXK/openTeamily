@@ -1,3 +1,5 @@
+import {validCallAudio} from '../shell/call-audio-handoff.mjs';
+
 const SAMPLE_RATE = 16000;
 const SEGMENT_SAMPLES = 15 * SAMPLE_RATE;
 const MAX_SECONDS = 600;
@@ -55,7 +57,7 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
   const record = el('meeting-audio-record'), stop = el('meeting-audio-stop');
   const start = el('meeting-audio-start'), discard = el('meeting-audio-discard');
   const addPartial = el('meeting-audio-add-partial');
-  if (!panel) return {reset() {}, hasPendingWork: () => false};
+  if (!panel) return {reset() {}, hasPendingWork: () => false, acceptCallRecording: () => false};
   let input = null, used = false, url = '', phase = '', ready = false, checking = false, asking = false;
   let progress = null, capture = null, captureTimer, pollTimer, operation = null, scope = 0;
 
@@ -95,6 +97,14 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     else preview.removeAttribute('src');
     file.value = '';
     syncAudio();
+  }
+
+  function acceptCallRecording(blob) {
+    if (input || capture || operation || asking || !validCallAudio(blob)) return false;
+    audioInput(blob);
+    panel.open = true;
+    status.textContent = '已带入通话录音。试听后可开始转写。';
+    return true;
   }
 
   async function checkSpeech(method = 'GET') {
@@ -291,5 +301,5 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     reset();
   });
   refreshButtons();
-  return {reset, hasPendingWork};
+  return {reset, hasPendingWork, acceptCallRecording};
 }

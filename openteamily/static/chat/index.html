@@ -219,6 +219,7 @@
           </fieldset>
         </div>
         <div class="compose-dialog-actions">
+          <p id="compose-dialog-progress" role="status"></p>
           <p id="compose-dialog-error" role="alert" tabindex="-1" hidden></p>
           <button type="button" id="compose-dialog-cancel"><span data-ui-text="chat.cancel">取消</span></button>
           <button type="submit" id="compose-dialog-submit" disabled><span data-ui-text="chat.create">创建</span></button>
@@ -678,12 +679,21 @@
         <div class="actions"><button type="button" id="save-message-cancel" data-ui-text="chat.cancel">取消</button><button type="submit" id="save-message-submit"><span data-ui-text="chat.save_confirm">确认保存</span></button></div>
       </form>
     </dialog>
-    <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
+    <section id="group-agent-action" class="group-agent-panel" hidden>
       <details id="conversation-agents-sheet" class="group-agent-sheet">
-      <summary id="conversation-agents-label" data-ui-text="chat.group.agents">群内智能体</summary>
+      <summary id="conversation-agents-label">
+        <svg class="group-roster-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>
+        <span id="conversation-agents-text" data-ui-text="chat.group.agents">群内智能体</span>
+        <span id="conversation-agents-count" hidden></span>
+        <span id="conversation-agents-preview" aria-hidden="true" hidden></span>
+        <svg class="group-roster-chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </summary>
+      <div class="group-agent-sheet-body">
       <h2 id="conversation-agents-heading" class="visually-hidden" data-ui-text="chat.group.agents">群内智能体</h2>
-      <p id="social-agent-members" class="group-agent-note" hidden></p>
-      <p id="group-agent-request-help" class="note" data-ui-text="chat.group.request_reply_help">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
+      <div class="group-roster-head">
+        <p id="social-agent-members" class="group-agent-note" hidden></p>
+        <button type="button" id="group-agent-manage" data-ui-text="chat.group.manage_agents" hidden>管理群智能体</button>
+      </div>
       <p id="direct-agent-help" class="note" hidden data-ui-text="chat.direct.agents_help">双方都可以添加自己的个人智能体。在输入框用 @ 选择智能体，它只会收到这条文字和你明确引用的一条消息。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
@@ -694,6 +704,7 @@
       </div>
       <p id="direct-agent-status" class="note" role="status" hidden></p>
       <form id="group-agent-form">
+        <p id="group-agent-request-help" class="note" data-ui-text="chat.group.request_reply_help">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
         <fieldset>
           <legend data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend>
           <div id="group-agent-choices" class="agent-choices"></div>
@@ -724,6 +735,7 @@
         <button id="group-agent-submit" type="submit"><span data-ui-text="chat.group.send_request">发送并请求回复</span></button>
       </form>
       <ul id="group-agent-requests" aria-live="polite"></ul>
+      </div>
       </details>
     </section>
     <div class="chat-timeline">
@@ -731,6 +743,7 @@
         <div id="chat-empty" class="note">
           <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
           <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
+          <p class="empty-group"><strong data-ui-text="chat.group.empty_title">开始群聊</strong><span data-ui-text="chat.group.empty_help">发送第一条消息。你也可以用 @ 指定智能体回复。</span></p>
           <p class="empty-next">
             <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
             <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>
@@ -764,6 +777,10 @@
             <span id="chat-reply-excerpt"></span>
           </div>
           <button type="button" id="chat-reply-cancel" aria-label="取消引用" data-ui-label="chat.messages.cancel_quote">×</button>
+        </div>
+        <div id="group-composer-routing" class="group-composer-routing" hidden>
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h10a4 4 0 0 0 4-4V4m-3 3 3-3 3 3M8 8l-4 4 4 4"/></svg>
+          <span id="group-composer-routing-text" role="status"></span>
         </div>
         <div class="composer-row">
           <details class="composer-plus">
@@ -926,6 +943,17 @@
     <button type="button" id="chat-call-camera" aria-pressed="true"><span data-ui-text="chat.call.turn_camera_off">关闭摄像头</span></button>
     <button type="button" id="chat-call-play" hidden data-ui-text="chat.call.play_audio">播放声音</button>
   </div>
+  <section id="chat-call-recording" aria-labelledby="chat-call-record-label" hidden>
+    <h3 id="chat-call-record-label">录制通话音频</h3>
+    <p class="note">当前参会者全部同意后才开始。音频仅由发起者保留在此设备。</p>
+    <p id="chat-call-record-status" role="status"></p>
+    <div class="actions">
+      <button type="button" id="chat-call-record-request">请求录音</button>
+      <button type="button" id="chat-call-record-allow" hidden>同意录音</button>
+      <button type="button" id="chat-call-record-decline" hidden>不同意</button>
+      <button type="button" id="chat-call-record-stop" hidden>停止并保留</button>
+    </div>
+  </section>
   <div id="chat-meeting-share" hidden>
     <label for="chat-meeting-link" data-ui-text="chat.invite.link">邀请链接</label>
     <div>
@@ -941,6 +969,7 @@
     <button type="button" id="chat-call-close" data-ui-text="chat.close">关闭</button>
     <button type="button" id="chat-meeting-notes-copy" hidden>复制纪要入口</button>
     <a id="chat-meeting-notes" data-ui-text="chat.meetings.organize" hidden>整理会议纪要</a>
+    <button type="button" id="chat-meeting-notes-without-audio" hidden>仅打开纪要</button>
     <button type="submit" form="chat-meeting-form" id="chat-meeting-submit" hidden><span data-ui-text="chat.meetings.join">加入会议</span></button>
   </div>
 </dialog>
