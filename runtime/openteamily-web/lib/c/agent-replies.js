@@ -149,6 +149,7 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       const path = `/v1/ot/agent-reply-jobs/${encodeURIComponent(item.job_id)}`
       const payload = {action, attempt:item.attempt, claim_id:claimId, ...(action === 'start' ? {
         accept_studio_reference: true,
+        accept_group_text_turn: true,
         ...(Number.isSafeInteger(sourceRevision) ? {source_revision:sourceRevision} : {}),
       } : {})}
       const result = action === 'start' ? await replayManagedPost(bs, path, payload) : await bs.post(path, payload)
@@ -184,8 +185,11 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
         const claimId = item.job_id ? randomUUID() : null
         const claim = claimId ? await changeJob(item, 'start', claimId) : null
         if (claimId && !claim) continue
+        const thirdParty = item.group_text_only === true
+        const restricted = claim?.group_text_only === true
         const studio = claimedStudioReference(item, claim)
-        if (claim?.studio_reference_unavailable === true ||
+        if (thirdParty !== restricted || (restricted && item.mode !== 'mention') ||
+            claim?.studio_reference_unavailable === true ||
             (!studio && (item.message.studio_reference !== undefined || claim?.studio_reference !== undefined))) {
           if (claimId) await changeJob(item, 'fail', claimId)
           continue
@@ -202,8 +206,9 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
             turn = await host.call('agents/publicReply', { agent_id: item.agent_ref, prompt: publicReplyPrompt(item) })
           } else {
             const prompt = replyPrompt(item, memories, claim?.quoted_message, studio)
-            turn = studio
-              ? await host.call('agents/groupReferenceTurn', {agent_id:item.agent_ref, text:prompt, onProgress:progress.write})
+            turn = (studio || restricted)
+              ? await host.call('agents/groupTextTurn', {agent_id:item.agent_ref, text:prompt,
+                includePersona:!restricted, onProgress:progress.write})
               : await host.call(progress ? 'agents/groupTurn' : 'agents/turn', {...params, text:prompt,
                 ...(progress ? {onProgress:progress.write} : {})})
           }

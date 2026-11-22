@@ -137,7 +137,7 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   const claim_id = posts[0].body.claim_id
   assert.match(claim_id, CLAIM_ID)
   assert.deepEqual(posts.slice(0,2),[
-    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true}},
+    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true}},
     {path:'/v1/ot/agent-reply-jobs/otj_live/progress',body:{attempt:2,claim_id,revision:1,text:'First visible'}},
   ])
   await Promise.all([second.promise,delay(350)])
@@ -210,7 +210,7 @@ test('a managed start replays its claim after a transient failure but a stale co
       assert.equal(ownerReplays.length,2)
       assert.equal(new Set(ownerReplays).size,1)
       assert.equal(claims.length,3)
-      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7,accept_studio_reference:true})
+      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7,accept_studio_reference:true,accept_group_text_turn:true})
     })
   }
 })
@@ -271,7 +271,7 @@ test('a managed reply retries transient delivery once with the same payload and 
         job_id:'otj_live',attempt:2,claim_id,
       })
       assert.deepEqual(actions,[
-        {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true},
+        {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true},
         ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
       ])
     })
@@ -517,8 +517,9 @@ test('Studio claims only expose a matching pin to a stateless group turn', async
       host:{
         currentRuntime:() => ({chatTurn() {}}),
         async call(endpoint, payload) {
-          assert.equal(endpoint,'agents/groupReferenceTurn')
+          assert.equal(endpoint,'agents/groupTextTurn')
           assert.equal(payload.agent_id,'helper')
+          assert.equal(payload.includePersona,true)
           assert.match(payload.text,/Use staging first 🌿/)
           assert.doesNotMatch(payload.text,/not authorized from inbox/)
           assert.equal(typeof payload.onProgress,'function')
@@ -529,7 +530,85 @@ test('Studio claims only expose a matching pin to a stateless group turn', async
     })
     assert.equal((await replier.once()).replied, Number(ok))
     assert.deepEqual(calls, ok
-      ? ['start','agents/groupReferenceTurn','/v1/ot/conversations/otc_group/agent-messages']
+      ? ['start','agents/groupTextTurn','/v1/ot/conversations/otc_group/agent-messages']
       : ['start','fail'])
+  }
+})
+
+test('group chooser forwards distinct owner-agent pairs, projected attribution, and rejects old servers', async () => {
+  const workspace = 'a'.repeat(32)
+  const agent = 'f'.repeat(32)
+  const targets = [{owner_id:'owner-a',agent_id:agent},{owner_id:'owner-b',agent_id:agent}]
+  const owner = {owner_id:'owner-b',display_name:'Bea',handle:'bea.home'}
+  let supportsPairs = false
+  const f = fake({
+    'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
+    ['GET /v1/ot/teams/by-workspace/'+workspace]: () => ({id:'ott_group'}),
+    'GET /v1/ot/conversations/otc_1': () => ({kind:'group',team_id:'ott_group', ...(supportsPairs ? {
+      group_agent_requests:true,
+    } : {})}),
+    'POST /v1/ot/conversations/otc_1/messages': () => ({id:'otm_requested',reply_jobs:[{
+      id:'otj_reply', agent_id:agent, agent_owner_id:'owner-b', agent_owner_name:'Bea',status:'queued',
+    }]}),
+    'GET /v1/ot/conversations/otc_1/messages': () => ({messages:[
+      {id:'otm_result',body:'Done',author:{kind:'agent',agent_ref:agent,name:'Helper',owner},reply_job_id:'otj_reply'},
+      {id:'otm_unmanaged',body:'Hello',author:{kind:'agent',agent_ref:agent,name:'Helper',owner}},
+    ]}),
+  })
+  const dir = fixture()
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call() {return {workspace_id:'b'.repeat(32)}}}).endpoints
+  const room = '/v1/workspaces/'+workspace+'/social/conversations/otc_1'
+  const send = {method:'POST',path:room+'/agent-replies',idempotency_key:'group-pairs-fixture',
+    body:{prompt:'Please help',agent_targets:targets}}
+  assert.equal((await feature.v1(send)).status,503)
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,0)
+  supportsPairs = true
+  for (const bad of [[targets[0],targets[0]], [{...targets[0],owner_id:'a/b'}], [{...targets[1],run_tools:true}]]) {
+    assert.equal((await feature.v1({...send,body:{...send.body,agent_targets:bad}})).status,400)
+  }
+  assert.equal((await feature.v1({...send,body:{...send.body,agent_ids:[agent]}})).status,400)
+  const accepted = await feature.v1(send)
+  assert.equal(accepted.status,202)
+  assert.deepEqual(f.calls.at(-1).body,{body:'Please help',workspace,direct:false,agent_mentions:targets,
+    client_key:'group-pairs-fixture',group_agent_request:true})
+  assert.equal(accepted.body.message.reply_jobs[0].agent_owner_name,'Bea')
+  const transcript = await feature.v1({method:'GET',path:room})
+  assert.equal(transcript.body.conversation.group_agent_requests,true)
+  assert.equal(transcript.body.items[0].agent_owner_id,'owner-b')
+  assert.equal(transcript.body.items[0].agent_owner_handle,'bea.home')
+  assert.equal(transcript.body.items[1].agent_owner_id,undefined)
+})
+
+test('a teammate request is text-only and fails closed if its claim lacks the restriction', async () => {
+  const job = {job_id:'otj_teammate',attempt:1,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_member',revision:1},group_text_only:true,
+    context:[{author:{display_name:'Member'},body:'Summarize our project'}]}
+  for (const [receipt, replies] of [[{group_text_only:true},1],[{},0]]) {
+    const actions = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'state.json'),
+      bs:{
+        async get(){return {jobs:[job]}},
+        async post(path,body) {
+          actions.push(body.action || path)
+          if (body.action === 'start') {
+            assert.equal(body.accept_group_text_turn,true)
+            return receipt
+          }
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint,payload) {
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(payload.includePersona,false)
+          assert.match(payload.text,/Summarize our project/)
+          return {text:'A teammate’s answer'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied,replies)
+    assert.deepEqual(actions,['start',replies ? '/v1/ot/conversations/otc_group/agent-messages' : 'fail'])
   }
 })

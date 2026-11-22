@@ -656,7 +656,7 @@
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
         <div class="agent-add">
-          <select id="group-agent-add" aria-label="添加群内智能体" data-ui-label="chat.group.add_agent"></select>
+          <select id="group-agent-add" aria-label="添加我的智能体" data-ui-label="chat.group.add_agent"></select>
           <button type="button" id="group-agent-add-submit" data-ui-text="chat.add">添加</button>
         </div>
       </div>
@@ -664,6 +664,8 @@
         <fieldset>
           <legend data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend>
           <div id="group-agent-choices" class="agent-choices"></div>
+          <p id="group-agent-empty" class="note" data-ui-text="chat.group.no_reply_agents" hidden>群里还没有可请求的智能体。</p>
+          <p id="group-agent-choice-status" class="note" role="status"></p>
         </fieldset>
         <details id="group-studio" hidden>
           <summary id="group-studio-toggle"><span data-ui-text="chat.group.studio_reference">引用团队文档</span><span id="group-studio-mark"></span></summary>

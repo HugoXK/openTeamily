@@ -16,6 +16,7 @@ import { GLB_MIME } from '../glb.js'
 import { studioReference } from './studio-reference.js'
 
 const HEX = /^[0-9a-f]{32}$/
+const GROUP_AGENT_ID = /^[A-Za-z0-9._:-]{1,80}$/
 const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}\.[a-f0-9]{24}$/
@@ -125,7 +126,10 @@ function conversationItem(row, me, env, workspaceId) {
     pinned: !!row.pinned,
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '' })),
+    ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
+    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
+      mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
+      owner_handle: a.owner?.handle || '' })),
   }
 }
 
@@ -158,7 +162,10 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(studio ? {studio_reference: studio} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
-    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id} : {}),
+    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id,
+      ...(author.owner?.owner_id ? {agent_owner_id: author.owner.owner_id,
+        agent_owner_name: author.owner.display_name || author.owner.handle || '',
+        agent_owner_handle: author.owner.handle || ''} : {})} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
     ...(row.attachment ? { attachment: attachmentItem(row.attachment, workspaceId, row.conversation_id, row.id) } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
@@ -256,6 +263,8 @@ function rethrow(error) {
     comment_not_found: 'not_found',
     comment_conflict: 'conflict',
     reply_unavailable: 'reply_unavailable',
+    group_agent_unavailable: 'group_agent_unavailable',
+    group_agent_request_conflict: 'group_agent_request_conflict',
     studio_reference_changed: 'studio_reference_changed',
     studio_reference_unavailable: 'studio_reference_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
@@ -729,6 +738,19 @@ async function requireSharedGroupScope(host,bs,workspace,cid) {
     throw new Fault(404,'not_found','该群聊不在当前工作区。')
   }
   return group
+}
+
+function groupAgentTargets(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 5 || input.some(target =>
+    !target || typeof target.owner_id !== 'string' || typeof target.agent_id !== 'string' ||
+    Object.keys(target).length !== 2 || !GROUP_AGENT_ID.test(target.owner_id) || !GROUP_AGENT_ID.test(target.agent_id))) {
+    throw new Fault(400, 'invalid', '请选择 1 至 5 个有效的群内智能体。')
+  }
+  const ordered = input.map(({owner_id, agent_id}) => ({owner_id, agent_id}))
+  if (new Set(ordered.map(item => JSON.stringify(item))).size !== ordered.length) {
+    throw new Fault(400, 'invalid', '不能重复选择同一个群内智能体。')
+  }
+  return ordered
 }
 
 export async function shareGroupMemory(host, payload) {
@@ -1296,12 +1318,15 @@ function messengerExtraRoutes(host, wakeReplies) {
       async handle({ match, body, idempotency_key: key }) {
         return wrap(async () => {
           const [, workspace, conversationId] = match
+          const paired = body?.agent_targets !== undefined
           const ids = Array.isArray(body?.agent_ids) ? [...new Set(body.agent_ids)] : []
           const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
-          if (!ids.length || ids.length > 5 || !ids.every(id => typeof id === 'string') || !prompt || prompt.length > 4000
+          if ((paired ? body.agent_ids !== undefined : !ids.length || ids.length > 5 || !ids.every(id => typeof id === 'string'))
+              || !prompt || prompt.length > 4000
               || typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
             throw new Fault(400, 'invalid', 'Provide up to five group agents, a prompt and a send key')
           }
+          const selected = paired ? groupAgentTargets(body.agent_targets) : null
           const reference = body.studio_reference
           const studio = studioReference(reference)
           if (reference !== undefined && (!studio || Object.keys(reference).length !== 2)) {
@@ -1313,13 +1338,17 @@ function messengerExtraRoutes(host, wakeReplies) {
             throw new Fault(404, 'studio_reference_unavailable', '此群聊无法使用团队文档。')
           }
           const me = await meOf(bs, env)
-          const targets = ids.map(agentId => {
+          const targets = selected || ids.map(agentId => {
             const agent = (conversation.agents || []).find(a => a.agent_ref === agentId && a.mine)
             if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
             return {owner_id:me.owner_id, agent_id:agentId}
           })
+          if (paired && conversation.group_agent_requests !== true) {
+            throw new Fault(503, 'unavailable', '群内智能体请求暂时不可用，请刷新后重试。')
+          }
           const source = await bs.post(`${conv(conversationId)}/messages`, {
             body:prompt, workspace, direct:accountConversation(conversation), agent_mentions:targets, client_key:key,
+            ...(paired ? {group_agent_request:true} : {}),
             ...(studio ? {studio_reference:studio} : {}),
           })
           if (source.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
