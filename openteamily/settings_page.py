@@ -120,6 +120,8 @@ class SettingsPage:
         '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
         '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/files.mjs': ('chat', 'files.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/translation.mjs': ('chat', 'translation.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),

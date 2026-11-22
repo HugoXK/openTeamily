@@ -1,5 +1,6 @@
 """Chat page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -98,9 +99,13 @@ class ChatPageTests(unittest.TestCase):
         self.assertIn('id="discover-list"', discover['body'].decode())
 
     def test_esm_dependencies_of_the_shell_and_chat_page_are_served(self):
-        # /chat boots from these two modules; a missing route leaves the page
-        # half-initialised (#workspace empty, #conversation-list hidden).
-        for path in ('/chat/dsbot.mjs', '/shell/dsbot-skills.mjs'):
+        # /chat boots from the modules its own page links; a missing route
+        # leaves the page half-initialised (#workspace empty, list hidden).
+        page = self.raw.call('GET', '/chat')
+        self.assertEqual(page['status'], 200)
+        paths = sorted(set(re.findall(r'(?:href|src)="(/[^"]+\.mjs)"', page['body'].decode())))
+        self.assertIn('/chat/dsbot.mjs', paths)
+        for path in paths:
             response = self.raw.call('GET', path)
             self.assertEqual(response['status'], 200, path)
             headers = {name.lower(): value for name, value in response['headers'].items()}
