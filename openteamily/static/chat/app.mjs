@@ -3965,7 +3965,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     historyScroller.focus({preventScroll: true});
     if (currentSource === 'social' && (socialHistory?.readingHistory || (liveBanner && !liveBanner.hidden))) {
       void openSocialLatest();
-    } else if (currentSource === 'agent' && privateHistory?.readingHistory) {
+    } else if (currentSource === 'agent' && privateHistory && (privateHistory.readingHistory || (liveBanner && !liveBanner.hidden))) {
       void restorePrivateLatest(privateHistory);
     } else {
       historyScroller.scrollTop = historyScroller.scrollHeight;
@@ -5002,6 +5002,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
     if (currentSource === 'social' && currentConversation) await openSocialLatest();
+    else if (currentSource === 'agent' && privateHistory) await restorePrivateLatest(privateHistory);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   let membersStatus = '', artifactsStatus = '';
@@ -5799,7 +5800,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -5820,12 +5821,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const wid = workspaceId();
     const owner = currentUser;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
+      && (!foreground || (foreground === foregroundPrivateRead && canRefreshForegroundPrivate()))
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
     const snapshot = startupSnapshot ? await startupSnapshot() : null;
     if (startupSnapshot && !stillOpen()) return false;
-    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path)
+    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
+      undefined, undefined, foreground ? AbortSignal.timeout(5000) : undefined)
       .catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
@@ -5847,11 +5850,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const listedAgent = agents.find(item => item.id === agentId);
     const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
     const conversation = threadAfterRead(result.body.conversation, {owner: owner?.id, wid, aid: agentId, cid: conversationId}, readThreadReceipt);
-    if (!agent || conversation?.id !== conversationId || (link && (
+    if (!agent || conversation?.id !== conversationId || ((link || foreground) && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
       if (!refresh) show('error', '无法打开对话。');
       return false;
+    }
+    if (foreground) {
+      if (!Array.isArray(result.body.items)) return false;
+      const sameHistory = JSON.stringify(result.body.items) === JSON.stringify(lastAgentItems);
+      const sameConversation = JSON.stringify(conversation) === JSON.stringify(currentConversation);
+      if (sameHistory && sameConversation && JSON.stringify(agent) === JSON.stringify(currentAgent)) return true;
+      const scroller = document.getElementById('message-scroller');
+      const selection = document.getSelection?.();
+      if (!messageScrollerAtBottom(scroller) || scroller.contains?.(document.activeElement) ||
+          (selection && !selection.isCollapsed && scroller.contains?.(selection.anchorNode))) {
+        if (liveBanner) liveBanner.hidden = false;
+        return true;
+      }
     }
     setSocialHistory(null);
     agentMentions.clear();
@@ -6153,9 +6169,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }, delay);
   }
 
+  function canRefreshForegroundPrivate() {
+    if (!currentPrivateThread() || !privateHistory || !canWatchReply() || readingPrivateContext() ||
+        sessionTransition?.pending || openingStartupLink()) return false;
+    const scope = sendScope();
+    const queue = pendingSends.get(scope);
+    return !queue?.active && !memoryWrites.has(scope) && !replyWatch && !lastAgentItems.some(waitingAgentReply);
+  }
+
+  let foregroundPrivateRead;
+  function refreshForegroundPrivate() {
+    if (!canRefreshForegroundPrivate()) return false;
+    const scope = sendScope();
+    const now = performance.now();
+    if (foregroundPrivateRead?.scope === scope && (foregroundPrivateRead.busy || now - foregroundPrivateRead.started < 750)) return true;
+    const reading = foregroundPrivateRead = {scope, started:now, busy:true};
+    void openAgentConversation(currentAgent.id, currentConversation.id, {refresh:true, foreground:reading})
+      .finally(() => { reading.busy = false; });
+    return true;
+  }
+
+  globalThis.addEventListener('focus', refreshForegroundPrivate);
+  globalThis.addEventListener('blur', () => { foregroundPrivateRead = null; });
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') foregroundPrivateRead = null;
     if (currentSource === 'agent') {
-      if (document.visibilityState === 'visible') void refreshAgentQuickStarts();
+      if (document.visibilityState === 'visible' && !refreshForegroundPrivate()) void refreshAgentQuickStarts();
       if (!canWatchReply()) stopPolling();
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
@@ -7390,7 +7429,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   globalThis.addEventListener('pageshow', event => {
     if (!event.persisted) return;
     void loadNotifications();
-    void refreshAgentQuickStarts();
+    if (!refreshForegroundPrivate()) void refreshAgentQuickStarts();
   });
   const readAll = document.getElementById('notifications-read-all');
   if (readAll) readAll.addEventListener('click', async () => {

@@ -543,6 +543,20 @@
       </div>
     </div>
   </div>
+  <dialog id="shared-work-copy-dialog" class="send-dialog-card" aria-labelledby="shared-work-copy-heading">
+    <h2 id="shared-work-copy-heading">保存共享文字</h2>
+    <p class="note">确认后，文字会成为个人空间中的可编辑文档。</p>
+    <section id="shared-work-copy-preview" hidden>
+      <h3 id="shared-work-copy-title"></h3>
+      <pre id="shared-work-copy-body" tabindex="0" aria-label="共享文字预览"></pre>
+    </section>
+    <p id="shared-work-copy-status" class="note" role="status"></p>
+    <div class="space-action-row">
+      <button type="button" id="shared-work-copy-cancel" autofocus>关闭</button>
+      <button type="button" id="shared-work-copy-retry" hidden>重新查看</button>
+      <button type="button" id="shared-work-copy-confirm" class="primary" hidden>保存副本</button>
+    </div>
+  </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
       <h2 id="duplicate-artifact-heading">复制为新作品</h2>

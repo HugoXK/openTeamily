@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {memoryCitationFromSearch, mount} from '../openteamily/static/memory/app.mjs';
-import {actionSaveAttempt, encodeActionReview, decodeActionReview} from '../openteamily/static/memory/action-review.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt} from '../openteamily/static/memory/action-review.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -55,6 +55,14 @@ test('due date helpers convert UTC calendar days', () => {
   assert.equal(dueDateValue(Date.UTC(2027, 0, 15) / 1000), '2027-01-15');
   assert.equal(dueDateValue(null), '');
   assert.equal(dueDateValue('bad'), '');
+});
+
+test('recovering an action create retains the exact request key and body', () => {
+  const draft = {key:'a'.repeat(32), payload:{title:'Prepare launch', notes:'Reviewed notes', due_at:1799990000, memory_page_id:'b'.repeat(32)}};
+  assert.deepEqual(decodeNewActionAttempt(JSON.stringify(draft)),draft);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,key:'uncorrelated'})),null);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,payload:{...draft.payload,memory_page_id:'a different scope'}})),null);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,payload:{...draft.payload,due_at:2 ** 31 + 1}})),null);
 });
 
 test('parseTopics splits unique names and formatTopics joins them', () => {

@@ -5,12 +5,12 @@ import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongTex
 import {
   canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
-  unlinkMedia, updateArtifact, usernames, view, versionView,
+  uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
 import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
 import { catalogSearchText } from './catalog-search.js'
-import { casefold, publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
+import { casefold, publicKind, SHA256, SLIDES_SCHEMA, TITLE_MAX, TOKEN, validBody, validTitle } from './model.js'
 import { normalizeSlides } from './structured.js'
 import { decodeWorkbook, normalizeWorkbook, WORKBOOK_SCHEMA, workbookText } from './workbook.js'
 
@@ -229,6 +229,43 @@ async function copyToStudio(req, workspaceId, artifactId) {
 
 const publishingShares = new Set()
 
+async function copySharedText(req, workspaceId) {
+  if (req.method !== 'POST' || req.query.size) refuse(400, 'invalid', 'Invalid shared document request')
+  const {token, fingerprint} = requireBodyKeys(await req.json(1024), ['token', 'fingerprint'])
+  if (typeof token !== 'string' || !TOKEN.test(token) ||
+      (fingerprint !== undefined && (typeof fingerprint !== 'string' || !SHA256.test(fingerprint)))) {
+    refuse(400, 'invalid', 'Invalid shared document review')
+  }
+  const binding = await req.host.call('agents/personal-binding', {})
+  if (workspaceId !== binding?.workspace_id) refuse(404, 'not_found', 'Personal workspace not found')
+  const shareHash = digest('share:' + token)
+  const key = 'share-copy-' + shareHash.slice(0, 48)
+  if (fingerprint) {
+    const prior = req.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',
+      workspaceId, digest('artifact:' + key))
+    if (prior) {
+      if (prior.request_hash !== fingerprint) refuse(409, 'share_changed', 'Review the shared text again')
+      return {body: {artifact:view(load(req.store, workspaceId, prior.id))}}
+    }
+  }
+  let snapshot
+  try {
+    snapshot = await sharedBotSocial(req.host).request('POST', '/v1/ot/public-shares/resolve', {token}, {signal:req.signal})
+  } catch (error) {
+    if (error?.status === 404) refuse(404, 'share_unavailable', 'Public share is unavailable')
+    refuse(503, 'unavailable', 'Could not read the public share')
+  }
+  if (!validTitle(snapshot?.title) || !validBody(snapshot?.body) || !snapshot.body.trim()) {
+    refuse(404, 'share_unavailable', 'Shared text is unavailable')
+  }
+  const {title, body} = snapshot
+  const reviewed = digest(JSON.stringify([shareHash, title, body]))
+  if (!fingerprint) return {body: {snapshot:{title, body, fingerprint:reviewed}}}
+  if (fingerprint !== reviewed) refuse(409, 'share_changed', 'Review the shared text again')
+  const name = uniqueTitle(req.store, workspaceId, title, shareHash)
+  return createArtifact(ctx(req), workspaceId, {title:name, body, kind:'document'}, key, {receiptHash:reviewed})
+}
+
 export async function shares(req, workspaceId, artifactId, shareId, revoking) {
   const row = mustLoad(req, workspaceId, artifactId)
   if (!shareId && req.method === 'GET' && !req.queryString) {
@@ -246,7 +283,7 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
       const workbook = row.spreadsheet_json && decodeWorkbook(row.spreadsheet_json)
       const body = workbook ? workbookText(workbook) : String(row.body ?? '')
       await sharedBotSocial(req.host).put('/v1/ot/public-shares', {
-        token_hash: item.token_hash, ref: row.id, title: row.title, kind: row.kind,
+        token_hash: item.token_hash, ref: row.id, title: row.title, kind: publicKind(row),
         body: body.slice(0,200000), expires_at: item.expires ? item.expires * 1000 : null,
       })
     } catch {
@@ -374,6 +411,7 @@ async function artifactDraft(req, workspaceId, kind) {
 }
 
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },

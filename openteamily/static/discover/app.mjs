@@ -769,8 +769,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!entry?.ready || entry.viewer !== null) return;
     const works = feedViewer === null && feedState.tab === 'activity' ? feedState.items : [];
     const index = works.findIndex(item => item.slug === entry.slug);
-    setAdjacent(entry, 'previous', index > 0 ? works[index - 1] : null);
-    setAdjacent(entry, 'next', index >= 0 ? works[index + 1] : null);
+    const fallback = index < 0 && entry.publicNeighbors?.scope === feedSearchText(feedState) ? entry.publicNeighbors : null;
+    setAdjacent(entry, 'previous', index > 0 ? works[index - 1] : fallback?.previous);
+    setAdjacent(entry, 'next', index >= 0 ? works[index + 1] : fallback?.next);
     entry.canPageNext = index >= 0 && index === works.length - 1 && Boolean(feedState.cursor);
     detail.next.disabled = Boolean(entry.loadingNext || (!entry.next && (!entry.canPageNext || feedState.loading || feedRestore)));
     detail.next.setAttribute('aria-busy', String(Boolean(entry.loadingNext)));
@@ -868,13 +869,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadPublicWork(entry) {
-    const path = '/w/' + entry.slug + '?view=preview';
+    const scope = feedSearchText(feedState);
+    const useNeighbors = feedState.tab === 'activity' && feedState.sort === 'latest' &&
+      (feedViewer !== null || !feedState.items.some(item => item.slug === entry.slug));
+    const parameters = new URLSearchParams(useNeighbors ? scope : '');
+    parameters.set('view', 'preview');
+    if (useNeighbors) parameters.set('nav', 'latest');
+    const path = '/w/' + entry.slug + '?' + parameters;
     const result = await request('GET', path).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
     if (result.status !== 200 || work?.slug !== entry.slug ||
         typeof work.title !== 'string' || typeof work.kind !== 'string') return result;
 
+    if (useNeighbors) entry.publicNeighbors = {scope, previous:work.previous, next:work.next};
     showWork(entry, work, work.preview);
     if (entry.outcome === 'unavailable') failWorkDetail(entry, 0);
     else if (entry.outcome === 'loading') detail.status.textContent = '';
