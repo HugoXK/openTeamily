@@ -429,6 +429,7 @@ export function createAgents({ db, host }) {
     if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Attachment send key required', 400)
     const stickerId = reference?.sticker_id
     let files = reference ? undefined : privateFiles(p.attachments)
+    let savedExcerpt
     const hash = stickerId ? sha(JSON.stringify(['sticker',stickerId,text,p.reply_language || '']))
       : reference ? sha(JSON.stringify(['saved-work',reference.artifact_id,reference.revision,text,p.reply_language || '']))
       : fingerprintAttachments(text, p.reply_language, files)
@@ -464,7 +465,10 @@ export function createAgents({ db, host }) {
       const concurrent = replay()
       if (concurrent) return concurrent
       files = privateFiles([snapshot.attachment], {savedWork:!stickerId})
-      if (!stickerId) text ||= snapshot.body
+      if (!stickerId) {
+        text ||= snapshot.body
+        if (typeof snapshot.context_excerpt === 'string') savedExcerpt = snapshot.context_excerpt.slice(0, 12_000).toWellFormed()
+      }
     }
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
@@ -478,8 +482,8 @@ export function createAgents({ db, host }) {
     } catch (error) { db.exec('ROLLBACK'); throw error }
     return trackSend(convo.id, userId, replyId, async (onProgress, onPhase) => {
       let staged = []
-      let remaining = 12_000
-      const excerpts = []
+      let remaining = 12_000 - (savedExcerpt?.length || 0)
+      const excerpts = savedExcerpt ? [{filename:files[0].title,text:savedExcerpt}] : []
       for (const file of files) {
         if (remaining <= 0 || !(file.mime.startsWith('text/') || file.mime === 'application/json')) continue
         const part = file.data.toString('utf8').slice(0,remaining)

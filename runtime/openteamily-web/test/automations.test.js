@@ -259,6 +259,48 @@ test('creating a scheduled automation can save it enabled in the same request', 
   assert.equal((await e['automations/v1']({...request, body: {...request.body, enabled: false}})).status, 409)
 })
 
+test('saving a recurring routine atomically starts one sample and keeps its recurring slot independent', async () => {
+  const now = Date.parse('2027-02-26T08:30:00Z') / 1000
+  const { e, feature, clock, calls } = fixture(undefined, now)
+  const collection = `/v1/workspaces/${W}/automations`
+  const payload = {title:'Daily sample', template_id:'daily_brief', participants:['alice'], scope:'ongoing', enabled:true,
+    schedule:{kind:'daily', time:'09:00', time_zone:'UTC'}, run_sample:true}
+  const save = (body, idempotency_key = 'routine-sample-exact-001') =>
+    e['automations/v1']({method:'POST', path:collection, body, idempotency_key})
+  const first = await save(payload)
+  assert.equal(first.status, 201)
+  const {automation, sample_run} = first.body
+  assert.equal(sample_run.automation_id, automation.id)
+  assert.equal(sample_run.workspace_id, W)
+  assert.equal(automation.schedule_status.at, now + 1800)
+  const replay = await save(payload)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.body.sample_run.id, sample_run.id)
+  assert.equal((await save({...payload, run_sample:false})).status, 409)
+  await flush()
+  const exact = e['automations/run']({workspace_id:W, id:automation.id, run_id:sample_run.id}).run
+  assert.equal(exact.status, 'succeeded')
+  assert.equal(exact.result.text, 'DS-Bot did it')
+  assert.equal(calls.length, 1)
+
+  const invalid = await save({...payload, title:'Unscheduled sample', schedule:{kind:'now', time_zone:'UTC'}}, 'routine-sample-invalid-001')
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.body.error.code, 'invalid_sample')
+  const paused = await save({...payload, title:'Paused sample', enabled:false}, 'routine-sample-paused-001')
+  assert.equal(paused.status, 201)
+  assert.deepEqual(paused.body.automation.schedule_status, {state:'paused'})
+  assert.equal(paused.body.sample_run.automation_id, paused.body.automation.id)
+  await flush()
+  clock.now += 1800
+  const [scheduled] = feature.tick(W)
+  assert.equal(scheduled.trigger, 'scheduled')
+  assert.equal(scheduled.automation_id, automation.id)
+  assert.notEqual(scheduled.id, sample_run.id)
+  assert.equal(feature.tick(W).length, 0)
+  await flush()
+  assert.equal(calls.length, 3)
+})
+
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {
   const at = zonedEpoch('UTC', 2027, 1, 4, 9, 0)
   const { e, calls, feature, clock } = fixture(null, at)

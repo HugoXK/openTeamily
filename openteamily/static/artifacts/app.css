@@ -1468,6 +1468,12 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   background: var(--ot-accent-soft);
   color: var(--ot-ink);
 }
+#send-to-chat-list:empty { display: none; }
+#send-to-chat-new { margin-block: .75rem; }
+#send-to-chat-new label, .send-chat-note-label { display: block; margin-block: .6rem .25rem; }
+#send-to-chat-agent, #send-to-chat-note { box-sizing: border-box; width: 100%; }
+#send-to-chat-note { margin-bottom: .75rem; resize: vertical; }
+#status .send-chat-receipt { margin-inline-start: .6rem; color: inherit; text-decoration: underline; }
 .send-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 
 #send-to-chat-empty {

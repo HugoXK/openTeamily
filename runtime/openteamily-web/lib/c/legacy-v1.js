@@ -1027,9 +1027,12 @@ function messengerRoutes(host, wakeReplies) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
+            if (body.body !== undefined && (typeof body.body !== 'string' || body.body.length > 4000)) {
+              throw new Fault(400, 'invalid', '附言不能超过 4000 个字符。')
+            }
             const snapshot = await host.call('artifacts/chatAttachment', {workspace_id: match[1],
               artifact_id: body.artifact_id, revision: body.artifact_revision})
-            body = {...body,body:snapshot.body}
+            body = {...body,body:body.body?.trim() || snapshot.body}
             attachment = snapshot.attachment
           } else if (body?.attachment !== undefined) {
             const {title,mime,data} = body.attachment || {}

@@ -449,7 +449,15 @@ test('only exported saved works add version metadata to group attachments and re
   const posted = await feature.v1({method:'POST',path:base+'/messages',
     body:{artifact_id:artifactId,artifact_revision:2}})
   assert.deepEqual(posted.body.message.attachment.resource,resource)
+  assert.equal(posted.body.message.body,'出货报告 · 版本 2')
   assert.deepEqual(f.calls.at(-1).body.attachment,{...file,resource})
+  const withNote = await feature.v1({method:'POST',path:base+'/messages',
+    body:{artifact_id:artifactId,artifact_revision:2,body:'  请核对出货报告。  '}})
+  assert.equal(withNote.body.message.body,'请核对出货报告。')
+  assert.deepEqual(withNote.body.message.attachment.resource,resource)
+  const invalidNote = await feature.v1({method:'POST',path:base+'/messages',
+    body:{artifact_id:artifactId,artifact_revision:2,body:{text:'not text'}}})
+  assert.equal(invalidNote.status,400)
   const plain = await feature.v1({method:'POST',path:base+'/messages',body:{attachment:{...file,resource}}})
   assert.equal(plain.body.message.attachment.resource,undefined)
   await feature.send({conversation_id:'otc_1',attachment:{...file,resource}})

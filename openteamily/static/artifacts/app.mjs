@@ -419,7 +419,7 @@ export function conversationLabel(item) {
 }
 
 function agentConversations(directory, {includeArchived = false} = {}) {
-  const agents = new Map((directory.items || []).filter(agent => includeArchived || !agent.archived)
+  const agents = new Map((directory.items || []).filter(agent => includeArchived || (!agent.archived && !agent.native_deleted))
     .map(agent => [agent.id, agent]));
   return (directory.conversations || []).filter(row => agents.has(row.agent_id)).map(row => {
     const agent = agents.get(row.agent_id);
@@ -1605,6 +1605,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const sendLead = document.getElementById('send-to-chat-lead');
   const sendConfirm = document.getElementById('send-to-chat-confirm');
   const sendCancel = document.getElementById('send-to-chat-cancel');
+  const sendNew = document.getElementById('send-to-chat-new');
+  const sendAgent = document.getElementById('send-to-chat-agent');
+  const sendNote = document.getElementById('send-to-chat-note');
   let sendingArtifact = null;
   let artifactSendOrigin = null;
 
@@ -1635,27 +1638,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     sendError.hidden = !message;
   }
 
-  function closeSendDialog() {
-    if (!sendDialog || sendingArtifact?.pending) return;
+  const sendCurrent = state => sendingArtifact === state && workspaceId() === state.wid && currentUser?.id === state.owner;
+
+  function closeSendDialog({force = false, restoreFocus = true} = {}) {
+    if (!sendDialog || (!force && sendingArtifact?.pending)) return;
     const trigger = sendingArtifact?.trigger;
     sendDialog.hidden = true;
     sendingArtifact = null;
-    if (trigger?.isConnected) trigger.focus({preventScroll: true});
+    if (restoreFocus && trigger?.isConnected) trigger.focus({preventScroll: true});
   }
+
+  function chooseSendDestination(state, destination, button) {
+    if (!sendCurrent(state) || state.pending) return;
+    state.destination = destination;
+    for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
+    if (button) sendAgent.value = '';
+    sendConfirm.disabled = !destination;
+    sendLead.textContent = state.lead + (destination?.source === 'agent' ? '智能体会读取这份附件。' : '');
+    sendStatus();
+  }
+
+  sendAgent?.addEventListener('change', () => {
+    const state = sendingArtifact;
+    if (!state) return;
+    const agent = state.agents?.get(sendAgent.value);
+    chooseSendDestination(state, agent ? {source:'agent', agent_id:agent.id, label:agent.name} : null);
+  });
 
   async function openSendDialog(item, trigger) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     const wid = workspaceId();
-    const state = {item: {...item}, wid, trigger, destination: null, pending: false, keys: new Map()};
+    const state = {item:{...item}, owner:currentUser?.id, wid, trigger, destination:null,
+      pending:false, keys:new Map(), threads:new Map()};
     sendingArtifact = state;
     sendDialog.hidden = false;
     sendConfirm.textContent = '确认发送';
     sendConfirm.disabled = true;
+    sendNote.value = '';
+    sendNote.disabled = false;
+    sendNew.hidden = true;
+    sendNew.open = false;
+    sendAgent.disabled = false;
+    sendAgent.replaceChildren();
     if (sendCancel) sendCancel.disabled = false;
     const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
       slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
-    const lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
-    sendLead.textContent = lead + '请选择接收会话。';
+    state.lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
+    sendLead.textContent = state.lead + '请选择接收会话。';
     sendStatus();
     sendList.replaceChildren();
     sendEmpty.hidden = false;
@@ -1668,18 +1697,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       get('/social/conversations?limit=100'),
       native ? get('/agents?limit=100&include=conversations') : null,
     ]);
-    if (sendingArtifact !== state || workspaceId() !== wid) return;
+    if (!sendCurrent(state)) return;
     const socialItems = social.status === 200 ? (social.body.items || [])
       .filter(row => !row.public_agent && row.direct?.open !== false)
       .map(row => ({...row, source: 'social', label: conversationLabel(row)})) : [];
     const privateItems = directory?.status === 200 ? agentConversations(directory.body) : [];
     const items = [...socialItems, ...privateItems].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    state.agents = new Map((directory?.status === 200 ? directory.body.items || [] : [])
+      .filter(agent => /^[a-f0-9]{32}$/.test(agent.id) && !agent.archived && !agent.native_deleted)
+      .map(agent => [agent.id, agent]));
+    if (state.agents.size) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '请选择智能体';
+      sendAgent.append(placeholder);
+      for (const agent of state.agents.values()) {
+        const option = document.createElement('option');
+        option.value = agent.id;
+        option.textContent = agent.name;
+        sendAgent.append(option);
+      }
+      sendAgent.value = '';
+      sendNew.hidden = false;
+      sendNew.open = !items.length;
+      if (sendNew.open && document.activeElement === sendCancel) sendAgent.focus({preventScroll:true});
+    }
     const incomplete = social.status !== 200 || (native && (directory?.status !== 200 || !Array.isArray(directory.body.conversations)));
     if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
       state.destination = socialItems.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
       sendConfirm.disabled = !state.destination;
     }
-    sendEmpty.hidden = items.length > 0;
+    sendEmpty.hidden = items.length > 0 || state.agents.size > 0;
     sendEmpty.textContent = incomplete ? '无法读取可发送的会话，请稍后重试。' : '这个工作区还没有可发送的会话。';
     if (items.length && incomplete) sendStatus('部分会话无法加载。');
     for (const conversation of items) {
@@ -1689,14 +1737,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       button.dataset.chatSource = conversation.source;
       button.textContent = conversation.source === 'agent' ? '智能体 · ' + conversation.label : conversation.label;
       button.setAttribute('aria-pressed', String(state.destination === conversation));
-      button.addEventListener('click', () => {
-        if (state.pending) return;
-        state.destination = conversation;
-        for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
-        sendConfirm.disabled = false;
-        sendLead.textContent = lead + (conversation.source === 'agent' ? '智能体会读取这份附件。' : '');
-        sendStatus();
-      });
+      button.addEventListener('click', () => chooseSendDestination(state, conversation, button));
       row.append(button);
       sendList.append(row);
     }
@@ -1704,22 +1745,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   sendConfirm?.addEventListener('click', async () => {
     const state = sendingArtifact;
-    if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
+    if (!state?.destination || state.pending || !sendCurrent(state)) return;
     const {wid, item, destination, keys} = state;
     const isAgent = destination.source === 'agent';
     const collection = isAgent ? `agents/${destination.agent_id}/conversations` : 'social/conversations';
-    const path = `/v1/workspaces/${wid}/${collection}/${destination.id}/messages`;
-    const key = keys.get(path) || idempotencyKey();
-    keys.set(path, key);
+    const base = `/v1/workspaces/${wid}/${collection}`;
+    const note = sendNote.value.trim();
+    if (note.length > 2000) { sendStatus('附言不能超过 2000 个字符。'); return; }
+    const requestKey = fingerprint => {
+      if (!keys.has(fingerprint)) keys.set(fingerprint, idempotencyKey());
+      return keys.get(fingerprint);
+    };
     state.pending = true;
     sendConfirm.disabled = true;
     sendConfirm.textContent = '正在发送…';
+    sendAgent.disabled = sendNote.disabled = true;
     if (sendCancel) sendCancel.disabled = true;
     sendStatus();
     try {
-      const result = await request('POST', path,
-        {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
-      if (sendingArtifact !== state || workspaceId() !== wid) return;
+      let conversationId = destination.id || state.threads.get(base);
+      if (isAgent && !conversationId) {
+        const opened = await request('POST', base, {title:[...item.title].slice(0, 40).join('')},
+          {'Idempotency-Key':requestKey('new:' + base)});
+        if (!sendCurrent(state)) return;
+        const thread = opened.body.conversation;
+        if (![200, 201].includes(opened.status) || !/^[a-f0-9]{32}$/.test(thread?.id || '') ||
+            thread.workspace_id !== wid || thread.agent_id !== destination.agent_id) {
+          sendStatus(messageFor(opened.body.error, '无法创建智能体对话，请重试。'));
+          return;
+        }
+        conversationId = thread.id;
+        state.threads.set(base, conversationId);
+      }
+      const path = `${base}/${conversationId}/messages`;
+      const result = await request('POST', path, {artifact_id:item.id, artifact_revision:item.revision, ...(note ? {body:note} : {})},
+        {'Idempotency-Key':requestKey(JSON.stringify([path,note]))});
+      if (!sendCurrent(state)) return;
       const accepted = isAgent ? [201, 202].includes(result.status) && result.body?.message?.id
         : [200, 201].includes(result.status);
       if (!accepted) {
@@ -1727,21 +1788,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return;
       }
       state.pending = false;
-      closeSendDialog();
+      closeSendDialog({restoreFocus:false});
       show('ok', '已发送到「' + destination.label + '」。');
+      const receipt = document.createElement('a');
+      receipt.className = 'send-chat-receipt';
+      receipt.href = conversationChatHref(wid, {...destination,id:conversationId,message_id:result.body.message?.id});
+      receipt.textContent = '在聊天中查看';
+      status.append(receipt);
+      receipt.focus({preventScroll:true});
     } catch {
-      if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
+      if (sendCurrent(state)) sendStatus('未能确认发送结果，请保留当前附言和接收会话重试。');
     } finally {
       state.pending = false;
       if (sendingArtifact === state || !sendingArtifact) {
         sendConfirm.textContent = '确认发送';
         sendConfirm.disabled = !sendingArtifact?.destination;
+        sendAgent.disabled = sendNote.disabled = false;
         if (sendCancel) sendCancel.disabled = false;
       }
     }
   });
 
-  sendCancel?.addEventListener('click', closeSendDialog);
+  sendCancel?.addEventListener('click', () => closeSendDialog());
   sendDialog?.addEventListener('click', event => {
     if (event.target === sendDialog) closeSendDialog();
   });
@@ -3267,6 +3335,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     workspaceLoad += 1;
+    closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
     syncStudioWorkspace();
     hideEditor();
