@@ -393,7 +393,11 @@ test('native follow-up opens only saved open items and artifact save uses the st
     },
   });
   const ele = id => doc.getElementById(id);
-  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-followup');
+  const link = index => {
+    const row = ele('action-list').children[index];
+    const destinations = row.children.find(child => child.className === 'action-destinations');
+    return (destinations?.children || row.children).find(child => child.className === 'action-followup');
+  };
   try {
     assert.equal(link(0).href, `/automations?workspace=${WORKSPACE}&meeting=${MEETING_ID}&action=0&revision=3`);
     assert.equal(link(0).target, '_blank');
