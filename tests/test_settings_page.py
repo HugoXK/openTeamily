@@ -181,6 +181,16 @@ class SettingsPageTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
 
+    def test_discover_agent_and_team_catalogues_can_restore_public_search(self):
+        for query in ('tab=agents&category=education&q=%E8%AF%BE%E7%A8%8B',
+                      'tab=agents&section=groups&q=research'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
+        for query in ('tab=agents&q=one&q=two', 'tab=agents&q=%0A', 'tab=agents&category=unknown',
+                      'tab=agents&section=groups&category=education', 'tab=agents&feed=following'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
+
     def test_discover_can_play_media_from_its_own_origin(self):
         headers = self.raw.call('GET', '/discover')['headers']
         self.assertIn("media-src 'self'", headers['Content-Security-Policy'])

@@ -237,7 +237,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
     const content = escapeHtml(choice);
     if (!canChat) return `<li class="starter-preview">${content}</li>`;
     const href = escapeHtml(`${chatHref}&quick-start=${index}&quick-start-version=${version}`);
-    return `<li><a class="starter" href="${href}"><span>${content}</span><span aria-hidden="true">↗</span></a></li>`;
+    return `<li><a class="starter" href="${href}" data-public-agent-starter><span>${content}</span></a></li>`;
   }).join("");
   const startList = choiceItems ? `
 <section class="starters" aria-labelledby="quick-starts">
@@ -263,13 +263,13 @@ a:focus-visible{outline:2px solid #176750;outline-offset:4px}
 .brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);font-weight:750;text-decoration:none}
 .brand-mark{display:grid;place-items:center;width:1.85rem;height:1.85rem;border-radius:.55rem;background:var(--green);color:#fff;font-weight:800}
 .discover{font-size:.9rem;text-underline-offset:3px}
-.agent-home{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
-.profile{min-width:0}
+.agent-home{display:grid;grid-template:"profile conversation" max-content "description conversation" 1fr / minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:1.1rem clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
+.profile{grid-area:profile;min-width:0}
 .avatar{display:grid;place-items:center;width:4rem;height:4rem;border:1px solid #bacfc3;border-radius:1.15rem;background:#e0eee3;color:#1b503f;font-weight:760;font-size:1.7rem}
 h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;letter-spacing:-.035em;overflow-wrap:anywhere}
 h2,h3,p{margin:0}
 .creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
-.description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.description{grid-area:description;white-space:pre-wrap;overflow-wrap:anywhere}
 .profile-share{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.35rem .75rem;margin-top:.85rem}
 .profile-share [hidden]{display:none}
 .profile-share button,.profile-share summary{min-height:2.75rem;padding:.55rem .7rem;border-radius:.55rem;font:inherit;font-size:.9rem;cursor:pointer}
@@ -283,7 +283,7 @@ h2,h3,p{margin:0}
 .profile-share input{display:block;width:100%;margin:.25rem 0 .55rem;padding:.45rem .55rem;border:1px solid #98bead;border-radius:.4rem;color:var(--ink);font:inherit}
 .profile-share details a,[data-copy-profile-status]{font-size:.85rem}
 [data-copy-profile-status]{flex-basis:100%;color:var(--muted)}
-.conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
+.conversation{grid-area:conversation;min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
 .chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
@@ -297,13 +297,22 @@ h2,h3,p{margin:0}
 #public-agent-composer button:disabled{opacity:.55;cursor:default}
 #public-agent-composer-status{font-size:.9rem;color:#914224}
 .chat-fallback{font-size:.9rem;justify-self:start;text-underline-offset:3px}
-.starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
-.starters h3{margin-bottom:.7rem;font-size:.97rem}
-.starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
-.starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
-.starter{text-decoration:none}
-.starter:hover{border-color:#98bead;background:#edf6ed}
-@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+.starters{margin:0 0 1rem}
+.starters h3{margin-bottom:.45rem;font-size:.92rem}
+.starters ul{display:flex;flex-wrap:wrap;gap:.45rem;list-style:none;margin:0;padding:0}
+.starters li{min-width:0;max-width:100%}
+.starter,.starter-preview{display:inline-block;max-width:100%;min-height:2.75rem;padding:.55rem .7rem;border:1px solid var(--line);border-radius:.55rem;background:#f8faf8;font:inherit;font-size:.9rem;text-align:start;overflow-wrap:anywhere}
+.starter{color:var(--green);text-decoration:none;cursor:pointer}
+.starter:hover,.starter[aria-pressed="true"]{border-color:#98bead;background:#edf6ed}
+.starter:focus-visible{outline:2px solid #176750;outline-offset:3px}
+@media(max-width:44rem){.agent-home{grid-template:"profile" "conversation" "description" / minmax(0,1fr);padding:1.25rem 1rem 2rem;gap:1rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.05rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+@media(max-width:44rem){
+  .profile{display:grid;grid-template-columns:auto minmax(0,1fr);place-items:start;column-gap:.75rem}
+  .avatar{grid-row:1/span 2}
+  .profile h1{grid-column:2;margin:0;font-size:clamp(1.4rem,7vw,1.8rem);align-self:center}
+  .profile .creator{grid-column:2}
+  .profile-share{grid-column:1/-1;width:100%;margin-top:.65rem}
+}
 </style>
 </head><body>
 <header class="site-header"><div class="topbar">
@@ -324,14 +333,14 @@ ${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
   </details>
   <p data-copy-profile-status role="status" aria-live="polite" hidden></p>
 </div>
-${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">
 <h2 id="conversation-title">网页对话</h2>
 <p class="help">${canChat ? "登录后确认发送。发送的消息会与智能体发布者共享。" : "该智能体暂未开放访客聊天。"}</p>
-${composer}
 ${startList}
+${composer}
 </section>
+${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </main>
 </body></html>
 `;

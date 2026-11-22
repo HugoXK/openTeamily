@@ -122,17 +122,25 @@ body.app-workspace #main-panel {
   gap: 0.15rem;
 }
 
-#automation-list li {
+#automation-list .automation-row {
   display: grid;
   grid-template-columns: 2.5rem minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: center;
-  min-height: 2.5rem;
+  width: 100%;
+  min-height: 2.75rem;
   padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
   border-radius: 0.75rem;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ot-ink);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
 }
 
-#automation-list li:hover {
+#automation-list .automation-row:is(:hover, :focus-visible) {
   background: var(--ot-surface-2);
 }
 
@@ -146,25 +154,9 @@ body.app-workspace #main-panel {
   font-weight: 700;
 }
 
-#automation-list button.link {
-  width: 100%;
-  background: none;
-  border: 0;
-  min-width: 0;
-  padding: 0;
-  color: var(--ot-ink);
-  font: inherit;
+#automation-list .item-title {
   font-weight: 650;
-  cursor: pointer;
-  text-align: left;
-  text-decoration: none;
-  white-space: normal;
   overflow-wrap: anywhere;
-}
-
-#automation-list button.link:hover {
-  color: var(--ot-accent);
-  text-decoration: underline;
 }
 
 #automation-list .item-meta {
@@ -627,6 +619,25 @@ body.app-workspace #main-panel {
   box-shadow: none;
 }
 
+.editor-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.editor-run-actions:has(> button:not([hidden])) {
+  min-height: 2.75rem;
+}
+
+.editor-head .manual-run-feedback {
+  grid-column: 1 / -1;
+}
+
+.editor-head .manual-run-feedback:has(#manual-run-status:empty):has(#view-watched-run[hidden]) {
+  display: none;
+}
+
 .editor-head h1 {
   grid-column: 1 / -1;
   margin: 0;
@@ -642,6 +653,7 @@ body.app-workspace #main-panel {
   box-shadow: none;
 }
 
+#tick-automation,
 #show-run-history {
   min-height: 2.75rem;
   border-radius: .6rem;
@@ -734,7 +746,8 @@ body.app-workspace #main-panel {
 }
 
 #tick-automation {
-  font-weight: 600;
+  border-color: var(--ot-line-strong);
+  font-weight: 650;
 }
 
 .run-toggle .status-pill[data-status="failed"],
@@ -747,6 +760,10 @@ body.app-workspace #main-panel {
 @media (max-width: 480px) {
   body.app-workspace #main-panel {
     padding-inline: 0.85rem;
+  }
+
+  #automation-list .automation-row {
+    gap: 0.5rem;
   }
 
   #editor-form input:not([type="checkbox"]),

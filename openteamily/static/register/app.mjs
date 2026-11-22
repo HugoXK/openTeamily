@@ -1,6 +1,7 @@
 // Credentials stay in form memory and the existing same-origin auth API only.
 import {publicAgentIntentFromHash, publicAgentContinuation} from '../shell/public-agent-link.mjs';
 import {publicWorkIntentFromHash} from '../shell/public-work-link.mjs';
+import {discoverIntentFromHash} from '../shell/discover-link.mjs';
 import {teamInviteFromHash, teamInviteHash} from '../shell/team-invite-link.mjs';
 import {rememberSignupSession, signupSessionError} from '../home/runtime-readiness.mjs';
 const MESSAGES = {
@@ -70,7 +71,7 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const hash = document.defaultView?.location?.hash;
   const work = publicWorkIntentFromHash(hash);
   const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
-    (work?.continuation ?? publicAgentContinuation(publicAgentIntentFromHash(hash)));
+    work?.continuation || publicAgentContinuation(publicAgentIntentFromHash(hash)) || discoverIntentFromHash(hash)?.continuation;
   const login = document.querySelector?.('a[href="/login"]');
   if (login && continuation) login.href = '/login' + continuation;
   const helpButton=document.getElementById('help-menu-button'),helpMenu=document.getElementById('help-menu');

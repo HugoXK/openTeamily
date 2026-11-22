@@ -210,14 +210,14 @@ function syncAccountSlot(doc) {
   const slot = doc.querySelector('.account-slot');
   const panel = signedInPanel(doc);
   if (!slot) return;
-  const visible = Boolean(panel && !panel.hasAttribute('hidden'));
+  const who = doc.getElementById('whoami');
+  const name = accountNameFromLabel(who ? who.textContent : '', who ? who.dataset : null);
+  const visible = Boolean(panel && !panel.hasAttribute('hidden') && (!panel.hasAttribute('data-guest-access') || name));
   if (visible) slot.removeAttribute('hidden');
   else {
     slot.setAttribute('hidden', '');
     closeAccountMenu(doc);
   }
-  const who = doc.getElementById('whoami');
-  const name = accountNameFromLabel(who ? who.textContent : '', who ? who.dataset : null);
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
   const button = doc.getElementById('account-menu-button');
@@ -470,7 +470,8 @@ export function startShell(doc = document, options = {}) {
   const target = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const run = async () => {
     enhanceChrome();
-    const loaded = options.values !== undefined ? { values: options.values } : await loadSettings();
+    const guest = signedInPanel(doc)?.hasAttribute('data-guest-access') && !csrfCookie(doc.cookie);
+    const loaded = options.values !== undefined ? { values: options.values } : guest ? null : await loadSettings();
     const values = (loaded && loaded.values) || { appearance: 'system' };
     if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
     applyResolvedTheme(doc, values, options.now, options.media);

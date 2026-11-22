@@ -644,26 +644,28 @@
       <ul id="group-agent-requests" aria-live="polite"></ul>
       </details>
     </section>
-    <div id="message-scroller">
-      <div id="chat-empty" class="note">
-        <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
-        <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
-        <p class="empty-next">
-          <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
-          <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>
-        </p>
+    <div class="chat-timeline">
+      <div id="message-scroller" tabindex="-1">
+        <div id="chat-empty" class="note">
+          <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
+          <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
+          <p class="empty-next">
+            <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
+            <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>
+          </p>
+        </div>
+        <div class="chat-history-toolbar">
+          <button type="button" id="chat-load-older" hidden data-ui-text="chat.messages.older">加载更早的消息</button>
+          <span id="chat-history-status" class="note" role="status"></span>
+        </div>
+        <ol id="message-list"></ol>
+        <div id="chat-unread-actions" hidden>
+          <button type="button" id="chat-load-newer" data-ui-text="chat.messages.newer" hidden>加载后续消息</button>
+          <button type="button" id="chat-mark-thread-read" data-ui-text="chat.messages.mark_thread_read" hidden>将此会话标为已读</button>
+          <span id="chat-unread-status" role="status"></span>
+        </div>
       </div>
-      <div class="chat-history-toolbar">
-        <button type="button" id="chat-load-older" hidden data-ui-text="chat.messages.older">加载更早的消息</button>
-        <span id="chat-history-status" class="note" role="status"></span>
-      </div>
-      <ol id="message-list"></ol>
-      <div id="chat-unread-actions" hidden>
-        <button type="button" id="chat-load-newer" data-ui-text="chat.messages.newer" hidden>加载后续消息</button>
-        <button type="button" id="chat-mark-thread-read" data-ui-text="chat.messages.mark_thread_read" hidden>将此会话标为已读</button>
-        <span id="chat-unread-status" role="status"></span>
-      </div>
-      <button type="button" id="chat-back-to-latest" hidden data-ui-text="chat.messages.back_latest">回到最新消息</button>
+      <button type="button" id="chat-back-to-latest" aria-controls="message-list" hidden data-ui-text="chat.messages.back_latest">回到最新消息</button>
     </div>
     <p id="public-chat-status" class="note" role="status" hidden></p>
     <details id="public-draft-recovery" hidden>

@@ -1,6 +1,7 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
 import { csrfCookie } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
+import { discoverLoginHref } from '../shell/discover-link.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
@@ -408,6 +409,11 @@ function messageFor(error, fallback) {
 export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location, history = globalThis.history, window = globalThis } = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
+  const loginLink = document.getElementById('discover-login');
+  function syncLoginLink() {
+    if (loginLink) loginLink.href = discoverLoginHref(location?.search);
+  }
+  syncLoginLink();
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   const nativeCatalog = servedByDsBot(document);
@@ -437,6 +443,19 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const manageAgent = manageParams.get('agent');
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
+  const catalogSearch = document.getElementById('catalog-query');
+  if (catalogView) catalogSearch.value = (manageParams.get('q') || '').trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
+
+  function saveCatalogQuery() {
+    const params = new URLSearchParams(location?.search);
+    const query = catalogSearch.value.trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
+    if (query === (params.get('q') || '')) return;
+    if (query) params.set('q', query);
+    else params.delete('q');
+    history?.replaceState?.(null, '', '/discover?' + params.toString());
+    syncLoginLink();
+  }
+
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
   const feedSections = document.getElementById('feed-sections');
   const directoryTabs = document.getElementById('discover-tabs');
@@ -625,6 +644,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const workComments = mountWorkComments(document, {
     request,
+    loginHref: slug => discoverLoginHref(workDetailSearchText(feedState, {slug, comments: true})),
     onCount(slug, count) {
       const item = feedState.items.find(work => work.slug === slug);
       if (item) item.comment_count = count;
@@ -707,6 +727,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const url = workUrl(intent);
       if (existing) history?.replaceState?.(history.state, '', url);
       else history?.pushState?.({discoverWork: true}, '', url);
+      syncLoginLink();
     }
 
     disposeWorkPreview();
@@ -1009,6 +1030,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     history?.replaceState?.(null, '', feedUrl());
+    syncLoginLink();
     closeWorkDetail();
   });
   for (const name of ['previous', 'next']) {
@@ -1129,6 +1151,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     Object.assign(feedState, changes);
     applyFeedChrome({restoreQuery: true});
     history?.pushState?.(null, '', feedUrl());
+    syncLoginLink();
     initialView.scrollTop = 0;
     return loadFeed();
   }
@@ -1162,6 +1185,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   if (!catalogView && window && typeof window.addEventListener === 'function') {
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('popstate', () => {
+      syncLoginLink();
       cancelSearch();
       const next = feedStateFromSearch(location?.search);
       const nextKey = feedSearchText(next);
@@ -1619,6 +1643,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (category === 'all') params.delete('category');
       else params.set('category', category);
       history.replaceState(null, '', '/discover?' + params.toString());
+      syncLoginLink();
     }
     return loadCatalog();
   }
@@ -1670,10 +1695,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function openRemix(item) {
-    if (!canUseCatalogItem(item)) {
-      if (sessionState === 'guest') show('error', '请登录后复制智能体。');
-      return;
-    }
+    if (!canUseCatalogItem(item)) return;
     const entry = {slug: item.slug, key: reuseKey(), template: null, viewer: currentUser};
     remix = entry;
     remixName.value = item.name;
@@ -1774,6 +1796,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       holder.replaceChildren();
       holder.hidden = !viewer && !guest;
       if (holder.hidden) continue;
+      if (guest) {
+        const chatEnabled = item.chat_enabled === true;
+        const link = document.createElement('a');
+        link.href = '/a/' + item.slug + (chatEnabled ? '#conversation-title' : '');
+        link.className = 'catalog-chat';
+        link.textContent = chatEnabled ? '聊天' : '查看主页';
+        const label = item.name || item.slug;
+        link.setAttribute('aria-label', chatEnabled ? '和 ' + label + ' 聊天' : '查看 ' + label + ' 的主页');
+        holder.append(link);
+        continue;
+      }
       const use = document.createElement('button');
       use.type = 'button';
       use.className = 'catalog-use';
@@ -2184,11 +2217,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
+    saveCatalogQuery();
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
-    document.getElementById('catalog-query').value = '';
+    catalogSearch.value = '';
+    saveCatalogQuery();
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });

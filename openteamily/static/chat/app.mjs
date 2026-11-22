@@ -2310,6 +2310,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const anchoredMessage = anchor?.id && Array.from(list.children).find(node => node.dataset.messageId === anchor.id);
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchoredMessage) scroller.scrollTop += anchoredMessage.getBoundingClientRect().top - anchor.offset;
+    updateLatestMessageControl();
     return lastAgentItems.some(waitingAgentReply) && !tracking;
   }
 
@@ -2345,6 +2346,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.body.textContent = snapshot.text;
     view.body.hidden = !snapshot.text;
     if (follow) scroller.scrollTop = scroller.scrollHeight;
+    else updateLatestMessageControl();
   }
 
   function scheduleReplyProgress(watch, delay = 400) {
@@ -2896,6 +2898,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let groupReplyScope = null;
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
+  const historyScroller = document.getElementById('message-scroller');
   const newerMessages = document.getElementById('chat-load-newer');
   const markThreadRead = document.getElementById('chat-mark-thread-read');
   const unreadActions = document.getElementById('chat-unread-actions');
@@ -2933,16 +2936,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Boolean(privateHistory?.readingHistory || privateHistory?.loading || privateHistory?.jumping);
   }
 
+  function updateLatestMessageControl() {
+    if (!latestMessages || !historyScroller) return;
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    const atLatest = !historyScroller.clientHeight || messageScrollerAtBottom(historyScroller);
+    const hidden = !currentConversation || (!state?.readingHistory && atLatest);
+    const disabled = Boolean(state?.restoring);
+    if (latestMessages.hidden !== hidden) latestMessages.hidden = hidden;
+    if (latestMessages.disabled !== disabled) latestMessages.disabled = disabled;
+  }
+
   function updateHistoryControls() {
     const state = currentSource === 'agent' ? privateHistory : socialHistory;
     if (olderMessages) {
       olderMessages.hidden = !state?.cursor;
       olderMessages.disabled = Boolean(state?.loading || state?.jumping || state?.restoring);
     }
-    if (latestMessages) {
-      latestMessages.hidden = !state?.readingHistory;
-      latestMessages.disabled = Boolean(state?.restoring);
+    if (historyScroller) {
+      if (state?.readingHistory) historyScroller.dataset.readingHistory = '';
+      else delete historyScroller.dataset.readingHistory;
     }
+    updateLatestMessageControl();
     const unread = currentSource === 'social' ? state?.unread : null;
     if (newerMessages) {
       newerMessages.hidden = !unread?.after;
@@ -3116,21 +3130,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
   function openSocialLatest() {
-    const unread = socialHistory?.unread;
+    const state = socialHistory;
+    if (state?.restoring) return state.restoring;
+    const unread = state?.unread;
     const preserveUnread = Boolean(unread && unread.committed < unread.latest);
-    return openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    const opened = openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    if (!state) return opened;
+    state.restoring = opened.finally(() => {
+      if (socialHistory === state) {
+        state.restoring = null;
+        updateHistoryControls();
+      }
+    });
+    updateHistoryControls();
+    return state.restoring;
   }
 
   latestMessages?.addEventListener('click', () => {
-    if (currentSource === 'social' && currentConversation) openSocialLatest();
-    else if (currentSource === 'agent' && privateHistory) void restorePrivateLatest(privateHistory);
+    if (!currentConversation || !historyScroller) return;
+    historyScroller.focus({preventScroll: true});
+    if (currentSource === 'social' && (socialHistory?.readingHistory || (liveBanner && !liveBanner.hidden))) {
+      void openSocialLatest();
+    } else if (currentSource === 'agent' && privateHistory?.readingHistory) {
+      void restorePrivateLatest(privateHistory);
+    } else {
+      historyScroller.scrollTop = historyScroller.scrollHeight;
+      updateLatestMessageControl();
+    }
   });
   markThreadRead?.addEventListener('click', () => {
     const state = socialHistory;
     if (unreadNotice) unreadNotice.textContent = '';
     if (state?.unread) void commitUnread(state, state.unread.latest, true);
   });
-  document.getElementById('message-scroller')?.addEventListener('scroll', scheduleUnreadRead, {passive: true});
+  historyScroller?.addEventListener('scroll', () => {
+    updateLatestMessageControl();
+    scheduleUnreadRead();
+  }, {passive: true});
+  globalThis.addEventListener('resize', updateLatestMessageControl);
   newerMessages?.addEventListener('click', async () => {
     const state = socialHistory;
     const unread = state?.unread;
@@ -3190,6 +3227,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     update();
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
+    if (!follow) updateLatestMessageControl();
   }
 
   function paintGroupReplyProgress(items, {preserveMissing = false} = {}) {
@@ -3766,6 +3804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
     } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
+    updateLatestMessageControl();
     return false;
   }
 

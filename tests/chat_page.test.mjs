@@ -2781,9 +2781,12 @@ test('social history prepends older messages and returns from a searched window 
   const list = el('message-list');
   const scroller = el('message-scroller');
   Object.defineProperty(scroller, 'scrollHeight', {get: () => list.children.length * 100});
+  scroller.clientHeight = 100;
+  let latestReads = 0;
   try {
     await mount(doc, {fetcher: async path => {
       if (path.endsWith('/conv-1')) {
+        latestReads++;
         const old = await original(path);
         return json(200, {...await old.json(), items:[row(5), row(6)], cursor:5});
       }
@@ -2795,6 +2798,18 @@ test('social history prepends older messages and returns from a searched window 
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
     const ids = () => list.children.map(item => item.dataset.messageId);
     assert.deepEqual(ids(), ['history-5','history-6']);
+    const latest = el('chat-back-to-latest');
+    const loadedRows = [...list.children];
+    assert.equal(latest.hidden,true);
+    scroller.scrollTop = 25;
+    await fire(scroller,'scroll');
+    assert.equal(latest.hidden,false);
+    const initialReads = latestReads;
+    await fire(latest,'click');
+    assert.equal(scroller.scrollTop,scroller.scrollHeight);
+    assert.equal(latest.hidden,true);
+    assert.equal(latestReads,initialReads);
+    assert.ok(loadedRows.every((node,index) => node === list.children[index]));
     scroller.scrollTop = 25;
     await fire(el('chat-load-older'), 'click');
     assert.deepEqual(ids(), ['history-3','history-4','history-5','history-6']);

@@ -427,23 +427,31 @@ function renderList(items, list, empty, onOpen) {
     avatar.className = 'avatar';
     avatar.dataset.tone = String(mark.tone);
     avatar.textContent = mark.label;
-    const copy = document.createElement('div');
+    avatar.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('span');
     copy.className = 'item-meta';
     const open = document.createElement('button');
     open.type = 'button';
-    open.className = 'link';
+    open.className = 'automation-row';
     open.dataset.automationId = item.id;
-    open.textContent = item.title;
-    open.addEventListener('click', () => onOpen(item));
+    open.setAttribute('aria-label', item.title);
+    open.addEventListener('click', () => onOpen(item, open));
+    const title = document.createElement('strong');
+    title.className = 'item-title';
+    title.textContent = item.title;
     const meta = document.createElement('span');
     meta.className = 'item-schedule';
+    meta.id = 'automation-schedule-' + item.id;
+    const description = [meta.id];
     meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
-    copy.appendChild(open);
+    copy.appendChild(title);
     copy.appendChild(meta);
     const running = scopedActiveRun(item.active_run, item.workspace_id, item.id);
     if (running) {
       const pill = document.createElement('span');
       pill.className = 'status-pill item-run-status';
+      pill.id = 'automation-execution-' + item.id;
+      description.push(pill.id);
       pill.dataset.status = running.status;
       pill.textContent = runStatusLabel(running);
       copy.appendChild(pill);
@@ -453,14 +461,22 @@ function renderList(items, list, empty, onOpen) {
       const next = document.createElement('span');
       next.className = 'item-schedule item-next-run';
       renderNextRun(next, item);
-      if (!next.hidden) copy.appendChild(next);
+      if (!next.hidden) {
+        next.id = 'automation-next-' + item.id;
+        description.push(next.id);
+        copy.appendChild(next);
+      }
     }
     const state = document.createElement('span');
     state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
+    state.id = 'automation-state-' + item.id;
     state.textContent = consumed ? '单次计划已触发' : item.enabled ? '已启用' : '未启用';
-    row.appendChild(avatar);
-    row.appendChild(copy);
-    row.appendChild(state);
+    description.push(state.id);
+    open.setAttribute('aria-describedby', description.join(' '));
+    open.appendChild(avatar);
+    open.appendChild(copy);
+    open.appendChild(state);
+    row.appendChild(open);
     list.appendChild(row);
   }
 }
@@ -476,6 +492,7 @@ function renderCatalog(items, list, empty, onOpen) {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'catalog-card';
+    open.dataset.templateId = item.id;
     const title = document.createElement('strong');
     title.textContent = item.title || '';
     const summary = document.createElement('span');
@@ -483,7 +500,7 @@ function renderCatalog(items, list, empty, onOpen) {
     summary.textContent = item.prompt || '';
     open.appendChild(title);
     open.appendChild(summary);
-    open.addEventListener('click', () => onOpen(item));
+    open.addEventListener('click', () => onOpen(item, open));
     row.appendChild(open);
     list.appendChild(row);
   }
@@ -493,6 +510,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
+  const main = document.getElementById('main');
   const form = document.getElementById('editor-form');
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
@@ -534,6 +552,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let listRequest = 0;
   let listTimer = 0;
   let listFingerprint = '';
+  let listReturn = null;
   let recentRuns = [];
   let runCursors = [''];
   let pendingRunCursors = null;
@@ -701,8 +720,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function showRunHistory() {
-    const anchor = manualRunStatus?.textContent && manualRunStatus.scrollIntoView ? manualRunStatus : runPanel;
-    anchor?.scrollIntoView?.({block: 'start'});
+    runPanel?.scrollIntoView?.({block: 'start'});
     runHeading?.focus({preventScroll: true});
   }
 
@@ -1125,7 +1143,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.classList.remove('is-editing');
   }
 
-  function openEditor(item, source = null) {
+  function openEditor(item, source = null, opener = null) {
+    listReturn = opener && {opener, workspace: workspaceId(), category, query: search.value, scroll: main.scrollTop || 0};
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
@@ -1169,7 +1188,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderManualRunNote();
     loadRuns();
     if ((!item?.id && !source) || editorOptions?.open) void loadTemplates();
-    if (source && heading) heading.focus();
+    main.scrollTop = 0;
+    heading?.focus({preventScroll: true});
   }
 
   function renderManualRunNote() {
@@ -1291,7 +1311,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!quiet || listFingerprint !== fingerprint) {
         const focused = document.activeElement?.dataset?.automationId;
         listFingerprint = fingerprint;
-        renderList(items, list, empty, item => openEditor(item));
+        renderList(items, list, empty, (item, opener) => openEditor(item, null, opener));
         if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
       }
       if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
@@ -1304,11 +1324,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }[templateState];
         if (templateRetry) templateRetry.hidden = templateState !== 'failed';
         renderCatalog(catalogItems(templates, category, search.value), list, empty,
-          item => openEditor(draftFromTemplate(item, currentUser && currentUser.username)));
+          (item, opener) => openEditor(draftFromTemplate(item, currentUser && currentUser.username), null, opener));
         setBusy(list, loading);
         setBusy(empty, loading);
       };
-      render();
+      if (!quiet || templateState !== 'ready') render();
       if (templateState === 'idle' || templateState === 'loading') {
         await loadTemplates();
         if (seq === listRequest && !listPanel.hidden && workspaceId() === id) render();
@@ -1567,13 +1587,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   newButton.addEventListener('click', () => {
     clearEditorLink();
-    openEditor(null);
+    openEditor(null, null, newButton);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
   scheduleSettings?.addEventListener('input', renderEditorSchedule);
 
   backButton.addEventListener('click', async () => {
-    editorRequest += 1;
+    const transition = ++editorRequest;
+    const position = listReturn;
+    listReturn = null;
     clearEditorLink();
     closeConfirm({restoreFocus: false});
     discardMeetingDraft();
@@ -1584,7 +1606,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
-    await loadList();
+    const restore = position?.workspace === workspaceId() && position?.category === category && position?.query === search.value;
+    const returnFocus = () => {
+      const opener = restore ? position.opener : null;
+      const automation = opener?.dataset.automationId;
+      const template = opener?.dataset.templateId;
+      const resolved = opener?.isConnected ? opener : Array.from(listPanel.querySelectorAll('button[data-automation-id], button[data-template-id]'))
+        .find(button => automation ? button.dataset.automationId === automation : template && button.dataset.templateId === template);
+      const control = resolved || newButton;
+      main.scrollTop = restore && resolved ? position.scroll : 0;
+      control.focus({preventScroll: true});
+      control.scrollIntoView?.({block: 'nearest'});
+    };
+    returnFocus();
+    const focused = document.activeElement;
+    await loadList({quiet: restore});
+    if (editorRequest === transition && focused && !focused.isConnected && document.activeElement === document.body) returnFocus();
   });
 
   form.addEventListener('submit', async event => {

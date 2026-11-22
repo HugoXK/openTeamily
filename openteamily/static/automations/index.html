@@ -98,8 +98,15 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
-        <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        <div class="editor-run-actions">
+          <button type="button" id="tick-automation" hidden>运行一次</button>
+          <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        </div>
         <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
+        <div class="manual-run-feedback">
+          <p id="manual-run-status" class="note" role="status"></p>
+          <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
+        </div>
       </header>
       <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
         <h2 id="meeting-action-source-heading">会议行动项</h2>
@@ -173,12 +180,7 @@
       <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
-        <button type="button" id="tick-automation" hidden>运行一次</button>
         <button type="button" id="remove-automation" hidden>删除</button>
-      </div>
-      <div class="manual-run-feedback">
-        <p id="manual-run-status" class="note" role="status"></p>
-        <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
       </div>
     </form>
     <section id="run-panel" hidden>

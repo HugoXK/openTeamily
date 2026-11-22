@@ -236,6 +236,14 @@ body.app-workspace > #status[data-announce-only="true"] {
 
 #chat-back { display: none; }
 
+.chat-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 #message-scroller {
   display: flex;
   flex-direction: column;
@@ -248,7 +256,7 @@ body.app-workspace > #status[data-announce-only="true"] {
 #message-scroller > * { flex-shrink: 0; }
 
 /* A short live thread stays near the composer. Overflow and history keep chronological scrolling. */
-#message-scroller:has(> #chat-back-to-latest[hidden]) > #message-list:has(> li) {
+#message-scroller:not([data-reading-history]) > #message-list:has(> li) {
   margin-block-start: auto;
 }
 
@@ -2302,12 +2310,19 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   font-size: .8125rem;
 }
 #chat-back-to-latest:not([hidden]) {
-  display: block;
-  position: sticky;
-  inset-block-end: .5rem;
+  position: absolute;
+  inset-block-end: .625rem;
+  inset-inline: 0;
   z-index: 2;
-  margin: .5rem auto 1rem;
+  margin-inline: auto;
+  width: max-content;
+  max-width: calc(100% - 1rem);
+  min-height: 44px;
+  padding-inline: .875rem;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 999px;
   background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-sm);
 }
 
 #message-list > li.chat-unread-divider {
