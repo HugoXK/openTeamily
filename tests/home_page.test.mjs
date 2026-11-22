@@ -69,6 +69,7 @@ function homeFixture(pathname = '/', hash = '') {
   const document = {
     defaultView: view, cookie: '', getElementById: read,
     querySelector: selector => selector === '.home-personal' ? read('home-personal') : null,
+    querySelectorAll: () => [],
   };
   return {document, view, read, register};
 }

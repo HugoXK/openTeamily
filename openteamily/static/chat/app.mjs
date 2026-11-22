@@ -1,7 +1,7 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { countMentionedGroupMembers, hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles,
-  ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, unclearSocialDelivery } from './files.mjs';
+  ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, sendSocialAttachmentMessage, unclearSocialDelivery } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -1134,13 +1134,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     node.hidden = !conversation || quoteBlocksSend(scope);
     if (node.hidden) return;
     const people = countMentionedGroupMembers(body, {members:conversation.members, viewerId:currentUser?.id});
+    const hasFiles = Boolean(attachmentSender?.draftFiles(scope).length);
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
     if (everyone) {
       kind = 'targeted';
-      text = agents.length ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
+      text = agents.length && !hasFiles ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
         : uiLabel('将提及群内所有成员', 'Everyone in the group will be mentioned');
+    } else if (hasFiles && (mentions?.targets.length || hasGroupAllMention(body))) {
+      kind = 'attention';
+      text = uiLabel('请先移除附件，再请求群内智能体回复。', 'Remove the files before requesting replies from group agents.');
+    } else if (hasFiles && !people) {
+      text = uiLabel('附件将在你发送后分享给会话成员。', 'Send to share the files with this conversation.');
     } else if (hasGroupAllMention(body)) {
       kind = 'targeted';
       text = agents.length ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
@@ -1513,6 +1519,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const input = document.getElementById('chat-body');
     if (input.value || replyDrafts.has(queue.scope) || attachmentSender?.draftFiles?.(queue.scope)?.length ||
         !agentMentions.restoreDraft(job.message.agent_mentions)) return false;
+    if (job.files.length && !attachmentSender?.addFiles(job.files, queue.scope, {stage:true})) return false;
     input.value = job.message.body;
     publicDraft.persist();
     setReplyDraft(queue.scope, {message_id:job.reply.message_id, state:'missing', available:false});
@@ -8107,13 +8114,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
       const wid = workspaceId(), cid = currentConversation.id;
       const scope = sendScope();
-      if (quoteBlocksSend(scope)) return null;
       return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
+        blocked:quoteBlocksSend(scope),
         path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
     ownerId: () => currentUser?.id,
     csrfToken: () => csrfCookie(document.cookie),
     createKey: () => idempotencyKey('chat-file-'),
+    onDraftChange: renderGroupComposerRouting,
     confirmDelivery: (target, key, current) =>
       socialSendReceipt(target, key, current, message => message.attachment || message.retracted),
     sent(destination, message) {
@@ -8576,7 +8584,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const field = document.getElementById('chat-body');
     const social = currentSource === 'social';
     const scope = sendScope();
-    const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
+    const files = attachmentSender?.draftFiles?.(scope) || [];
     if (!field.value.trim() && !files.length) return;
     if (sendClosed() || memoryWrites.has(scope) || quoteBlocksSend(scope)) return;
     if (social ? !currentConversation : !currentAgent) {
@@ -8590,7 +8598,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
-    if (social && !validMessage(message.body)) {
+    if (social && files.length && (message.agent_mentions?.length ||
+        (hasGroupAllMention(message.body) && !hasEveryoneMention(message.body)))) {
+      show('error', uiLabel('请先移除附件，再请求智能体回复。', 'Remove the files before requesting agent replies.'));
+      return;
+    }
+    if (social && !validMessage(message.body) && (!files.length || message.body.trim())) {
       show('error', '请输入 1–4000 字符的消息。');
       return;
     }
@@ -8612,14 +8625,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function queueChatMessage(message, files, reply, sticker) {
     const queue = currentChatSendQueue();
     const {social,scope} = queue;
-    const job = makeSendJob(queue, message, files, reply, sticker);
-    if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-    if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
-      // A reload can interrupt the request after the composer clears.
-      job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+    if (social && files.length) {
+      // The social message store accepts one attachment per message. A
+      // multi-file draft is sent in order, with its caption on the first file.
+      files.forEach((file, index) => {
+        const payload = index ? {reply_to:message.reply_to} : message;
+        queue.jobs.push(makeSendJob(queue, payload, [file], reply));
+      });
+    } else {
+      const job = makeSendJob(queue, message, files, reply, sticker);
+      if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
+      if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+        // A reload can interrupt the request after the composer clears.
+        job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+      }
+      queue.jobs.push(job);
     }
     const field = document.getElementById('chat-body');
-    queue.jobs.push(job);
     if (!sticker) {
       field.value = '';
       publicDraft.persist({now: false});
@@ -8787,17 +8809,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const nativeSocial = servedByDsbot && queue.social;
             const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
             try {
-              const response = progress
-                ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-                  {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                    if (percent < 100) {
-                      progress.value = percent;
-                    } else {
-                      progress.hidden = true;
-                      feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
-                      beginReply();
-                    }
-                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
+              const onProgress = percent => {
+                if (percent < 100) {
+                  progress.value = percent;
+                } else {
+                  progress.hidden = true;
+                  feedback(queue.social
+                    ? uiLabel('附件已上传，正在确认发送…', 'File uploaded. Checking delivery…')
+                    : uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
+                  beginReply();
+                }
+              };
+              const upload = queue.social ? sendSocialAttachmentMessage : sendPrivateAttachmentMessage;
+              const response = progress ? upload(document.defaultView, path, job.message,
+                queue.social ? job.files[0] : job.files, {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, onProgress)
+                : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
                   : nativeSocial ? AbortSignal.timeout(15000) : undefined);
               if (!progress) beginReply();
               const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;

@@ -94,7 +94,7 @@
       <div>
         <p class="home-kicker">OpenTeamily 工作台</p>
         <h1 id="home-greeting">欢迎回来</h1>
-        <p class="note">这里汇总你最近的对话、作品和会议；所有数字都来自本实例的真实记录，不生成推荐内容。</p>
+        <p class="note">查看当前工作区的对话、作品和会议。</p>
       </div>
       <label class="home-workspace">工作区
         <select id="home-workspace" disabled></select>
@@ -116,32 +116,32 @@
     </section>
 
     <p id="home-onboarding" class="note home-banner" hidden>继续设置工作背景和自动化偏好。<a href="/onboarding">打开新手引导</a></p>
-    <a id="home-notifications" class="home-banner home-notifications" href="/chat" hidden></a>
+    <a id="home-notifications" class="home-banner home-notifications" href="/chat" data-home-workspace-path="/chat" hidden></a>
     <section id="home-stats" class="home-stats" aria-label="工作区概览" hidden></section>
 
     <nav id="home-actions" class="home-actions" aria-label="快捷操作">
-      <a href="/chat"><strong>新对话</strong><span>和智能体或成员聊天</span></a>
-      <a href="/agents"><strong>智能体</strong><span>查看工作区目录</span></a>
-      <a href="/automations"><strong>自动化</strong><span>管理模板和运行</span></a>
-      <a href="/space"><strong>作品</strong><span>文档、幻灯片和看板</span></a>
-      <a href="/meetings"><strong>会议</strong><span>纪要和行动项</span></a>
+      <a href="/chat" data-home-workspace-path="/chat"><strong>新对话</strong><span>和智能体或成员聊天</span></a>
+      <a href="/agents" data-home-workspace-path="/agents"><strong>智能体</strong><span>查看工作区目录</span></a>
+      <a href="/automations" data-home-workspace-path="/automations"><strong>自动化</strong><span>管理模板和运行</span></a>
+      <a href="/space" data-home-workspace-path="/space"><strong>作品</strong><span>文档、幻灯片和看板</span></a>
+      <a href="/meetings" data-home-workspace-path="/meetings"><strong>会议</strong><span>纪要和行动项</span></a>
       <a href="/skills"><strong>技能</strong><span>浏览技能库</span></a>
       <a href="/discover"><strong>发现</strong><span>浏览公开目录</span></a>
     </nav>
 
     <div class="home-columns">
       <section class="home-card" aria-labelledby="home-conversations-title">
-        <header class="home-card-head"><h2 id="home-conversations-title">最近对话</h2><a href="/chat">打开聊天</a></header>
+        <header class="home-card-head"><h2 id="home-conversations-title">最近对话</h2><a href="/chat" data-home-workspace-path="/chat">打开聊天</a></header>
         <ul id="home-conversations" class="home-list"></ul>
         <p id="home-conversations-empty" class="note" hidden>还没有对话。打开聊天开始吧。</p>
       </section>
       <section class="home-card" aria-labelledby="home-artifacts-title">
-        <header class="home-card-head"><h2 id="home-artifacts-title">最近作品</h2><a href="/space">打开作品库</a></header>
+        <header class="home-card-head"><h2 id="home-artifacts-title">最近作品</h2><a href="/space" data-home-workspace-path="/space">打开作品库</a></header>
         <ul id="home-artifacts" class="home-list"></ul>
         <p id="home-artifacts-empty" class="note" hidden>还没有作品。去作品库新建一个吧。</p>
       </section>
       <section class="home-card" aria-labelledby="home-meetings-title">
-        <header class="home-card-head"><h2 id="home-meetings-title">最近会议</h2><a href="/meetings">打开会议</a></header>
+        <header class="home-card-head"><h2 id="home-meetings-title">最近会议</h2><a href="/meetings" data-home-workspace-path="/meetings">打开会议</a></header>
         <ul id="home-meetings" class="home-list"></ul>
         <p id="home-meetings-empty" class="note" hidden>还没有会议纪要。</p>
       </section>

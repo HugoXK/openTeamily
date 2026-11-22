@@ -1,3 +1,4 @@
+import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
@@ -49,9 +50,12 @@ export function meetingMeta(item) {
   return actions ? `${actions} 个行动项 · ${done} 已完成` : '没有行动项';
 }
 
-function hashWorkspace() {
-  const hash = (globalThis.location && globalThis.location.hash) || '';
+function hashWorkspace(hash = '') {
   return new URLSearchParams(hash.replace(/^#/, '')).get('workspace') || '';
+}
+
+function workspaceLink(path, workspace, extras = {}) {
+  return path + '#' + new URLSearchParams({workspace, ...extras});
 }
 
 function element(tag, className, text) {
@@ -94,11 +98,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let selectedId = '';
   let loading = false;
   let signingIn = false;
-  let overviewVersion = 0;
+  let overviewRequest = null;
 
-  async function request(method, path, body) {
+  async function request(method, path, body, signal) {
     const headers = {Accept: 'application/json'};
     const options = {method, headers, credentials: 'same-origin'};
+    if (signal) options.signal = signal;
     if (method !== 'GET') headers['X-CSRF-Token'] = csrfCookie(document.cookie);
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -136,7 +141,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     const chat = document.getElementById('home-personal-chat');
     const agents = document.getElementById('home-personal-agents');
     if (chat && workspaceId) chat.href = '/chat#workspace=' + encodeURIComponent(workspaceId) + '&agent=' + encodeURIComponent(agent.id);
-    if (agents) agents.href = '/agents';
+    if (agents && workspaceId) agents.href = workspaceLink('/agents', workspaceId, {agent:agent.id});
   }
 
   function renderPersonalContext() {
@@ -213,7 +218,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/meetings';
+      link.href = workspaceLink('/meetings', selectedId, {meeting:item.id});
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', meetingMeta(item));
       const when = element('time', 'home-row-time', formatWhen(item.started_at, now));
@@ -235,18 +240,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     ];
     holder.replaceChildren(...entries.map(([label, value, href]) => {
       const link = element('a', 'home-stat');
-      link.href = href;
+      link.href = workspaceLink(href, selectedId);
       link.append(element('strong', '', String(Number(value) || 0)), element('span', '', label));
       return link;
     }));
     holder.hidden = !counts;
   }
 
+  function renderWorkspaceLinks() {
+    for (const link of document.querySelectorAll('[data-home-workspace-path]')) {
+      if (selectedId) {
+        link.href = workspaceLink(link.dataset.homeWorkspacePath, selectedId);
+        link.removeAttribute('aria-disabled');
+      } else {
+        link.removeAttribute('href');
+        link.setAttribute('aria-disabled', 'true');
+      }
+    }
+  }
+
+  function clearOverview() {
+    renderConversations([]);
+    renderArtifacts([]);
+    renderMeetings([]);
+    renderStats(null);
+    for (const id of ['home-conversations-empty', 'home-artifacts-empty', 'home-meetings-empty', 'home-notifications']) {
+      const element = document.getElementById(id);
+      if (element) element.hidden = true;
+    }
+  }
+
   async function loadOverview() {
+    overviewRequest?.abort();
+    renderWorkspaceLinks();
+    clearOverview();
     if (!selectedId) return;
-    const version = ++overviewVersion;
-    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`).catch(() => ({status: 0, body: {}}));
-    if (version !== overviewVersion) return;
+    const controller = overviewRequest = new AbortController();
+    show(document, 'loading', '正在读取工作区概览…');
+    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`, undefined, controller.signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (overviewRequest !== controller || controller.signal.aborted) return;
+    overviewRequest = null;
     if (result.status !== 200) {
       show(document, 'error', (result.body.error && result.body.error.message) || '无法加载首页摘要。');
       return;
@@ -255,13 +289,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderArtifacts(result.body.recent_artifacts || []);
     renderMeetings(result.body.recent_meetings || []);
     renderStats(result.body.counts || null);
-    const quickChat = document.querySelector('.home-actions a[href="/chat"]');
-    if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
-    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
-    for (const link of spaceLinks) {
-      if (link.classList.contains('home-row')) continue;
-      link.href = spaceHref(selectedId);
-    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
@@ -443,6 +470,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       // The authenticated personal binding is already usable. Optional dashboard
       // and onboarding reads no longer hold back opening the first chat.
       renderPersonal();
+      selectedId = '';
+      renderWorkspaceLinks();
       mainPanel.hidden = false;
       show(document, '', '');
       const activeUser = currentUser;
@@ -466,7 +495,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         show(document, '', '还没有工作区。先创建一个团队或工作区。');
         return;
       }
-      const wanted = hashWorkspace();
+      const wanted = hashWorkspace(view.location?.hash);
+      if (wanted && !workspaces.some(space => space.id === wanted)) {
+        renderWorkspaceSelect();
+        clearOverview();
+        show(document, 'error', '无法访问链接中的工作区。请选择其他工作区。');
+        return;
+      }
       selectedId = workspaces.some((space) => space.id === wanted)
         ? wanted
         : (personal && personal.workspace ? personal.workspace.id : workspaces[0].id);
@@ -531,7 +566,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     const result = await request('POST', '/v1/auth/logout', {});
     if (result.status !== 200) return;
     currentUser = null;
-    overviewVersion++;
+    overviewRequest?.abort();
     // A slow dashboard read may still be in flight after the page is usable.
     view.location.replace('/');
   });

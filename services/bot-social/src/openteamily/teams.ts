@@ -406,14 +406,20 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     return inviteView(ot.get("SELECT * FROM ot_invites WHERE id = ?", inv.id));
   });
   app.post("/v1/ot/invites/preview", async (req) => {
-    ot.me(req);
+    const me = ot.me(req);
     const code = text(body(req).code, "code", { min: 16, max: 128 });
     const inv = ot.get<any>("SELECT * FROM ot_invites WHERE code_hash = ?", hashCode(code));
     assert(inv, 404, "invite_not_found", "no such invite");
     const team = ot.get<any>("SELECT * FROM ot_teams WHERE id = ?", inv.team_id);
+    const existing = roleOf(ot, inv.team_id, me.ownerId);
+    const pending = !existing && inv.requires_approval && ot.get(
+      "SELECT 1 FROM ot_join_requests WHERE team_id = ? AND owner_id = ? AND invite_id = ? AND status = 'pending'",
+      inv.team_id, me.ownerId, inv.id);
+    const membership = existing ? (existing.suspended ? "suspended" : "member") : pending ? "pending" : null;
     return { team: { id: team.id, name: team.name, summary: team.summary, owner: ot.profileView(team.owner_id) },
       role: inv.role, requires_approval: !!inv.requires_approval, usable: inviteCanGrantRole(inv, team.owner_id) && usable(inv, ot.now()),
-      expires_at: inv.expires_at };
+      expires_at: inv.expires_at, ...(membership ? {membership} : {}),
+      ...(membership === "member" && team.workspace_id ? {workspace_id: team.workspace_id} : {}) };
   });
   app.post("/v1/ot/invites/accept", async (req) => {
     const me = ot.me(req);

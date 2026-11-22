@@ -238,3 +238,37 @@ test('transient read errors keep visible results, but permission loss clears tas
   assert.equal(node('team-runs-new').disabled, true);
   assert.match(node('team-run-status').textContent, /没有权限/);
 });
+
+test('lost deletion responses need an empty scoped result from the original signed owner', async () => {
+  for (const [listStatus, sessionUser] of [[200, user], [403, user], [200, {id: OTHER_WS}]]) {
+    const confirmed = listStatus === 200 && sessionUser === user;
+    const {document, node} = fixture(`#workspace=${WS}&run=${RUN}`);
+    const requests = [];
+    let posted = false;
+    const listing = Promise.withResolvers();
+    await mountTeamRuns(document, async (path, {method}) => {
+      if (path === '/v1/auth/session' && posted) return ok({user: sessionUser});
+      const base = baseRead(path);
+      if (base) return base;
+      requests.push([method, path]);
+      if (path === BASE + '/' + RUN + '/remove') {
+        posted = true;
+        return ok({}, 503);
+      }
+      if (path === BASE + '/' + RUN) return posted ? ok({}, 404) : ok({run});
+      if (path === BASE) return listing.promise;
+      throw new Error(path);
+    });
+    node('team-run-remove').events.click();
+    node('team-run-confirm-action').events.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(node('team-run-remove').disabled, true);
+    assert.match(node('team-run-status').textContent, /正在核对/);
+    listing.resolve(ok({items: []}, listStatus));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.filter(([method]) => method === 'POST').length, 1);
+    assert.equal(node('team-run-detail').hidden, confirmed);
+    assert.equal(node('team-run-results').children.length, 0);
+    assert.equal(document.defaultView.location.hash, `#workspace=${WS}${confirmed ? '' : '&run=' + RUN}`);
+  }
+});

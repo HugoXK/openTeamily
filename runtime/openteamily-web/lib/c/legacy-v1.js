@@ -443,11 +443,16 @@ function invitesRoutes(host) {
             throw new Fault(400, 'invalid_invite', '邀请链接格式不正确。')
           }
           const data = await client(host).post('/v1/ot/invites/preview', { code: token })
-          if (!data.usable) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
+          if (data.membership === 'suspended') throw new Fault(403, 'forbidden', '此工作区已暂停你的访问。')
+          const joined = data.membership === 'member' && HEX.test(data.workspace_id || '')
+          const pending = data.membership === 'pending'
+          if (!data.usable && !joined && !pending) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
           return [200, { invitation: {
             team_name: String(data.team?.name || '').slice(0, 80),
             role: data.role === 'admin' ? 'admin' : 'member',
             requires_approval: data.requires_approval === true,
+            ...(joined ? {membership: 'member', workspace_id: data.workspace_id}
+              : pending ? {membership: 'pending'} : {}),
           } }]
         })
       },

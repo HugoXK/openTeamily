@@ -560,15 +560,18 @@ test('same-tab workspace fragments change the roster and hide a foreign team bef
   assert.deepEqual(rosterReads, [`/v1/workspaces/${teamA}/members`, `/v1/workspaces/${teamB}/members`]);
 });
 
-test('joining pins the verified team and a newer manual switch wins during acceptance', async t => {
+test('joining pins the verified team, including after a lost receipt, without overriding a newer workspace switch', async t => {
   const invited = 'c'.repeat(32);
   const token = 'browser-invite-with-access';
-  for (const manual of [false, true]) await t.test(manual ? 'manual switch' : 'newly joined team', async () => {
+  for (const lostReceipt of [false, true]) for (const manual of [false, true]) await t.test(
+    `${lostReceipt ? 'lost receipt' : 'successful receipt'} with ${manual ? 'manual switch' : 'no switch'}`, async () => {
     const {doc, elements} = fakeDocument();
     setView(doc);
     const accept = Promise.withResolvers();
     const issued = Promise.withResolvers();
     let joined = false;
+    let writes = 0;
+    let reads = 0;
     const original = globalThis.FormData;
     globalThis.FormData = class { get(name) { return name === 'token' ? token : null; } };
     try {
@@ -578,12 +581,17 @@ test('joining pins the verified team and a newer manual switch wins during accep
           items: joined ? [...workspaceListing, {id: invited, name:'新加入的团队'}] : workspaceListing,
         });
         if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
-        if (path === '/v1/invites/preview') return jsonResponse(200, {invitation: {team_name: '新加入的团队',role: 'member'}});
+        if (path === '/v1/invites/preview') {
+          reads++;
+          return jsonResponse(200, {invitation: {team_name: '新加入的团队', role:'member',
+            ...(joined ? {membership:'member', workspace_id:invited} : {})}});
+        }
         if (path === '/v1/invites/accept') {
+          writes++;
           issued.resolve();
           await accept.promise;
           joined = true;
-          return jsonResponse(200, {workspace: {id: invited}});
+          return lostReceipt ? jsonResponse(503, {}) : jsonResponse(200, {workspace: {id: invited}});
         }
         if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
         throw new Error(path);
@@ -605,6 +613,8 @@ test('joining pins the verified team and a newer manual switch wins during accep
       assert.equal(doc.defaultView.location.hash, '#workspace=' + expected);
       assert.equal(elements.get('workspace-chat').hidden, false);
       assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + expected);
+      assert.equal(writes, 1);
+      assert.equal(reads, lostReceipt ? 2 : 1);
     } finally {
       globalThis.FormData = original;
     }

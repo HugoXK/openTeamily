@@ -691,7 +691,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!editorTargetFromSearch(readSearch())) return;
     if (linkRetry) linkRetry.hidden = true;
     show('', '');
-    view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + runFilterSearchText(runFilter));
+    writeWorkspaceLink();
+  }
+
+  function writeWorkspaceLink() {
+    if (!view?.location || !view?.history?.replaceState) return;
+    const workspace = workspaceId();
+    const fragment = /^[a-f0-9]{32}$/.test(workspace) ? '#workspace=' + workspace : '';
+    view.history.replaceState({runs:runFilter}, '',
+      (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment);
   }
 
   const RUN_FILTER_BUTTONS = {all: 'run-filter-all', succeeded: 'run-filter-succeeded', failed: 'run-filter-failed'};
@@ -1867,13 +1875,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function load() {
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
+    const fragment = new URLSearchParams((view?.location?.hash || '').slice(1));
+    const hasWorkspace = !target && fragment.has('workspace');
+    const requestedWorkspace = hasWorkspace && fragment.getAll('workspace').length === 1
+      ? fragment.get('workspace') : '';
+    const wantedWorkspace = target?.workspace || requestedWorkspace;
     const wantedTemplate = !target && templateFromSearch(readSearch());
     discardFollowupDraft();
     newButton.disabled = true;
     workspaceStatus.textContent = '';
     if (linkRetry) linkRetry.hidden = true;
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
-    const initialCatalogue = native && !target && !wantedTemplate && category === 'mine' && !search.value.trim()
+    const initialCatalogue = native && !target && !hasWorkspace && !wantedTemplate && category === 'mine' && !search.value.trim()
       ? request('GET', '/v1/workspaces?scope=personal&include=automations').catch(() => null) : null;
     const session = await sessionRequest;
     if (seq !== loadRequest) return;
@@ -1914,7 +1927,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const linked = native && target?.automation ? readLinkedAutomation(target) : null;
     const personalRequest = initialCatalogue?.then(result => ownedPersonalCatalogue(result, session.body.user));
     let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
-    if (target?.workspace && !space.body?.items?.some(item => item.id === target.workspace) && supplemental) {
+    if (wantedWorkspace && !space.body?.items?.some(item => item.id === wantedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
       supplemental = null;
@@ -1938,6 +1951,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     watchEditorExit();
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
+    if (hasWorkspace && (!/^[a-f0-9]{32}$/.test(requestedWorkspace) || !items.some(item => item.id === requestedWorkspace))) {
+      workspaceSelect.value = '';
+      newButton.disabled = true;
+      document.getElementById('automation-list').textContent = '';
+      document.getElementById('list-empty').hidden = true;
+      show('error', '无法访问链接中的工作区。请选择其他工作区。');
+      return;
+    }
+    if (hasWorkspace) workspaceSelect.value = requestedWorkspace;
     void supplemental?.then(result => {
       if (seq !== loadRequest) return;
       if (result.status === 200) fillWorkspaces(result.body.items);
@@ -1987,7 +2009,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     editorRequest += 1;
-    clearEditorLink();
+    if (editorTargetFromSearch(readSearch())) clearEditorLink();
+    else writeWorkspaceLink();
+    newButton.disabled = !workspaceId();
     closeConfirm({restoreFocus: false});
     discardFollowupDraft();
     current = null;
