@@ -39,6 +39,17 @@ export function actionView(store, row, includeNotes = true, user = usernames(sto
   return data
 }
 const loadAction = (store, ws, id) => store.get('SELECT * FROM memory_actions WHERE id=? AND workspace_id=?', id, ws)
+
+async function actionWithFollowups(req, action) {
+  try {
+    const {items} = await req.host.call('automations/memoryFollowupsForAction', {
+      workspace_id: action.workspace_id, action_id: action.id,
+    })
+    return {...action, automation_followups: items}
+  } catch { /* The action stays accessible while the optional automation integration is unavailable. */ }
+  return action
+}
+
 function resolvePage(store, ws, pageId) {
   if (pageId === null || pageId === undefined) return null
   if (!validRef(pageId)) refuse(400, 'invalid', 'Provide a valid linked memory page')
@@ -99,7 +110,7 @@ async function actions(req, ws, targetId, removing) {
     store.run('DELETE FROM memory_actions WHERE id=?', row.id)
     return { body: { removed: actionView(store, row, false) } }
   }
-  if (req.method === 'GET' && !req.queryString) return { body: { action: actionView(store, row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: { action: await actionWithFollowups(req, actionView(store, row)) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory action request')
   const body = requireBodyKeys(await req.json(), ['revision', 'changes'])
   const { revision, changes } = body
@@ -107,7 +118,7 @@ async function actions(req, ws, targetId, removing) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((k) => !['title', 'notes', 'status', 'due_at', 'memory_page_id'].includes(k))) refuse(400, 'invalid', 'Unknown memory action field')
-  return store.transaction(() => {
+  const action = store.transaction(() => {
     const current = loadAction(store, ws, targetId)
     if (!current) refuse(404, 'not_found', 'Memory action not found')
     if (revision !== current.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, current))
@@ -118,11 +129,12 @@ async function actions(req, ws, targetId, removing) {
     if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
     if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
     if (title === current.title && notes === current.notes && status === current.status && due === current.due_at &&
-        pageId === current.memory_page_id) return { body: { action: actionView(store, current) } }
+        pageId === current.memory_page_id) return actionView(store, current)
     store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
       title, notes, status, due, pageId, current.revision + 1, req.now, actor(req), current.id)
-    return { body: { action: actionView(store, loadAction(store, ws, current.id)) } }
+    return actionView(store, loadAction(store, ws, current.id))
   })
+  return { body: { action: await actionWithFollowups(req, action) } }
 }
 
 // ---- links and graph ----

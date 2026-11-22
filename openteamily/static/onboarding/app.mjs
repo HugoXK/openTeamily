@@ -1,5 +1,5 @@
 import {servedByDsBot} from '../shell/dsbot-api.mjs';
-import {readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
+import {readChatDrafts, rememberColdDraftHandoff, writeChatDrafts} from '../home/runtime-readiness.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -687,7 +687,8 @@ export function mountOnboarding(document, {
         return;
       }
       drafts.set(scope, firstMessage);
-      if (!writeChatDrafts(view, owner, drafts)) {
+      // Chat resolves the latest owned conversation before applying the staged draft.
+      if (!writeChatDrafts(view, owner, drafts) || !rememberColdDraftHandoff(view, scope)) {
         showFirstTaskError('浏览器无法暂存任务。请复制草稿后，选择「直接打开聊天」。');
         taskPreview.focus();
         taskPreview.select();

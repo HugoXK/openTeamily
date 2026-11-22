@@ -419,6 +419,17 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     const automation = existingMemoryFollowup(workspaceId, ref)
     return {automation, action: automation ? null : await checkedMemoryAction(workspaceId, ref)}
   }
+
+  async function memoryFollowupsForAction(payload) {
+    const workspaceId = workspaceOf(payload)
+    const {action_id: actionId} = payload
+    if (typeof actionId !== 'string' || !HEX32.test(actionId)) refuse(400, 'invalid', 'Invalid memory action')
+    await requirePersonalMemory(workspaceId)
+    const rows = all(`SELECT a.id, a.title, a.enabled, s.revision FROM ot_automation_memory_action_sources s
+      JOIN ot_automations a ON a.id=s.automation_id AND a.workspace_id=s.workspace_id
+      WHERE s.workspace_id=? AND s.action_id=? ORDER BY s.revision DESC`, workspaceId, actionId)
+    return {items: rows.map(row => ({...row, enabled: Boolean(row.enabled)}))}
+  }
   const loadRun = (row, runId) => {
     const item = typeof runId === 'string' && HEX32.test(runId)
       ? one('SELECT * FROM ot_automation_runs WHERE id=? AND automation_id=? AND workspace_id=?', runId, row.id, row.workspace_id) : undefined
@@ -1008,6 +1019,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
 
   const ops = {}
   for (const [name, handler] of Object.entries(endpoints)) ops[name.slice('automations/'.length)] = handler
+  ops.memoryFollowupsForAction = memoryFollowupsForAction
   ops.v1 = automationsV1({ endpoints: ops, log, personalBinding, readSavedWorks })
   ops.importRuns = (p) => ({ imported: recordLegacyRuns(db, p) })
   endpoints['automations/v1'] = ops.v1
@@ -1038,7 +1050,11 @@ export default async function automations(host) {
   if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') feature.start()
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) {
-    if (!['createOnboarding', 'memoryFollowup'].includes(name)) ops[name] = async (payload) => handler(payload ?? {})
+    if (!['createOnboarding', 'memoryFollowup', 'memoryFollowupsForAction'].includes(name)) ops[name] = async (payload) => handler(payload ?? {})
+  }
+  ops.memoryFollowupsForAction = async (payload, call) => {
+    if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+    return feature.ops.memoryFollowupsForAction(payload ?? {})
   }
   ops.v1 = feature.ops.v1
   ops.importRuns = feature.ops.importRuns

@@ -1435,6 +1435,33 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #studio-copy-open { justify-self: start; }
 #studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
 #shared-work-copy-dialog { box-sizing: border-box; }
+#work-version-dialog {
+  box-sizing: border-box;
+  width: min(45rem, calc(100% - 1.5rem));
+  margin: auto;
+  max-height: min(40rem, 90dvh);
+  border: 1px solid var(--ot-line);
+}
+#work-version-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+.work-version-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.work-version-header div { min-width: 0; overflow-wrap: anywhere; }
+.work-version-header p { margin: .3rem 0 .6rem; }
+#work-version-dialog button { min-height: 2.75rem; }
+#work-version-preview {
+  max-height: min(44dvh, 24rem);
+  overflow: auto;
+  background: var(--ot-surface-2);
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+  padding: .75rem;
+  overflow-wrap: anywhere;
+}
+#work-version-preview:empty, #work-version-status:empty { display: none; }
+#work-version-preview pre { margin: 0; white-space: pre-wrap; font: inherit; }
+#work-version-preview :is(img, video, audio) { display: block; max-width: 100%; margin: auto; }
+#work-version-preview table { border-collapse: collapse; margin: .5rem 0; }
+#work-version-preview td { padding: .3rem; border: 1px solid var(--ot-line); min-width: 3rem; }
+#work-version-link { margin-top: .5rem; width: 100%; }
 #studio-copy-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem; overflow-wrap: anywhere; }
 #studio-copy-preview, #shared-work-copy-preview {
   background: var(--ot-surface-2);

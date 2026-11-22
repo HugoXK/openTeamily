@@ -1576,9 +1576,14 @@ test('saved result deep links require an exact authorized workspace and artifact
   const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
   const wid='a'.repeat(32),aid='b'.repeat(32);
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid+'&revision=12'),{workspace:wid,artifact:aid,revision:12});
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid),{workspace:wid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
   for(const query of ['?artifact='+aid,'?workspace='+wid+'&artifact=','?workspace='+wid+'&workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+  for(const revision of ['0','-1','01','+1','1.2','100000000','1&revision=2']) {
+    assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid+'&revision='+revision),{invalid:true});
+  }
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&revision=1'),{invalid:true});
 });
 
 const linkedWorkspace = 'a'.repeat(32);

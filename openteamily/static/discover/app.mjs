@@ -425,6 +425,14 @@ export function renderTeamCard(document, team, {joining = false, onJoin} = {}) {
     state.dataset.state = team.membership;
     state.textContent = membership;
     foot.append(state);
+    if (team.membership === 'member' && /^[a-f0-9]{32}$/.test(team.workspace_id || '')) {
+      const open = document.createElement('a');
+      open.className = 'team-open';
+      open.href = '/members#workspace=' + team.workspace_id;
+      open.textContent = '打开工作区';
+      open.setAttribute('aria-label', '打开工作区：' + team.name);
+      foot.append(open);
+    }
   } else if (onJoin && TEAM_DIRECTORY_ID.test(team.workspace_id || '')) {
     const join = document.createElement('button');
     join.type = 'button';

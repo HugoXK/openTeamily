@@ -130,8 +130,16 @@ test('a scoped memory action prepares one durable follow-up for its reviewed rev
   assert.equal((await post(4)).status, 409)
   assert.equal((await post(3)).body.automation.id, saved.id)
   assert.equal(calls.length, 0)
+  const linked = (workspace_id = W, action_id = actionId) => feature.ops.memoryFollowupsForAction({workspace_id, action_id})
+  assert.deepEqual(await linked(), {items: [{id: saved.id, title: saved.title, revision: 3, enabled: false}]})
+  assert.deepEqual(await linked(W, 'e'.repeat(32)), {items: []})
+  await assert.rejects(linked(otherWorkspace), /个人工作区/)
+  action = {...action, revision: 5, status: 'open'}
+  const latest = (await post(5, {key: 'save-later-memory-followup', changes: {title: '准备第二版简报'}})).body.automation
+  assert.ok(latest?.id && latest.id !== saved.id)
+  assert.deepEqual((await linked()).items.map(item => [item.id, item.revision]), [[latest.id, 5], [saved.id, 3]])
   const items = (await e['automations/v1']({method: 'GET', path: collection(W)}, context('alice'))).body.items
-  assert.deepEqual(items.map(item => item.source_memory_action), [saved.source_memory_action])
+  assert.deepEqual(new Set(items.map(item => item.source_memory_action.revision)), new Set([3, 5]))
 
   const manual = await e['automations/v1']({
     method: 'POST', path: collection(W) + '/' + saved.id + '/run', idempotency_key: 'run-memory-followup-001',

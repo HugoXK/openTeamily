@@ -59,7 +59,8 @@ export const normalizeActions = (value) => value.map((item) => ({
   text: strip(item.text), done: Boolean(item.done ?? false), owner: strip(item.owner || ''),
   ...(item.due_date ? { due_date: item.due_date } : {}),
 }))
-const titleHash = (title) => digest(casefold(strip(title)))
+// Recurring calls can share a title. Their source ID, not their title, identifies the note.
+const titleHash = (title, sourceCallId) => sourceCallId ? 'call:' + sourceCallId : digest(casefold(strip(title)))
 const parse = (text) => (text ? JSON.parse(text) : [])
 
 function draftSource({title = '', attendees = [], transcript}) {
@@ -452,7 +453,7 @@ async function create(req, workspaceId) {
     }
     const fromCall = source && store.get('SELECT * FROM meetings WHERE workspace_id=? AND source_call_id=?', workspaceId, source.id)
     if (fromCall) refuse(409, 'meeting_exists', '这次通话已有纪要。', view(fromCall))
-    const hash = titleHash(title)
+    const hash = titleHash(title, source?.id)
     if (store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A meeting with this title already exists')
     if (store.get('SELECT COUNT(*) AS n FROM meetings WHERE workspace_id=?', workspaceId).n >= LIMITS.PER_WORKSPACE) refuse(429, 'quota', 'Meeting capacity reached')
     const id = newId()
@@ -491,7 +492,7 @@ async function update(req, row) {
       === stableJson([row.title, row.started_at, parse(row.attendees), row.transcript, row.summary, parse(row.action_items)])) {
     return { body: { meeting: view(row) } }
   }
-  const hash = titleHash(title)
+  const hash = titleHash(title, row.source_call_id)
   return req.store.transaction((store) => {
     if (title !== row.title && store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
       refuse(409, 'conflict', 'A meeting with this title already exists')
@@ -562,7 +563,8 @@ export const spec = {
       state TEXT NOT NULL CHECK(state IN ('queued','running','ready','failed','cancelled','dismissed')), result TEXT, error TEXT);
     CREATE INDEX IF NOT EXISTS meeting_draft_queue ON meeting_draft_jobs(state, created, id);
     CREATE TRIGGER IF NOT EXISTS meeting_draft_revision_changed AFTER UPDATE OF revision ON meetings
-      WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`],
+      WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`,
+    "UPDATE meetings SET title_hash='call:' || source_call_id WHERE source_call_id IS NOT NULL"],
   endpoints({store, host}) {
     store.run(`UPDATE meeting_draft_jobs SET state='failed',error='DS-Bot 已重启。请重新生成纪要。'
       WHERE state IN ('queued','running')`)

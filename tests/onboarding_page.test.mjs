@@ -234,9 +234,11 @@ test('a selected one-off task only stages a private draft and preserves an exist
     if (mode === 'new') {
       assert.deepEqual(destinations, ['/chat#workspace=' + workspace + '&agent=' + agent]);
       assert.deepEqual(JSON.parse(storage.get(storageKey)), {[scope]: text});
+      assert.equal(storage.get('openteamily.cold-chat-draft'), scope);
     } else {
       assert.deepEqual(destinations, []);
       assert.deepEqual(storage.get(storageKey), mode === 'existing' ? JSON.stringify({[scope]: '用户原草稿'}) : undefined);
+      assert.equal(storage.has('openteamily.cold-chat-draft'), false);
       assert.match(document.getElementById('onboarding-first-task-status').textContent, /已有未发送草稿|无法确认|无法暂存/);
     }
   }

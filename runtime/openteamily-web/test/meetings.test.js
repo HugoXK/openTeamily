@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { boot, bootMemory, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
+import { digest } from '../featurekit/http.js'
+import { openStore } from '../featurekit/store.js'
 import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
@@ -360,6 +362,65 @@ test('only an authorized finished call can prefill and associate a personal meet
   const second = await boot()
   installBinding(second)
   assert.equal((await second.call('meetings','GET',sourcePath)).body.meeting,undefined)
+})
+
+test('different calls can keep their shared title without duplicating a saved call', async t => {
+  const vol = volume()
+  const firstRuntime = await bootMemory(vol)
+  const title = 'Weekly review'
+  const firstCall = 'otcav_' + 'A'.repeat(26)
+  const secondCall = 'otcav_' + 'B'.repeat(26)
+  const records = new Map([
+    [firstCall, 1700000000],
+    [secondCall, 1700604800],
+  ])
+  setSharedBotSocial({async request(method,path) {
+    assert.equal(method,'GET')
+    const id = path.replace('/v1/ot/call-records/','')
+    assert.ok(records.has(id))
+    const started = records.get(id)
+    return {record:{id, kind:'video', title, started_at:started*1000, ended_at:(started+1000)*1000, attendees:['Alex']}}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+
+  const firstDraft = {source_call_id:firstCall, summary:'First call notes'}
+  const firstKey = key()
+  const first = await firstRuntime.call('meetings','POST',base(),firstDraft,firstKey)
+  assert.equal(first.status,201)
+  // Simulate a call note already written by the old runtime before this migration.
+  const store = openStore(join(vol.data,'openteamily','features','meetings','meetings.sqlite3'))
+  store.transaction(db => {
+    db.run("DELETE FROM ot_feature_migrations WHERE feature='meetings' AND version=5")
+    db.run('UPDATE meetings SET title_hash=? WHERE id=?',digest(title.toLowerCase()),first.body.meeting.id)
+  })
+  store.close()
+
+  const runtime = await bootMemory(vol)
+  const call = (method,path,payload,requestKey) => runtime.call('meetings',method,path,payload,requestKey)
+  const secondDraft = {source_call_id:secondCall, summary:'Second call notes'}
+  const secondKey = key()
+  const second = await call('POST',base(),secondDraft,secondKey)
+  assert.equal(second.status,201,JSON.stringify(second.body))
+  assert.notEqual(first.body.meeting.id,second.body.meeting.id)
+  assert.equal(second.body.meeting.title,title)
+  assert.equal(second.body.meeting.started_at,records.get(secondCall))
+  assert.deepEqual((await call('POST',base(),firstDraft,firstKey)).body.meeting,first.body.meeting)
+  assert.deepEqual((await call('POST',base(),secondDraft,secondKey)).body.meeting,second.body.meeting)
+  const duplicate = await call('POST',base(),{...secondDraft,title:'Another title'},key())
+  assert.equal(duplicate.status,409)
+  assert.equal(duplicate.body.error.code,'meeting_exists')
+  assert.equal(duplicate.body.error.current.id,second.body.meeting.id)
+  assert.deepEqual((await call('GET',base('from-call/'+firstCall))).body.meeting,first.body.meeting)
+  assert.deepEqual((await call('GET',base('from-call/'+secondCall))).body.meeting,second.body.meeting)
+
+  const manual = {title, summary:'Manual meeting notes'}
+  assert.equal((await call('POST',base(),manual,key())).status,201)
+  assert.equal((await call('POST',base(),manual,key())).status,409)
+  const renamed = await call('POST',base(first.body.meeting.id),{revision:1,changes:{title:'Planning'}})
+  assert.equal(renamed.status,200)
+  const sameTitleAgain = await call('POST',base(first.body.meeting.id), {revision:2,changes:{title}})
+  assert.equal(sameTitleAgain.status,200)
+  assert.equal(sameTitleAgain.body.meeting.source_call_id,firstCall)
 })
 
 test('meeting list filters all saved metadata before paging in start-time order', async () => {
