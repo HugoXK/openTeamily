@@ -1802,7 +1802,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=? WHERE id=?",
           now, job.current_revision, claim, job.id);
       } else if (b.action === "pass") {
-        assert(job.discretionary && job.available && job.studio_available && claim !== null && job.claim_id === claim
+        assert(!job.direct_grant_id && !job.studio_document_id && job.available && claim !== null && job.claim_id === claim
           && job.source_revision === job.current_revision && (state === "running" || state === "passed"),
         409, "reply_job_unavailable", "这次回复的状态已更新。");
         if (state === "passed") return {ok: true};
@@ -2122,8 +2122,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         assert(mode === "mention" && job && claim !== null,
           409, "reply_job_unavailable", "队友请求只可由已领取任务的指定智能体回复。");
       }
-      if (job?.discretionary) {
-        assert(job.available && !job.passed && job.source_revision === job.current_revision,
+      if (job) {
+        assert(!job.passed && (!job.discretionary || (job.available && job.source_revision === job.current_revision)),
           409, "reply_job_unavailable", "这次回复的状态已更新。");
       }
       if (b.job_id !== undefined || claim !== null || job?.claim_id != null) {

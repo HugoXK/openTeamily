@@ -148,10 +148,24 @@ test("ordinary agents can remain silent using a scoped claim and see only visibl
   assert.equal((await owner.call("POST", path(third), {action: "pass", attempt: 1, claim_id: claimThird.claim_id})).status, 409);
 
   const required = await send("@所有人 都回复我一下");
-  const only = required.reply_jobs[0];
-  const oldStart = {...start(only, required.revision), accept_discretionary_reply: undefined};
-  assert.deepEqual(await owner.ok("POST", path(only), oldStart), {ok: true});
-  assert.equal((await owner.call("POST", path(only), {action: "pass", attempt: 1, claim_id: oldStart.claim_id})).status, 409);
+  const [quiet, responding] = required.reply_jobs;
+  const oldStart = {...start(quiet, required.revision), accept_discretionary_reply: undefined};
+  assert.deepEqual(await owner.ok("POST", path(quiet), oldStart), {ok: true});
+  const quietCompletion = {action:"pass", attempt:1, claim_id:oldStart.claim_id};
+  assert.equal((await owner.call("POST", path(quiet), {...quietCompletion, claim_id:randomUUID()})).status, 409);
+  assert.deepEqual(await owner.ok("POST", path(quiet), quietCompletion), {ok:true});
+  assert.deepEqual(await owner.ok("POST", path(quiet), quietCompletion), {ok:true});
+  assert.equal((await owner.call("POST", path(quiet) + "/progress", {
+    attempt:1, claim_id:oldStart.claim_id, revision:1, text:"Late draft",
+  })).status, 409);
+  assert.equal((await owner.call("POST", room + "/agent-messages", {
+    agent_ref:quiet.agent_id, reply_to:required.id, body:"Late reply", mode:"mention",
+    job_id:quiet.id, attempt:1, claim_id:oldStart.claim_id,
+  })).status, 409);
+  const response = await answer(owner, room, required, responding);
+  const afterExplicit = (await owner.ok("GET", room + "/messages")).messages;
+  assert.deepEqual(afterExplicit.filter((row: any) => row.reply_to === required.id).map((row: any) => row.id), [response.id]);
+  assert.equal(afterExplicit.find((row: any) => row.id === required.id).reply_jobs[0].status, "passed");
 });
 
 test("shared group workers judge ordinary text while explicit mentions preserve their audience and isolation", async () => {

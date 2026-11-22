@@ -1118,6 +1118,7 @@ test("explicit Studio references keep a reviewed version private to its selected
   const claim = await worker.ok("POST", jobPath(first), canRead);
   assert.deepEqual(claim, {ok: true, group_text_only:true, studio_reference: {...request.studio_reference, title, excerpt, truncated: true}});
   assert.deepEqual(await worker.ok("POST", jobPath(first), canRead), claim);
+  assert.equal((await worker.call("POST", jobPath(first), {action:"pass", attempt:1, claim_id:start.claim_id})).status, 409);
   const completed = await worker.ok("POST", room + "/agent-messages", finish(first));
   await worker.ok("POST", jobPath(running), canRead);
   const progress = {attempt: 1, claim_id: start.claim_id, revision: 1, text: "Temporary draft"};
