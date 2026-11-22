@@ -437,6 +437,25 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
+  const feedSections = document.getElementById('feed-sections');
+  const directoryTabs = document.getElementById('discover-tabs');
+  if (!catalogView && feedSections && directoryTabs) {
+    feedSections.append(directoryTabs);
+    mainPanel.classList?.add('discover-feed-mode');
+    const toolbar = feedSections.parentElement;
+    const search = document.getElementById('feed-search');
+    const compact = document.defaultView?.matchMedia?.('(max-width: 45rem)');
+    if (toolbar && search && compact) {
+      const orderControls = ({matches}) => {
+        const [first, last] = matches ? [feedSections, search] : [search, feedSections];
+        if (toolbar.firstElementChild === first) return;
+        if (first.contains(document.activeElement)) toolbar.append(last);
+        else toolbar.prepend(first);
+      };
+      orderControls(compact);
+      compact.addEventListener('change', orderControls);
+    }
+  }
 
   function setCurrent(id, on) {
     const node = document.getElementById(id);
@@ -641,7 +660,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const target = position.trigger?.isConnected ? position.trigger :
       workTriggers.get(position.slug) || (control && !control.hidden ? control : null);
     initialView.scrollTop = position.scroll;
-    (target || document.getElementById('discover-title'))?.focus?.({preventScroll: true});
+    (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
   }
 
   function closeWorkDetail({restore = true} = {}) {

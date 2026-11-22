@@ -74,6 +74,13 @@
       </nav>
     <section id="feed-panel">
       <header class="feed-toolbar">
+        <div id="feed-sections" class="feed-sections">
+          <nav class="feed-tabs" aria-label="动态类型">
+            <button type="button" id="feed-tab-following" data-feed-tab="following" aria-selected="false">关注</button>
+            <button type="button" id="feed-tab-activity" data-feed-tab="activity" aria-selected="true">动态</button>
+            <button type="button" id="feed-tab-collected" data-feed-tab="collected" aria-selected="false">已收录</button>
+          </nav>
+        </div>
         <form id="feed-search" role="search" aria-label="搜索公开作品">
           <label class="visually-hidden" for="feed-query">搜索作品标题、内容或创作者</label>
           <button type="submit" class="search-submit"><svg class="search-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span class="visually-hidden">搜索</span></button>
@@ -82,11 +89,6 @@
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </button>
         </form>
-        <nav class="feed-tabs" aria-label="动态类型">
-          <button type="button" id="feed-tab-following" data-feed-tab="following" aria-selected="false">关注</button>
-          <button type="button" id="feed-tab-activity" data-feed-tab="activity" aria-selected="true">动态</button>
-          <button type="button" id="feed-tab-collected" data-feed-tab="collected" aria-selected="false">已收录</button>
-        </nav>
       </header>
       <div class="feed-filters" id="feed-filters" role="group" aria-label="内容分类">
         <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>

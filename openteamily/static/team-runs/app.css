@@ -78,6 +78,7 @@
 .team-run-goal { margin-block: .7rem; }
 #team-run-progress { font-weight: 650; margin: .45rem 0; }
 #team-run-detail .team-run-results { margin-block-start: 1rem; }
+.team-run-detail-compact { display: none; }
 
 #team-run-form {
   background: var(--ot-surface);
@@ -159,6 +160,18 @@
 @media (max-width: 44rem) {
   .team-run-page { padding: .85rem .85rem 2rem; }
   .team-run-toolbar { padding-inline: .65rem; }
+  .team-run-page[data-screen="detail"] > :is(.team-run-header, .team-run-toolbar) { display: none; }
+  #team-run-detail .team-run-subhead {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: .55rem .65rem;
+    margin-block-end: .4rem;
+  }
+  #team-run-detail .team-run-detail-compact { display: block; }
+  #team-run-detail-scope { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #team-run-detail .team-run-subhead h2 { grid-column: 1 / -1; justify-self: start; max-width: 100%; }
+  #team-run-detail .team-run-goal { margin-block: .4rem; }
+  #team-run-detail .team-run-results { margin-block-start: .65rem; }
   .step-draft { grid-template-columns: minmax(0, 1fr); }
   .team-run-page :is(input, textarea, select) { font-size: 1rem; }
   #team-run-form { padding: .75rem; }

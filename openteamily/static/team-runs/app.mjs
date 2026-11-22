@@ -203,6 +203,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     detailId = id;
     current = null;
     screen = next;
+    main.dataset.screen = next;
+    const detailScope = node('team-run-detail-scope');
+    if (detailScope) detailScope.textContent = next === 'detail' ? spaces.find(item => item.id === workspace)?.name || '' : '';
     lastList = lastSteps = '';
     previewNodes.clear();
     node('team-run-results').replaceChildren();
@@ -761,12 +764,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   newRun.addEventListener('click', showEditor);
   picker.addEventListener('change', () => choose({workspace: picker.value}, true));
   view.addEventListener('hashchange', () => choose(teamRunTarget(view.location.hash)));
-  node('team-runs-refresh').addEventListener('click', () => {
+  function refresh() {
     if (!spaces.length) return load();
     if (screen === 'detail') return loadDetail();
     if (screen === 'editor') return loadAgents();
     return loadList();
-  });
+  }
+  node('team-runs-refresh').addEventListener('click', refresh);
+  node('team-run-detail-refresh')?.addEventListener('click', refresh);
   for (const back of document.querySelectorAll('[data-back-to-team-runs]')) back.addEventListener('click', () => showList({focus: true}));
   cancel.addEventListener('click', () => ask('cancel'));
   remove.addEventListener('click', () => ask('remove'));

@@ -86,7 +86,9 @@
         <button type="submit" form="editor-form" id="mobile-editor-save">保存</button>
       </div>
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
-      <h1 class="visually-hidden" id="space-title">作品库</h1>
+      <div class="catalog-quick-actions" id="catalog-quick-actions">
+        <h1 class="visually-hidden" id="space-title">作品库</h1>
+      </div>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
@@ -109,7 +111,9 @@
         </div>
         <div class="workspace-recovery">
           <span id="workspace-events-status" class="note" role="status"></span>
-          <button type="button" id="workspace-events-retry">检查更新</button>
+          <button type="button" id="workspace-events-retry" aria-label="检查更新" title="检查更新">
+            <span class="workspace-retry-label">检查更新</span><span class="workspace-retry-icon" aria-hidden="true">↻</span>
+          </button>
         </div>
       </div>
       <div class="filter-wrap">

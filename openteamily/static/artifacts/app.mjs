@@ -314,6 +314,47 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
+function bindMobileCatalogToolbar(document, closePopovers) {
+  const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
+  const panel = document.getElementById('main-panel');
+  const toolbar = document.getElementById('catalog-quick-actions');
+  const title = document.getElementById('space-title');
+  const directory = document.getElementById('artifact-dir');
+  const catalog = document.getElementById('list-panel');
+  const controls = [
+    document.getElementById('new-menu-button')?.parentElement,
+    document.getElementById('artifact-notify'),
+    document.getElementById('search')?.parentElement,
+    document.getElementById('filter-button')?.parentElement,
+  ];
+  if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
+    return () => {};
+  }
+  // Move the original controls so focus order follows their visual order and
+  // there is still only one search, workspace context, and set of popovers.
+  const original = controls.map(node => ({node, parent: node.parentElement, next: node.nextElementSibling}));
+  let catalogView = false;
+  let compact = false;
+
+  function sync() {
+    const next = catalogView && viewport.matches;
+    if (next === compact) return;
+    compact = next;
+    closePopovers();
+    const focus = document.activeElement;
+    const restoreFocus = controls.some(node => node.contains(focus));
+    if (compact) toolbar.append(...controls);
+    else for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+    panel.classList.toggle('is-compact-catalog', compact);
+    title.classList.toggle('visually-hidden', !compact);
+    directory.hidden = !compact && catalog.classList.contains('dir-collapsed');
+    if (restoreFocus && !focus.closest('[hidden]')) focus.focus({preventScroll: true});
+  }
+
+  viewport.addEventListener?.('change', sync);
+  return enabled => { catalogView = enabled; sync(); };
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -471,6 +512,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
+  const compactToolbar = bindMobileCatalogToolbar(document, () => {
+    actionMenus.close({focus: true});
+    closeFilterPanel({focus: true});
+  });
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
   const discoverEditable = document.getElementById('discover-editable-remix');
@@ -1176,6 +1221,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
+    compactToolbar(catalogKind !== 'meetings');
     const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
     search.placeholder = searchLabel;
     search.setAttribute('aria-label', searchLabel);
@@ -2427,6 +2473,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         idle: '',
       }[state];
       if (activityStatus.textContent !== message) activityStatus.textContent = message;
+      activityStatus.dataset.state = state;
     },
     async read(workspace, signal) {
       const account = currentUser;
