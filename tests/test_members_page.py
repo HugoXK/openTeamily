@@ -32,7 +32,10 @@ class MembersPageTests(unittest.TestCase):
         self.assertIn('/v1/workspaces', html)
         self.assertIn('/v1/invites/accept', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
-        self.assertEqual(self.raw.call('GET', '/members/app.mjs')['status'], 200)
+        script = self.raw.call('GET', '/members/app.mjs')
+        self.assertEqual(script['status'], 200)
+        self.assertIn('发消息', script['body'].decode())
+        self.assertIn('startDirectMessage', script['body'].decode())
         self.assertEqual(self.raw.call('GET', '/members/app.css')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/members/missing')['status'], 404)
 
@@ -41,23 +44,18 @@ class MembersPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/members', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/members')['status'], 405)
 
-    def test_wrapper_still_exposes_members_and_invites(self):
-        space = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
-                                 {'HTTP_IDEMPOTENCY_KEY': 'members-page-space-01'})
-        self.assertEqual(space['status'], 201, space)
-        wid = space['body']['workspace']['id']
-        bob = Client(self.app)
-        bob.register('bob')
-        added = self.client.call('POST', f'/v1/workspaces/{wid}/members',
-                                 {'username': 'bob', 'role': 'member'})
-        self.assertEqual(added['status'], 201, added)
-        listed = self.client.call('GET', f'/v1/workspaces/{wid}/members')
-        self.assertEqual(listed['status'], 200)
-        self.assertEqual([row['username'] for row in listed['body']['items']], ['alice', 'bob'])
-        invited = self.client.call('POST', f'/v1/workspaces/{wid}/invites',
-                                   {'role': 'member', 'expires_in': 600, 'max_uses': 1})
-        self.assertEqual(invited['status'], 201, invited)
-        self.assertIn('token', invited['body'])
+    def test_members_and_invites_have_no_legacy_management_fallback(self):
+        workspace = 'a' * 32
+        for method, path, payload in (
+            ('GET', f'/v1/workspaces/{workspace}/members', None),
+            ('POST', f'/v1/workspaces/{workspace}/invites', {'role': 'member'}),
+            ('GET', '/v1/join-requests', None),
+            ('POST', '/v1/invites/accept', {'token': 'a' * 32}),
+        ):
+            with self.subTest(method=method, path=path):
+                result = self.client.call(method, path, payload)
+                self.assertEqual(result['status'], 410)
+                self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
 
 
 if __name__ == '__main__':
