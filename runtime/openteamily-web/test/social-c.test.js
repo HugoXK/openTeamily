@@ -12,6 +12,7 @@ import social from '../features/social/index.js'
 import teams from '../features/teams/index.js'
 import members from '../features/members/index.js'
 import invites from '../features/invites/index.js'
+import studio from '../features/studio/index.js'
 
 const TOKEN = 'ot-fake-connector-token-for-tests'
 const SERVER = 'https://social.example.test'
@@ -428,4 +429,38 @@ test('Space work notices map account messages to the recipient workspace and sco
   assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
   assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
   assert.equal(f.calls.length,2)
+})
+
+test('Studio live requests forward only the authenticated watch and presence contracts', async () => {
+  const wid = 'a'.repeat(32), id = 'b'.repeat(32)
+  const path = '/v1/workspaces/' + wid + '/studio/documents/' + id + '/live'
+  const upstream = SERVER + '/v1/ot/teams/' + wid + '/studio/documents/' + id + '/live'
+  const editors = [{name: 'Member', editing: true}]
+  const stub = fakeFetch((url, {method}) => method === 'GET'
+    ? {unchanged:true, revision:2, editors} : {ok:true})
+  setSharedBotSocial(createBotSocial({server:SERVER, credentialsPath:creds(), fetch:stub.fetch}))
+  const {v1} = studio({}).endpoints
+  const update = {session_id:'studio-fixture-session', active:true, editing:true}
+  assert.deepEqual(await v1({method:'GET',path:path+'?revision=2'}),
+    {status:200,body:{unchanged:true,revision:2,editors}})
+  assert.deepEqual(await v1({method:'POST',path,body:update}), {status:200,body:{ok:true}})
+  assert.deepEqual(stub.calls, [
+    {url:upstream+'?revision=2', method:'GET', auth:'Bearer '+TOKEN, body:undefined},
+    {url:upstream, method:'POST', auth:'Bearer '+TOKEN, body:update},
+  ])
+  for (const query of ['', '?revision=2&revision=3', '?revision=9999999999999999']) {
+    assert.equal((await v1({method:'GET',path:path+query})).status,400)
+  }
+  for (const body of [undefined, {...update, body:'local draft'}, {...update, active:false}]) {
+    assert.equal((await v1({method:'POST',path,body})).status,400)
+  }
+  const signed = new AbortController()
+  signed.abort()
+  let sawAbort
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:async (url, {signal})=>{
+    sawAbort = url === upstream+'?revision=2' && signal.aborted
+    signal.throwIfAborted()
+  }}))
+  assert.equal((await v1({method:'GET',path:path+'?revision=2'},{request:{signal:signed.signal}})).status,503)
+  assert.equal(sawAbort,true)
 })

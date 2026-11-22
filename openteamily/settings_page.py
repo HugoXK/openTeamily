@@ -71,6 +71,7 @@ class SettingsPage:
         '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-merge.mjs': ('artifacts', 'studio-merge.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),

@@ -598,15 +598,26 @@
         </div>
       </div>
       <label id="studio-link-wrap" hidden>文档链接<input id="studio-link" readonly></label>
+      <p id="studio-presence" class="note" aria-live="polite" hidden></p>
       <div id="studio-conflict" class="studio-conflict" hidden>
-        <p>团队文档已有新版本。当前草稿仍保留。</p>
+        <p>两份修改需要确认。请比较后选择要继续编辑的版本。</p>
         <details id="studio-compare">
-          <summary>查看服务器版本</summary>
-          <p id="studio-server-title"></p>
-          <pre id="studio-server-body"></pre>
+          <summary>比较我的草稿和团队版本</summary>
+          <div class="studio-comparison">
+            <section aria-label="我的草稿">
+              <h3>我的草稿</h3>
+              <p id="studio-local-title"></p>
+              <pre id="studio-local-body" tabindex="0" aria-label="我的草稿正文"></pre>
+            </section>
+            <section aria-label="团队版本">
+              <h3>团队版本</h3>
+              <p id="studio-server-title"></p>
+              <pre id="studio-server-body" tabindex="0" aria-label="团队版本正文"></pre>
+            </section>
+          </div>
           <div class="studio-actions">
-            <button type="button" id="studio-use-server" class="secondary">采用服务器版本</button>
-            <button type="button" id="studio-rebase" class="secondary">保留草稿并更新版本</button>
+            <button type="button" id="studio-use-server" class="secondary">采用团队版本</button>
+            <button type="button" id="studio-rebase" class="secondary">保留我的草稿</button>
           </div>
         </details>
       </div>

@@ -163,11 +163,15 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 #studio-list button { text-align: start; white-space: normal; overflow-wrap: anywhere; }
 #studio-list .note { max-width: 12rem; overflow-wrap: anywhere; }
+#studio-presence { margin: 0; overflow-wrap: anywhere; }
 .studio-conflict { border: 1px solid var(--ot-line); border-radius: .65rem; background: var(--ot-surface-2); padding: .6rem .75rem; }
 .studio-conflict > p { margin: 0; }
 #studio-compare summary { min-height: 2.75rem; align-content: center; cursor: pointer; }
-#studio-server-title { margin: .25rem 0; overflow-wrap: anywhere; }
-#studio-server-body { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.studio-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin-block-end: .55rem; }
+.studio-comparison section { min-width: 0; border: 1px solid var(--ot-line); border-radius: .5rem; padding: .45rem .6rem; background: var(--ot-surface); }
+.studio-comparison h3 { margin: 0; font-size: .85rem; }
+.studio-comparison p { margin: .25rem 0; overflow-wrap: anywhere; }
+.studio-comparison pre { min-height: 2rem; max-height: 10rem; margin: .35rem 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #studio-compare .studio-actions { justify-content: flex-start; }
 
 #studio-history {
@@ -197,6 +201,8 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   #studio-form input { min-height: 2.75rem; }
   #studio-form input, #studio-form textarea { font-size: 1rem; }
   #studio-list li { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
+  .studio-comparison { grid-template-columns: minmax(0, 1fr); }
+  .studio-comparison pre { max-height: 6rem; }
 }
 
 .artifacts-disclaimer {

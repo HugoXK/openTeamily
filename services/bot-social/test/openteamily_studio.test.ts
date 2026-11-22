@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 import { STUDIO_SCHEMA } from "../src/openteamily/studio.js";
@@ -131,4 +132,105 @@ test("team document versions restore atomically and stay scoped to the current r
   const remaining = platform.db.prepare("SELECT count(*) AS n FROM ot_studio_revisions WHERE document_id=?")
     .get(document.id) as {n: number};
   assert.equal(remaining.n,0);
+});
+
+test("Studio watches wake on commits and scoped presence, then reauthorize before returning", async t => {
+  let now = Date.now();
+  const {base, stop} = await startServer({...bulkAuth, now:() => now});
+  t.after(stop);
+  const [owner, editor, outsider] = await Promise.all([
+    home(base, "watch-owner"), home(base, "watch-editor"), home(base, "watch-outsider"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {
+    name:"Studio live",slug:"studio-live-test",idempotency_key:"studio-live-team-fixture",
+  });
+  const anotherTeam = await owner.ok("POST", "/v1/ot/workspaces", {
+    name:"Studio separated",slug:"studio-live-other",idempotency_key:"studio-live-other-fixture",
+  });
+  const memberships = `/v1/ot/teams/${team.id}/members`;
+  await owner.ok("POST", memberships, {handle:editor.handle,role:"member"});
+  await editor.ok("PUT", "/v1/ot/profile", {display_name:"Studio teammate"});
+  const collection = `/v1/ot/teams/${team.workspace_id}/studio/documents`;
+  const {document} = await owner.ok("POST", collection, {
+    title:"Draft",body:"Draft text",client_key:"studio-live-document-key",
+  });
+  const {document:other} = await owner.ok("POST", collection, {
+    title:"Other draft",body:"Separate document",client_key:"studio-live-second-document",
+  });
+  const path = collection + "/" + document.id;
+  const live = path + "/live";
+  const firstTab = {session_id:"first-studio-tab",active:true,editing:false};
+  const secondTab = {session_id:"second-studio-tab",active:true,editing:true};
+
+  async function wake(reader: typeof owner, revision: number, action: () => Promise<unknown>) {
+    let settled = false;
+    const pending = reader.call("GET", live + "?revision=" + revision).finally(() => { settled = true; });
+    await delay(50);
+    assert.equal(settled, false);
+    await action();
+    const controller = new AbortController();
+    try {
+      return await Promise.race([pending, delay(2000, undefined, {signal:controller.signal}).then(() => {
+        throw new Error("Studio watch did not wake after the operation");
+      })]);
+    } finally { controller.abort(); }
+  }
+
+  assert.equal((await outsider.call("GET", live + "?revision=1")).status,404);
+  assert.equal((await outsider.call("POST", live, firstTab)).status,404);
+  assert.equal((await owner.call("GET", live + "?revision=1&revision=1")).status,400);
+  assert.equal((await owner.call("GET", live + "?revision=0")).status,400);
+  assert.equal((await owner.call("GET", live)).status,400);
+  assert.equal((await owner.call("GET", `/v1/ot/teams/${anotherTeam.workspace_id}/studio/documents/${document.id}/live?revision=2`)).status,404);
+  assert.equal((await editor.call("POST", live, {...firstTab, draft:"Private changes"})).status,400);
+  assert.equal((await editor.call("POST", live, {...firstTab, editing:"yes"})).status,400);
+
+  const opened = await wake(owner, 1, () => editor.ok("POST", live, firstTab));
+  assert.deepEqual(opened.data, {unchanged:true, revision:1, editors:[{name:"Studio teammate",editing:false}]});
+  const typing = await wake(owner, 1, () => editor.ok("POST", live, secondTab));
+  assert.deepEqual(typing.data, {unchanged:true, revision:1, editors:[{name:"Studio teammate",editing:true}]});
+  const closedFirst = await wake(owner, 1, () => editor.ok("POST", live, {...firstTab,active:false}));
+  assert.deepEqual(closedFirst.data.editors,[{name:"Studio teammate",editing:true}]);
+  assert.deepEqual((await editor.ok("GET", live + "?revision=2")).editors, []);
+  assert.deepEqual((await owner.ok("GET", collection + "/" + other.id + "/live?revision=2")).editors, []);
+
+  const saved = await wake(owner, 1, () => editor.ok("PUT", path, {
+    title:"Saved",body:"Saved text",revision:1,
+  }));
+  assert.equal(saved.data.document.revision,2);
+  assert.equal(saved.data.document.body,"Saved text");
+  assert.deepEqual(saved.data.editors,[{name:"Studio teammate",editing:true}]);
+  const unchanged = editor.call("GET", live + "?revision=2");
+  const secondStarted = performance.now();
+  await owner.ok("PUT", path, {title:"Saved",body:"Saved text",revision:2});
+  await editor.ok("POST", live, secondTab);
+  assert.deepEqual((await unchanged).data, {unchanged:true,revision:2,editors:[]});
+  assert.ok(performance.now() - secondStarted >= 3500, "no-op save and heartbeat cannot force a poll loop");
+  now += 16_001;
+  assert.deepEqual((await owner.ok("GET", live + "?revision=1")).editors,[]);
+
+  const restored = await wake(editor, 2, () => owner.ok("POST", path + "/restore", {revision:2,to:1}));
+  assert.equal(restored.data.document.revision,3);
+  assert.equal(restored.data.document.body,"Draft text");
+  const watches = Array.from({length:8}, () => owner.call("GET", live + "?revision=3"));
+  await delay(60);
+  const crowded = await owner.call("GET", live + "?revision=3");
+  assert.equal(crowded.status,429);
+  assert.equal(crowded.data.error.code,"studio_live_busy");
+  await editor.ok("POST", live, secondTab);
+  assert.deepEqual((await Promise.all(watches)).map(reply => reply.status),Array(8).fill(200));
+  await wake(owner, 3, () => editor.ok("POST", live, {...secondTab,editing:false}));
+  const suspended = await wake(editor, 3, async () => {
+    await owner.ok("PATCH", memberships + "/" + editor.handle, {suspended:true});
+    await owner.ok("PUT", path, {title:"Authorized only",body:"Members only",revision:3});
+  });
+  assert.equal(suspended.status,404);
+  assert.equal(suspended.data.error.code,"team_not_found");
+  assert.doesNotMatch(JSON.stringify(suspended.data),/Members only/);
+  assert.deepEqual((await owner.ok("GET", live + "?revision=3")).editors,[]);
+
+  const deleted = await wake(owner, 4, () => owner.ok("DELETE", path, {revision:4}));
+  assert.equal(deleted.status,404);
+  assert.equal(deleted.data.error.code,"document_not_found");
+  assert.equal((await owner.call("POST", live, firstTab)).status,404);
 });
