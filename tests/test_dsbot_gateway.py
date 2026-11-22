@@ -175,6 +175,8 @@ class GatewayTest(unittest.TestCase):
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/studio-copy'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/shared-copy'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/shared-copy/extra'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live'), 'studio')
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live/anything'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/action'), 'meetings')

@@ -46,3 +46,15 @@ export function decodeActionReview(raw) {
   else if (items.length) state.message = '已恢复此标签页中的行动草稿。';
   return state;
 }
+
+export function decodeNewActionAttempt(raw) {
+  if (typeof raw !== 'string' || raw.length > 16000) return null;
+  let value;
+  try { value = JSON.parse(raw); } catch { return null; }
+  const {key, payload} = value || {};
+  const {title, notes, due_at, memory_page_id} = payload || {};
+  if (!id(key) || !text(title) || !title.trim() || typeof notes !== 'string' || notes.length > 2000 ||
+      (due_at !== null && (!Number.isInteger(due_at) || due_at < 0 || due_at > 2 ** 31)) ||
+      (memory_page_id !== null && !id(memory_page_id))) return null;
+  return {key, payload:{title:title.trim(), notes, due_at, memory_page_id}};
+}

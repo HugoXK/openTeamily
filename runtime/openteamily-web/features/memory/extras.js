@@ -53,13 +53,13 @@ export function createAction(req, ws, body, keyHash) {
   const ref = 'memory_page_id' in body ? body.memory_page_id : null
   if (!validTitle(body.title) || !validNotes(notes) || !validDue(due) || !validRef(ref)) refuse(400, 'invalid', 'Provide a memory action title')
   const title = body.title.trim()
-  const pageId = resolvePage(store, ws, ref)
-  const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: pageId }))
+  const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: ref }))
   const prior = store.get('SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', ws, keyHash)
   if (prior) {
     if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
     return { status: 200, action: actionView(store, prior) }
   }
+  const pageId = resolvePage(store, ws, ref)
   if (store.get('SELECT COUNT(*) AS n FROM memory_actions WHERE workspace_id=?', ws).n >= LIMITS.actions) refuse(429, 'quota', 'Memory action capacity reached')
   const id = newId()
   const user = actor(req)

@@ -31,6 +31,28 @@ test('memory actions run in DS-Bot: create linked to a page, filter, update, con
   assert.equal((await call('POST', base(`/actions/${action.id}/remove`), {})).status, 200)
 })
 
+test('a committed action create remains replayable after its linked page is removed', async () => {
+  const team = 'e'.repeat(32)
+  const bot = await boot(undefined,{teams:[team]})
+  const call = (...args) => bot.call('memory', ...args)
+  const source = (await call('POST',base(),{title:'发布原始记忆',body:'确认发布联系人'},key())).body.page
+  const payload = {title:'确认发布联系人',notes:'周五前确认',memory_page_id:source.id}
+  const clientKey = key()
+  const created = await call('POST',base('/actions'),payload,clientKey)
+  assert.equal(created.status,201)
+  assert.equal(created.body.action.memory_page_id,source.id)
+  assert.equal((await call('POST',base(`/${source.id}/remove`),{})).status,200)
+
+  const replay = await call('POST',base('/actions'),payload,clientKey)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.action.id,created.body.action.id)
+  assert.equal(replay.body.action.memory_page_id,null)
+  assert.equal((await call('POST',base('/actions'),{...payload,title:'不同的行动'},clientKey)).status,409)
+  assert.equal((await call('POST',base('/actions'),payload,key())).status,400)
+  assert.equal((await call('POST',`/v1/workspaces/${team}/memory/actions`,payload,clientKey)).status,400)
+  assert.equal((await call('GET',base('/actions'))).body.items.length,1)
+})
+
 test('links and the graph (topics, [[mentions]], manual links) are computed in DS-Bot', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('memory', ...args)

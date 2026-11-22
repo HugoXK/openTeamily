@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
 import {studioDiscussionContext} from '../openteamily/static/artifacts/studio-discussion.mjs';
+import {sharedWorkCopyToken} from '../openteamily/static/artifacts/shared-work-copy.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref,
@@ -15,6 +16,15 @@ import {
   createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
+
+test('a shared copy deep link accepts only one exact private share token', () => {
+  const token = 'Ab_Cd-'.repeat(7) + 'e';
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token),token);
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token + '&shared-work=' + token),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token + '&workspace=' + 'a'.repeat(32)),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=%2F'),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=x'),'');
+});
 
 test('Studio discussion identifies the saved revision and bounds the excerpt on Unicode characters', () => {
   const source = {title:'行动方案', revision:7, body:'核对负责人'};

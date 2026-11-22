@@ -1,5 +1,5 @@
 import {mountCandidates, sourceHref} from './candidates.mjs';
-import {actionSaveAttempt, encodeActionReview, decodeActionReview} from './action-review.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 export function csrfCookie(source) {
@@ -400,6 +400,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionMore = document.getElementById('action-list-more');
   const actionRetry = document.getElementById('action-list-retry');
   const actionFollowup = document.getElementById('action-follow-up');
+  const newActionForm = document.getElementById('new-action-form');
+  const newActionButton = document.getElementById('new-action');
+  const newActionStatus = document.getElementById('new-action-status');
+  const newActionFields = Object.fromEntries(['title', 'notes', 'due', 'page'].map(name => [name, document.getElementById('new-action-' + name)]));
   let personalWorkspaces = new Set();
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
@@ -1193,8 +1197,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // An action may reference a page past the first directory page while the
     // graph is still loading. Keep the stored link selected in the meantime.
-    if (selected && !pages.has(selected) && currentAction?.memory_page_id === selected) {
-      pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+    if (selected && !pages.has(selected)) {
+      if (currentAction?.memory_page_id === selected) pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+      else if (select === newActionFields.page && newActionAttempt()?.payload.memory_page_id === selected) pages.set(selected, '已选择的记忆页');
     }
     select.replaceChildren();
     const empty = document.createElement('option');
@@ -1550,6 +1555,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentUser = null;
       currentPage = null;
       currentAction = null;
+      syncNewActionWorkspace();
       stopActionListing();
       actionListing = null;
       setCitation(null);
@@ -1665,7 +1671,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pageChoices = [];
     renderRecent([]);
-    fillPageSelect(document.getElementById('new-action-page'), '');
+    syncNewActionWorkspace();
+    fillPageSelect(newActionFields.page, newActionFields.page.value);
     actionDraftPageScope = '';
     renderActionDrafts();
     newPageButton.disabled = true;
@@ -3059,54 +3066,105 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('close-editor').addEventListener('click', returnToList);
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
+  const newActionAttempts = new Map();
+  let newActionScope = '';
+
+  function newActionAttempt(scope = actionDraftScope()) {
+    if (!scope) return null;
+    if (!newActionAttempts.has(scope)) {
+      let attempt;
+      try { attempt = decodeNewActionAttempt(document.defaultView.sessionStorage.getItem('openteamily.memory-action-create:' + scope)); } catch {}
+      newActionAttempts.set(scope, attempt || null);
+    }
+    return newActionAttempts.get(scope);
+  }
+
+  function saveNewActionAttempt(scope, attempt) {
+    newActionAttempts.set(scope, attempt);
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const name = 'openteamily.memory-action-create:' + scope;
+      if (attempt) storage.setItem(name, JSON.stringify({key:attempt.key, payload:attempt.payload}));
+      else storage.removeItem(name);
+    } catch {}
+  }
+
+  function newActionPayload() {
+    return {title:newActionFields.title.value.trim(), notes:newActionFields.notes.value,
+      due_at:dueAtFromDate(newActionFields.due.value), memory_page_id:newActionFields.page.value || null};
+  }
+
+  function renderNewActionAttempt(attempt = newActionAttempt()) {
+    const busy = attempt?.busy === true;
+    const retry = attempt && JSON.stringify(attempt.payload) === JSON.stringify(newActionPayload());
+    for (const field of Object.values(newActionFields)) field.disabled = busy;
+    newActionButton.disabled = busy || !actionDraftScope();
+    newActionButton.textContent = busy ? '正在保存…' : retry ? '重试保存' : '新建行动';
+    newActionStatus.textContent = busy ? '正在保存行动。' : retry ? '上次保存尚未确认。重试会核对同一次请求。'
+      : attempt ? '上次保存尚未确认。修改内容后将发起新的保存请求。' : '';
+  }
+
+  function applyNewActionDraft(payload) {
+    newActionFields.title.value = payload?.title ?? '';
+    newActionFields.notes.value = payload?.notes ?? '';
+    newActionFields.due.value = dueDateValue(payload?.due_at);
+    fillPageSelect(newActionFields.page, payload?.memory_page_id ?? '');
+  }
+
+  function syncNewActionWorkspace() {
+    const scope = actionDraftScope();
+    if (scope === newActionScope) return;
+    newActionScope = scope;
+    const attempt = newActionAttempt(scope);
+    applyNewActionDraft(attempt?.payload);
+    newActionForm.dataset.open = String(Boolean(attempt));
+    renderNewActionAttempt(attempt);
+    syncActionComposer(false);
+  }
+
   const newActionOpen = document.getElementById('new-action-open');
-  document.getElementById('new-action-form').addEventListener('input', event => {
-    event.currentTarget.dataset.open = 'true';
+  newActionForm.addEventListener('input', () => {
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt();
   });
+  newActionForm.addEventListener('change', () => renderNewActionAttempt());
   if (newActionOpen) {
     newActionOpen.addEventListener('click', () => {
-      const form = document.getElementById('new-action-form');
-      if (form) form.dataset.open = 'true';
+      newActionForm.dataset.open = 'true';
       syncActionComposer(false);
     });
   }
-  document.getElementById('new-action-form').addEventListener('submit', async (event) => {
+  newActionForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const id = workspaceId();
-    const owner = currentUser;
-    if (!id) return;
-    const title = document.getElementById('new-action-title').value.trim();
-    const notes = document.getElementById('new-action-notes').value;
-    const dueAt = dueAtFromDate(document.getElementById('new-action-due').value);
-    const pageId = document.getElementById('new-action-page').value || null;
-    const payload = {title, notes};
-    if (dueAt != null) payload.due_at = dueAt;
-    if (pageId) payload.memory_page_id = pageId;
-    const created = await fetcher(`/v1/workspaces/${id}/memory/actions`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfCookie(document.cookie),
-        'Idempotency-Key': randomKey(),
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    });
-    let parsed = {};
-    try { parsed = await created.json(); } catch { parsed = {}; }
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (created.status !== 201 && created.status !== 200) {
-      show('error', messageFor(parsed.error, '无法创建下一步行动。'));
+    const workspace = workspaceId(), scope = actionDraftScope(), visible = pageRequest;
+    const previous = newActionAttempt(scope);
+    const payload = newActionPayload();
+    if (!scope || previous?.busy || !payload.title) return;
+    const key = previous && JSON.stringify(previous.payload) === JSON.stringify(payload) ? previous.key : randomKey();
+    const attempt = {key, payload, busy:true};
+    saveNewActionAttempt(scope, attempt);
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt(attempt);
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions`, payload, {'Idempotency-Key':key})
+      .catch(() => ({status:0, body:{}}));
+    attempt.busy = false;
+    const row = result.body?.action;
+    const saved = [200,201].includes(result.status) && row?.workspace_id === workspace && MEMORY_ID.test(row.id || '');
+    const definitiveFailure = result.status >= 400 && result.status < 500 && result.status !== 408;
+    if (saved || definitiveFailure) saveNewActionAttempt(scope, null);
+    if (actionDraftScope() !== scope) return;
+    if (!saved) {
+      renderNewActionAttempt();
+      if (definitiveFailure) show('error', messageFor(result.body.error, '无法创建下一步行动。'));
       return;
     }
-    document.getElementById('new-action-title').value = '';
-    document.getElementById('new-action-notes').value = '';
-    document.getElementById('new-action-due').value = '';
-    document.getElementById('new-action-page').value = '';
+    applyNewActionDraft();
+    newActionForm.dataset.open = 'false';
+    renderNewActionAttempt();
+    if (pageRequest !== visible || currentView !== 'actions') return;
     show('ok', '已创建下一步行动。');
     void loadActions();
-    await openAction(parsed.action.id);
+    await openAction(row.id);
   });
 
   actionEditor.addEventListener('input', syncActionFollowup);

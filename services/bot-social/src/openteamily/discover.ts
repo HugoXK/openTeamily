@@ -4,7 +4,7 @@
 // category, kind and an optional explicitly released snapshot).
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { assert } from "../errors.js";
+import { ApiError, assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { CHAT_FILE_BODY_LIMIT, CHAT_FILE_MAX_BYTES, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
@@ -396,7 +396,7 @@ type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
 const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
 
-function publicWorkPreview(ot: OtContext, slug: string) {
+function publicWorkPreview(ot: OtContext, slug: string, input: Record<string, unknown>) {
   assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
   const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS}, substr(l.snapshot, 1, ?) AS snapshot
     FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, WORK_PREVIEW_MAX, slug);
@@ -410,6 +410,7 @@ function publicWorkPreview(ot: OtContext, slug: string) {
     path, likes, collections, comment_count, site_available,
     ...(file_available ? {file_available, file_mime, file_bytes} : {}),
     preview: workExcerpt(work, site_available === true),
+    ...(input.nav === "latest" ? publicPreviewNeighbors(ot, work, input) : {}),
   };
 }
 
@@ -505,6 +506,24 @@ function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: Feed
     ...scope.args, work.updated_at, work.id) ?? null;
   };
   return {previous: neighbor(true), next: neighbor(false)};
+}
+
+function scopedWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
+  const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
+  return matches ? chronologicalWorkNeighbors(ot, work, scope) : {previous:null, next:null};
+}
+
+function publicPreviewNeighbors(ot: OtContext, work: WorkAnchor, input: Record<string, unknown>) {
+  try {
+    // Public links can carry chronological filters, never a viewer's private feed.
+    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator}, null);
+    return scopedWorkNeighbors(ot, work, scope);
+  } catch (error) {
+    // An obsolete creator filter or invalid optional query cannot hide the work itself.
+    if (error instanceof ApiError && (error.status === 400 || error.code === "member_not_found")) return {previous:null, next:null};
+    throw error;
+  }
 }
 
 const RANKING_WINDOW = 500;
@@ -853,9 +872,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         : null;
       return {...detail, previous: neighbor(ids[position - 1]), next: neighbor(ids[position + 1])};
     }
-    const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
-    return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
+    return {...detail, ...scopedWorkNeighbors(ot, work, scope)};
   });
   app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
     ot.me(req);
@@ -998,7 +1015,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const slug = params(req).slug;
     const accept = String(req.headers.accept || "");
     const json = accept.includes("application/json") && !accept.includes("text/html");
-    if (json && kind === "work" && query(req).view === "preview") return publicWorkPreview(ot, slug);
+    const input = query(req);
+    if (json && kind === "work" && input.view === "preview") return publicWorkPreview(ot, slug, input);
     const l = listedBySlug(ot, slug);
     assert(l.kind === kind, 404, "listing_not_found", "no such listing");
     const view = publicListingView(ot, l);

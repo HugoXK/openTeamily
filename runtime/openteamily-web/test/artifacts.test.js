@@ -98,6 +98,60 @@ test('copying a saved work version creates a separate private artifact and repla
   assert.equal(replay.body.artifact.body,'Only edited in copy')
 })
 
+test('saving link-shared text copies only the reviewed snapshot to the personal runtime', async (t) => {
+  const bot = await boot()
+  const other = await boot()
+  const call = (...args) => bot.call('artifacts',...args)
+  const workspace = WS
+  assert.notEqual(workspace, bot.identity.instanceId)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  other.features.table['agents/personal-binding'] = async () => ({workspace_id:other.identity.instanceId})
+  const endpoint = base('/shared-copy', workspace)
+  const token = 'a'.repeat(43)
+  let snapshot = {title:'Shared plan',body:'Reviewed text with <literal markup>.'}
+  let resolves = 0
+  setSharedBotSocial({
+    async request(method, path, payload) {
+      assert.deepEqual([method,path,payload],['POST','/v1/ot/public-shares/resolve',{token}])
+      resolves += 1
+      if (!snapshot) throw Object.assign(new Error('revoked'),{status:404})
+      return snapshot
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  assert.equal((await other.call('artifacts','POST',endpoint,{token})).status,404)
+  assert.equal((await call('POST',base('/shared-copy',bot.identity.instanceId),{token})).status,404)
+  assert.equal((await call('POST',endpoint,{token,body:'Use my different text'})).status,400)
+  assert.equal(resolves,0)
+  const {body:{snapshot:preview}} = await call('POST',endpoint,{token})
+  assert.deepEqual(Object.keys(preview).sort(),['body','fingerprint','title'])
+  assert.equal(preview.body,snapshot.body)
+  assert.deepEqual((await call('GET',base('',workspace))).body.items,[])
+
+  const originalSnapshot = snapshot
+  const confirmation = {token,fingerprint:preview.fingerprint}
+  snapshot = {...snapshot,body:'Unreviewed alternate text'}
+  assert.equal((await call('POST',endpoint,confirmation)).status,409)
+  snapshot = null
+  assert.equal((await call('POST',endpoint,confirmation)).status,404)
+  assert.deepEqual((await call('GET',base('',workspace))).body.items,[])
+
+  snapshot = originalSnapshot
+  const results = await Promise.all([call('POST',endpoint,confirmation),call('POST',endpoint,confirmation)])
+  assert.deepEqual(results.map(result => result.status).sort(),[200,201])
+  const first = results[0].body.artifact
+  assert.equal(results[1].body.artifact.id,first.id)
+  assert.equal(first.body,originalSnapshot.body)
+  assert.equal(first.source,undefined)
+  const previous = resolves
+  snapshot = null
+  const receipt = await call('POST',endpoint,confirmation)
+  assert.equal(receipt.body.artifact.id,first.id)
+  assert.equal(resolves,previous)
+  assert.equal((await call('GET',base('',workspace))).body.items.length,1)
+})
+
 test('saved website, structured work and historical media copies keep their native content', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('artifacts',...args)

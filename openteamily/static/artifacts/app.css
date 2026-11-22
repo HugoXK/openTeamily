@@ -1421,19 +1421,38 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: 1.05rem;
 }
 
-#duplicate-artifact-dialog, #studio-copy-dialog {
+#duplicate-artifact-dialog, #studio-copy-dialog, #shared-work-copy-dialog {
   width: min(26rem, calc(100% - 2rem));
   margin: auto;
   border: 1px solid var(--ot-line);
 }
 
-#duplicate-artifact-dialog::backdrop, #studio-copy-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+#duplicate-artifact-dialog::backdrop, #studio-copy-dialog::backdrop, #shared-work-copy-dialog::backdrop {
+  background: rgb(15 23 42 / 32%);
+}
 #duplicate-artifact-source { overflow-wrap: anywhere; }
 #duplicate-artifact-title { width: 100%; margin-top: .3rem; }
 #studio-copy-open { justify-self: start; }
 #studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
+#shared-work-copy-dialog { box-sizing: border-box; }
 #studio-copy-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem; overflow-wrap: anywhere; }
-#studio-copy-preview { background: var(--ot-surface-2); border: 1px solid var(--ot-line); border-radius: .65rem; padding: .75rem; }
+#studio-copy-preview, #shared-work-copy-preview {
+  background: var(--ot-surface-2);
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+  padding: .75rem;
+}
+#shared-work-copy-dialog :is(button, a) { min-height: 2.75rem; }
+#shared-work-copy-status:empty { display: none; }
+#shared-work-copy-title { margin: 0; overflow-wrap: anywhere; }
+#shared-work-copy-body {
+  margin: .5rem 0 0;
+  max-height: min(48vh, 24rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: inherit;
+}
 #studio-copy-title { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
 #studio-copy-body { max-height: min(13rem, 35dvh); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #studio-copy-status:empty { display: none; }

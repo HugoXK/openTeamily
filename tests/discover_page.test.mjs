@@ -1577,7 +1577,7 @@ test('the native direct excerpt paints before auth and is retained through a mis
   const scoped = Promise.withResolvers();
   const work = detailFixture();
   const next = detailFixture({slug: 'next-work'});
-  const publicPath = '/w/' + work.slug + '?view=preview';
+  const publicPath = '/w/' + work.slug + '?view=preview&nav=latest';
   const privatePath = '/v1/discover/works/' + work.slug;
   const requests = [];
   const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async (path, options) => {
@@ -1629,6 +1629,7 @@ test('a guest detail pages only its filtered feed and a late page cannot reopen 
   const paths = [];
   const history = {replaceState(_state, _unused, path) { paths.push(path); }};
   const detailRequests = [];
+  const publicPath = '/w/guest-edge?kind=document&q=%E5%85%AC%E5%BC%80&view=preview&nav=latest';
   await mount(doc, {history, location:{search:'?kind=document&q=公开&work=guest-edge'}, fetcher: async path => {
     if (path === '/v1/auth/session') return commentResponse({},401);
     if (path.startsWith('/v1/discover/works?')) {
@@ -1644,7 +1645,7 @@ test('a guest detail pages only its filtered feed and a late page cannot reopen 
     }
     if (path.startsWith('/w/')) {
       detailRequests.push(path);
-      if (path === '/w/guest-edge?view=preview') return commentResponse({...last,preview:'公开详情正文'});
+      if (path === publicPath) return commentResponse({...last,preview:'公开详情正文'});
     }
     assert.fail('Unexpected request ' + path);
   }});
@@ -1660,7 +1661,7 @@ test('a guest detail pages only its filtered feed and a late page cannot reopen 
   await advancing;
   assert.equal(doc.getElementById('work-detail').hidden,true);
   assert.deepEqual(paths,['/discover?kind=document&q=%E5%85%AC%E5%BC%80']);
-  assert.deepEqual(detailRequests,['/w/guest-edge?view=preview']);
+  assert.deepEqual(detailRequests,[publicPath]);
   assert.deepEqual(doc.getElementById('feed-grid').children.map(child=>child.dataset.slug),[first.slug,last.slug,later.slug]);
 });
 
@@ -1674,7 +1675,7 @@ test('a failed public detail cannot block the native scoped work or its preview'
   await mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
     requests.push(path);
     if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
-    if (path === publicPath + '?view=preview') return commentResponse({}, 503);
+    if (path === publicPath + '?view=preview&nav=latest') return commentResponse({}, 503);
     if (path === publicPath + '/preview') return commentResponse({preview: 'Normal scoped preview'});
     if (path === '/v1/discover/works/' + work.slug) return commentResponse({viewer_username: 'alice', work});
     if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
@@ -1694,7 +1695,7 @@ test('an authoritative withdrawal clears the optimistic public preview and actio
   const work = detailFixture();
   const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
     if (path === '/v1/auth/session') return session.promise;
-    if (path === '/w/' + work.slug + '?view=preview') return commentResponse({...work, preview: 'Was public'});
+    if (path === '/w/' + work.slug + '?view=preview&nav=latest') return commentResponse({...work, preview: 'Was public'});
     if (path === '/v1/discover/works/' + work.slug) return commentResponse({}, 404);
     if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
     throw new Error(path);

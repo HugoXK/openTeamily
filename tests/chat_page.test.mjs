@@ -3815,6 +3815,48 @@ test('a meeting discussion draft unlocks thread controls only after its exact fi
   }
 });
 
+test('returning to a private chat fetches once and keeps the older scroll position until the user loads the update', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc, el, routes, messages, restore} = fixture;
+  const returnedMessage = 'c'.repeat(32);
+  const conversation = {...fixture.nativeThread, archived:false, unread_count:0};
+  const update = [{id:returnedMessage, role:'user', body:'Sent from another device', status:'succeeded', created:15}];
+  const resume = Promise.withResolvers();
+  let reads = 0;
+  routes.set(linkBase(linkWork) + linkNativeLatest, () => {
+    if (++reads === 2) return resume.promise;
+    return json(200, {agent:fixture.agent, conversation, items:reads === 1 ? fixture.nativeRows : update, cursor:null});
+  });
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    assert.deepEqual(messages(),[linkAgentOlder,linkAgentLatest]);
+    const scroller = el('message-scroller');
+    Object.assign(scroller,{scrollHeight:500, clientHeight:100, scrollTop:40});
+    const oldNodes = [...el('message-list').children];
+    el('chat-body').value = 'unfinished draft';
+    await fire(el('chat-body'),'input');
+    doc.visibilityState = 'hidden';
+    await fire(doc,'visibilitychange');
+    assert.equal(reads,1);
+    doc.visibilityState = 'visible';
+    await fire(doc,'visibilitychange');
+    await fire(doc,'visibilitychange');
+    assert.equal(reads,2);
+    resume.resolve(json(200,{agent:fixture.agent, conversation, items:update, cursor:null}));
+    await settle();
+    assert.deepEqual(el('message-list').children,oldNodes);
+    assert.equal(scroller.scrollTop,40);
+    assert.equal(el('conversation-live-update').hidden,false);
+    await fire(el('conversation-live-load'),'click');
+    assert.deepEqual(messages(),[returnedMessage]);
+    assert.equal(el('conversation-live-update').hidden,true);
+    assert.equal(el('chat-body').value,'unfinished draft');
+  } finally {
+    resume.resolve(json(503,{}));
+    restore();
+  }
+});
+
 test('an exact shared chat and its group sidebar are usable while the personal startup and agent directory wait', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
   const {doc, el, routes, calls, messages, selected, restore} = fixture;

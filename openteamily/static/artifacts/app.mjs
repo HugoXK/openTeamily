@@ -4,6 +4,7 @@ import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
 import { mountSharedStudio } from './shared-studio.mjs';
 import { mountStudioCopy } from './studio-copy.mjs';
+import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -691,6 +692,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (selection, id, review) =>
       request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
     show,
+  });
+  const sharedWorkCopy = mountSharedWorkCopy(document, {
+    request: (method, path, body, signal) => request(method, path, body, undefined, signal),
+    dismissLink: () => syncViewUrl(),
+    openArtifact: (workspace, artifact) => {
+      void openEditor(artifact, {workspace,saved:true,notice:{kind:'ok',text:'已保存到个人空间。'}});
+    },
   });
 
   function syncStudioWorkspace() {
@@ -3238,6 +3246,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     activity.setScope('');
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
+    const sharedWork = !location?.search && sharedWorkCopyToken(location?.hash);
     const linkedStudio = new URLSearchParams(location?.search).has('studio')
       ? studioDocumentFromSearch(location.search) || {invalid: true} : null;
     const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
@@ -3302,7 +3311,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     const workspaces = space.body.items || [];
-    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    const personal = sharedWork && workspaces.find(item => item.kind === 'personal');
+    fillWorkspaces(workspaces, personal?.id || linkedWorkspace || workspaceId());
     void supplemental?.then(shared => {
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
@@ -3321,6 +3331,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const emptyMessage = document.getElementById('list-empty-message');
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     hideEditor();
+    if (sharedWork) {
+      void loadList();
+      if (personal && personal.id === workspaceId() && sharedWorkCopy) sharedWorkCopy.open(personal.id,sharedWork);
+      else show('error', '无法打开个人空间，请重试。');
+      return;
+    }
     if (linkedStudio) {
       void loadList();
       if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
@@ -4479,12 +4495,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const address = spaceAddress;
       workspaceLoad += 1;
       hideEditor();
+      sharedWorkCopy?.close();
       show('', '');
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
       if (studioDocumentFromSearch(view.location.search) || artifactTargetFromSearch(view.location.search) ||
-          newKindFromSearch(view.location.search)) {
+          newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
       }
