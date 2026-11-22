@@ -82,7 +82,8 @@ test('installation needs permission, persists through service reload, and uninst
   assert.match(el('skills-error').textContent,/勾选/);assert.equal(svc.calls.filter(c=>c.options.method==='POST').length,0);
   el('skills-permission').checked=true;await button.handlers.click();
   assert.equal(el('skills-list').children[0].children[2].textContent,'卸载');
-  assert.match(el('skills-list').children[0].children[1].children[1].textContent,/等待/);
+  assert.match(el('skills-list').children[0].children[1].children[1].textContent,/已安装/);
+  assert.equal(el('skills-permission').checked,false);
   const posted=svc.calls.find(c=>c.options.method==='POST');assert.equal(posted.options.headers['X-CSRF-Token'],'synthetic-csrf');
   const next=fakeDocument();next.doc.cookie='__Host-ot_csrf=x';next.el('skills-scope').value='account';await mountSkills(next.doc,{fetcher:svc.fetcher}).ready;
   assert.equal(next.el('skills-list').children[0].children[2].textContent,'卸载');

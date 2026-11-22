@@ -6,6 +6,7 @@ import socket
 import threading
 from urllib.parse import urlsplit, urlencode
 
+from ..dsbot_bundle import FORMAT as BUNDLE_FORMAT
 from .safety import ManagerError, require, json_loads
 
 HEX = re.compile(r'[0-9a-f]{32}')
@@ -16,6 +17,19 @@ KEY = re.compile(r'[A-Za-z0-9_-]{16,64}')
 def check_id(value):
     require(isinstance(value, str) and HEX.fullmatch(value), 'invalid_id')
     return value
+
+
+def check_agent_bootstrap(iid, bundle):
+    if bundle is not None:
+        require(
+            isinstance(bundle, dict)
+            and set(bundle) == {'format', 'version', 'feature', 'instance_id', 'created', 'tables', 'manifest'}
+            and bundle['format'] == BUNDLE_FORMAT
+            and type(bundle['version']) is int and bundle['version'] == 1
+            and bundle['feature'] == 'agents' and bundle['instance_id'] == iid,
+            'agent_bootstrap_shape',
+        )
+    return bundle
 
 
 class ManagerClient:
@@ -193,28 +207,14 @@ class ManagerClient:
         require(doc.get('source') in ('platform', 'workspace'), 'bot_social_shape')
         return doc
 
-    def runtime_agent_key(self, iid, claim):
-        """Lease-gated fetch of the instance runtime key. The token is written to a file and not logged."""
+    def runtime_agent_bootstrap(self, iid, claim):
+        """Fetch the personal-agent import bundle for this leased instance's startup."""
         check_id(iid)
         job = claim['job']
-        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', {
+        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', {
             'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease']})
-        require(isinstance(data, dict) and set(data) == {'runtime_key_present', 'runtime_key'}, 'runtime_key_shape')
-        require(data['runtime_key_present'] in (True, False), 'runtime_key_shape')
-        if data['runtime_key_present'] is False:
-            require(data['runtime_key'] is None, 'runtime_key_shape')
-            return None
-        doc = data['runtime_key']
-        fields = {'origin', 'token', 'hostname'}
-        require(isinstance(doc, dict) and fields <= set(doc) <= fields | {'agent_bootstrap'}, 'runtime_key_shape')
-        if 'agent_bootstrap' in doc:
-            bootstrap = doc['agent_bootstrap']
-            require(isinstance(bootstrap, dict) and bootstrap.get('feature') == 'agents'
-                    and bootstrap.get('instance_id') == iid, 'runtime_key_shape')
-        for key in ('origin', 'token', 'hostname'):
-            require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
-        return doc
-
+        require(isinstance(data, dict) and set(data) == {'agent_bootstrap'}, 'agent_bootstrap_shape')
+        return check_agent_bootstrap(iid, data['agent_bootstrap'])
 
     def dsbot_upstream(self, iid, address, auth_cookie, process_ref):
         """Report a running runtime's private address and DSH session cookie (never logged)."""

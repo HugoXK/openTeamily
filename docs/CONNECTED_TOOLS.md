@@ -1,17 +1,14 @@
-# Connected app tools in FlyBot management tasks
+# Connected app tools in DS-Bot
 
 Related #10, #6, #11. Status: implemented, with **synthetic/mock** tests only.
 No real Composio key, real model or live provider mutation has been used to
 verify this. CI passing is not Teamily parity or real-vendor verification.
 
-## What now runs
+Connected app tools run in the user's own DS-Bot. The OpenTeamily connectors feature exposes the native `ot-apps` capability and handles the owner's one-time approvals. See [the native tool server](../runtime/openteamily-web/features/connectors/tool-server.js).
 
-After the user saves **their own** Composio project API key and connects an app
-(see [COMPOSIO.md](COMPOSIO.md)), management-dispatched private conversation
-infer tasks can discover and call connected tools. Both the Python FlyBot daemon
-(including the downloaded zipapp) and the image's `agent-loop.mjs` implement
-OpenAI-compatible tool-call/result rounds. This is not an integration into every
-standalone DSH session: the entry point is the management task loop.
+## Historical management task protocol
+
+The following describes the retired polling architecture and its approval protocol.
 
 1. Dispatch records the private conversation's initiating user. Only a runtime
    owned by that same user receives a connected-tools grant. An explicitly

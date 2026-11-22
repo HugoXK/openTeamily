@@ -15,7 +15,7 @@ class LookAvatarPageTests(unittest.TestCase):
         self.assertEqual(style['status'], 200)
         self.assertIn('javascript', script['headers']['Content-Type'])
         self.assertIn('text/css', style['headers']['Content-Type'])
-        self.assertEqual(script['headers']['Cache-Control'], 'no-store')
+        self.assertEqual(script['headers']['Cache-Control'], 'private, no-cache')
         self.assertIn("default-src 'none'", script['headers']['Content-Security-Policy'])
         self.assertIn(b'createLookAvatar', script['body'])
         self.assertIn(b'.look-avatar', style['body'])

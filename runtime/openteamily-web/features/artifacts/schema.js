@@ -128,6 +128,12 @@ CREATE TABLE IF NOT EXISTS annotation_comments (
   deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)));
 CREATE INDEX IF NOT EXISTS annotation_comment_thread
   ON annotation_comments(workspace_id, thread_id, deleted, id);
+`, `
+CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, updated DESC, id);
+`, `
+ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
+`, `
+CREATE INDEX IF NOT EXISTS artifact_chat_sources_conversation ON artifact_chat_sources(workspace_id, agent_id, conversation_id);
 `]
 
 // annotation_threads/annotation_comments have no legacy rows to import: the

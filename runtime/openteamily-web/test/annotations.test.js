@@ -66,7 +66,10 @@ test('the artifacts feature serves annotations and records migration 4', async (
   const db = store(bot)
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4])
+      .map((row) => row.version)
+    // The annotation tables are migration 4; later main-line migrations follow it.
+    assert.deepEqual(versions.slice(0, 4), [1, 2, 3, 4])
+    assert.equal(versions.length, versions.at(-1))
   } finally { db.close() }
 })
 
@@ -320,7 +323,10 @@ test('migrations are idempotent and threads survive a reboot', async () => {
   const db = store(again)
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4])
+      .map((row) => row.version)
+    // The annotation tables are migration 4; later main-line migrations follow it.
+    assert.deepEqual(versions.slice(0, 4), [1, 2, 3, 4])
+    assert.equal(versions.length, versions.at(-1))
   } finally { db.close() }
 })
 
