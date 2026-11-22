@@ -220,10 +220,14 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   const bs = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: socket, localServer: SERVER,
   })
-  assert.deepEqual(await bs.post('/v1/ot/teams', { name: 'Studio' }), { ok: true })
+  assert.deepEqual(await bs.post('/v1/ot/teams', { name: '团队文档' }), { ok: true })
   assert.deepEqual([requests[0].method, requests[0].path, requests[0].headers.host, requests[0].headers.authorization],
     ['POST', '/v1/ot/teams', new URL(SERVER).host, `Bearer ${TOKEN}`])
-  assert.deepEqual(JSON.parse(requests[0].body), { name: 'Studio' })
+  assert.deepEqual(JSON.parse(requests[0].body), { name: '团队文档' })
+  const documentPath = '/v1/ot/teams/' + 'a'.repeat(32) + '/studio/documents/' + 'b'.repeat(32)
+  assert.deepEqual(await bs.request('DELETE', documentPath, { revision: 2 }), { ok: true })
+  assert.deepEqual([requests[1].method, requests[1].path], ['DELETE', documentPath])
+  assert.deepEqual(JSON.parse(requests[1].body), { revision: 2 })
   await assert.rejects(bs.get('/v1/ot/redirect'), { code: 'social/unreachable' })
   assert.equal(f.calls.length, 0)
 
@@ -233,7 +237,7 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   })
   assert.deepEqual(await other.get('/v1/ot/teams'), { ok: true })
   assert.equal(f.calls[0].url, remote + '/v1/ot/teams')
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, 3)
   const unavailable = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: join(dir, 'missing.sock'), localServer: SERVER,
   })
