@@ -2097,6 +2097,13 @@ html[data-theme-resolved="dark"] #message-list li.agent{
 
 #chat-call-incoming { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 #chat-call-incoming[hidden], #chat-call-dialog [hidden] { display: none; }
+#chat-call-recording { display: grid; gap: .375rem; min-width: 0; margin-top: .625rem; padding: .625rem .75rem; border: 1px solid var(--ot-line); border-radius: .65rem; }
+#chat-call-recording h3 { margin: 0; font-size: .875rem; }
+#chat-call-recording p { margin: 0; overflow-wrap: anywhere; }
+#chat-call-record-status:not(:empty) { font-size: .8125rem; font-weight: 600; }
+#chat-call-record-status:empty, #chat-call-recording .actions:not(:has(button:not([hidden]))) { display: none; }
+#chat-call-recording .actions { flex-wrap: wrap; gap: .375rem; margin: 0; }
+#chat-call-recording button { min-height: 2.75rem; }
 #chat-call-dialog {
   box-sizing: border-box;
   width: min(42rem, calc(100vw - 2rem));

@@ -249,6 +249,8 @@ function rethrow(error) {
     call_full: 'call_full',
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
+    call_recording_busy: 'call_recording_busy',
+    call_recording_changed: 'call_recording_changed',
     meeting_ended: 'meeting_ended',
     group_management_conflict: 'group_management_conflict',
     group_owner_transfer_required: 'group_owner_transfer_required',
@@ -1090,10 +1092,22 @@ function messengerExtraRoutes(host, wakeReplies) {
     if (scope.personal && !accountConversation(scope.conversation)) throw new Fault(404, 'not_found', '该会话没有通话功能。')
     return scope.team?.id
   }
+  const recordingInput = body => {
+    const action = body?.action
+    const fields = ['call_id', 'peer_id', 'action', ...(action === 'request' ? [] : ['recording_id'])]
+    const valid = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(value)
+    if (!['request', 'allow', 'decline', 'stop'].includes(action) ||
+        Object.keys(body).length !== fields.length || !fields.every(field => Object.hasOwn(body, field)) ||
+        fields.some(field => field !== 'action' && !valid(body[field]))) {
+      throw new Fault(400, 'invalid', '录制同意请求无效。')
+    }
+    return body
+  }
   return [
     {
-      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
-      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end|recording)$/,
+      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1],
+        match[1] === 'recording' ? recordingInput(body) : body)]),
     },
     ...['GET', 'POST', 'DELETE'].map(method => ({
       method, path: re('\\/group-invite'),
@@ -1163,11 +1177,12 @@ function messengerExtraRoutes(host, wakeReplies) {
       }),
     },
     {
-      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
+      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave|recording)'),
       handle: async ({ match, body }) => wrap(async () => {
+        const input = match[3] === 'recording' ? recordingInput(body) : body
         const bs = client(host)
         const teamId = await callTeam(bs, match[1], match[2])
-        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: teamId})]
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...input, team_id: teamId})]
       }),
     },
     ...['GET','POST'].map(method=>({method,path:re('\\/(translation|translations)'),

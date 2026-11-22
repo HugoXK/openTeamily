@@ -927,6 +927,17 @@
     <button type="button" id="chat-call-camera" aria-pressed="true"><span data-ui-text="chat.call.turn_camera_off">关闭摄像头</span></button>
     <button type="button" id="chat-call-play" hidden data-ui-text="chat.call.play_audio">播放声音</button>
   </div>
+  <section id="chat-call-recording" aria-labelledby="chat-call-record-label" hidden>
+    <h3 id="chat-call-record-label">录制通话音频</h3>
+    <p class="note">当前参会者全部同意后才开始。音频仅由发起者保留在此设备。</p>
+    <p id="chat-call-record-status" role="status"></p>
+    <div class="actions">
+      <button type="button" id="chat-call-record-request">请求录音</button>
+      <button type="button" id="chat-call-record-allow" hidden>同意录音</button>
+      <button type="button" id="chat-call-record-decline" hidden>不同意</button>
+      <button type="button" id="chat-call-record-stop" hidden>停止并保留</button>
+    </div>
+  </section>
   <div id="chat-meeting-share" hidden>
     <label for="chat-meeting-link" data-ui-text="chat.invite.link">邀请链接</label>
     <div>
@@ -942,6 +953,7 @@
     <button type="button" id="chat-call-close" data-ui-text="chat.close">关闭</button>
     <button type="button" id="chat-meeting-notes-copy" hidden>复制纪要入口</button>
     <a id="chat-meeting-notes" data-ui-text="chat.meetings.organize" hidden>整理会议纪要</a>
+    <button type="button" id="chat-meeting-notes-without-audio" hidden>仅打开纪要</button>
     <button type="submit" form="chat-meeting-form" id="chat-meeting-submit" hidden><span data-ui-text="chat.meetings.join">加入会议</span></button>
   </div>
 </dialog>

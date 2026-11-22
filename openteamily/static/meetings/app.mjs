@@ -3,6 +3,7 @@ import {mountMeetingDiscussion} from './discussion.mjs';
 import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
+import {takeCallAudio} from '../shell/call-audio-handoff.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -1648,14 +1649,16 @@ function mount() {
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
   }
 
-  async function openCallDraft(id, read) {
+  async function openCallDraft(id, read, linkedWorkspace) {
     const target = scope();
+    const account = viewerId;
     show('loading', '正在打开通话纪要…');
     const result = await (read || request('GET', `${base()}/from-call/${id}`).catch(() => unavailable));
     if (!active(target)) return;
     const {source, meeting, viewer_username: owner, workspace_id: workspace} = result.body;
     if (result.status !== 200 || owner !== target.viewer || workspace !== target.workspace ||
         source?.id !== id || typeof source.title !== 'string' || !Number.isSafeInteger(source.started_at) ||
+        !Number.isSafeInteger(source.ended_at) || source.ended_at < source.started_at ||
         !Array.isArray(source.attendees) || (meeting &&
         (!meetingIdPattern.test(meeting.id) || meeting.source_call_id !== id || meeting.workspace_id !== workspace))) {
       const code = result.body.error?.code;
@@ -1665,12 +1668,22 @@ function mount() {
       return;
     }
     if (meeting) {
-      await openMeeting(meeting.id, {status: 200, body: {meeting, viewer_username: owner}});
+      if (!await openMeeting(meeting.id, {status: 200, body: {meeting, viewer_username: owner}})) return;
     } else {
       fill(null, source);
       document.getElementById('main').scrollTop = 0;
       callSource.focus({preventScroll: true});
       show('ok', '已填入通话信息。上传录音或粘贴转写后，可生成纪要。');
+    }
+    if (viewerId !== account || workspaceId() !== workspace || (current?.source_call_id || callDraft?.id) !== id) return;
+    const editor = scope();
+    try {
+      const clip = await takeCallAudio({owner:account, workspace:linkedWorkspace, call:id}, document.defaultView);
+      if (clip && active(editor) && viewerId === account && audio.acceptCallRecording(clip)) {
+        show('ok', '已带入本次通话录音。可先试听，再开始转写。');
+      }
+    } catch {
+      if (active(editor) && viewerId === account) show('error', '暂时无法读取本机录音。刷新后可重试。');
     }
   }
 
@@ -1784,7 +1797,7 @@ function mount() {
         show('error', '通话纪要链接无效。');
         return;
       }
-      await Promise.all([openCallDraft(callId, eagerSource), loadList({keepEditor: true})]);
+      await Promise.all([openCallDraft(callId, eagerSource, linkedWorkspace || ''), loadList({keepEditor: true})]);
     } else if (linked.has('shared')) {
       if (workspaceId() === linkedWorkspace && meetingIdPattern.test(shareId) && !meetingId) {
         await openSharedMeeting(shareId, viewerMatches && detail);
