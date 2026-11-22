@@ -148,6 +148,70 @@ async function saveRequest(method, path, body, headers) {
   finally { clearTimeout(timeout); }
 }
 
+const meetingShareRetriesKey = 'openteamily.meeting-share-retries';
+const meetingShareRetryLifetime = 30 * 60 * 1000;
+const meetingShareRetryLimit = 12;
+const shareScopeId = /^[A-Za-z0-9._-]{1,80}$/;
+const shareRetryKey = /^[A-Za-z0-9_-]{16,64}$/;
+
+function validMeetingShareRetryScope(scope) {
+  if (!Array.isArray(scope) || scope.length !== 7) return false;
+  const [owner, workspace, meeting, revision, kind, audience, recipients] = scope;
+  return [owner, workspace, meeting].every(id => typeof id === 'string' && meetingIdPattern.test(id)) &&
+    Number.isSafeInteger(revision) && revision > 0 && ['call', 'conversation'].includes(kind) &&
+    typeof audience === 'string' && shareScopeId.test(audience) &&
+    Array.isArray(recipients) && recipients.length > 0 && recipients.length <= 50 &&
+    recipients.every(id => typeof id === 'string' && shareScopeId.test(id));
+}
+
+function meetingShareRetries(view, key) {
+  const retries = new Map();
+  let loaded = false;
+  function restore(now) {
+    loaded = true;
+    try {
+      const items = JSON.parse(view.sessionStorage.getItem(meetingShareRetriesKey));
+      for (const entry of (Array.isArray(items) ? items.slice(-meetingShareRetryLimit) : [])) {
+        const scope = entry?.scope;
+        if (!validMeetingShareRetryScope(scope) ||
+            typeof entry.key !== 'string' || !shareRetryKey.test(entry.key) ||
+            !Number.isFinite(entry.expiry) || entry.expiry <= now || entry.expiry > now + meetingShareRetryLifetime) continue;
+        retries.set(JSON.stringify(scope),entry);
+      }
+    } catch {}
+  }
+  function persist() {
+    try {
+      const items = [...retries.values()].filter(item => validMeetingShareRetryScope(item.scope));
+      if (items.length) view.sessionStorage.setItem(meetingShareRetriesKey, JSON.stringify(items));
+      else view.sessionStorage.removeItem(meetingShareRetriesKey);
+    } catch {}
+  }
+  return {
+    remember(scope) {
+      const timestamp = Date.now();
+      if (!loaded) restore(timestamp);
+      for (const [fingerprint, item] of retries) {
+        if (item.expiry <= timestamp) retries.delete(fingerprint);
+      }
+      const fingerprint = JSON.stringify(scope);
+      const saved = retries.get(fingerprint);
+      if (saved) return saved.key;
+      const entry = {scope, key:key(), expiry:timestamp + meetingShareRetryLifetime};
+      retries.set(fingerprint,entry);
+      if (retries.size > meetingShareRetryLimit) retries.delete(retries.keys().next().value);
+      persist();
+      return entry.key;
+    },
+    confirm(scope, acknowledgedKey) {
+      const fingerprint = JSON.stringify(scope);
+      if (retries.get(fingerprint)?.key !== acknowledgedKey) return;
+      retries.delete(fingerprint);
+      persist();
+    },
+  };
+}
+
 export function mountMeetingShares(document, {request, context, historyWorkspace = () => '', key = () => meetingKey('meeting-share-')}) {
   const control = name => document.getElementById('meeting-share-' + name);
   const trigger = document.getElementById('share-meeting');
@@ -166,7 +230,7 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
   const sentMore = control('sent-more');
   const form = control('form');
   let view;
-  let attempt;
+  const retries = meetingShareRetries(document.defaultView, key);
 
   const call = (method, path, body, headers, signal) => request(method, path, body, headers, signal)
     .catch(() => ({status: 0, body: {}}));
@@ -179,7 +243,7 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     if (!dialog.open || view !== state || !state) return false;
     if (state.historyOnly) return historyWorkspace() === state.workspace;
     const target = context();
-    return target?.workspace === state.workspace && target.meeting.id === state.meeting.id;
+    return target?.workspace === state.workspace && target.owner === state.owner && target.meeting.id === state.meeting.id;
   }
   function syncForm(state) {
     close.disabled = state.busy;
@@ -281,7 +345,7 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     if (!target?.workspace || dialog.open) return;
     const base = `/v1/workspaces/${target.workspace}/meetings`;
     const state = view = {
-      workspace: target.workspace, meeting: {...target.meeting}, base, historyOnly,
+      workspace: target.workspace, owner:target.owner, meeting: {...target.meeting}, base, historyOnly,
       path: historyOnly ? base + '/shared' : `${base}/${target.meeting.id}/shares`,
       selected: new Set(), busy: false, controller: new AbortController(), sentItems: [],
     };
@@ -384,21 +448,25 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     const state = view;
     if (!state || state.historyOnly || !isCurrent(state) || state.busy || !select.value || !state.selected.size) return;
     const body = {revision: state.meeting.revision, ...selectedAudience(state), recipient_ids: [...state.selected].sort()};
-    const fingerprint = JSON.stringify([state.path, body]);
-    if (fingerprint !== attempt?.fingerprint) attempt = {fingerprint, key: key()};
+    const scope = [state.owner, state.workspace, state.meeting.id, body.revision,
+      body.call_id ? 'call' : 'conversation', body.call_id || body.conversation_id, body.recipient_ids];
+    const attemptKey = retries.remember(scope);
     state.busy = true;
     syncForm(state);
     status.textContent = '正在分享…';
-    const result = await call('POST', state.path, body, {'Idempotency-Key': attempt.key});
+    const result = await call('POST', state.path, body, {'Idempotency-Key': attemptKey});
     if (!isCurrent(state)) return;
     state.busy = false;
     if (![200, 201].includes(result.status) || !result.body.meeting?.id) {
+      const unknown = ambiguousSave(result.status) || result.status === 200 || result.status === 201;
       status.textContent = result.status === 409 ? '纪要已更新。请关闭分享窗口，重新打开会议后再试。'
+        : unknown ? '分享结果未确认。可查看分享记录，或选择相同的接收范围和接收人后重试。'
         : messageFor(result.body.error, '分享未确认，请重试。');
       syncForm(state);
+      if (unknown) void loadSent(state);
       return;
     }
-    attempt = null;
+    retries.confirm(scope, attemptKey);
     state.selected.clear();
     for (const label of choices.children) label.children[0].checked = false;
     status.textContent = '已分享纪要。';
@@ -549,7 +617,7 @@ function mount() {
   const sharing = mountMeetingShares(document, {
     request,
     context: () => native && current?.id && workspaceId() && layout?.dataset.view !== 'catalogue'
-      ? {workspace: workspaceId(), meeting: current} : null,
+      ? {owner:viewerId, workspace: workspaceId(), meeting: current} : null,
     historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
       ? workspaceId() : '',
   });

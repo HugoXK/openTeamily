@@ -1424,7 +1424,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function makeSendJob(queue, message, files, reply, sticker) {
-    const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+    const firstText = servedByDsbot && !queue.social && !queue.conversationId &&
+      !queue.jobs.length && !files.length && !reply && !sticker;
+    const key = firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
@@ -8387,6 +8389,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
         };
         try {
+          const nativePrivate = servedByDsbot && !queue.social;
+          let initialResult;
           if (job.preferences) {
             feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
             await job.preferences.promise;
@@ -8398,12 +8402,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback('正在创建对话…');
             const body = {title: '新对话'};
             if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
-            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
-            const conversation = created.body.conversation;
-            if (![200, 201].includes(created.status) || !conversation?.id) {
-              throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
+            const firstText = nativePrivate && job.key === queue.createKey && !job.files.length && !job.reply && !job.sticker;
+            if (firstText) body.first_message = messagePayload(job.message.body, job.message.chat_language);
+            const create = () => request('POST', queue.base, body, {'Idempotency-Key': queue.createKey},
+              firstText ? AbortSignal.timeout(15000) : undefined);
+            const post = () => create().catch(() => ({status: 0, body: {}}));
+            let created = firstText ? await post() : await create();
+            const active = () => pendingSends.get(queue.scope) === queue && queue.owner === currentUser?.id;
+            if (!active()) return;
+            if (firstText && (!created.status || created.status === 408 || created.status >= 500)) {
+              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+              // The same create key also identifies the first message.
+              created = await post();
+              if (!active()) return;
             }
-            if (pendingSends.get(queue.scope) !== queue) return;
+            const conversation = created.body.conversation;
+            const firstPair = conversation?.id && privateReplyPair(created.body, {...queue,conversationId:conversation.id}, job.key);
+            if (![200, 201, 202].includes(created.status) || !conversation?.id ||
+                (firstText && (!firstPair || conversation.workspace_id !== queue.wid || conversation.agent_id !== queue.agentId))) {
+              throw new Error(messageFor(created.body.error, firstText ? '未能确认发送结果，请重试。' : '创建对话失败，请重试。'));
+            }
+            if (firstText) initialResult = created;
             const previous = queue.scope;
             const visible = isCurrent();
             queue.conversationId = conversation.id;
@@ -8432,46 +8451,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             progress.removeAttribute('value');
           }
           feedback(progress ? uiLabel('正在上传附件…', 'Uploading attachments…') : queue.social ? '正在发送…' : '正在等待智能体回复…');
-          let result;
+          let result = initialResult;
           let anchor;
-          const nativePrivate = servedByDsbot && !queue.social;
-          const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
-          const receipt = nativePrivate ? Promise.withResolvers() : null;
-          job.acceptReceipt = receipt?.resolve;
-          try {
-            const response = progress
-              ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                  if (percent < 100) {
-                    progress.value = percent;
-                  } else {
-                    progress.hidden = true;
-                    feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
-                    beginReply();
-                  }
-                }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
-            if (!progress) beginReply();
-            result = receipt
-              ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
-              : await response;
-            if (nativePrivate && uncertainPrivateWrite(result)) {
-              if (progress) progress.hidden = true;
-              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
-              const pair = await confirmPostedSend(queue, job);
-              if (pair) result = {status: 200, body: pair};
-            }
-          } finally {
-            if (progress) progress.hidden = true;
-            job.acceptReceipt = null;
-            if (queue.replying === job) {
-              if (isCurrent()) {
-                const scroller = document.getElementById('message-scroller');
-                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
-                if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+          if (!result) {
+            const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
+            const receipt = nativePrivate ? Promise.withResolvers() : null;
+            job.acceptReceipt = receipt?.resolve;
+            try {
+              const response = progress
+                ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+                  {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                    if (percent < 100) {
+                      progress.value = percent;
+                    } else {
+                      progress.hidden = true;
+                      feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
+                      beginReply();
+                    }
+                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+              if (!progress) beginReply();
+              result = receipt
+                ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
+                : await response;
+              if (nativePrivate && uncertainPrivateWrite(result)) {
+                if (progress) progress.hidden = true;
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const pair = await confirmPostedSend(queue, job);
+                if (pair) result = {status: 200, body: pair};
               }
-              queue.replying = null;
-              job.replyView?.bubble.remove();
-              job.replyView = null;
+            } finally {
+              if (progress) progress.hidden = true;
+              job.acceptReceipt = null;
+              if (queue.replying === job) {
+                if (isCurrent()) {
+                  const scroller = document.getElementById('message-scroller');
+                  anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
+                  if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+                }
+                queue.replying = null;
+                job.replyView?.bubble.remove();
+                job.replyView = null;
+              }
             }
           }
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);

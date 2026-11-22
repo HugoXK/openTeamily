@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto'
-import { currentSession, threadOf, threadOfPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { currentSession, threadCurrentOfPart, threadOf, threadOfPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
 import { NATIVE_EVENT_LEDGER } from './history.js'
 
 const MAX_TURN_EVENTS = 2048
+const MAX_CATCH_UP_EVENTS = 2048
+const STORAGE_READ_MS = 1200
+const MAX_COLD_REVISIONS = 128
 const MAX_TEXT = 20_000
 const ID = /^[0-9a-f]{32}$/
 
@@ -22,14 +25,14 @@ function nativeInput(event) {
   return text ? {text,request:typeof source.rpcId === 'string' && source.rpcId.length <= 128 ? source.rpcId : undefined} : null
 }
 
-function turnRows(session, end) {
+function turnRows(session, end, floor = session.firstLiveSeq ?? 0) {
   const turn = end.data?.turn
   if (!Number.isSafeInteger(turn) || !Number.isSafeInteger(end.seq)) return []
   const users = []
   let answer, seenAnswer = false, otherInput = false
   const rowOf = (event, role, text) => ({event_seq:event.seq,role,text,created:Math.floor(event.time / 1000)})
   const canAnswer = end.data?.reason?.kind === 'completed'
-  for (let seq = end.seq - 1; seq >= Math.max(session.firstLiveSeq ?? 0,end.seq - MAX_TURN_EVENTS); seq--) {
+  for (let seq = end.seq - 1; seq >= Math.max(floor,end.seq - MAX_TURN_EVENTS); seq--) {
     const event = session.eventAt(seq)
     if (!event) return []
     if (event.type === 'turn/start' || event.type === 'turn/end') {
@@ -62,7 +65,12 @@ function turnRows(session, end) {
 
 export function nativeHistoryProjection({host,db}) {
   db.exec(NATIVE_EVENT_LEDGER)
+  db.exec(`CREATE TABLE IF NOT EXISTS native_agent_history_checkpoints (
+    session_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+    next_seq INTEGER NOT NULL);`)
   const jobs = new Map()
+  const recovering = new Map()
+  const coldRevisions = new Map()
   const mapping = db.prepare(`SELECT c.id,c.agent_id,a.workspace_id FROM native_agent_sessions s
     JOIN native_agent_objects o ON o.agent_id=s.agent_id JOIN agents a ON a.id=s.agent_id
     JOIN agent_conversations c ON c.agent_id=s.agent_id AND s.conversation_key='agent:'||c.agent_id||':'||c.id
@@ -71,6 +79,10 @@ export function nativeHistoryProjection({host,db}) {
   const insert = db.prepare('INSERT OR IGNORE INTO agent_messages(id,conversation_id,role,text,status,created,meta) VALUES(?,?,?,?,?,?,?)')
   const record = db.prepare('INSERT INTO native_agent_events(message_id,session_id,event_seq,source) VALUES(?,?,?,?)')
   const touch = db.prepare('UPDATE agent_conversations SET updated=MAX(updated,?) WHERE id=?')
+  const checkpoint = db.prepare('SELECT next_seq FROM native_agent_history_checkpoints WHERE session_id=? AND conversation_id=?')
+  const advance = db.prepare(`INSERT INTO native_agent_history_checkpoints VALUES (?,?,?)
+    ON CONFLICT(session_id) DO UPDATE SET conversation_id=excluded.conversation_id,
+      next_seq=CASE WHEN conversation_id=excluded.conversation_id THEN MAX(next_seq,excluded.next_seq) ELSE excluded.next_seq END`)
 
   function ownedConversation(rt, sessionId, allowPast = false) {
     const old = rt.pastOwners?.get(sessionId)
@@ -93,8 +105,8 @@ export function nativeHistoryProjection({host,db}) {
     return found
   }
 
-  function save(rt, sessionId, conversationId, rows) {
-    if (ownedConversation(rt,sessionId,true)?.id !== conversationId) return
+  function save(rt, sessionId, conversationId, rows, nextSeq) {
+    if (ownedConversation(rt,sessionId,true)?.id !== conversationId) return false
     db.exec('BEGIN IMMEDIATE')
     try {
       let updated = 0
@@ -108,8 +120,91 @@ export function nativeHistoryProjection({host,db}) {
         updated = Math.max(updated,created)
       }
       if (updated) touch.run(updated,conversationId)
+      if (nextSeq !== undefined) advance.run(sessionId,conversationId,nextSeq)
       db.exec('COMMIT')
+      return true
     } catch (error) { db.exec('ROLLBACK'); throw error }
+  }
+
+  function enqueue(conversationId, work) {
+    const job = Promise.resolve(jobs.get(conversationId)).then(work)
+      .catch(() => host.log?.('Native private chat history projection could not be saved.'))
+    jobs.set(conversationId,job)
+    void job.then(() => { if (jobs.get(conversationId) === job) jobs.delete(conversationId) })
+    return job
+  }
+
+  function recoverRows(session, from, floor) {
+    const through = Math.min(session.seq, from + MAX_CATCH_UP_EVENTS)
+    if (from >= through) return null
+    const rows = []
+    for (let seq = from; seq < through; seq++) {
+      const event = session.eventAt(seq)
+      if (!event || event.seq !== seq) throw new Error('Native session history is unavailable')
+      if (event.type === 'turn/end') rows.push(...turnRows(session,event,floor))
+    }
+    return {rows, through}
+  }
+
+  async function recoverStored(storage, sessionId, next) {
+    if (!storage) return null
+    const signal = AbortSignal.timeout(STORAGE_READ_MS)
+    const snapshot = await storage.stat(sessionId,{signal})
+    if (!snapshot || snapshot.header?.id !== sessionId || snapshot.eventCount <= next) return null
+    const reached = coldRevisions.get(sessionId)
+    const revision = storage.identity !== undefined && typeof snapshot.revision === 'string'
+      ? {storage:storage.identity, revision:snapshot.revision} : null
+    if (revision && reached?.storage === revision.storage && reached.revision === revision.revision && reached.next === next) return null
+    const handle = await storage.open(sessionId,'read',{signal})
+    try {
+      if (handle.id !== sessionId) return null
+      const floor = handle.inheritedEventCount
+      const from = Math.max(floor,next)
+      // A turn can start before the checkpoint and finish in the new slice.
+      const offset = Math.max(floor,from - MAX_TURN_EVENTS)
+      const count = from - offset + MAX_CATCH_UP_EVENTS
+      const {events} = await handle.read(offset,count,{signal})
+      const recovered = recoverRows({seq:offset + events.length,eventAt:seq=>events[seq - offset]},from,floor)
+      return {recovered, revision:events.length < count ? revision : null}
+    } finally { await handle.close() }
+  }
+
+  function catchUp(runtime, mapping, conversationId) {
+    const {rt,ctx} = runtime ?? {}
+    if (typeof rt?.botOf !== 'function' || typeof ctx?.sessions?.get !== 'function') return
+    if (recovering.has(conversationId)) return recovering.get(conversationId)
+    const bot = rt.botOf(mapping.native_bot_id)
+    const exact = mapping.native_session_id
+    const current = threadCurrentOfPart(bot,exact)
+    if (!current) return
+    const job = enqueue(conversationId,async () => {
+      for (const sessionId of new Set([exact,current])) {
+        if (ownedConversation(rt,sessionId,true)?.id !== conversationId) continue
+        const next = checkpoint.get(sessionId,conversationId)?.next_seq ?? 0
+        const session = ctx.sessions.get(sessionId)
+        let recovered
+        let revision
+        if (session?.id === sessionId && Number.isSafeInteger(session.seq) && typeof session.eventAt === 'function') {
+          // firstLiveSeq includes the entire restored log. Only native fork seeds
+          // came from a different physical Session.
+          const floor = session.inheritedEventCount ?? 0
+          recovered = recoverRows(session,Math.max(floor,next),floor)
+          if (recovered) await ctx.sessions.flush(session)
+        } else {
+          const stored = await recoverStored(ctx.get?.('sessionPersistence'),sessionId,next)
+          recovered = stored?.recovered
+          revision = stored?.revision
+        }
+        if (recovered && !save(rt,sessionId,conversationId,recovered.rows,recovered.through)) continue
+        if (revision) {
+          coldRevisions.set(sessionId,{...revision,next:recovered?.through ?? next})
+          if (coldRevisions.size > MAX_COLD_REVISIONS) coldRevisions.delete(coldRevisions.keys().next().value)
+        }
+      }
+    })
+    recovering.set(conversationId,job)
+    void job.then(() => { if (recovering.get(conversationId) === job) recovering.delete(conversationId) })
+    return job
   }
 
   function attach({rt,ctx} = {}) {
@@ -121,16 +216,13 @@ export function nativeHistoryProjection({host,db}) {
         if (!conversation) return
         const rows = turnRows(session,event)
         if (!rows.length) return
-        const previous = jobs.get(conversation.id)
-        const job = Promise.resolve(previous).then(async () => {
+        enqueue(conversation.id,async () => {
           await ctx.sessions.flush(session)
           save(rt,session.id,conversation.id,rows)
-        }).catch(() => host.log?.('Native private chat history projection could not be saved.'))
-        jobs.set(conversation.id,job)
-        void job.then(() => { if (jobs.get(conversation.id) === job) jobs.delete(conversation.id) })
+        })
       } catch { host.log?.('Native private chat history could not be projected.') }
     })
   }
 
-  return {attach,pending: id => jobs.get(id)}
+  return {attach,catchUp,pending: id => jobs.get(id)}
 }

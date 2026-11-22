@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 //   DS-Bot's. No runtime_tasks row and no server queue are involved.
 import { createHash } from 'node:crypto'
 import { TEMPLATES, INTENTS } from './templates.js'
-import { dueAt, nextScheduledSlot, normalizeSchedule, validSchedule } from './schedule.js'
+import { dueAt, dueSlot, nextSlot, normalizeSchedule, validSchedule } from './schedule.js'
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
@@ -206,6 +206,11 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
   const existingSlot = db.prepare('SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
+  function hasScheduledSlot(id, slot) {
+    // A stored run from the other side of a clock change already used this local slot.
+    return existingSlot.get(id, slot.at) ||
+      (slot.alternateAt !== undefined && existingSlot.get(id, slot.alternateAt))
+  }
 
   function activeRun(id) {
     const row = activeRunFor.get(id)
@@ -215,27 +220,33 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   function eligibleSlot(schedule, at, activeAt) {
-    const due = dueAt(schedule, at)
-    if (due !== null && activeAt != null && due < activeAt &&
+    const due = dueSlot(schedule, at)
+    if (due && activeAt != null && due.at < activeAt &&
       schedule.kind !== 'now' && schedule.kind !== 'once') return null
     return due
   }
 
   function scheduleStatus(item, activeAt, at = clock()) {
-    if (!item.enabled) return {state:'paused'}
+    if (!item.enabled) {
+      const preview = item.schedule?.kind === 'once' ? nextSlot(item.schedule, at) : null
+      if (preview?.clockChange && !hasScheduledSlot(item.id, preview)) {
+        return {state:'paused', at:preview.at, clock_change:preview.clockChange}
+      }
+      return {state:'paused'}
+    }
     if (!validSchedule(item.schedule)) return null
     const schedule = normalizeSchedule(item.schedule)
     const once = schedule.kind === 'now' || schedule.kind === 'once'
     const due = eligibleSlot(schedule, at, activeAt)
     if (due !== null) {
-      if (!existingSlot.get(item.id, due)) return {state:'due'}
+      if (!hasScheduledSlot(item.id, due)) return {state:'due'}
       if (once) return {state:'once_triggered'}
     }
     const after = once || activeAt == null ? at : Math.max(at, activeAt - 1)
-    const next = nextScheduledSlot(schedule, after)
+    const next = nextSlot(schedule, after)
     if (next === null) return null
-    if (once && existingSlot.get(item.id, next)) return {state:'once_triggered'}
-    return {state:'scheduled', at:next}
+    if (once && hasScheduledSlot(item.id, next)) return {state:'once_triggered'}
+    return {state:'scheduled', at:next.at, ...(next.clockChange ? {clock_change:next.clockChange} : {})}
   }
 
   function projected(item, activeAt, at) {
@@ -478,8 +489,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       const due = eligibleSlot(JSON.parse(row.schedule), now, row.schedule_active_at)
       if (due === null) continue
       const id = tx(db, () => {
-        if (hasActiveRun(row.id) || one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due)) return null
-        return insertRun(row, due)
+        if (hasActiveRun(row.id) || hasScheduledSlot(row.id, due)) return null
+        return insertRun(row, due.at)
       })
       if (!id) continue
       void execute(id)

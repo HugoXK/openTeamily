@@ -409,7 +409,10 @@ function renderNextRun(node, item) {
   if (!status) return;
   if (status.state === 'due') node.textContent = '已到计划运行时间';
   if (status.state === 'once_triggered') node.textContent = '单次计划已触发';
-  if (status.state === 'scheduled' && Number.isSafeInteger(status.at) && status.at > 0) {
+  const clockChange = status.clock_change === 'forward' ? '时钟跳转后顺延'
+    : status.clock_change === 'first' ? '按第一次出现的时间运行' : '';
+  const pausedPreview = status.state === 'paused' && clockChange;
+  if ((status.state === 'scheduled' || pausedPreview) && Number.isSafeInteger(status.at) && status.at > 0) {
     const zone = item.schedule?.time_zone;
     if (typeof zone !== 'string' || !zone) return;
     try {
@@ -419,8 +422,13 @@ function renderNextRun(node, item) {
       const time = node.ownerDocument.createElement('time');
       time.dateTime = date.toISOString();
       time.textContent = `${formatted}（${zone}）`;
-      node.textContent = '下次运行 ';
+      node.textContent = pausedPreview ? '启用后按此时刻运行 ' : '下次运行 ';
       node.append(time);
+      if (clockChange) {
+        const note = node.ownerDocument.createElement('span');
+        note.textContent = ' · ' + clockChange;
+        node.append(note);
+      }
     } catch { return; }
   }
   node.hidden = !node.textContent;
@@ -1270,7 +1278,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       activeRun = Boolean(pending) || (typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive));
       const upcoming = listed.body.schedule_status;
       if (listed.body.schedule_revision === current.revision &&
-          (upcoming?.state !== current.schedule_status?.state || upcoming?.at !== current.schedule_status?.at)) {
+          (upcoming?.state !== current.schedule_status?.state || upcoming?.at !== current.schedule_status?.at ||
+            upcoming?.clock_change !== current.schedule_status?.clock_change)) {
         current.schedule_status = upcoming;
         renderEditorSchedule();
         renderManualRunNote();

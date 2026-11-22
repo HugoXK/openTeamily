@@ -14,13 +14,13 @@ import { openDatabase, newId } from '../../src/store.js'
 import { agentsV1 } from './v1.js'
 import { PRIVATE_FILE_COUNT, privateFiles, fingerprintAttachments } from './files.js'
 import { importOfficialBundle } from './migrate.js'
-import { sendId, textReplyKey, textReplyAttempt } from './private-reply.js'
+import { PRIVATE_TEXT_LIMIT, sendId, textReplyKey, textReplyAttempt } from './private-reply.js'
 import { replyStream, waitForReplyChange } from './reply-stream.js'
 import { rank, noteBlock, personalizationBlock } from '../chat/recall.js'
 
 export const CATEGORIES = ['content-creation', 'customer-support', 'data-analysis', 'design', 'education', 'engineering',
   'finance', 'it-security', 'investment', 'legal', 'life', 'marketing', 'operations', 'product', 'recruiting', 'research', 'sales']
-export const LIMITS = { name: 80, summary: 500, instructions: 16000, quickStarts: 5, quickStart: 80, agents: 200, text: 20000 }
+export const LIMITS = { name: 80, summary: 500, instructions: 16000, quickStarts: 5, quickStart: 80, agents: 200, text: PRIVATE_TEXT_LIMIT }
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
@@ -827,11 +827,15 @@ export function createAgents({ db, host }) {
         current = load(agent.workspace_id, agent.id)
       }
       const {native_name, ...mapping} = mapped ?? {}
-      const rt = host.currentRuntime?.()?.rt
+      const runtime = host.currentRuntime?.()
+      const rt = runtime?.rt
       const observed = mapped ? observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       const memory = memorySetting(await conversationMemoryMode(row, agent))
+      if (!snapshot && !history?.before && !history?.around && mapped && row.archived_at === null && !observed.archived) {
+        await historyProjection.catchUp(runtime,mapped,row.id)
+      }
       const pendingHistory = historyProjection.pending(row.id)
       if (pendingHistory) await pendingHistory
       return {
