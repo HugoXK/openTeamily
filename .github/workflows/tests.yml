@@ -45,6 +45,7 @@ jobs:
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
       - run: node --test tests/shell_page.test.mjs
+      - run: node --test tests/studio_merge.test.mjs
       - run: node --test tests/agent_bootstrap.test.mjs
       - run: node --test tests/ds_bot_bridge.test.mjs
       - run: node --test tests/model_http_policy.test.mjs
