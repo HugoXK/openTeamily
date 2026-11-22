@@ -25,6 +25,8 @@ import { GROUP_INVITES_SCHEMA, registerGroupInvites } from "./group-invites.js";
 import { agentInboxWake } from "./agent-inbox-wake.js";
 
 const AGENT_INBOX_MAX_WAIT_MS = 10_000;
+const SHARED_GROUP_ID = /^otc_[0-9A-HJKMNP-TV-Z]{26}$/;
+const SHARED_GROUP_PAGE = 30;
 
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
@@ -1041,6 +1043,38 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     }
     const list = rows.map(c => conversationView(ot, c, me.ownerId));
     return { conversations: list, unread: list.reduce((n, c) => n + (c.muted ? 0 : c.unread), 0) };
+  });
+  // Native discovery is a read-only membership directory. Reading a page does
+  // not open rooms, load their chat logs or materialize native Sessions.
+  app.get("/v1/ot/group-directory", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const input = query(req);
+    const cursor = one(input.cursor, "cursor");
+    assert(Object.keys(input).every(key => key === "cursor") && (cursor === undefined || SHARED_GROUP_ID.test(cursor)),
+      400, "invalid_request", "Invalid shared group directory cursor");
+    const rows = ot.all<{conversation_id:string; title:string; kind:"personal"|"team"; workspace_id:string|null; workspace_name:string|null}>(`
+      SELECT c.id AS conversation_id,c.title,
+        CASE WHEN c.team_id IS NULL THEN 'personal' ELSE 'team' END AS kind,
+        team.workspace_id,team.name AS workspace_name
+      FROM ot_conversation_members seat JOIN ot_conversations c ON c.id=seat.conversation_id
+      LEFT JOIN ot_teams team ON team.id=c.team_id
+      LEFT JOIN ot_team_members active ON active.team_id=team.id AND active.owner_id=seat.owner_id AND active.suspended=0
+      WHERE seat.owner_id=? AND c.kind='group' AND c.dm_key IS NULL AND c.group_archived_at IS NULL
+        AND ((c.team_id IS NULL AND c.account_group=1) OR active.owner_id IS NOT NULL)
+        ${cursor ? "AND seat.conversation_id<?" : ""}
+      ORDER BY seat.conversation_id DESC LIMIT ?`, ownerId, ...(cursor ? [cursor] : []), SHARED_GROUP_PAGE + 1);
+    const items = rows.slice(0, SHARED_GROUP_PAGE);
+    return {items, next_cursor: rows.length > SHARED_GROUP_PAGE ? items[items.length - 1].conversation_id : null};
+  });
+  app.get("/v1/ot/group-directory/:id", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const {id} = params(req);
+    assert(SHARED_GROUP_ID.test(id) && Object.keys(query(req)).length === 0, 400, "invalid_request", "Invalid shared group request");
+    const group = memberOf(ot, id, ownerId);
+    assert(managedGroup(group), 404, "conversation_not_found", "no such conversation");
+    return conversationView(ot, group, ownerId, true);
   });
   app.get("/v1/ot/conversations/:id", async (req) => {
     const me = ot.me(req);
