@@ -32,6 +32,7 @@ jobs:
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_dsbot.test.mjs
       - run: node --test tests/chat_calls_handoff.test.mjs
+      - run: node --test tests/chat_call_recording.test.mjs
       - run: node --test tests/chat_group_management.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
       - run: node --test tests/chat_stickers.test.mjs
