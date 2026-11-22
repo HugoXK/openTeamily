@@ -8,6 +8,7 @@ import { createAgents } from '../features/agents/index.js'
 import { digest } from '../featurekit/http.js'
 import { createLegacyDispatch, createReplyStreamDispatch, REPLY_STREAM_PATH } from '../src/dispatch.js'
 import { sendPrivateAttachmentMessage } from '../../../openteamily/static/chat/files.mjs'
+import { prepareNativeChat } from '../../flybot-image/ds-bot-bridge.mjs'
 
 const workspace = 'a'.repeat(32)
 const root = `/v1/workspaces/${workspace}/agents`
@@ -180,6 +181,62 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   assert.equal(selected.status,200)
   assert.equal((await selected.json()).conversation.native_session_id,unmapped.native_session_id)
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,2)
+})
+
+test('a fresh mapped private chat selects its Bot route before the native composer sends', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const {rt} = runtime
+  const selected = []
+  rt.applyModel = async bot => {
+    assert.equal(bot, rt.botOf('agent'))
+    bot.appliedEffort = 'high'
+    return 'openteamily/openteamily-model'
+  }
+  rt.selectSessionModel = async (id, route) => selected.push({id, route})
+  rt.chatOf = botId => rt.botOf(botId).sessionId
+  rt.applyPermission = async () => {}
+  runtime.prepareMappedChat = (botId, sessionId) => prepareNativeChat(rt, botId, sessionId)
+  runtime.nativeTurn = () => assert.fail('Opening the chat must not call a model')
+  const {endpoints} = createAgents({db,host:{runtime:async () => runtime}})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Native route fixture',idempotency_key:'native-route-agent'})
+  const body = {workspace_id:workspace,id:agent.id,idempotency_key:'mapped-route-fixture'}
+  const create = () => endpoints['conversation-create'](body)
+  const {conversation} = await create()
+  assert.equal(conversation.native_session_id, 'native-session')
+  assert.deepEqual(selected, [{id:conversation.native_session_id,
+    route:{provider:'openteamily',model:'openteamily-model',reasoningEffort:'high'}}])
+  assert.equal((await create()).conversation.native_session_id, conversation.native_session_id)
+  assert.equal(selected.length, 1)
+})
+
+test('a failed native configuration still creates an empty private chat and retries only that mapped part', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const configured = []
+  runtime.prepareMappedChat = async (botId, sid) => {
+    assert.equal(runtime.rt.chatOwners.get(sid), botId)
+    configured.push(sid)
+    if (configured.length === 1) throw new Error('Model unavailable')
+  }
+  runtime.nativeTurn = () => assert.fail('Opening the chat must not call a model')
+  const host = {runtime:async () => runtime}
+  const {endpoints} = createAgents({db,host})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Native setup retry',idempotency_key:'native-setup-agent'})
+  const body = {workspace_id:workspace,id:agent.id,idempotency_key:'mapped-setup-retry'}
+  const initial = await endpoints['conversation-create'](body)
+  assert.equal(initial.status, 201)
+  assert.equal(initial.conversation.native_session_id, 'native-session')
+  assert.equal(db.prepare('SELECT count(*) AS n FROM agent_messages').get().n, 0)
+  const restarted = createAgents({db,host}).endpoints
+  const {conversation} = await restarted['conversation-create'](body)
+  assert.equal(conversation.id, initial.conversation.id)
+  assert.equal(conversation.native_session_id, initial.conversation.native_session_id)
+  assert.equal((await restarted['conversation-create'](body)).conversation.native_session_id, conversation.native_session_id)
+  assert.deepEqual(configured, [conversation.native_session_id, conversation.native_session_id])
+  assert.equal(db.prepare('SELECT count(*) AS n FROM native_agent_sessions').get().n, 1)
 })
 
 test('private history pages and anchors keep native message order and conversation scope', async t => {
