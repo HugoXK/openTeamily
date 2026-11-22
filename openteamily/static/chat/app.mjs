@@ -9,7 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
-import { studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
+import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
@@ -39,6 +39,15 @@ export function sessionPreview(row, fallback) {
 }
 
 const PRIVATE_THREAD_ID = /^[a-f0-9]{32}$/;
+const STUDIO_EXCERPT_LIMIT = 2400;
+
+function studioRevisionReference(value) {
+  if (typeof value?.document_id !== 'string' || !PRIVATE_THREAD_ID.test(value.document_id)
+    || !Number.isSafeInteger(value.revision) || value.revision < 1) return null;
+  return {document_id: value.document_id, revision: value.revision};
+}
+
+const sameStudioReference = (left, right) => left?.document_id === right?.document_id && left?.revision === right?.revision;
 
 function privateThreadTitle(conversation, agent) {
   return (conversation?.title_edited === true && conversation.title) || agent?.name || conversation?.title || '对话';
@@ -1470,19 +1479,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try {
       const saved = JSON.parse(document.defaultView.sessionStorage.getItem('openteamily.group-reply-draft:' + scope) || 'null');
       if (saved && typeof saved.prompt === 'string' && saved.prompt.length <= 4000 && validAgentIds(saved.agentIds)) {
+        const reference = studioRevisionReference(saved.studioReference);
+        const studioDocumentId = typeof saved.studioDocumentId === 'string' && PRIVATE_THREAD_ID.test(saved.studioDocumentId)
+          ? saved.studioDocumentId : reference?.document_id || '';
         const attempt = saved.attempt;
-        if (!attempt || typeof attempt.key !== 'string' || !/^[a-zA-Z0-9_-]{16,64}$/.test(attempt.key)
-          || typeof attempt.prompt !== 'string' || !validMessage(attempt.prompt)
-          || !validAgentIds(attempt.agentIds) || !attempt.agentIds.length || attempt.agentIds.length > 5) saved.attempt = null;
-        groupReplyDrafts.set(scope, saved);
-        return saved;
+        const attemptReference = studioRevisionReference(attempt?.studioReference);
+        const validAttempt = typeof attempt?.key === 'string' && /^[a-zA-Z0-9_-]{16,64}$/.test(attempt.key)
+          && typeof attempt.prompt === 'string' && validMessage(attempt.prompt)
+          && validAgentIds(attempt.agentIds) && attempt.agentIds.length > 0 && attempt.agentIds.length <= 5
+          && (attempt.studioReference == null || attemptReference);
+        const draft = {
+          prompt: saved.prompt, agentIds: saved.agentIds, studioDocumentId,
+          studioReference: reference?.document_id === studioDocumentId ? reference : null,
+          attempt: validAttempt
+            ? {key: attempt.key, prompt: attempt.prompt, agentIds: attempt.agentIds, studioReference: attemptReference} : null,
+        };
+        groupReplyDrafts.set(scope, draft);
+        return draft;
       }
     } catch {}
-    return {prompt: '', agentIds: [], attempt: null};
+    return {prompt: '', agentIds: [], studioDocumentId: '', studioReference: null, attempt: null};
   }
 
   function saveGroupReplyDraft(scope, draft) {
-    const hasDraft = Boolean(draft.prompt || draft.agentIds.length || draft.attempt);
+    const hasDraft = Boolean(draft.prompt || draft.agentIds.length || draft.studioDocumentId || draft.attempt);
     if (hasDraft) groupReplyDrafts.set(scope, draft);
     else groupReplyDrafts.delete(scope);
     try {
@@ -1495,8 +1515,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const groupReplyAgentIds = () => [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
     .map(box => box.value).sort();
-  const sameGroupReplyRequest = (attempt, prompt, agentIds) => attempt?.prompt === prompt
-    && attempt.agentIds.join(',') === agentIds.join(',');
+  const sameGroupReplyRequest = (attempt, prompt, agentIds, studioReference) => attempt?.prompt === prompt
+    && attempt.agentIds.join(',') === agentIds.join(',') && sameStudioReference(attempt.studioReference, studioReference);
 
   function rememberGroupReplyDraft() {
     if (!groupReplyFormScope || groupReplyFormScope !== sendScope()) return;
@@ -1508,18 +1528,176 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function confirmGroupReplyDraft(scope, key) {
     const draft = groupReplyDraft(scope);
     if (!key || draft.attempt?.key !== key) return false;
-    const clearPrompt = sameGroupReplyRequest(draft.attempt, draft.prompt.trim(), draft.agentIds);
-    saveGroupReplyDraft(scope, {...draft, prompt: clearPrompt ? '' : draft.prompt, attempt: null});
+    const clearPrompt = sameGroupReplyRequest(draft.attempt, draft.prompt.trim(), draft.agentIds, draft.studioReference)
+      && draft.studioDocumentId === (draft.attempt.studioReference?.document_id || '');
+    saveGroupReplyDraft(scope, {...draft, attempt: null,
+      ...(clearPrompt ? {prompt: '', studioDocumentId: '', studioReference: null} : {})});
     if (clearPrompt && groupReplyFormScope === scope && sendScope() === scope) {
       document.getElementById('group-agent-prompt').value = '';
+      if (groupStudio?.scope === scope) {
+        groupStudio.preview?.abort();
+        groupStudio.preview = null;
+        groupStudioPanel.open = false;
+        clearGroupStudioPreview();
+        groupStudioNode('status').textContent = '';
+        renderGroupStudioPicker();
+      }
     }
     return true;
+  }
+
+  const groupStudioNode = id => document.getElementById('group-studio-' + id);
+  const groupStudioPanel = document.getElementById('group-studio');
+  let groupStudio = null;
+
+  function namedTeamGroup() {
+    const workspace = workspaceId();
+    return servedByDsbot && currentSource === 'social' && currentConversation?.kind === 'group'
+      && !currentConversation.public_agent && !currentConversation.account_group && !currentConversation.direct
+      && currentConversation.workspace_id === workspace && workspaces.some(item => item.id === workspace && item.kind === 'team');
+  }
+
+  const currentGroupStudio = state => groupStudio === state && state?.scope === sendScope() && namedTeamGroup();
+  const groupStudioRevisionLabel = revision => uiLabel('版本 ' + revision, 'Version ' + revision);
+
+  function clearGroupStudioPreview() {
+    if (groupStudio) groupStudio.review = null;
+    groupStudioNode('preview').hidden = true;
+    for (const field of ['title', 'revision', 'excerpt']) groupStudioNode(field).textContent = '';
+  }
+
+  function syncGroupStudioPicker() {
+    if (!groupStudio) return;
+    const draft = groupReplyDraft(groupStudio.scope);
+    const select = groupStudioNode('document');
+    select.disabled = !groupStudio.items.length && !draft.studioDocumentId;
+    groupStudioNode('review').disabled = !draft.studioDocumentId || Boolean(groupStudio.preview);
+    groupStudioNode('mark').textContent = draft.studioReference
+      ? ' · ' + groupStudioRevisionLabel(draft.studioReference.revision)
+      : draft.studioDocumentId ? uiLabel(' · 待确认', ' · Review needed') : '';
+  }
+
+  function renderGroupStudioPicker() {
+    const draft = groupStudio && groupReplyDraft(groupStudio.scope);
+    const select = groupStudioNode('document');
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = uiLabel('不引用文档', 'No document reference');
+    const rows = [...(groupStudio?.items || [])];
+    if (draft?.studioDocumentId && !rows.some(item => item.id === draft.studioDocumentId)) {
+      rows.push({id: draft.studioDocumentId, title: uiLabel('已选文档', 'Selected document')});
+    }
+    select.replaceChildren(none, ...rows.map(item => {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.title;
+      return option;
+    }));
+    select.value = draft?.studioDocumentId || '';
+    syncGroupStudioPicker();
+  }
+
+  function setGroupStudio(scope = '') {
+    if (groupStudio?.scope === scope || (!groupStudio && !scope)) return;
+    groupStudio?.controller.abort();
+    groupStudio?.preview?.abort();
+    groupStudio = scope ? {scope, workspace: workspaceId(), controller: new AbortController(), items: [], loading: false,
+      preview: null, review: null, referenceError: false} : null;
+    groupStudioPanel.hidden = !groupStudio;
+    groupStudioPanel.open = false;
+    groupStudioNode('mark').textContent = '';
+    groupStudioNode('status').textContent = '';
+    groupStudioNode('refresh').hidden = true;
+    clearGroupStudioPreview();
+    renderGroupStudioPicker();
+  }
+
+  function updateGroupStudioDraft(scope, documentId, reference = null) {
+    saveGroupReplyDraft(scope, {...groupReplyDraft(scope), studioDocumentId: documentId, studioReference: reference});
+    if (groupStudio?.scope === scope) syncGroupStudioPicker();
+    if (groupReplyFormScope === scope && scope === sendScope()) syncGroupReplySubmit(scope);
+  }
+
+  const groupStudioPath = state => `/v1/workspaces/${state.workspace}/studio/documents`;
+  async function loadGroupStudioDocuments() {
+    const state = groupStudio;
+    if (!currentGroupStudio(state) || state.loading) return;
+    state.loading = true;
+    const feedback = groupStudioNode('status');
+    const refresh = groupStudioNode('refresh');
+    refresh.disabled = true;
+    if (!state.preview && !state.review && !state.referenceError) feedback.textContent = uiLabel('正在读取团队文档…', 'Loading team documents…');
+    const result = await request('GET', groupStudioPath(state), undefined, undefined,
+      AbortSignal.any([state.controller.signal, AbortSignal.timeout(12000)])).catch(() => null);
+    if (!currentGroupStudio(state)) return;
+    state.loading = false;
+    refresh.disabled = false;
+    refresh.hidden = false;
+    if (result?.status !== 200 || !Array.isArray(result.body.items)) {
+      if (!state.preview && !state.review && !state.referenceError) feedback.textContent = uiLabel('无法读取团队文档，请重试。', 'Couldn’t load team documents. Try again.');
+      return;
+    }
+    state.items = result.body.items.filter(item => typeof item?.id === 'string' && PRIVATE_THREAD_ID.test(item.id)
+      && typeof item.title === 'string');
+    renderGroupStudioPicker();
+    if (state.preview || state.review || state.referenceError) return;
+    const draft = groupReplyDraft(state.scope);
+    feedback.textContent = draft.studioDocumentId && !draft.studioReference
+      ? uiLabel('请选择并确认要引用的版本。', 'Preview and confirm the version to reference.')
+      : state.items.length ? '' : uiLabel('这个团队还没有可引用的文档。', 'This team has no documents to reference.');
+  }
+
+  async function previewGroupStudioDocument() {
+    const state = groupStudio;
+    if (!currentGroupStudio(state)) return;
+    const {scope} = state;
+    const id = groupReplyDraft(scope).studioDocumentId;
+    if (!id) return;
+    state.preview?.abort();
+    const controller = new AbortController();
+    state.preview = controller;
+    state.referenceError = false;
+    clearGroupStudioPreview();
+    const feedback = groupStudioNode('status');
+    feedback.textContent = uiLabel('正在读取已保存的版本…', 'Loading the saved version…');
+    syncGroupStudioPicker();
+    syncGroupReplySubmit(scope);
+    const result = await request('GET', groupStudioPath(state) + '/' + id, undefined, undefined,
+      AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])).catch(() => null);
+    if (!currentGroupStudio(state) || state.preview !== controller || groupReplyDraft(scope).studioDocumentId !== id) return;
+    state.preview = null;
+    const item = result?.body?.document;
+    const reference = studioRevisionReference({document_id: item?.id, revision: item?.revision});
+    if (result?.status !== 200 || reference?.document_id !== id || typeof item.title !== 'string' || typeof item.body !== 'string') {
+      const unavailable = [403, 404, 410].includes(result?.status);
+      feedback.textContent = unavailable ? uiLabel('这个团队文档已不可用，请选择其他文档或取消引用。', 'This document is unavailable. Select another document or remove the reference.')
+        : uiLabel('无法预览文档，请重试。', 'Couldn’t preview the document. Try again.');
+      state.referenceError = true;
+      if (unavailable) updateGroupStudioDraft(scope, id);
+      syncGroupStudioPicker();
+      syncGroupReplySubmit(scope);
+      return;
+    }
+    state.review = reference;
+    if (!sameStudioReference(reference, groupReplyDraft(scope).studioReference)) updateGroupStudioDraft(scope, id);
+    const characters = [...item.body];
+    groupStudioNode('title').textContent = item.title;
+    groupStudioNode('revision').textContent = groupStudioRevisionLabel(reference.revision);
+    groupStudioNode('excerpt').textContent = characters.slice(0, STUDIO_EXCERPT_LIMIT).join('')
+      || uiLabel('正文为空。', 'This document has no text.');
+    groupStudioNode('truncated').hidden = characters.length <= STUDIO_EXCERPT_LIMIT;
+    groupStudioNode('preview').hidden = false;
+    feedback.textContent = '';
+    syncGroupStudioPicker();
+    syncGroupReplySubmit(scope);
   }
 
   function syncGroupReplySubmit(scope) {
     const button = document.getElementById('group-agent-submit');
     const busy = groupReplyBusy.has(scope);
-    button.disabled = busy || !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
+    const draft = groupReplyDraft(scope);
+    const pendingReview = groupStudio?.scope === scope && (groupStudio.preview || (draft.studioDocumentId && !draft.studioReference));
+    button.disabled = busy || Boolean(pendingReview) || !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
     const label = button.firstElementChild || button;
     label.textContent = busy ? uiLabel('发送中…', 'Sending…') : uiLabel('发送并请求回复', 'Send and request a reply');
   }
@@ -1529,7 +1707,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const isGroup = currentSource === 'social' && currentConversation
       && currentConversation.kind === 'group' && !currentConversation.public_agent;
     panel.hidden = !isGroup;
-    if (!isGroup) return;
+    if (!isGroup) {
+      setGroupStudio();
+      return;
+    }
     const saved = currentConversation.agent_members || [];
     const active = new Set((requests || []).filter(item =>
       ['queued', 'running'].includes(item.status)).map(item => item.agent_id));
@@ -1595,6 +1776,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       item.dataset.replyStatus = request.status;
       list.append(item);
     }
+    setGroupStudio(namedTeamGroup() ? scope : '');
     syncGroupReplySubmit(scope);
   }
 
@@ -3819,6 +4001,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pendingKeys = pendingMessageKeys();
     const unread = socialHistory?.unread;
     let needsDivider = Boolean(unread?.firstId);
+    const showsStudioReferences = namedTeamGroup();
     for (const item of items || []) {
       if (pendingKeys.has(item.client_key)) continue;
       if (needsDivider && item.seq >= unread.firstSeq) {
@@ -3864,6 +4047,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
       li.append(body, time);
       if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
+      const studioReference = !item.retracted && showsStudioReferences && studioRevisionReference(item.studio_reference);
+      if (studioReference) {
+        const link = document.createElement('a');
+        link.className = 'group-studio-reference';
+        link.href = studioDocumentHref(workspaceId(), studioReference.document_id, studioReference.revision);
+        link.textContent = uiLabel('团队文档 · 引用版本 ', 'Team document · Referenced version ') + studioReference.revision;
+        li.insertBefore(link, time);
+      }
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
@@ -4024,6 +4215,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!session || session.source !== 'social') {
       document.getElementById('social-agent-members').hidden = true;
       document.getElementById('group-agent-action').hidden = true;
+      setGroupStudio();
     }
     const link = document.getElementById('open-agent-dir');
     link.hidden = Boolean(session?.public_agent);
@@ -7035,6 +7227,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   document.getElementById('group-agent-prompt').addEventListener('input', rememberGroupReplyDraft);
   document.getElementById('group-agent-choices').addEventListener('change', rememberGroupReplyDraft);
+  groupStudioPanel.addEventListener('toggle', () => {
+    if (groupStudioPanel.open) return loadGroupStudioDocuments();
+  });
+  groupStudioNode('refresh').addEventListener('click', loadGroupStudioDocuments);
+  groupStudioNode('review').addEventListener('click', previewGroupStudioDocument);
+  groupStudioNode('document').addEventListener('change', () => {
+    const state = groupStudio;
+    if (!currentGroupStudio(state)) return;
+    const id = groupStudioNode('document').value;
+    if (id && !state.items.some(item => item.id === id)) return;
+    state.preview?.abort();
+    state.preview = null;
+    state.referenceError = false;
+    clearGroupStudioPreview();
+    groupStudioNode('status').textContent = '';
+    updateGroupStudioDraft(state.scope, id);
+    if (id) return previewGroupStudioDocument();
+  });
+  groupStudioNode('confirm').addEventListener('click', () => {
+    const state = groupStudio;
+    if (!currentGroupStudio(state) || state.review?.document_id !== groupReplyDraft(state.scope).studioDocumentId) return;
+    const reference = state.review;
+    updateGroupStudioDraft(state.scope, reference.document_id, reference);
+    clearGroupStudioPreview();
+    groupStudioNode('status').textContent = uiLabel('已引用' + groupStudioRevisionLabel(reference.revision) + '。', 'Attached version ' + reference.revision + '.');
+    groupStudioNode('review').focus();
+  });
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
     if (currentSource !== 'social' || currentConversation?.kind !== 'group'
@@ -7051,17 +7270,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!validMessage(prompt)) return;
     rememberGroupReplyDraft();
     const draft = groupReplyDraft(scope);
-    const attempt = sameGroupReplyRequest(draft.attempt, prompt, agentIds) ? draft.attempt
-      : {prompt, agentIds, key: idempotencyKey('group-reply-')};
+    const studioReference = namedTeamGroup() ? draft.studioReference : null;
+    if (draft.studioDocumentId && (!studioReference || groupStudio?.preview)) return;
+    const attempt = sameGroupReplyRequest(draft.attempt, prompt, agentIds, studioReference) ? draft.attempt
+      : {prompt, agentIds, studioReference, key: idempotencyKey('group-reply-')};
     saveGroupReplyDraft(scope, {...draft, attempt});
     groupReplyBusy.add(scope);
     syncGroupReplySubmit(scope);
     try {
       const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
-        {agent_ids: agentIds, prompt}, {'Idempotency-Key': attempt.key}, AbortSignal.timeout(15000))
+        {agent_ids: agentIds, prompt, ...(studioReference ? {studio_reference: studioReference} : {})},
+        {'Idempotency-Key': attempt.key}, AbortSignal.timeout(15000))
         .catch(() => ({status: 0, body: {}}));
       if (result.status !== 202 || !result.body.message?.id) {
-        if (scope === sendScope() && groupReplyDraft(scope).attempt?.key === attempt.key) {
+        const latest = groupReplyDraft(scope);
+        const code = result.body.error?.code;
+        if (studioReference && ['studio_reference_changed', 'studio_reference_unavailable'].includes(code)
+          && latest.attempt?.key === attempt.key && sameStudioReference(latest.studioReference, studioReference)) {
+          saveGroupReplyDraft(scope, {...latest, studioReference: null, attempt: null});
+          if (currentGroupStudio(groupStudio) && groupStudio.scope === scope) {
+            groupStudio.referenceError = true;
+            clearGroupStudioPreview();
+            const message = code === 'studio_reference_changed'
+              ? uiLabel('文档版本已更新，请重新预览并确认。', 'The document has a newer version. Preview and confirm it again.')
+              : uiLabel('这个团队文档已不可用，请选择其他文档或取消引用。', 'This document is unavailable. Select another document or remove the reference.');
+            groupStudioPanel.open = true;
+            groupStudioNode('status').textContent = message;
+            syncGroupStudioPicker();
+          }
+        } else if (scope === sendScope() && latest.attempt?.key === attempt.key) {
           show('error', messageFor(result.body.error, uiLabel('发送未确认，请重试。', 'Delivery is unconfirmed. Try again.')));
         }
         return;

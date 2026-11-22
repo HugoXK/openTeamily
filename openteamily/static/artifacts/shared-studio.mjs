@@ -220,7 +220,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     queueUpdate(state);
   }
 
-  async function openDocument(id) {
+  async function openDocument(id, revision) {
     if (!ID.test(id || '')) return;
     const state = newScreen('edit');
     show('正在打开团队文档…');
@@ -236,7 +236,8 @@ export function mountSharedStudio(document, {request, onClose}) {
     show();
     showForm(state, item);
     queueUpdate(state);
-    get('back').focus();
+    if (revision) history.showVersion(revision);
+    else get('back').focus();
   }
 
   async function loadCatalog(failure = '') {
@@ -270,12 +271,12 @@ export function mountSharedStudio(document, {request, onClose}) {
     }
   }
 
-  async function open(id) {
+  async function open(id, revision) {
     if (!scope || dialog.open) return false;
     get('workspace-name').textContent = scope.name;
     dialog.showModal();
     closeButton.focus();
-    if (id) await openDocument(id);
+    if (id) await openDocument(id, revision);
     else await loadCatalog();
     return true;
   }

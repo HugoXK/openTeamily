@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   createBridge, createBridgeServer, forwardModel, runTurn, startBridge, MODEL_ID,
-  userModelOverride, MODEL_OVERRIDE, prepareNativeChat,
+  userModelOverride, MODEL_OVERRIDE, prepareNativeChat, textOnlyCompletion,
 } from '../runtime/flybot-image/ds-bot-bridge.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
@@ -531,4 +531,42 @@ test('parallel native preparations apply a changed provider capability once', as
   model = 'DeepSeek-V4.1-Flash-1017'
   await Promise.all([bridge.prepareModel(), bridge.prepareModel()])
   assert.deepEqual(updates,[['text','image']])
+})
+
+test('isolated text-only requests stream answer text without tools, history, or reasoning', async () => {
+  const seen = []
+  const server = createBridgeServer(
+    {token:'synthetic', startupModel:() => ({model:'fixture'})},
+    {forward:async (_model, raw, response) => {
+      const request = JSON.parse(String(raw))
+      seen.push(request)
+      if (!request.stream) {
+        response.writeHead(200, {'content-type':'application/json'})
+        response.end(JSON.stringify({choices:[{message:{content:'JSON result'}}]}))
+        return
+      }
+      response.writeHead(200, {'content-type':'text/event-stream'})
+      response.write(': comment\r\ndata: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\r\n\r\n')
+      const bytes = Buffer.from('data: {"choices":[{"delta":{"content":"🌿 Plan"}}]}\r\n\r\n')
+      const pivot = bytes.indexOf(0xf0) + 2
+      response.write(bytes.subarray(0,pivot))
+      await delay(5)
+      response.write(bytes.subarray(pivot))
+      if (request.messages.at(-1).content === 'incomplete') { response.end(); return }
+      response.end('data: {"choices":[{"delta":{"content":" approved"}}]}\n\n' +
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+    }},
+  )
+  const port = await listen(server)
+  const bridge = {baseURL:'http://127.0.0.1:'+port+'/v1',state:{token:'synthetic'},async setup() {}}
+  try {
+    const snapshots = []
+    assert.equal(await textOnlyCompletion(bridge,'file excerpt',{system:'Member agent',onProgress:text=>snapshots.push(text)}),'🌿 Plan approved')
+    assert.deepEqual(snapshots,['🌿 Plan','🌿 Plan approved'])
+    assert.deepEqual(seen[0],{model:MODEL_ID,stream:true,messages:[
+      {role:'system',content:'Member agent'},{role:'user',content:'file excerpt'},
+    ]})
+    assert.equal(await textOnlyCompletion(bridge,'summary'),'JSON result')
+    await assert.rejects(textOnlyCompletion(bridge,'incomplete',{onProgress() {}}),/ended early/)
+  } finally { await close(server) }
 })

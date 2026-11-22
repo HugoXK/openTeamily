@@ -3464,6 +3464,86 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('named team group replies explicitly pin what was previewed and keep drafts across stale versions', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
+  const {doc, el, routes, calls, restore} = fixture;
+  const sendPath = linkBase(linkTeam) + linkSocialPath + '/agent-replies';
+  const documentPath = linkBase(linkTeam) + '/studio/documents';
+  const documentId = 'f'.repeat(32);
+  const title = '项目文档';
+  const excerpt = '甲'.repeat(2399) + '🦊';
+  let revision = 1;
+  const attempts = [];
+  routes.set(linkBase(linkTeam) + linkSocialPath, () => json(200, {
+    conversation: {id: linkSocial, workspace_id: linkTeam, title: '测试群', kind: 'group',
+      members: [{user_id: alice, username: 'alice'}], agent_members: [{id: 'agent-local', name: '测试助理'}]},
+    items: [],
+  }));
+  routes.set(documentPath, () => json(200, {items: [{id: documentId, title, revision}]}));
+  routes.set(documentPath + '/' + documentId, () => json(200, {
+    document: {id: documentId, title, revision, body: excerpt + '不能进入预览的片段'},
+  }));
+  const fetcher = (path, options) => {
+    if (path !== sendPath) return fixture.fetcher(path, options);
+    const sent = JSON.parse(options.body);
+    attempts.push({body: sent, key: options.headers['Idempotency-Key']});
+    if (attempts.length === 1) return json(503, {});
+    if (sent.studio_reference.revision !== revision) return json(409, {error: {code: 'studio_reference_changed'}});
+    return json(202, {message: {id: 'posted', seq: 1, body: sent.prompt, user_id: alice, created: 1,
+      studio_reference: sent.studio_reference}});
+  };
+  const query = doc.querySelectorAll;
+  doc.querySelectorAll = selector => selector === '#group-agent-choices input[name="group-agent"]:checked'
+    ? el('group-agent-choices').children.map(label => label.children[0]).filter(box => box.checked)
+    : query(selector);
+  try {
+    await mount(doc, {fetcher});
+    assert.equal(el('group-studio').hidden, false);
+    assert.equal(calls.some(call => call.path.startsWith(documentPath)), false);
+    const prompt = el('group-agent-prompt');
+    prompt.value = '用这份文档回答';
+    el('group-agent-choices').children[0].children[0].checked = true;
+    const submit = () => fire(el('group-agent-form'), 'submit', {preventDefault() {}});
+    const picker = el('group-studio-document');
+    el('group-studio').open = true;
+    await fire(el('group-studio'), 'toggle');
+    picker.value = documentId;
+    await fire(picker, 'change');
+    assert.equal(el('group-agent-submit').disabled, true);
+    await submit();
+    assert.equal(attempts.length, 0);
+    assert.equal(el('group-studio-excerpt').textContent, excerpt);
+    assert.equal(el('group-studio-truncated').hidden, false);
+    await fire(el('group-studio-confirm'), 'click');
+    await submit();
+    assert.equal(prompt.value, '用这份文档回答');
+    assert.equal(picker.value, documentId);
+    assert.deepEqual(attempts[0].body, {agent_ids: ['agent-local'], prompt: prompt.value,
+      studio_reference: {document_id: documentId, revision: 1}});
+    el('status').textContent = '另一个聊天状态';
+    revision = 2;
+    await submit();
+    assert.equal(attempts[1].key, attempts[0].key);
+    assert.match(el('group-studio-status').textContent, /重新预览/);
+    assert.equal(el('status').textContent, '另一个聊天状态');
+    assert.equal(el('group-agent-submit').disabled, true);
+    await fire(el('group-studio-review'), 'click');
+    assert.equal(el('group-studio-revision').textContent, '版本 2');
+    assert.equal(el('group-studio-status').textContent, '');
+    await fire(el('group-studio-confirm'), 'click');
+    await submit();
+    assert.notEqual(attempts[2].key, attempts[1].key);
+    assert.equal(attempts[2].body.studio_reference.revision, 2);
+    const link = descendants(el('message-list')).find(node => node.classList.contains('group-studio-reference'));
+    assert.equal(link.textContent, '团队文档 · 引用版本 2');
+    assert.equal(link.href, `/space?workspace=${linkTeam}&studio=${documentId}&studio_revision=2`);
+    assert.equal(prompt.value, '');
+    assert.equal(picker.value, '');
+    assert.equal(el('group-studio-excerpt').textContent, '');
+  } finally { restore(); }
+});
+
 function settledNativeSnapshot(fixture) {
   return {agent: fixture.agent, conversation: fixture.nativeThread, cursor: null, has_newer: false,
     items: fixture.nativeRows.map(row => ({...row, workspace_id: linkWork, agent_id: linkAgent, conversation_id: linkThread}))};

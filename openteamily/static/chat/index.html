@@ -663,6 +663,26 @@
           <legend data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend>
           <div id="group-agent-choices" class="agent-choices"></div>
         </fieldset>
+        <details id="group-studio" hidden>
+          <summary id="group-studio-toggle"><span data-ui-text="chat.group.studio_reference">引用团队文档</span><span id="group-studio-mark"></span></summary>
+          <div class="group-studio-picker">
+            <label><span class="visually-hidden" data-ui-text="chat.group.studio_document">团队文档</span>
+              <select id="group-studio-document" disabled>
+                <option value="" data-ui-text="chat.group.studio_none">不引用文档</option>
+              </select>
+            </label>
+            <button type="button" id="group-studio-review" data-ui-text="chat.group.studio_review" disabled>预览当前版本</button>
+            <button type="button" id="group-studio-refresh" data-ui-text="chat.group.studio_refresh" hidden>重新读取文档列表</button>
+          </div>
+          <p id="group-studio-status" class="note" role="status"></p>
+          <section id="group-studio-preview" aria-labelledby="group-studio-title" hidden>
+            <p class="group-studio-version"><strong id="group-studio-title"></strong><span id="group-studio-revision"></span></p>
+            <p class="note" data-ui-text="chat.group.studio_scope">发送请求后，所选智能体会收到这段文档内容。</p>
+            <pre id="group-studio-excerpt" tabindex="0"></pre>
+            <p id="group-studio-truncated" class="note" data-ui-text="chat.group.studio_truncated" hidden>只引用正文开头的 2400 个字符。</p>
+            <button type="button" id="group-studio-confirm" data-ui-text="chat.group.studio_confirm">引用此版本</button>
+          </section>
+        </details>
         <label><span data-ui-text="chat.group.message">群消息</span> <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
         <button id="group-agent-submit" type="submit"><span data-ui-text="chat.group.send_request">发送并请求回复</span></button>
       </form>

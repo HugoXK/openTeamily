@@ -896,6 +896,134 @@ test("a group reply claim returns an older exact quote only while its agent owne
   assert.equal((await sender.call("POST", room, {body: "@helper review", reply_to: unrelated.id})).status, 409);
 });
 
+test("explicit Studio references keep a reviewed version private to its selected managed job", async () => {
+  const [owner, sender, worker, observer] = await Promise.all([
+    home(S.base, "studio-group-owner"), home(S.base, "studio-group-sender"),
+    home(S.base, "studio-group-worker"), home(S.base, "studio-group-observer"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {
+    name: "Studio group", slug: "studio-group-pin", idempotency_key: "studio-group-pin-request",
+  });
+  const other = await sender.ok("POST", "/v1/ot/workspaces", {
+    name: "Other Studio", slug: "other-studio-pin", idempotency_key: "studio-other-pin-request",
+  });
+  for (const member of [sender, worker, observer]) {
+    await owner.ok("POST", `/v1/ot/teams/${team.id}/members`, {handle: member.handle, role: "member"});
+  }
+  const group = await sender.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Studio review", team_id: team.id, members: [worker.handle, observer.handle],
+  });
+  const room = `/v1/ot/conversations/${group.id}`;
+  const progressList = `/v1/ot/workspaces/${team.workspace_id}/conversations/${group.id}/reply-progress`;
+  await worker.ok("PUT", room + "/agents/review", {name: "Review"});
+  await observer.ok("PUT", room + "/agents/auto", {name: "Automatic", auto_reply: true});
+  const workerId = (await worker.ok("GET", "/v1/ot/me")).owner_id;
+  const documents = (workspace: string) => `/v1/ot/teams/${workspace}/studio/documents`;
+  const title = "Studio-only title";
+  const excerpt = "🧪".repeat(2399) + "界";
+  const {document: doc} = await owner.ok("POST", documents(team.workspace_id), {
+    title, body: excerpt + "studio-only tail", client_key: "first-studio-group-doc",
+  });
+  const {document: separate} = await sender.ok("POST", documents(other.workspace_id), {
+    title: "Other workspace title", body: "Unrelated team material", client_key: "other-studio-group-doc",
+  });
+  const docPath = documents(team.workspace_id) + "/" + doc.id;
+  const request = {
+    workspace: team.workspace_id, direct: false, client_key: "studio-group-source-001", body: "Review the decision",
+    agent_mentions: [{owner_id: workerId, agent_id: "review"}],
+    studio_reference: {document_id: doc.id, revision: 1},
+  };
+  const send = (overrides = {}) => sender.call("POST", room + "/messages", {...request, ...overrides});
+  assert.equal((await send({workspace: other.workspace_id})).status, 404);
+  assert.equal((await send({studio_reference: {document_id: separate.id, revision: 1}})).data.error.code,
+    "studio_reference_unavailable");
+  assert.equal((await send({agent_mentions: [], body: "@review Try a plain mention"})).status, 400);
+  assert.equal((await send({voice: {}})).status, 400);
+  const workerMembership = `/v1/ot/teams/${team.id}/members/${worker.handle}`;
+  await owner.ok("PATCH", workerMembership, {suspended: true});
+  assert.equal((await send()).data.error.code, "studio_reference_unavailable");
+  await owner.ok("PATCH", workerMembership, {suspended: false});
+  assert.deepEqual((await sender.ok("GET", room + "/messages")).messages, []);
+
+  const first = (await send()).data;
+  const running = (await send({client_key: "studio-group-source-002"})).data;
+  const queued = (await send({client_key: "studio-group-source-003"})).data;
+  assert.deepEqual(first.studio_reference, request.studio_reference);
+  assert.equal((await send({body: "Different questions are not retries"})).status, 409);
+  const inboxPath = "/v1/ot/agent-inbox?managed=1";
+  const inbox = await worker.ok("GET", inboxPath);
+  const managed = inbox.jobs.find((job: any) => job.message.id === first.id);
+  assert.ok(managed);
+  assert.deepEqual(managed.message.studio_reference, request.studio_reference);
+  for (const view of [first, inbox, await observer.ok("GET", room + "/messages"), await observer.ok("GET", inboxPath)]) {
+    assert.doesNotMatch(JSON.stringify(view), /Studio-only title|studio-only tail|🧪/u);
+  }
+  assert.equal((await worker.ok("GET", "/v1/ot/agent-inbox")).items.some((item: any) => item.message.id === first.id), false);
+  assert.equal((await observer.ok("GET", inboxPath)).items.some((item: any) => item.message.id === first.id), false);
+
+  await owner.ok("PUT", docPath, {revision: 1, title: "A later version", body: "Not the reviewed body"});
+  const replay = await send();
+  assert.equal(replay.data.id, first.id);
+  assert.equal((await send({client_key: "unused-studio-group-key"})).data.error.code, "studio_reference_changed");
+  const start = {action: "start", attempt: 1, claim_id: "c7fe0015-624c-4326-afdc-303943909a26", source_revision: 1};
+  const canRead = {...start, accept_studio_reference: true};
+  const jobPath = (message: any) => `/v1/ot/agent-reply-jobs/${message.reply_jobs[0].id}`;
+  const finish = (message: any) => ({
+    reply_to: message.id, agent_ref: "review", mode: "mention", body: "Reviewed result",
+    job_id: message.reply_jobs[0].id, attempt: 1, claim_id: start.claim_id,
+  });
+  assert.equal((await observer.call("POST", jobPath(first), canRead)).status, 404);
+  assert.equal((await worker.call("POST", jobPath(first), start)).status, 409);
+  assert.equal((await worker.call("POST", room + "/agent-messages", {
+    reply_to: first.id, agent_ref: "review", body: "Unclaimed attempt",
+  })).status, 409);
+  assert.equal((await observer.call("POST", room + "/agent-messages", {
+    reply_to: first.id, agent_ref: "auto", mode: "auto", body: "Unselected attempt",
+  })).status, 409);
+  const claim = await worker.ok("POST", jobPath(first), canRead);
+  assert.deepEqual(claim, {ok: true, studio_reference: {...request.studio_reference, title, excerpt, truncated: true}});
+  assert.deepEqual(await worker.ok("POST", jobPath(first), canRead), claim);
+  const completed = await worker.ok("POST", room + "/agent-messages", finish(first));
+  await worker.ok("POST", jobPath(running), canRead);
+  const progress = {attempt: 1, claim_id: start.claim_id, revision: 1, text: "Temporary draft"};
+  await worker.ok("POST", jobPath(running) + "/progress", progress);
+  assert.ok((await observer.ok("GET", progressList)).items.some((item: any) => item.text === progress.text));
+
+  await owner.ok("DELETE", docPath, {revision: 2});
+  assert.equal((await send()).data.id, first.id);
+  assert.equal((await worker.ok("POST", room + "/agent-messages", finish(first))).id, completed.id);
+  assert.deepEqual((await observer.ok("GET", progressList)).items, []);
+  for (const message of [running, queued]) {
+    assert.deepEqual(await worker.ok("POST", jobPath(message), canRead), {ok: true, studio_reference_unavailable: true});
+    assert.equal((await worker.call("POST", jobPath(message) + "/progress", {...progress, revision: 2})).status, 409);
+    assert.equal((await worker.call("POST", room + "/agent-messages", finish(message))).status, 409);
+  }
+  assert.equal((await sender.call("POST", room + `/messages/${running.id}/agent-retry`, {
+    job_id: running.reply_jobs[0].id,
+  })).data.error.code, "studio_reference_unavailable");
+  assert.equal((await send({client_key: "deleted-studio-group-key"})).data.error.code, "studio_reference_unavailable");
+
+  const {document: again} = await owner.ok("POST", documents(team.workspace_id), {
+    title: "Still present", body: "Membership check", client_key: "second-studio-group-doc",
+  });
+  const revoked = (await send({client_key: "studio-group-source-004", studio_reference: {document_id: again.id, revision: 1}})).data;
+  await worker.ok("POST", jobPath(revoked), canRead);
+  const authorMembership = `/v1/ot/teams/${team.id}/members/${sender.handle}`;
+  await owner.ok("PATCH", authorMembership, {suspended: true});
+  assert.equal((await sender.call("POST", room + "/messages", request)).status, 404);
+  assert.deepEqual(await worker.ok("POST", jobPath(revoked), canRead), {ok: true, studio_reference_unavailable: true});
+  await owner.ok("PATCH", authorMembership, {suspended: false});
+  assert.equal((await worker.call("POST", room + "/agent-messages", finish(revoked))).status, 409);
+
+  const pruned = (await send({client_key: "studio-group-source-005", studio_reference: {document_id: again.id, revision: 1}})).data;
+  const currentDoc = documents(team.workspace_id) + "/" + again.id;
+  for (let revision = 1; revision <= 30; revision++) {
+    await owner.ok("PUT", currentDoc, {revision, title: again.title, body: `Saved version ${revision + 1}`});
+  }
+  assert.equal((await owner.call("GET", currentDoc + "/versions/1")).status, 404);
+  assert.deepEqual(await worker.ok("POST", jobPath(pruned), canRead), {ok: true, studio_reference_unavailable: true});
+});
+
 test("attachment search is newest-first, case-insensitive and scoped to readable files", async () => {
   const author = await home(S.base, "search-file-author");
   const reader = await home(S.base, "search-file-reader");

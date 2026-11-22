@@ -219,6 +219,8 @@ class SettingsPage:
                 return True
             if re.fullmatch(rf'workspace={identifier}&studio={identifier}|studio={identifier}&workspace={identifier}', query):
                 return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}&studio_revision=[1-9][0-9]{{0,15}}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',

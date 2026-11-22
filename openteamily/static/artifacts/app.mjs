@@ -3197,7 +3197,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (linkedStudio) {
       void loadList();
       if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
-          !await studio?.open(linkedStudio.id)) {
+          !await studio?.open(linkedStudio.id, linkedStudio.revision)) {
         show('error', '团队文档链接无效，或你没有访问权限。');
       }
       return;

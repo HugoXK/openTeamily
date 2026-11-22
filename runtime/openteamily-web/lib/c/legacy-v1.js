@@ -13,6 +13,7 @@ import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
 import { GLB_MIME } from '../glb.js'
+import { studioReference } from './studio-reference.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
@@ -138,6 +139,7 @@ function attachmentItem({ title, mime, bytes, resource, sticker }, workspaceId, 
 function messageItem(row, me, env, workspaceId) {
   const author = row.author || { handle: null, owner_id: row.author_id, display_name: row.agent_name }
   const agent = row.author_kind === 'agent' || author.kind === 'agent'
+  const studio = !agent && !row.retracted && studioReference(row.studio_reference)
   return {
     id: row.id,
     seq: row.seq,
@@ -154,6 +156,7 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.voice ? { voice: row.voice } : {}),
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
+    ...(studio ? {studio_reference: studio} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
@@ -253,6 +256,8 @@ function rethrow(error) {
     comment_not_found: 'not_found',
     comment_conflict: 'conflict',
     reply_unavailable: 'reply_unavailable',
+    studio_reference_changed: 'studio_reference_changed',
+    studio_reference_unavailable: 'studio_reference_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
@@ -1297,8 +1302,16 @@ function messengerExtraRoutes(host, wakeReplies) {
               || typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
             throw new Fault(400, 'invalid', 'Provide up to five group agents, a prompt and a send key')
           }
+          const reference = body.studio_reference
+          const studio = studioReference(reference)
+          if (reference !== undefined && (!studio || Object.keys(reference).length !== 2)) {
+            throw new Fault(400, 'invalid', '选择有效的团队文档版本。')
+          }
           const bs = client(host)
           const conversation = await requireSharedGroupScope(host, bs, workspace, conversationId)
+          if (studio && accountConversation(conversation)) {
+            throw new Fault(404, 'studio_reference_unavailable', '此群聊无法使用团队文档。')
+          }
           const me = await meOf(bs, env)
           const targets = ids.map(agentId => {
             const agent = (conversation.agents || []).find(a => a.agent_ref === agentId && a.mine)
@@ -1307,6 +1320,7 @@ function messengerExtraRoutes(host, wakeReplies) {
           })
           const source = await bs.post(`${conv(conversationId)}/messages`, {
             body:prompt, workspace, direct:accountConversation(conversation), agent_mentions:targets, client_key:key,
+            ...(studio ? {studio_reference:studio} : {}),
           })
           if (source.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [202, {message:messageItem({...source, conversation_id:conversationId}, me, env, workspace)}]

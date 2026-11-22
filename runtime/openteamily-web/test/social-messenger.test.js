@@ -137,7 +137,7 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   const claim_id = posts[0].body.claim_id
   assert.match(claim_id, CLAIM_ID)
   assert.deepEqual(posts.slice(0,2),[
-    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3}},
+    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true}},
     {path:'/v1/ot/agent-reply-jobs/otj_live/progress',body:{attempt:2,claim_id,revision:1,text:'First visible'}},
   ])
   await Promise.all([second.promise,delay(350)])
@@ -210,7 +210,7 @@ test('a managed start replays its claim after a transient failure but a stale co
       assert.equal(ownerReplays.length,2)
       assert.equal(new Set(ownerReplays).size,1)
       assert.equal(claims.length,3)
-      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7})
+      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7,accept_studio_reference:true})
     })
   }
 })
@@ -271,7 +271,7 @@ test('a managed reply retries transient delivery once with the same payload and 
         job_id:'otj_live',attempt:2,claim_id,
       })
       assert.deepEqual(actions,[
-        {action:'start',attempt:2,claim_id,source_revision:3},
+        {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true},
         ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
       ])
     })
@@ -282,6 +282,7 @@ test('manual group reply uses the same managed send and progress reads follow th
   const workspace = 'a'.repeat(32)
   const personal = 'b'.repeat(32)
   const wrong = 'c'.repeat(32)
+  const studio = {document_id:'d'.repeat(32),revision:3}
   const sharedProgress = {id:'otj_live',message_id:'otm_source',attempt:1,status:'running',text:''}
   const accountProgress = {...sharedProgress,status:'queued'}
   const f = fake({
@@ -290,7 +291,10 @@ test('manual group reply uses the same managed send and progress reads follow th
     [`GET /v1/ot/teams/by-workspace/${wrong}`]: () => ({id:'ott_other'}),
     'GET /v1/ot/conversations/otc_1': () => ({kind:'group',team_id:'ott_group',
       agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
+    'GET /v1/ot/conversations/otc_account': () => ({kind:'group',account_group:true,
+      agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
     'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_source',body:input.body,
+      ...(input.studio_reference ? {studio_reference:{...input.studio_reference,excerpt:'private response field'}} : {}),
       reply_jobs:[{id:'otj_live',status:'queued',attempt:1}]}),
     'GET /v1/ot/conversations/otc_1/messages': () => ({messages:[
       {id:'otm_source',body:'Please help',author:{kind:'member',owner_id:'owner-a'}},
@@ -316,7 +320,17 @@ test('manual group reply uses the same managed send and progress reads follow th
   assert.deepEqual(f.calls.at(-1).body,{body:'Please help',workspace,direct:false,client_key:'group-reply-test-key',
     agent_mentions:[{owner_id:'owner-a',agent_id:'helper'}]})
   assert.equal((await feature.v1({...payload,path:from(wrong)+'/agent-replies'})).status,404)
-  assert.equal(f.calls.filter(call => call.method === 'POST').length,1)
+  const referenced = await feature.v1({...payload,body:{...payload.body,studio_reference:studio}})
+  assert.equal(referenced.status,202)
+  assert.deepEqual(referenced.body.message.studio_reference,studio)
+  assert.deepEqual(f.calls.at(-1).body.studio_reference,studio)
+  const unexpectedText = {...payload,body:{...payload.body,studio_reference:{...studio,excerpt:'must not accept'}}}
+  assert.equal((await feature.v1(unexpectedText)).status,400)
+  const accountReference = await feature.v1({...payload,path:from(personal,'otc_account')+'/agent-replies',
+    body:{...payload.body,studio_reference:studio}})
+  assert.equal(accountReference.status,404)
+  assert.equal(accountReference.body.error.code,'studio_reference_unavailable')
+  assert.equal(f.calls.filter(call => call.method === 'POST').length,2)
   const shared = await feature.v1({method:'GET',path:from(workspace)+'/reply-progress'})
   assert.deepEqual(shared,{status:200,body:{items:[sharedProgress]}})
   const account = await feature.v1({method:'GET',path:from(personal,'otc_account')+'/reply-progress'})
@@ -477,4 +491,45 @@ test('group sender retry forwards the displayed attempt to Bot Social', async ()
   const result = await feature.v1({method:'POST',path,body})
   assert.deepEqual(result,{status:200,body:{reply_jobs:jobs}})
   assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body})
+})
+
+test('Studio claims only expose a matching pin to a stateless group turn', async () => {
+  const studio = {document_id:'f'.repeat(32),revision:4}
+  const receipt = { ...studio, title:'Release', excerpt:'Use staging first 🌿', truncated:false }
+  const item = {job_id:'otj_studio',attempt:2,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_studio',revision:1,studio_reference:{...studio,excerpt:'not authorized from inbox'}}}
+  for (const [claim, ok] of [
+    [{studio_reference:receipt},true],
+    [{studio_reference:{...receipt,revision:5}},false],
+    [{studio_reference_unavailable:true},false],
+    [{},false],
+  ]) {
+    const calls = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'cursor.json'),
+      bs:{
+        async get() { return {jobs:[item]} },
+        async post(path, body) {
+          calls.push(body.action || path)
+          if (body.action === 'start') return claim
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint, payload) {
+          assert.equal(endpoint,'agents/groupReferenceTurn')
+          assert.equal(payload.agent_id,'helper')
+          assert.match(payload.text,/Use staging first 🌿/)
+          assert.doesNotMatch(payload.text,/not authorized from inbox/)
+          assert.equal(typeof payload.onProgress,'function')
+          calls.push(endpoint)
+          return {text:'First use staging.'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied, Number(ok))
+    assert.deepEqual(calls, ok
+      ? ['start','agents/groupReferenceTurn','/v1/ot/conversations/otc_group/agent-messages']
+      : ['start','fail'])
+  }
 })
