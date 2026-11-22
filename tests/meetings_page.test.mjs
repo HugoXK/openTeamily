@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
+import { mergeMeetingFields, mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
 import { discussionContext, mountMeetingDiscussion } from '../openteamily/static/meetings/discussion.mjs';
 import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
 import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
+
+test('meeting version review merges disjoint edits and flags overlapping fields', () => {
+  const actions = [['核对报告', 'Alice', false, '2026-12-01']];
+  const base = ['会议', '2026-11-22T13:00', 'Alice', '摘要', '旧正文', actions];
+  const local = ['后续会议', base[1], base[2], '我的摘要', base[4], actions];
+  const remote = [base[0], base[1], base[2], '后提交的摘要', '新正文', [['核对报告', 'Alice', true, '2026-12-01']]];
+  assert.deepEqual(mergeMeetingFields(base, local, remote), {
+    fields:['后续会议', base[1], base[2], '我的摘要', '新正文', remote[5]], conflicts:[3],
+  });
+  assert.deepEqual(mergeMeetingFields(base, remote, remote), {fields:remote, conflicts:[]});
+});
 
 test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
   const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],

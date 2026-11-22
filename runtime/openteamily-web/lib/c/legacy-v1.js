@@ -262,6 +262,7 @@ function rethrow(error) {
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
     listing_changed: 'listing_changed',
+    artifact_changed: 'artifact_changed',
     title_conflict: 'title_conflict',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
@@ -1512,6 +1513,7 @@ function discoverRoutes(host) {
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(Number.isSafeInteger(row.source_revision) && row.source_revision > 0 ? {published_revision:row.source_revision} : {}),
     ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
@@ -1610,6 +1612,7 @@ function discoverRoutes(host) {
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
+            ...(Number.isSafeInteger(artifact.revision) && artifact.revision > 0 ? {source_revision:artifact.revision} : {}),
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
             ...file,

@@ -12,6 +12,8 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
   const title = byId('title');
   const body = byId('body');
   const target = byId('target');
+  const workspaceSelect = byId('target-workspace');
+  const workspaceField = byId('target-field');
   const revision = byId('revision');
   const confirm = byId('confirm');
   const dismiss = byId('dismiss');
@@ -21,13 +23,15 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
   let pending = false;
 
   function candidate() {
-    const {selection, item, team} = source();
-    if (team?.kind !== 'team' || !ID.test(team.id) || !team.name?.trim() || !ROLES.has(team.role) ||
-        selection?.workspace !== team.id || item?.kind !== 'document' || !ID.test(item.id || '') ||
+    const {selection, item, workspaces} = source();
+    const teams = (workspaces || []).filter(team => team.kind === 'team' && ID.test(team.id) &&
+      typeof team.name === 'string' && team.name.trim() && ROLES.has(team.role));
+    if (!teams.length || !selection || selection.workspace !== item?.workspace_id ||
+        item.kind !== 'document' || !ID.test(item.id || '') ||
         !Number.isSafeInteger(item.revision) || item.revision < 1 ||
         typeof item.title !== 'string' || typeof item.body !== 'string') return null;
     const draft = {revision: item.revision, title: item.title.replace(/\s+/g, ' ').trim(), body: item.body};
-    return {selection, item, team, draft};
+    return {selection, item, teams, draft};
   }
 
   function close() {
@@ -37,6 +41,7 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
     title.textContent = '';
     body.textContent = '';
     target.textContent = '';
+    workspaceSelect.replaceChildren();
     revision.textContent = '';
     status.textContent = '';
     link.removeAttribute('href');
@@ -51,7 +56,18 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
       return;
     }
     review = copy;
-    target.textContent = copy.team.name;
+    workspaceSelect.replaceChildren();
+    for (const team of [{id:'', name:'请选择团队工作区'},...copy.teams]) {
+      const option = document.createElement('option');
+      option.value = team.id;
+      option.textContent = team.name;
+      workspaceSelect.append(option);
+    }
+    workspaceSelect.value = copy.teams.some(team => team.id === copy.selection.workspace) ? copy.selection.workspace : '';
+    workspaceSelect.disabled = false;
+    workspaceField.hidden = false;
+    target.hidden = true;
+    target.textContent = copy.teams.find(team => team.id === workspaceSelect.value)?.name || '';
     revision.textContent = '版本 ' + copy.draft.revision;
     title.textContent = copy.draft.title;
     body.textContent = copy.draft.body;
@@ -59,7 +75,7 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
     byId('empty').hidden = Boolean(copy.draft.body);
     status.textContent = '';
     confirm.textContent = '确认复制';
-    confirm.disabled = false;
+    confirm.disabled = !workspaceSelect.value;
     confirm.hidden = false;
     dismiss.textContent = '取消';
     dismiss.disabled = false;
@@ -68,6 +84,13 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
   }
 
   for (const button of [desktop, mobile]) button.addEventListener('click', open);
+  workspaceSelect.addEventListener('change', () => {
+    if (!review || pending || workspaceSelect.disabled) return;
+    const team = review.teams.find(item => item.id === workspaceSelect.value);
+    target.textContent = team?.name || '';
+    confirm.disabled = !team;
+    status.textContent = '';
+  });
   dismiss.addEventListener('click', close);
   dialog.addEventListener('cancel', event => {
     event.preventDefault();
@@ -77,8 +100,10 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
     const copy = review;
     const current = candidate();
     if (!copy || pending) return;
+    const team = copy.teams.find(item => item.id === workspaceSelect.value);
+    if (!team) return;
     if (copy.selection !== current?.selection || copy.item !== current.item ||
-        copy.team.name !== current.team.name) {
+        !current.teams.some(item => item.id === team.id && item.name === team.name)) {
       status.textContent = '作品或工作区已变更。请关闭此窗口并重新预览。';
       confirm.disabled = true;
       return;
@@ -89,19 +114,21 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
       confirm.disabled = true;
       return;
     }
-    pending = confirm.disabled = dismiss.disabled = true;
+    pending = confirm.disabled = dismiss.disabled = workspaceSelect.disabled = true;
     status.textContent = '正在复制到团队协作…';
     let result;
     try {
-      result = await request(copy.selection, copy.item.id, copy.draft);
+      result = await request(copy.selection, copy.item.id, {...copy.draft,target_workspace_id:team.id});
     } catch {
       result = {status: 0, body: {}};
     }
     if (review !== copy) return;
     pending = dismiss.disabled = false;
-    const href = result.status === 200 && studioDocumentHref(copy.team.id, result.body.id);
+    const href = result.status === 200 && result.body?.workspace_id === team.id && studioDocumentHref(team.id, result.body.id);
     if (href) {
       status.textContent = '已复制。团队成员可以编辑这份副本。';
+      target.hidden = false;
+      workspaceField.hidden = true;
       confirm.hidden = true;
       dismiss.textContent = '关闭';
       link.href = href;

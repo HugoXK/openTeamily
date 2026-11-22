@@ -58,6 +58,27 @@ export function actionToggleBody(actions, index, done, revision) {
   return {revision, changes: {action_items: items}};
 }
 
+const sameMeetingField = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const actionFields = ({text, owner, done, due_date}) => [text || '', owner || '', Boolean(done), due_date || ''];
+const meetingFieldLabels = ['标题', '开始时间', '与会者', '摘要', '会议正文', '行动项'];
+
+export function mergeMeetingFields(base, local, remote) {
+  const conflicts = [];
+  const fields = local.map((value, index) => {
+    if (sameMeetingField(value, base[index])) return remote[index];
+    if (!sameMeetingField(remote[index], base[index]) && !sameMeetingField(remote[index], value)) conflicts.push(index);
+    return value;
+  });
+  return {fields, conflicts};
+}
+
+function conflictFieldText(value) {
+  if (!Array.isArray(value)) return value || '（空）';
+  return value.map(([text, owner, done, date]) => [
+    done ? '已完成' : '未完成', text || '（空行动项）', owner, date,
+  ].filter(Boolean).join(' · ')).join('\n') || '（没有行动项）';
+}
+
 
 export const MEMBER_ROLE_LABELS = {owner: '所有者', admin: '管理员', member: '成员'};
 export const ATTENDEE_EMPTY = '无匹配成员';
@@ -651,6 +672,7 @@ function mount() {
   let writing = null;
   let saveRetry = null;
   let saveConflict = false;
+  let conflictRead = null;
   let savedDraft = null;
   let editingWorkspace = '';
   let continueNavigation = null;
@@ -666,6 +688,10 @@ function mount() {
   const transcriptSearch = mountTranscriptSearch(document, transcript);
   const audio = mountMeetingAudio(document, {request, base, transcript, onPendingChange: syncLeaveProtection});
   const summary = document.getElementById('meeting-summary');
+  const reviewConflict = document.getElementById('review-meeting-conflict');
+  const conflictDialog = document.getElementById('meeting-conflict-dialog');
+  const conflictFields = document.getElementById('meeting-conflict-fields');
+  const applyConflict = document.getElementById('apply-meeting-conflict');
   const draftPanel = document.getElementById('meeting-draft');
   const draftButton = document.getElementById('generate-meeting-draft');
   const stopDraftButton = document.getElementById('stop-meeting-draft-wait');
@@ -696,6 +722,8 @@ function mount() {
   function resetSave() {
     saveRetry = null;
     saveConflict = false;
+    conflictRead = null;
+    if (conflictDialog?.open) conflictDialog.close();
     showSave('', '');
   }
 
@@ -874,6 +902,10 @@ function mount() {
     }
     const blocked = Boolean(pending || retry || saveConflict);
     remove.disabled = blocked;
+    if (reviewConflict) {
+      reviewConflict.hidden = !saveConflict || !current?.id;
+      reviewConflict.disabled = Boolean(pending || conflictRead);
+    }
     const label = pending?.kind === 'save' ? '保存中…' : retry ? '确认并重试保存' : '保存';
     save.textContent = label;
     if (mobileSave) mobileSave.textContent = label;
@@ -2035,8 +2067,95 @@ function mount() {
 
   function draftContents() {
     return JSON.stringify([titleInput.value, startedInput.value, attendeeInput.value, summary.value, transcript.value,
-      actions.map(({text, owner, done, due_date}) => [text, owner, done, due_date || ''])]);
+      actions.map(actionFields)]);
   }
+
+  function renderConflictReview(review, local, remote, revision) {
+    document.getElementById('meeting-conflict-description').textContent = review.conflicts.length
+      ? `请选择有冲突的字段。其他修改会合并到修订 ${revision}。`
+      : `你的修改可与修订 ${revision} 合并。请载入后核对内容。`;
+    conflictFields.replaceChildren();
+    const chosen = new Set();
+    for (const index of review.conflicts) {
+      const field = document.createElement('fieldset');
+      const label = document.createElement('legend');
+      label.textContent = meetingFieldLabels[index];
+      field.append(label);
+      for (const [name, value] of [['我的修改', local[index]], ['最新版本', remote[index]]]) {
+        const option = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'meeting-merge-' + index;
+        input.setAttribute('aria-label', name);
+        const choice = document.createElement('span');
+        choice.textContent = name;
+        const preview = document.createElement('span');
+        preview.className = 'meeting-conflict-preview';
+        preview.textContent = conflictFieldText(value);
+        input.addEventListener('change', () => {
+          review.fields[index] = value;
+          chosen.add(index);
+          applyConflict.disabled = chosen.size !== review.conflicts.length;
+        });
+        option.append(input, choice, preview);
+        field.append(option);
+      }
+      conflictFields.append(field);
+    }
+    applyConflict.disabled = review.conflicts.length > 0;
+  }
+
+  reviewConflict?.addEventListener('click', async () => {
+    if (!saveConflict || !current?.id || !savedDraft || conflictRead) return;
+    if (audio.hasPendingWork()) {
+      showSave('error', '请先完成或取消当前音频处理，再核对会议版本。');
+      return;
+    }
+    const target = {...scope(), id:current.id};
+    conflictRead = target;
+    syncWriting();
+    showSave('loading', '正在读取最新版本…');
+    const result = await saveRequest('GET', `${base()}/${target.id}`);
+    if (conflictRead !== target || !active(target) || current?.id !== target.id || !saveConflict) return;
+    conflictRead = null;
+    syncWriting();
+    const latest = savedMeeting(result, target);
+    if (!latest || latest.revision < current.revision || (native && result.body.viewer_username !== target.viewer)) {
+      showSave('error', '无法读取最新版本。未保存的修改已保留。');
+      return;
+    }
+    const local = JSON.parse(draftContents());
+    const remote = [latest.title, inputTime(latest.started_at), (latest.attendees || []).join(', '),
+      latest.summary || '', latest.transcript || '', (latest.action_items || []).map(actionFields)];
+    const review = mergeMeetingFields(JSON.parse(savedDraft), local, remote);
+    renderConflictReview(review, local, remote, latest.revision);
+    showSave('', '');
+    applyConflict.onclick = () => {
+      if (!active(target) || current?.id !== target.id || !saveConflict || audio.hasPendingWork()) return;
+      const [title, startedAt, attendees, notes, body, nextActions] = review.fields;
+      fill(latest, null, result.body.draft_job || null);
+      titleInput.value = title;
+      startedInput.value = startedAt;
+      attendeeInput.value = attendees;
+      summary.value = notes;
+      transcript.value = body;
+      actions = nextActions.map(([text, owner, done, due_date], index) => ({
+        text, owner, done, due_date, ...(sameMeetingField(nextActions[index], remote[5][index]) ? {savedIndex:index} : {}),
+      }));
+      transcriptSearch.refresh();
+      syncDraft();
+      renderActions();
+      showSave('ok', hasUnsavedChanges() ? '已载入最新版本并保留修改。请核对后保存。' : '已载入最新版本。');
+      titleInput.focus({preventScroll:true});
+    };
+    conflictDialog.showModal();
+  });
+  document.getElementById('cancel-meeting-conflict')?.addEventListener('click', () => conflictDialog.close());
+  conflictDialog?.addEventListener('close', () => {
+    if (reviewConflict.hidden) return;
+    if (saveConflict && !saveStatus.textContent) showSave('error', '纪要有更新。可核对版本后继续编辑。');
+    reviewConflict.focus({preventScroll:true});
+  });
 
   function hasUnsavedChanges() {
     return savedDraft !== null && !form.hidden && (audio.hasPendingWork() || draftContents() !== savedDraft);
@@ -2116,7 +2235,7 @@ function mount() {
     const meeting = result.body.meeting;
     return [200, 201].includes(result.status) && meetingIdPattern.test(meeting?.id || '') &&
       meeting.workspace_id === operation.workspace && (!operation.id || meeting.id === operation.id) &&
-      (!operation.changes.source_call_id || meeting.source_call_id === operation.changes.source_call_id) &&
+      (!operation.changes?.source_call_id || meeting.source_call_id === operation.changes.source_call_id) &&
       Number.isSafeInteger(meeting.revision) && meeting.revision > 0 ? meeting : null;
   }
 
@@ -2162,7 +2281,7 @@ function mount() {
     syncWriting();
     if (!meeting) {
       if (uncertain) showSave('error', '暂时无法确认保存结果。草稿已保留，请重试。');
-      else if (conflict) showSave('error', '会议已在别处更新。草稿已保留，请复制修改后重新打开会议。');
+      else if (conflict) showSave('error', '会议已在别处更新。可核对版本后继续编辑。');
       else if (result.status === 409 && changes.source_call_id && result.body.error?.code === 'meeting_exists') {
         showSave('error', '这场通话已有纪要。草稿已保留，可复制修改后从通话链接打开已保存的纪要。');
       } else if (result.status === 409) showSave('error', '同名会议已存在。请更换标题后保存。');
@@ -2182,7 +2301,7 @@ function mount() {
       syncWriting();
       syncRecord();
     }
-    if (saveConflict) showSave('error', '会议已创建，但随后在别处更新。草稿已保留，请复制修改后重新打开会议。');
+    if (saveConflict) showSave('error', '会议已创建并在别处更新。可核对版本后继续编辑。');
     else showSave('ok', newerDraft ? '上次提交已保存。还有未保存的修改。' : '会议已保存。');
     void loadList({keepEditor: true, preserve: true});
   });

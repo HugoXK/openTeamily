@@ -24,6 +24,28 @@ let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
 
+test("published work source revision stays owner-only and rejects late older releases", async () => {
+  const [author,reader] = await Promise.all([home(S.base,"revision-owner"),home(S.base,"revision-reader")]);
+  const path = "/v1/ot/listings";
+  const slug = "publish-version-fence";
+  const work = {kind:"work",work_kind:"document",ref:"private-saved-work",slug,title:"Work revision fixture"};
+  const draft = (revision: number) => ({...work,source_revision:revision,snapshot:"Public revision " + revision});
+  const first = await author.ok("PUT",path,draft(3));
+  const updated = await author.ok("PUT",path,draft(4));
+  assert.equal(updated.id,first.id);
+  assert.equal(updated.source_revision,4);
+  const stale = await author.call("PUT",path,draft(3));
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"artifact_changed");
+  assert.equal((await author.ok("GET",path+"/mine")).listings[0].source_revision,4);
+  assert.deepEqual((await reader.ok("GET",path+"/mine")).listings,[]);
+  const publicWork = await reader.ok("GET","/v1/ot/discover/"+slug+"/detail");
+  assert.equal(publicWork.work.source_revision,undefined);
+  const publicPage = await fetch(S.base + "/w/" + slug);
+  assert.equal(publicPage.status,200);
+  assert.match(await publicPage.text(),/Public revision 4/);
+});
+
 test("guest Discover pages only contain opted-in records and carry no viewer state", async () => {
   const publisher = await home(S.base, "guest-directory-publisher");
   const term = "anonymous-gallery-fixture";

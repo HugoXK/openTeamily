@@ -8,7 +8,8 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
-import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
+import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
+  savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
 import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
 
 const alice = 'a'.repeat(32);
@@ -537,7 +538,7 @@ test('a confirmed attachment replaces its preview before the upload response arr
     XMLHttpRequest: Upload, FormData,
     URL: {createObjectURL: () => 'blob:video-preview', revokeObjectURL: url => revoked.push(url)},
   };
-  const destination = {owner: alice, scope: 'group-one', path: '/messages'};
+  const destination = {owner:alice, scope:'group-one', wid:'workspace-one', conversationId:'chat-one', path:'/messages'};
   const receipts = [];
   const queue = mountChatFiles(doc, {
     context: () => destination, ownerId: () => alice, csrfToken: () => '',
@@ -554,9 +555,12 @@ test('a confirmed attachment replaces its preview before the upload response arr
   assert.equal(progress.hidden, true);
   assert.equal(status.textContent, '附件已上传，正在确认发送…');
 
-  const message = {id:'saved-video', client_key:'attachment-key', user_id:alice, attachment:{title:'clip.mp4'}};
+  const message = {id:'saved-video', client_key:'attachment-key', user_id:alice,
+    workspace_id:destination.wid, conversation_id:destination.conversationId, attachment:{title:'clip.mp4'}};
   queue.confirmFromHistory('another-group', [message]);
   queue.confirmFromHistory(destination.scope, [{...message, user_id:bob}]);
+  queue.confirmFromHistory(destination.scope, [{...message, workspace_id:'workspace-two'}]);
+  queue.confirmFromHistory(destination.scope, [{...message, conversation_id:'chat-two'}]);
   assert.deepEqual(el('message-list').children, [preview]);
   queue.confirmFromHistory(destination.scope, [message]);
   assert.equal(el('message-list').children.length, 0);
@@ -3769,6 +3773,73 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('pending private text keeps its send key alongside an independent newer draft', () => {
+  const {view} = publicOpeningView();
+  const scope = JSON.stringify([alice,linkWork,'agent',linkAgent,linkThread]);
+  const other = JSON.stringify([bob,linkWork,'agent',linkAgent,linkThread]);
+  const fresh = JSON.stringify([alice,linkWork,'agent',linkAgent,null]);
+  const key = 'msg-confirm-original-key';
+  const message = {body:'先发出的消息',chat_language:'zh-CN'};
+  assert.equal(savePendingPrivateText(view,scope,key,message),true);
+  assert.equal(writeChatDrafts(view,alice,new Map([[scope,'后写的草稿']])),true);
+  assert.deepEqual(readPendingPrivateText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingPrivateText(view,other),[]);
+  assert.equal(savePendingPrivateText(view,fresh,key,message),false);
+  assert.equal(savePendingPrivateText(view,scope,key),true);
+  assert.deepEqual(readPendingPrivateText(view,scope),[]);
+  assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
+});
+
+test('an interrupted group send checks for its exact receipt and retries the original key if no receipt exists', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
+  const {doc, el, calls, routes, restore} = fixture;
+  const path = linkBase(linkTeam) + linkSocialPath + '/messages';
+  const receiptPath = path + '?limit=50';
+  const keys = [];
+  const body = '一条需要确认的群消息';
+  const newer = '继续写的草稿';
+  const saved = {id:'otm_' + 'C'.repeat(26),workspace_id:linkTeam,conversation_id:linkSocial,user_id:alice,
+    body,seq:9,created:20};
+  routes.set(receiptPath, () => json(200, {items:[
+    {...saved,client_key:keys[0],user_id:bob},
+    {...saved,client_key:keys[0],workspace_id:linkWork},
+    {...saved,client_key:keys[0],conversation_id:linkSocialOlder},
+    {...saved,client_key:'different-request'},
+  ]}));
+  const fetcher = async (url, options = {}) => {
+    if (url !== path || options.method !== 'POST') return fixture.fetcher(url, options);
+    keys.push(options.headers['Idempotency-Key']);
+    assert.deepEqual(JSON.parse(options.body),{body});
+    if (keys.length === 1) throw new TypeError('Connection interrupted');
+    return json(201,{message:{...saved,client_key:keys[0]}});
+  };
+  try {
+    await mount(doc,{fetcher});
+    el('chat-body').value = body;
+    await fire(el('chat-form'),'submit',{preventDefault() {}});
+    assert.equal(el('chat-body').value,'');
+    el('chat-body').value = newer;
+    await fire(el('chat-body'),'input');
+    await settle();
+    const failed = el('message-list').children.find(row => row.dataset.sendPending === 'failed');
+    assert.ok(failed);
+    assert.equal(el('chat-body').value,newer);
+    assert.equal(fixture.messages().includes(saved.id),false);
+    assert.equal(calls.filter(call => call.path === receiptPath && call.method === 'GET').length,1);
+    assert.equal(keys.length,1);
+    const retry = failed.children.find(node => node.className === 'send-actions').children[0];
+    await fire(retry,'click');
+    await settle();
+    assert.ok(keys[0]);
+    assert.deepEqual(keys,[keys[0],keys[0]]);
+    assert.equal(calls.filter(call => call.path === receiptPath && call.method === 'GET').length,1);
+    assert.equal(el('chat-body').value,newer);
+    assert.equal(fixture.messages().filter(id => id === saved.id).length,1);
+  } finally {
+    restore();
+  }
+});
+
 test('a reloaded quote keeps its text scoped and ignores a late lookup after changing workspaces', async () => {
   const initial = `#workspace=${linkTeam}&social=${linkSocial}`;
   const fixture = linkedChatFixture(initial);
@@ -3813,6 +3884,73 @@ test('a reloaded quote keeps its text scoped and ignores a late lookup after cha
     assert.equal(saved.has(quoteKey),false);
   } finally {
     pending.resolve(json(503,{}));
+    restore();
+  }
+});
+
+test('a definitively rejected quote preserves the newer draft and restores the original owner-specific mention for editing', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
+  const {doc, el, routes, calls, restore} = fixture;
+  const {view, saved} = publicOpeningView();
+  doc.defaultView = view;
+  const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
+  const quoteKey = 'openteamily.chat-quote:' + scope;
+  const path = linkBase(linkTeam) + linkSocialPath;
+  const messagePath = path + '/messages';
+  const targets = [{owner_id:bob,agent_id:linkAgent}];
+  const text = '这段文字需要保留';
+  const newer = '等候发送时写的另一稿';
+  const reply = Promise.withResolvers();
+  saved.set(quoteKey,linkSocialLatest);
+  writeChatDrafts(view,alice,new Map([[scope,text]]));
+  writeChatDraftMentions(view,scope,targets);
+  const agentMembers = [alice,bob].map(owner_id => ({id:linkAgent,name:'相同名称',owner_id}));
+  const conversation = {id:linkSocial,workspace_id:linkTeam,kind:'group',title:'聊天群',
+    members:[linkMember],agent_members:agentMembers,last_seq:8};
+  const source = {id:linkSocialLatest,conversation_id:linkSocial,user_id:bob,body:'即将撤回的消息',seq:8};
+  routes.set(path, () => json(200,{conversation,items:[source]}));
+  routes.set(messagePath, () => reply.promise);
+  const submit = () => fire(el('chat-form'),'submit',{preventDefault() {}});
+  const sends = () => calls.filter(call => call.path === messagePath && call.method === 'POST');
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    await settle();
+    assert.equal(el('chat-body').value,text);
+    assert.equal(el('chat-reply-preview').hidden,false);
+    await submit();
+    assert.equal(el('chat-body').value,'');
+    assert.deepEqual(sends()[0].body,{body:text,agent_mentions:targets,reply_to:linkSocialLatest});
+    el('chat-body').value = newer;
+    await fire(el('chat-body'),'input');
+
+    reply.resolve(json(409,{error:{code:'reply_unavailable'}}));
+    await settle();
+    assert.equal(el('chat-body').value,newer);
+    const failed = el('message-list').children.find(row => row.dataset.sendPending === 'failed');
+    const restoreDraft = failed.children.find(node => node.className === 'send-actions').children[0];
+    assert.match(restoreDraft.textContent,/恢复到输入框/);
+    await fire(restoreDraft,'click');
+    assert.equal(el('chat-body').value,newer);
+    assert.equal(sends().length,1);
+
+    el('chat-body').value = '';
+    await fire(el('chat-body'),'input');
+    await fire(restoreDraft,'click');
+    assert.equal(el('chat-body').value,text);
+    assert.equal(el('chat-reply-preview').dataset.state,'missing');
+    assert.equal(el('chat-send').disabled,true);
+    assert.equal(readChatDrafts(view,alice).get(scope),text);
+    assert.deepEqual(readChatDraftMentions(view,scope),targets);
+    assert.equal(saved.get(quoteKey),linkSocialLatest);
+    await submit();
+    assert.equal(sends().length,1);
+    await fire(el('chat-reply-cancel'),'click');
+    assert.equal(el('chat-body').value,text);
+    assert.equal(el('chat-send').disabled,false);
+    await submit();
+    assert.deepEqual(sends()[1].body,{body:text,agent_mentions:targets});
+  } finally {
+    reply.resolve(json(503,{}));
     restore();
   }
 });

@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
   snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
   chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  publication_revision INTEGER NOT NULL DEFAULT 1,
+  publication_revision INTEGER NOT NULL DEFAULT 1, source_revision INTEGER,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -123,6 +123,10 @@ function publicListingView(ot: OtContext, listing: any) {
   const view = listingView(ot, listing, null, true);
   const {handle, display_name, bio} = view.creator;
   return {...view, creator: {handle, display_name, bio}};
+}
+
+function ownerWorkRevision(row: {kind: string; source_revision?: number | null}) {
+  return row.kind === "work" && Number.isSafeInteger(row.source_revision) ? {source_revision:row.source_revision} : {};
 }
 
 function workExcerpt(listing: {snapshot: string | null; summary: string}, hasSite: boolean) {
@@ -673,6 +677,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("publication_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 1");
+  if (!columns.has("source_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN source_revision INTEGER");
   const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
@@ -686,6 +691,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const b = body(req);
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
+    const sourceRevision = b.source_revision;
+    assert(sourceRevision === undefined || (b.kind === "work" && typeof sourceRevision === "number" &&
+      Number.isSafeInteger(sourceRevision) && sourceRevision > 0), 400, "invalid_request", "Invalid work source revision");
     assert(typeof b.ref === "string" && REF.test(b.ref), 400, "invalid_request", "ref is invalid");
     const title = text(b.title, "title", { min: 1, max: 80 });
     const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
@@ -710,6 +718,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const summary = suppliedSummary
       ?? (site === undefined ? "" : (searchableBody ?? "").slice(0, 300).replace(/[\uD800-\uDBFF]$/u, ""));
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
+    assert(sourceRevision === undefined || existing?.source_revision == null || existing.source_revision <= sourceRevision,
+      409, "artifact_changed", "已经公开了更新的保存版本。");
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
     const chatEnabled = b.kind === "agent" && (b.chat_enabled ?? !!(existing?.listed && existing.chat_enabled));
@@ -724,11 +734,11 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     ot.tx(() => {
       if (existing) {
         ot.run(`UPDATE ot_listings SET slug=?, title=?, summary=?, category=?, work_kind=?, snapshot=?, listed=1,
-          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1 WHERE id=?`,
-        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
+          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1, source_revision=? WHERE id=?`,
+        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, sourceRevision ?? null, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
-        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
+        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at, source_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now, sourceRevision ?? null);
       }
       const fileSize = model?.length ?? media?.data.length;
       if (fileSize !== undefined) {
@@ -769,7 +779,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
       }
     });
-    return {...listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true),
+    const listing = ot.get<any>("SELECT * FROM ot_listings WHERE id = ?", id);
+    return {...listingView(ot, listing, me.ownerId, true), ...ownerWorkRevision(listing),
       ...(editable ? {editable_remix:true} : {})};
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
@@ -791,7 +802,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const rows = ot.all<any>(`SELECT l.*,e.listing_id IS NOT NULL AS editable
       FROM ot_listings l LEFT JOIN ot_listing_editable e ON e.listing_id=l.id AND e.kind=l.work_kind
       WHERE l.owner_id=? ORDER BY l.updated_at DESC`, me.ownerId);
-    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
+    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref, ...ownerWorkRevision(l),
       ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
   const readFeed = (q: Record<string, unknown>, viewer: string | null) => {

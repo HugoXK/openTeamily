@@ -200,8 +200,10 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
 
 async function copyToStudio(req, workspaceId, artifactId) {
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid Studio copy request')
-  const {revision, title, body} = requireBodyKeys(await req.json(70_000), ['revision', 'title', 'body'])
-  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string') {
+  const {revision, title, body, target_workspace_id:target = workspaceId} = requireBodyKeys(await req.json(70_000),
+    ['revision', 'title', 'body', 'target_workspace_id'])
+  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string' ||
+      typeof target !== 'string' || !HEX32.test(target)) {
     refuse(400, 'invalid', 'Invalid Studio copy review')
   }
   const source = mustLoad(req, workspaceId, artifactId)
@@ -212,12 +214,15 @@ async function copyToStudio(req, workspaceId, artifactId) {
   }
   // The team service checks active membership and consumes the same key even
   // if the client did not receive the original acknowledgment.
-  const clientKey = digest(JSON.stringify(['artifact-studio-copy', workspaceId, artifactId, revision]))
+  const originalKey = ['artifact-studio-copy', workspaceId, artifactId, revision]
+  const clientKey = digest(JSON.stringify(target === workspaceId ? originalKey : [...originalKey,target]))
+  const scopedSource = target !== workspaceId && workspaceId !== req.identity?.instanceId
   try {
-    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${workspaceId}/studio/documents`, {
+    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${target}/studio/documents`, {
       title: studioTitle, body: source.body, client_key: clientKey,
+      ...(scopedSource ? {source_workspace_id:workspaceId} : {}),
     })
-    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id}}
+    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id, workspace_id:target}}
   } catch (error) {
     const code = /^social\/([a-z][a-z0-9_]{0,59})$/.exec(error?.code || '')?.[1]
     if (code && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
@@ -228,6 +233,48 @@ async function copyToStudio(req, workspaceId, artifactId) {
 }
 
 const publishingShares = new Set()
+
+async function copyStudioToPersonal(req, workspaceId) {
+  if (req.method !== 'POST' || req.query.size) refuse(400, 'invalid', 'Invalid Studio copy request')
+  const {source_workspace_id:source, document_id:id, revision, fingerprint} = requireBodyKeys(await req.json(1024),
+    ['source_workspace_id', 'document_id', 'revision', 'fingerprint'])
+  if (typeof source !== 'string' || !HEX32.test(source) || source === workspaceId || typeof id !== 'string' || !HEX32.test(id) ||
+      !Number.isSafeInteger(revision) || revision < 1 ||
+      (fingerprint !== undefined && (typeof fingerprint !== 'string' || !SHA256.test(fingerprint)))) {
+    refuse(400, 'invalid', 'Invalid Studio copy review')
+  }
+  const binding = await req.host.call('agents/personal-binding', {})
+  if (binding?.workspace_id !== workspaceId) refuse(404, 'not_found', 'Personal workspace not found')
+  const sourceHash = digest(JSON.stringify(['studio-personal-copy', source, id, revision]))
+  const key = 'studio-copy-' + sourceHash.slice(0, 48)
+  if (fingerprint) {
+    const prior = req.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',
+      workspaceId, digest('artifact:' + key))
+    if (prior) {
+      if (prior.request_hash !== fingerprint) refuse(409, 'source_changed', 'Review the saved Studio version again')
+      return {body: {artifact:view(load(req.store, workspaceId, prior.id))}}
+    }
+  }
+  let version
+  try {
+    ({version} = await sharedBotSocial(req.host).get(`/v1/ot/teams/${source}/studio/documents/${id}/versions/${revision}`,
+      {signal:req.signal}))
+  } catch (error) {
+    if (error?.status === 404 || error?.status === 403) refuse(404, 'source_unavailable', 'Studio version is unavailable')
+    refuse(503, 'unavailable', 'Could not read the Studio version')
+  }
+  if (version?.revision !== revision || typeof version.title !== 'string' || typeof version.body !== 'string') {
+    refuse(503, 'unavailable', 'Could not verify the Studio version')
+  }
+  const {title, body} = version
+  const reviewed = digest(JSON.stringify([sourceHash, title, body]))
+  const canCopy = validTitle(title) && validBody(body)
+  if (!fingerprint) return {body: {snapshot:{title, body, revision, fingerprint:reviewed, can_copy:canCopy}}}
+  if (fingerprint !== reviewed) refuse(409, 'source_changed', 'Review the saved Studio version again')
+  if (!canCopy) refuse(413, 'copy_too_large', 'The Studio version exceeds the personal work limits')
+  const name = uniqueTitle(req.store, workspaceId, title, sourceHash)
+  return createArtifact(ctx(req), workspaceId, {title:name, body, kind:'document'}, key, {receiptHash:reviewed})
+}
 
 async function copySharedText(req, workspaceId) {
   if (req.method !== 'POST' || req.query.size) refuse(400, 'invalid', 'Invalid shared document request')
@@ -273,17 +320,21 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
   }
   if (!shareId && req.method === 'POST' && !req.queryString) {
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
-    const body = requireBodyKeys(await req.json(), ['expires_in'])
-    const created = createShare(req.store, row, req.owner, req.now, body.expires_in)
+    const {expires_in, revision} = requireBodyKeys(await req.json(), ['expires_in','revision'])
+    const source = mustLoad(req, workspaceId, artifactId)
+    if (revision !== undefined && (!Number.isSafeInteger(revision) || revision !== source.revision)) {
+      refuse(409, 'artifact_changed', '已保存的作品版本已更新，请查看后再创建分享链接。')
+    }
+    const created = createShare(req.store, source, req.owner, req.now, expires_in)
     // Public /share/<token> pages are served by the dedicated Bot Social from this
     // read-only snapshot; only the token hash leaves this DS-Bot.
     const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', created.body.share.id)
     publishingShares.add(item.id)
     try {
-      const workbook = row.spreadsheet_json && decodeWorkbook(row.spreadsheet_json)
-      const body = workbook ? workbookText(workbook) : String(row.body ?? '')
+      const workbook = source.spreadsheet_json && decodeWorkbook(source.spreadsheet_json)
+      const body = workbook ? workbookText(workbook) : String(source.body ?? '')
       await sharedBotSocial(req.host).put('/v1/ot/public-shares', {
-        token_hash: item.token_hash, ref: row.id, title: row.title, kind: publicKind(row),
+        token_hash: item.token_hash, ref: source.id, title: source.title, kind: publicKind(source),
         body: body.slice(0,200000), expires_at: item.expires ? item.expires * 1000 : null,
       })
     } catch {
@@ -411,6 +462,7 @@ async function artifactDraft(req, workspaceId, kind) {
 }
 
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },

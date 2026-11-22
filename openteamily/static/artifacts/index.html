@@ -479,6 +479,7 @@
       <details id="share-panel" class="artifact-editor-panel" hidden>
         <summary>只读分享</summary>
         <p class="note">知道链接的人可查看创建时已保存的版本。</p>
+        <p id="share-revision" class="note"></p>
         <p id="share-status" class="note" role="status" hidden></p>
         <ul id="share-list"></ul>
         <p id="share-empty" class="note" hidden>还没有分享链接。</p>
@@ -503,6 +504,7 @@
       <details id="discover-panel" class="artifact-editor-panel" hidden>
         <summary>公开到发现页</summary>
         <p class="note">发布后，任何人都能在发现页查看已保存的作品，并下载公开的图片、音频、视频和 3D 文件。</p>
+        <p id="discover-revision" class="note" hidden></p>
         <p id="discover-status" class="note" role="status" hidden></p>
         <a id="discover-public-link" target="_blank" rel="noopener" hidden>打开公开作品</a>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
@@ -593,7 +595,8 @@
   <dialog id="studio-copy-dialog" class="send-dialog-card" aria-labelledby="studio-copy-heading" aria-describedby="studio-copy-description">
     <h2 id="studio-copy-heading">复制到团队协作</h2>
     <p id="studio-copy-description" class="note">确认后，团队成员可以编辑下方内容的副本。原文档仍保存在你的资料空间。</p>
-    <p id="studio-copy-scope"><strong id="studio-copy-target"></strong><span id="studio-copy-revision" class="note"></span></p>
+    <label id="studio-copy-target-field">团队工作区 <select id="studio-copy-target-workspace"></select></label>
+    <p id="studio-copy-scope"><strong id="studio-copy-target" hidden></strong><span id="studio-copy-revision" class="note"></span></p>
     <section id="studio-copy-preview" aria-label="要复制的内容">
       <h3 id="studio-copy-title"></h3>
       <pre id="studio-copy-body" tabindex="0"></pre>
@@ -643,6 +646,7 @@
         <div class="studio-actions">
           <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
           <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
+          <button type="button" id="studio-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
           <button type="submit" id="studio-save">保存</button>
         </div>
       </div>
@@ -681,6 +685,22 @@
       <button type="button" id="studio-delete" class="danger" hidden>删除团队文档</button>
     </form>
   </dialog>
+  <dialog id="studio-personal-dialog" class="send-dialog-card" aria-labelledby="studio-personal-heading">
+    <h2 id="studio-personal-heading">保存到我的资料空间</h2>
+    <p id="studio-personal-meta" class="note"></p>
+    <section id="studio-personal-preview" aria-labelledby="studio-personal-title" hidden>
+      <h3 id="studio-personal-title"></h3>
+      <pre id="studio-personal-body" tabindex="0"></pre>
+    </section>
+    <p id="studio-personal-status" class="note" role="status"></p>
+    <div class="space-action-row">
+      <button type="button" id="studio-personal-close" autofocus>关闭</button>
+      <button type="button" id="studio-personal-retry" hidden>重新查看</button>
+      <a id="studio-personal-download" hidden>下载 Markdown</a>
+      <button type="button" id="studio-personal-confirm" class="primary" hidden>保存副本</button>
+      <a id="studio-personal-result" target="_blank" rel="noopener" hidden>打开个人副本</a>
+    </div>
+  </dialog>
   <dialog id="studio-discussion-dialog" aria-labelledby="studio-discussion-title">
     <h2 id="studio-discussion-title">与个人智能体讨论</h2>
     <p id="studio-discussion-source" class="note"></p>
@@ -712,6 +732,7 @@
       <h3 id="studio-history-title"></h3>
       <pre id="studio-history-body"></pre>
       <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
+      <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
     </section>
   </dialog>
   </main>

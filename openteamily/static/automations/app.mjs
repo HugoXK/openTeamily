@@ -140,6 +140,9 @@ export function runDetailFields(run) {
   if (typeof result.source === 'string' && result.source) fields.push({label: '来源', value: result.source});
   const trigger = {manual: '手动运行', scheduled: '定时触发', retry: '重新运行'}[run.trigger];
   if (typeof trigger === 'string') fields.push({label: '触发方式', value: trigger});
+  if (Number.isSafeInteger(run.automation_revision) && run.automation_revision > 0) {
+    fields.push({label: '设置版本', value: '第 ' + run.automation_revision + ' 版'});
+  }
   const dispatch = run.dispatch || {};
   if (typeof dispatch.backend === 'string' && dispatch.backend) {
     const location = dispatch.backend === 'ds-bot' ? '个人 DS-Bot'
@@ -404,13 +407,19 @@ export function scheduleSummary(schedule, enabled, includeState = true) {
   return `已安排${state ? ` ${state}` : ''}`;
 }
 
+function oneTimeScheduleLabel(state) {
+  if (state === 'once_cancelled') return '单次计划已取消';
+  if (state === 'once_triggered') return '单次计划已触发';
+  return '';
+}
+
 function renderNextRun(node, item) {
   const status = item?.schedule_status;
   node.textContent = '';
   node.hidden = true;
   if (!status) return;
   if (status.state === 'due') node.textContent = '已到计划运行时间';
-  if (status.state === 'once_triggered') node.textContent = '单次计划已触发';
+  if (oneTimeScheduleLabel(status.state)) node.textContent = oneTimeScheduleLabel(status.state);
   const clockChange = status.clock_change === 'forward' ? '时钟跳转后顺延'
     : status.clock_change === 'first' ? '按第一次出现的时间运行' : '';
   const pausedPreview = status.state === 'paused' && clockChange;
@@ -527,7 +536,7 @@ function renderList(items, list, empty, onOpen) {
       pill.textContent = runStatusLabel(running);
       copy.appendChild(pill);
     }
-    const consumed = item.schedule_status?.state === 'once_triggered';
+    const consumed = oneTimeScheduleLabel(item.schedule_status?.state);
     if (item.schedule_status && !consumed) {
       const next = document.createElement('span');
       next.className = 'item-schedule item-next-run';
@@ -541,7 +550,7 @@ function renderList(items, list, empty, onOpen) {
     const state = document.createElement('span');
     state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
     state.id = 'automation-state-' + item.id;
-    state.textContent = consumed ? '单次计划已触发' : item.enabled ? '已启用' : '未启用';
+    state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
     description.push(state.id);
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
@@ -601,6 +610,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const manualRunNote = document.getElementById('manual-run-note');
   const manualRunStatus = document.getElementById('manual-run-status');
   const viewWatchedRun = document.getElementById('view-watched-run');
+  const reloadSettings = document.getElementById('reload-automation-settings');
   const historyError = document.getElementById('run-history-error');
   const linkRetry = document.getElementById('automation-link-retry');
   const sourcePanel = document.getElementById('meeting-action-source');
@@ -633,6 +643,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pendingRunCursors = null;
   let nextRunCursor = '';
   let activeRun = false;
+  let runSettingsChanged = false;
   let editorRequest = 0;
   let editorInitial = '';
   let runIntent = 0;
@@ -734,8 +745,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!key) return;
     try {
       if (submission) {
-        const {source, idempotency} = submission;
-        view.sessionStorage.setItem(key, JSON.stringify({source, idempotency}));
+        const {source, idempotency, expectedRevision} = submission;
+        view.sessionStorage.setItem(key, JSON.stringify({source, idempotency, expectedRevision}));
       } else view.sessionStorage.removeItem(key);
     } catch { /* The in-page retry still works when tab storage is unavailable. */ }
   }
@@ -747,7 +758,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const saved = JSON.parse(view.sessionStorage.getItem(key));
       if (!saved || typeof saved.idempotency !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(saved.idempotency) ||
           (saved.source !== undefined && (typeof saved.source !== 'string' || !/^[a-f0-9]{32}$/.test(saved.source)))) return;
-      runSubmissions.set(target.key, {source: saved.source, idempotency: saved.idempotency, state: 'uncertain'});
+      const expectedRevision = Number.isSafeInteger(saved.expectedRevision) && saved.expectedRevision > 0
+        ? saved.expectedRevision : undefined;
+      runSubmissions.set(target.key, {source:saved.source, idempotency:saved.idempotency, expectedRevision, state:'uncertain'});
     } catch { /* Ignore unavailable or invalid tab data. */ }
   }
 
@@ -980,7 +993,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const target = runScope();
     const submission = runSubmissions.get(target.key);
     const hasRetry = visible.some(retryAllowed);
-    const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible, hasRetry && activeRun,
+    const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible,
+      hasRetry && [activeRun, runSettingsChanged, current?.revision],
       hasRetry && submission?.state, hasRetry && submission?.source,
       visible.map(item => [savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
         cancellingRuns.has(`${target.key}/${item.id}`)])]);
@@ -990,7 +1004,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const focusRow = focused?.closest?.('[data-run-id]');
     const restore = focusRow && list.contains(focusRow);
     const focusedControl = focused?.dataset?.runControl;
-    if (pendingConfirm?.trigger.dataset.runControl === 'cancel') closeConfirm({restoreFocus: false});
+    if (['cancel', 'retry'].includes(pendingConfirm?.trigger.dataset.runControl)) closeConfirm({restoreFocus: false});
     list.textContent = '';
     let nextFocus = restore ? runHeading : null;
     for (const item of visible) {
@@ -1120,10 +1134,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         retry.type = 'button';
         retry.dataset.runControl = 'retry';
         const rechecking = submission?.state === 'uncertain' && submission.source === item.id;
-        retry.disabled = !rechecking && Boolean(activeRun || submission);
+        retry.disabled = !rechecking && Boolean(activeRun || submission || runSettingsChanged);
         retry.textContent = rechecking ? '确认并重试' : '重新运行';
         if (restore && focusRow.dataset.runId === item.id && focusedControl === 'retry' && !retry.disabled) nextFocus = retry;
-        retry.addEventListener('click', () => submitRun(target, item.id));
+        retry.addEventListener('click', () => {
+          const revision = current?.revision;
+          if (rechecking || !native || !Number.isSafeInteger(item.automation_revision) ||
+              !Number.isSafeInteger(revision) || revision === item.automation_revision) {
+            return submitRun(target, item.id);
+          }
+          openConfirm({
+            parent: head,
+            trigger: retry,
+            prompt: {
+              question: '原运行使用第 ' + item.automation_revision + ' 版设置。使用已保存的第 ' + revision + ' 版重新运行？',
+              confirmLabel: '使用第 ' + revision + ' 版重试',
+            },
+            action: () => submitRun(target, item.id, revision),
+          });
+        });
         head.appendChild(retry);
       }
       row.appendChild(head);
@@ -1164,7 +1193,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const watched = watchedRuns.get(target.key);
     const uncertain = submission?.state === 'uncertain';
     const pending = submission?.state === 'pending';
-    runButton.disabled = saveButton.disabled || pending || (activeRun && !uncertain);
+    runButton.disabled = saveButton.disabled || pending || ((activeRun || runSettingsChanged) && !uncertain);
     runButton.textContent = pending ? '正在提交…' : uncertain ? '确认并重试' : activeRun ? '已有运行' : '运行一次';
     const label = pending ? '正在提交本次运行…' : uncertain ? '暂时无法确认是否提交成功，可以重试。' : runStatusLabel(watched);
     if (manualRunStatus) {
@@ -1174,6 +1203,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (viewWatchedRun) {
       viewWatchedRun.hidden = !watched || uncertain || recentRuns.some(item => item.id === watched.id && matchesRunFilter(item, runFilter));
     }
+    if (reloadSettings) reloadSettings.hidden = !runSettingsChanged || pendingConfirm?.trigger === reloadSettings;
   }
 
   async function recoverRunReceipt(target, stillCurrent) {
@@ -1189,11 +1219,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {item, submission};
   }
 
-  async function submitRun(target, source) {
+  async function submitRun(target, source, reviewed = current?.revision) {
     if (!target.workspace || !target.automation || !currentRunScope(target)) return;
     let submission = runSubmissions.get(target.key);
-    if (submission ? submission.state !== 'uncertain' || submission.source !== source : activeRun) return;
+    if (submission ? submission.state !== 'uncertain' || submission.source !== source : activeRun || runSettingsChanged) return;
     if (!submission) submission = {source, idempotency: idempotencyKey()};
+    if (submission.expectedRevision === undefined && native && Number.isSafeInteger(reviewed) && reviewed > 0) {
+      submission.expectedRevision = reviewed;
+    }
     submission.state = 'pending';
     storeRunSubmission(target, submission);
     if (submissionStorageKey(target)) {
@@ -1203,7 +1236,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('', '');
     syncRunControls();
     if (!runPanel?.hidden) renderRuns(recentRuns);
-    const result = await runRequestWithTimeout('POST', runPath(target) + submissionAction(source), {}, {'Idempotency-Key': submission.idempotency});
+    const body = submission.expectedRevision === undefined ? {} : {expected_revision:submission.expectedRevision};
+    const result = await runRequestWithTimeout('POST', runPath(target) + submissionAction(source), body, {'Idempotency-Key': submission.idempotency});
     if (runSubmissions.get(target.key) !== submission) return;
     const accepted = result.status === 200 || result.status === (source ? 201 : 202);
     const item = result.body.run;
@@ -1214,6 +1248,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (confirmed) watchedRuns.set(target.key, item);
     if (!currentRunScope(target)) return;
     if (!confirmed) {
+      if (result.status === 409 && result.body.error?.code === 'run_revision_changed') runSettingsChanged = true;
       if (!uncertain) show('error', messageFor(result.body.error, source ? '重新运行失败。' : '无法启动这条自动化。'));
       syncRunControls();
       if (!runPanel?.hidden) renderRuns(recentRuns);
@@ -1444,6 +1479,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     saveButton.textContent = '保存';
     backButton.disabled = false;
     current = item;
+    runSettingsChanged = false;
     followupSource = source;
     draftSave = null;
     recentRuns = [];
@@ -1497,7 +1533,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!manualRunNote) return;
     manualRunNote.hidden = !current?.id && !followupSource;
     manualRunNote.textContent = followupSource ? '保存为暂停的自动化。保存后可手动运行一次。'
-      : current?.schedule_status?.state === 'once_triggered' ? '可以用已保存的设置手动运行一次。' : current?.enabled
+      : oneTimeScheduleLabel(current?.schedule_status?.state) ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
   }
@@ -2088,6 +2124,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    runSettingsChanged = false;
     const returnedSample = result.body.sample_run;
     const startedSample = sample && exactRunForTarget(returnedSample, runScope()) ? returnedSample : null;
     if (startedSample) {
@@ -2121,6 +2158,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderManualRunNote();
     show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'
+      : result.body.cancelled_scheduled_runs > 0 ? '已暂停自动运行，排队中的计划运行已取消。'
       : current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns({focus: Boolean(startedSample)});
   });
@@ -2129,18 +2167,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (runButton.disabled) return;
     const target = runScope();
     const submission = runSubmissions.get(target.key);
+    const revision = current?.revision;
     if (!submission && editorHasChanges()) {
       openConfirm({
         parent: editorConfirm,
         trigger: runButton,
         prompt: {question: '有未保存的修改。使用已保存的设置运行一次？', confirmLabel: '运行已保存版本'},
         action: () => {
-          if (!saveButton.disabled) return submitRun(target);
+          if (!saveButton.disabled) return submitRun(target, undefined, revision);
         },
       });
       return;
     }
     return submitRun(target, submission?.source);
+  });
+
+  async function refreshRunSettings(target) {
+    if (!currentRunScope(target) || !runSettingsChanged || reloadSettings.disabled) return;
+    const previousDraft = editorSettings();
+    reloadSettings.disabled = true;
+    try {
+      const result = await runRequestWithTimeout('GET', runPath(target));
+      if (!currentRunScope(target)) return;
+      const item = result.body.automation;
+      if (result.status !== 200 || item?.id !== target.automation || item.workspace_id !== target.workspace ||
+          !Number.isSafeInteger(item.revision) || item.revision < 1) {
+        show('error', '无法载入最新设置，请重试。');
+        return;
+      }
+      if (editorSettings() !== previousDraft) {
+        show('error', '载入期间有新的未保存修改。请再次确认后载入最新设置。');
+        return;
+      }
+      openEditor(item, null, listReturn?.opener, selectedRun);
+      show('ok', '已载入最新设置。');
+    } finally { reloadSettings.disabled = false; }
+  }
+
+  reloadSettings?.addEventListener('click', () => {
+    const target = runScope();
+    if (!editorHasChanges()) return refreshRunSettings(target);
+    openConfirm({
+      parent: editorConfirm,
+      trigger: reloadSettings,
+      prompt: {question:'载入最新设置会替换当前未保存的修改。', confirmLabel:'载入最新设置'},
+      action: () => refreshRunSettings(target),
+    });
   });
 
   const removeButton = document.getElementById('remove-automation');

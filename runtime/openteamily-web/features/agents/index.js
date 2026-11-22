@@ -1338,7 +1338,7 @@ export default async function agents(host) {
   }
   wrapped.groupTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
-    return endpoints.turn(payload, {onProgress:payload.onProgress})
+    return endpoints.turn(payload, {onProgress:payload.onProgress, signal:payload.signal})
   }
   return { pages: ['agents'], endpoints: wrapped, migrate }
 }

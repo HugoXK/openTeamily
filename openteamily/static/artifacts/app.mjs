@@ -560,6 +560,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const discoverEditableField = document.getElementById('discover-editable-remix-field');
   const discoverEditableNote = document.getElementById('discover-editable-remix-note');
   const discoverPublicLink = document.getElementById('discover-public-link');
+  const discoverRevision = document.getElementById('discover-revision');
+  const shareRevision = document.getElementById('share-revision');
   const publishDiscover = document.getElementById('publish-discover');
   const revokeDiscover = document.getElementById('revoke-discover');
   const mobileMenu = document.getElementById('mobile-editor-menu');
@@ -677,6 +679,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   const studio = mountSharedStudio(document, {
     request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+    personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
+      (!item.owner_id || item.owner_id === currentUser?.id))?.id,
     onDocument(workspace, id, revision) {
       const href = studioDocumentHref(workspace, id, revision);
       if (href) writeSpaceAddress(href);
@@ -691,7 +695,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const studioCopy = mountStudioCopy(document, {
     source: () => ({
       selection: editor, item: current,
-      team: nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
+      workspaces: nativeCatalog ? studioWorkspaces : [],
     }),
     ready(selection) {
       if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
@@ -1168,6 +1172,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
+    syncSharingRevisions(item?.revision);
   }
 
   function fillEditor(item) {
@@ -2503,7 +2508,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (editor) {
       editor.discoverSlugEdited = false;
       editor.discoverEditableEdited = false;
+      editor.discoverListing = null;
     }
+    if (publishDiscover) publishDiscover.textContent = '发布到发现页';
+    syncSharingRevisions(current?.revision);
     showDiscoverPublicLink('');
     setDiscoverPending(false);
   }
@@ -2611,12 +2619,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (discoverEditable) discoverEditable.disabled = pending;
   }
 
+  function syncSharingRevisions(revision) {
+    const saved = Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+    if (shareRevision) shareRevision.textContent = saved ? '将分享当前保存的修订 ' + saved + '。' : '';
+    if (!discoverRevision) return;
+    const listing = editor?.discoverListing;
+    const published = listing?.published_revision;
+    discoverRevision.hidden = !saved;
+    if (!saved) discoverRevision.textContent = '';
+    else if (!listing?.listed) discoverRevision.textContent = '当前保存的修订 ' + saved + '。';
+    else if (!Number.isSafeInteger(published)) discoverRevision.textContent = '当前保存的修订 ' + saved + '。旧发布记录未标注修订。';
+    else discoverRevision.textContent = published === saved ? '发现页公开修订 ' + published + '。'
+      : '发现页公开修订 ' + published + ' · 当前保存的修订 ' + saved;
+  }
+
   function renderDiscoverListing(row, updateSlug = true) {
     const slug = typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug) ? row.slug : '';
     const listed = row.listed === true && Boolean(slug);
+    if (editor) editor.discoverListing = listed ? row : null;
+    syncSharingRevisions(current?.revision);
     if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
     if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
     if (revokeDiscover) revokeDiscover.hidden = !listed;
+    if (publishDiscover) publishDiscover.textContent = listed ? '更新公开版本' : '发布到发现页';
     const path = '/w/' + slug;
     showDiscoverPublicLink(listed ? (row.path === '/social' + path ? row.path : path) : '');
     panelStatus('discover', listed ? (row.editable_remix === true ? '已公开并允许复制可编辑版本。' : '已公开到发现页。') : '尚未公开到发现页。');
@@ -2648,9 +2673,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
     const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
-    const payload = publish ? {slug} : {};
+    const payload = publish ? {slug,revision:current.revision} : {};
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
-      payload.revision = current.revision;
       payload.allow_editable_remix = discoverEditable.checked;
     }
     const result = await request('POST', path, payload, undefined, selection.controller.signal)
@@ -2674,6 +2698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       attachment_type_blocked: '这个文件格式无法公开发布。',
     };
     const code = typeof error === 'string' ? error : error?.code;
+    if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
     const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
     panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
   }
@@ -2694,12 +2719,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     button.disabled = true;
     if (!create && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
     const expires = Number(document.getElementById('share-expires').value);
+    const payload = create ? {revision:current.revision,...(expires ? {expires_in:expires} : {})} : {};
     panelStatus('share', create ? '正在创建分享链接…' : '正在撤销分享链接…');
     try {
-      const result = await request('POST', path, create && expires ? {expires_in: expires} : {},
+      const result = await request('POST', path, payload,
         undefined, selection.controller.signal).catch(() => ({status: 0, body: {}}));
       if (!activeEditor(selection)) return;
       const share = result.body?.share;
+      if (create && result.body?.error?.code === 'artifact_changed') {
+        displayEditorUpdate({dirty:hasEditorDraft()});
+        panelStatus('share', '已保存的作品版本已更新，请查看后再创建分享链接。');
+        return;
+      }
       if (create && result.status === 201 && /^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) {
         const value = new URL(share.path, document.defaultView.location.origin).href;
         const once = document.getElementById('share-once');
@@ -2756,7 +2787,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const expired = item.expired === true;
       const state = item.revoked ? '已撤销' : expired ? '已过期' : item.revocation_pending ? '撤销待确认' : '有效';
       const expiry = item.expires ? ` · 到期 ${artifactTime(item.expires)}` : '';
-      meta.textContent = `${state} · ${item.prefix}…${expiry}`;
+      const revision = Number.isSafeInteger(item.revision) ? ` · 修订 ${item.revision}` : '';
+      meta.textContent = `${state} · ${item.prefix}…${revision}${expiry}`;
       row.appendChild(meta);
       if (!item.revoked && !expired) {
         const revoke = document.createElement('button');

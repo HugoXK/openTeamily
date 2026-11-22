@@ -15,6 +15,7 @@ import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
 import { artifactContextExcerpt } from './catalog-search.js'
+import { teamRunWorkKey } from '../shares/team-run-source.js'
 
 function generatedMedia(ctx, input, call, type, mime, extension, limit) {
   if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
@@ -127,6 +128,19 @@ export default defineFeature({
       const title = uniqueTitle(ctx.store, workspace, `${automation_title} · 运行结果`, run_id)
       const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, 'automation-run-' + run_id, {reuseSource: true})
       return {status: result.status, artifact: result.body.artifact}
+    },
+    async savedTeamRunWorks(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, run_id: run, positions} = input ?? {}
+      if (![workspace, run].every(id => typeof id === 'string' && HEX32.test(id)) ||
+          !Array.isArray(positions) || !positions.length || positions.length > 8 ||
+          positions.some(position => !Number.isInteger(position) || position < 0 || position >= 8)) {
+        refuse(400, 'invalid', 'Invalid team run work request')
+      }
+      const keys = new Map(positions.map(position => [digest('artifact:' + teamRunWorkKey(run, position)), position]))
+      const rows = ctx.store.all(`SELECT id, key_hash FROM artifacts WHERE workspace_id=? AND kind='document'
+        AND key_hash IN (${[...keys].map(() => '?').join(',')})`, workspace, ...keys.keys())
+      return {items: rows.map(row => ({position: keys.get(row.key_hash), id: row.id}))}
     },
     async savedAutomationWorks(input, call) {
       if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')

@@ -102,6 +102,8 @@ CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, 
 ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
 `, `
 CREATE INDEX IF NOT EXISTS artifact_chat_sources_conversation ON artifact_chat_sources(workspace_id, agent_id, conversation_id);
+`, `
+ALTER TABLE artifact_shares ADD COLUMN source_revision INTEGER;
 `]
 
 export const IMPORT_TABLES = {

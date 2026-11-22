@@ -116,6 +116,20 @@
 #meeting-save-status { margin: 0; padding: .5rem .65rem; border-radius: .55rem; background: var(--ot-bg-accent); }
 #meeting-save-status:empty { display: none; }
 #meeting-save-status[data-kind="error"] { color: var(--ot-danger, #b42318); }
+#meeting-conflict-fields fieldset { min-width: 0; margin: .75rem 0; }
+#meeting-conflict-fields label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: .25rem .5rem; padding: .375rem; }
+.meeting-conflict-preview {
+  grid-column: 2;
+  font: inherit;
+  max-height: 8rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  background: var(--ot-bg-accent);
+  margin: 0;
+  padding: .5rem;
+  border-radius: .375rem;
+}
 .action-list { display: grid; gap: 0.45rem; margin-bottom: 0.5rem; }
 .action-row {
   display: grid;
@@ -270,7 +284,7 @@
 #meeting-share-dialog p:empty { display: none; }
 .meeting-share-history { margin-top: 1rem; }
 
-#meeting-delete-dialog, #meeting-unsaved-dialog, #meeting-action-copy-dialog {
+#meeting-delete-dialog, #meeting-unsaved-dialog, #meeting-action-copy-dialog, #meeting-conflict-dialog {
   box-sizing: border-box;
   width: min(calc(100% - 2rem), 22rem);
   padding: 1.1rem;
@@ -279,7 +293,10 @@
   background: var(--ot-surface);
   color: var(--ot-ink);
 }
-#meeting-delete-dialog::backdrop, #meeting-unsaved-dialog::backdrop, #meeting-action-copy-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+#meeting-delete-dialog::backdrop, #meeting-unsaved-dialog::backdrop, #meeting-action-copy-dialog::backdrop,
+#meeting-conflict-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+#meeting-conflict-dialog { width: min(42rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }
+#meeting-conflict-title { margin-block: 0 .5rem; }
 #meeting-action-copy-dialog { width: min(calc(100% - 2rem), 30rem); }
 #meeting-action-copy-dialog h2 { margin-block: 0 .45rem; }
 #meeting-action-copy-dialog form, #meeting-action-copy-dialog label { display: grid; gap: .45rem; }

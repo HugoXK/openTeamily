@@ -1624,8 +1624,9 @@ test('a succeeded run expands to its summary and the model that wrote it', () =>
 });
 
 test('recorded trigger and execution location distinguish manual, scheduled and retried runs', () => {
-  assert.deepEqual(runDetailFields({trigger: 'manual', dispatch: {backend: 'ds-bot'}}), [
-    {label: '触发方式', value: '手动运行'}, {label: '执行位置', value: '个人 DS-Bot'},
+  assert.deepEqual(runDetailFields({trigger: 'manual', automation_revision: 2, dispatch: {backend: 'ds-bot'}}), [
+    {label: '触发方式', value: '手动运行'}, {label: '设置版本', value: '第 2 版'},
+    {label: '执行位置', value: '个人 DS-Bot'},
   ]);
   assert.deepEqual(runDetailFields({trigger: 'scheduled', dispatch: {backend: 'legacy'}}), [
     {label: '触发方式', value: '定时触发'}, {label: '执行位置', value: '旧版平台'},

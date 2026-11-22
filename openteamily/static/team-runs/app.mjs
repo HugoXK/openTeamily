@@ -188,7 +188,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const goal = node('team-run-goal');
   const drafts = new Map();
   const creates = new Map();
-  const saved = new Map();
   const previewNodes = new Map();
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
   let personalSpaces = new Set();
@@ -239,7 +238,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
-  const savedKey = step => workspace + '/' + detailId + '/' + step.position;
 
   function updateLocation(extra = {}) {
     if (!workspace || !view?.history) return;
@@ -293,7 +291,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
     show('team-run-progress', '');
-    for (const key of saved.keys()) if (key.startsWith(workspace + '/')) saved.delete(key);
     shares.selectRun(null);
     shares.selectWorkspace(null);
   }
@@ -620,7 +617,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function renderResults(run) {
     const structure = run.steps.map(({preview, ...step}) => step);
-    const fingerprint = JSON.stringify([structure, doing, run.steps.map(step => saved.get(savedKey(step)))]);
+    const fingerprint = JSON.stringify([structure, doing]);
     if (fingerprint === lastSteps) return updatePreviews(run.steps);
     lastSteps = fingerprint;
     const container = node('team-run-results');
@@ -659,7 +656,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         retry.addEventListener('click', () => mutate('retry', item));
         actions.append(retry);
       }
-      const artifact = saved.get(savedKey(item));
+      const artifact = ID.test(item.saved_artifact_id || '') && item.saved_artifact_id;
       if (artifact) {
         const link = make('a', '打开作品', 'team-run-link');
         link.href = spaceHref(workspace, artifact);
@@ -757,9 +754,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (result.status === 200 && action === 'remove') return showList({focus: true});
     const run = result.body.run, artifact = result.body.artifact?.id;
     if (action === 'artifact' && [200, 201].includes(result.status) && ID.test(artifact || '')) {
-      saved.set(savedKey(step), artifact);
+      const steps = current.steps.map(item => item.position === step.position ? {...item, saved_artifact_id: artifact} : item);
       show('team-run-status', '已保存到作品库。', 'ok');
-      renderDetail(current);
+      renderDetail({...current, steps});
       node('team-run-results').querySelector(`[data-position="${step.position}"] [data-step-action="open"]`)?.focus();
     } else if (result.status === 200 && matchesRun(run, workspace, runId) && Array.isArray(run.steps)) {
       show('team-run-status', '');
@@ -781,7 +778,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   function ask(action) {
     question = action;
     const cancelling = action === 'cancel';
-    node('team-run-confirm-label').textContent = cancelling ? '取消后会停止安排后续步骤，已完成的结果会保留。'
+    node('team-run-confirm-label').textContent = cancelling ? '取消后会请求停止正在执行的步骤，已完成的结果会保留。'
       : action === 'reuse' ? '复用会替换本工作区未保存的任务草稿。' : '删除这条任务记录？';
     node('team-run-confirm-action').textContent = cancelling ? '确认取消' : action === 'reuse' ? '替换草稿' : '确认删除';
     confirm.hidden = false;
@@ -853,7 +850,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (seq !== auth) return;
     if (session.status !== 200 || !session.body.user) {
       viewer = null;
-      drafts.clear(); creates.clear(); saved.clear();
+      drafts.clear(); creates.clear();
       personalSpaces.clear();
       changeScreen('');
       clearInaccessibleRunData();
@@ -863,7 +860,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       return;
     }
     if (viewer && viewer.id !== session.body.user.id) {
-      drafts.clear(); creates.clear(); saved.clear();
+      drafts.clear(); creates.clear();
       workspace = '';
       spaces = [];
       personalSpaces.clear();

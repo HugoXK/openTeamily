@@ -1,7 +1,7 @@
 // Legacy /v1 routes for /automations/ once the core stream flips that page
 // into moved_pages. The browser shim (shell/dsbot-api.mjs) posts
 // {endpoint:'automations/v1', payload:{method,path,body,idempotency_key}}.
-import { FeatureError, HEX32 } from '../../featurekit/http.js'
+import { FeatureError, HEX32, requireBodyKeys } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 
 const HEX = '([0-9a-f]{32})'
@@ -58,7 +58,8 @@ export function automationsV1({ endpoints, log, personalBinding, readSavedWorks 
       const key = req.headers.get('idempotency-key')
       if (req.method === 'GET' && !req.query.size) return { status: 200, body: await call('receipt', { workspace_id: workspaceId, id, idempotency_key: key }) }
       if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
-      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: key })
+      const {expected_revision} = requireBodyKeys(await req.json(512), ['expected_revision'])
+      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: key, expected_revision })
       return { status: result.status, body: { run: result.run } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {
@@ -69,7 +70,8 @@ export function automationsV1({ endpoints, log, personalBinding, readSavedWorks 
         const {status, artifact} = await call('saveRun', payload)
         return {status, body: {artifact}}
       }
-      const result = action === 'cancel' ? await call('cancel', payload) : await call('retry', payload)
+      const result = action === 'cancel' ? await call('cancel', payload)
+        : await call('retry', {...payload, ...requireBodyKeys(await req.json(512), ['expected_revision'])})
       return { status: result.status ?? 200, body: { run: result.run, ...(result.retried ? { retried: result.retried } : {}) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/studio$`), handle: wrap(async (req, workspaceId, id, runId) => {

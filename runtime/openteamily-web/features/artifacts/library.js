@@ -740,6 +740,7 @@ export function shareView(row, { includeToken = false, token = null, store, now 
     id: row.id, artifact_id: row.artifact_id, workspace_id: row.workspace_id, prefix: row.token_prefix,
     created: row.created, created_by: row.created_by_username ?? user(row.created_by),
     expires: row.expires, revoked, revocation_pending: Boolean(row.revoked && !revoked), scope: 'read',
+    ...(Number.isSafeInteger(row.source_revision) ? {revision:row.source_revision} : {}),
   }
   if (now != null) data.expired = row.expires != null && row.expires <= now
   if (includeToken && token) { data.token = token; data.path = '/share/' + token }
@@ -762,9 +763,9 @@ export function createShare(store, row, owner, now, expiresIn) {
   const token = opaque()
   const id = newId()
   store.run(`INSERT INTO artifact_shares
-    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at)
-    VALUES(?,?,?,?,?,?,?,?,0,NULL)`,
-    id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires)
+    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at,source_revision)
+    VALUES(?,?,?,?,?,?,?,?,0,NULL,?)`,
+    id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires, row.revision)
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', id, row.id)
   return { status: 201, body: { share: shareView(item, { includeToken: true, token, store }) } }
 }

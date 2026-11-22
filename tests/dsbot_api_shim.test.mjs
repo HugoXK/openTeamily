@@ -13,9 +13,11 @@ test('call recording consent uses the owner runtime on both call roots', () => {
 });
 
 test('copying shared work goes only to the signed owner artifact runtime', () => {
-  const path = `/v1/workspaces/${WS}/artifacts/shared-copy`;
-  assert.deepEqual(movedTarget(path,ORIGIN),{feature:'artifacts',path});
-  assert.equal(movedTarget(path + '/extra',ORIGIN),null);
+  for (const action of ['shared-copy','studio-personal-copy']) {
+    const path = `/v1/workspaces/${WS}/artifacts/${action}`;
+    assert.deepEqual(movedTarget(path,ORIGIN),{feature:'artifacts',path});
+    assert.equal(movedTarget(path + '/extra',ORIGIN),null);
+  }
 });
 
 test('the personal sticker library routes only canonical paths to the owner runtime', () => {

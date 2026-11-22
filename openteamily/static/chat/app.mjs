@@ -1,6 +1,7 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles,
+  ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, unclearSocialDelivery } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -10,7 +11,8 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
+  signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
@@ -1494,12 +1496,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
+    const action = job.quoteUnavailable ? uiLabel('恢复到输入框', 'Restore to composer') : uiLabel('重试', 'Retry');
+    if (job.retry.textContent !== action) job.retry.textContent = action;
   }
 
-  function makeSendJob(queue, message, files, reply, sticker) {
+  function restoreUnavailableQuote(queue, job) {
+    if (sendScope() !== queue.scope || sendClosed()) return false;
+    const input = document.getElementById('chat-body');
+    if (input.value || replyDrafts.has(queue.scope) || attachmentSender?.draftFiles?.(queue.scope)?.length ||
+        !agentMentions.restoreDraft(job.message.agent_mentions)) return false;
+    input.value = job.message.body;
+    publicDraft.persist();
+    setReplyDraft(queue.scope, {message_id:job.reply.message_id, state:'missing', available:false});
+    removeSendJob(queue, job);
+    return true;
+  }
+
+  function makeSendJob(queue, message, files, reply, sticker, sendKey) {
     const firstText = servedByDsbot && !queue.social && !queue.conversationId &&
       !queue.jobs.length && !files.length && !reply && !sticker;
-    const key = firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+    const key = sendKey || (firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-'));
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
@@ -1535,6 +1551,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
+      if (job.quoteUnavailable) {
+        if (restoreUnavailableQuote(queue, job)) {
+          renderPendingSend();
+          document.getElementById('chat-body').focus({preventScroll:true});
+        } else {
+          job.state = uiLabel('请先处理输入框中的草稿、引用或提及，再恢复这条消息。',
+            'Finish or clear the current draft, quote, or mentions before restoring this message.');
+          paintSendJob(job);
+        }
+        return;
+      }
       job.failed = false;
       job.state = '等待发送…';
       paintSendJob(job);
@@ -1548,8 +1575,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return job;
   }
 
-  function removeSendJob(queue, job) {
+  function removeSendJob(queue, job, {keepStored = false} = {}) {
     queue.jobs = queue.jobs.filter(item => item !== job);
+    if (job.storedText && !keepStored) savePendingPrivateText(document.defaultView, queue.scope, job.key);
     job.bubble.remove();
     job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
@@ -1561,7 +1589,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopGroupReplyProgress();
     stopPolling();
     for (const queue of pendingSends.values()) {
-      for (const job of queue.jobs) removeSendJob(queue,job);
+      for (const job of queue.jobs) removeSendJob(queue,job,{keepStored:true});
     }
     pendingSends.clear();
     privateReplyRetries.clear();
@@ -1594,10 +1622,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? {message, reply} : null;
   }
 
-  async function privateSendReceipt(target, key, current, accept = () => true) {
+  async function privateSendReceipt(target, key, current, accept = () => true, delays = [0, 350, 800]) {
     const query = new URLSearchParams({key, receipt: '1'});
     const path = `${target.base}/${target.conversationId}/reply-progress?${query}`;
-    for (const delay of [0, 350, 800]) {
+    for (const delay of delays) {
       if (delay) await new Promise(resolve => globalThis.setTimeout(resolve, delay));
       if (!current()) return null;
       const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(3000)).catch(() => null);
@@ -1613,6 +1641,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.receipt ||= privateSendReceipt(queue, job.key, () => queue.owner === currentUser?.id &&
       pendingSends.get(queue.scope) === queue && queue.jobs.includes(job)).finally(() => { job.receipt = null; });
     return job.receipt;
+  }
+
+  async function socialSendReceipt(target, key, current, isExpected = () => true) {
+    const active = () => target.owner === currentUser?.id && current();
+    if (!active()) return null;
+    const path = `/v1/workspaces/${target.wid}/social/conversations/${target.conversationId}/messages?limit=50`;
+    const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(4000)).catch(() => null);
+    if (!active() || result?.status !== 200 || !Array.isArray(result.body?.items)) return null;
+    return result.body.items.find(message => ownSocialReceipt(message, target, key) && isExpected(message)) || null;
   }
 
   async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
@@ -3007,6 +3044,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentReplyViews.clear();
     lastAgentItems = items || [];
     syncCaptureButton();
+    restorePendingPrivateText(lastAgentItems);
     const queue = pendingSends.get(sendScope());
     if (queue && !queue.social) {
       const delivered = new Set(lastAgentItems.filter(item => item.role === 'user').map(item => item.client_key).filter(Boolean));
@@ -4539,6 +4577,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    const queue = pendingSends.get(scope);
+    if (servedByDsbot && queue?.social) {
+      for (const job of queue.jobs) {
+        if (lastSocialItems.some(item => ownSocialReceipt(item, queue, job.key))) removeSendJob(queue, job);
+      }
+    }
     if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
       const attempt = groupReplyDraft(scope).attempt;
       if (attempt && lastSocialItems.some(item => item.client_key === attempt.key) && confirmGroupReplyDraft(scope, attempt.key)) {
@@ -8014,9 +8058,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   inChatMore.addEventListener('click', () => searchCurrentConversation(true));
   inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
-    if (message && scope === sendScope() && !socialHistory?.readingHistory) {
-      const without = lastSocialItems.filter(item => item.id !== message.id);
-      renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
+    if (message && scope === sendScope()) {
+      if (socialHistory?.readingHistory) liveBanner.hidden = false;
+      else {
+        const without = lastSocialItems.filter(item => item.id !== message.id);
+        renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq), {refresh:true});
+      }
     }
     void loadSessions();
   }
@@ -8029,11 +8076,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const wid = workspaceId(), cid = currentConversation.id;
       const scope = sendScope();
       if (quoteBlocksSend(scope)) return null;
-      return {scope, owner:currentUser.id, reply:replyDrafts.get(scope), path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+      return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
+        path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
     ownerId: () => currentUser?.id,
     csrfToken: () => csrfCookie(document.cookie),
     createKey: () => idempotencyKey('chat-file-'),
+    confirmDelivery: (target, key, current) =>
+      socialSendReceipt(target, key, current, message => message.attachment || message.retracted),
     sent(destination, message) {
       consumeReplyDraft(destination.scope, destination.reply);
       if (message) renderDeliveredSocialMessage(destination.scope, message);
@@ -8528,22 +8578,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function queueChatMessage(message, files, reply, sticker) {
-    const field = document.getElementById('chat-body');
-    const social = currentSource === 'social';
-    const scope = sendScope();
-    let queue = pendingSends.get(scope);
-    if (!queue) {
-      queue = {
-        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
-        base: social ? socialBase() : `${agentBase()}/conversations`,
-        conversationId: currentConversation?.id, jobs: [], active: false,
-        createKey: currentConversation ? null : idempotencyKey('chat-'),
-        memoryScope: memoryDrafts.get(scope),
-      };
-      pendingSends.set(scope, queue);
-    }
+    const queue = currentChatSendQueue();
+    const {social,scope} = queue;
     const job = makeSendJob(queue, message, files, reply, sticker);
     if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
+    if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+      // A reload can interrupt the request after the composer clears.
+      job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+    }
+    const field = document.getElementById('chat-body');
     queue.jobs.push(job);
     if (!sticker) {
       field.value = '';
@@ -8562,6 +8605,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     scroller.scrollTop = scroller.scrollHeight;
     if (!social) resumePrivateSending();
     void drainSends(queue);
+  }
+
+  function currentChatSendQueue() {
+    const social = currentSource === 'social', scope = sendScope();
+    let queue = pendingSends.get(scope);
+    if (!queue) {
+      queue = {
+        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
+        base: social ? socialBase() : `${agentBase()}/conversations`,
+        conversationId: currentConversation?.id, jobs: [], active: false,
+        createKey: currentConversation ? null : idempotencyKey('chat-'),
+        memoryScope: memoryDrafts.get(scope),
+      };
+      pendingSends.set(scope, queue);
+    }
+    return queue;
+  }
+
+  function restorePendingPrivateText(items) {
+    if (!currentPrivateThread()) return;
+    const scope = sendScope();
+    const stored = readPendingPrivateText(document.defaultView, scope);
+    if (!stored.length) return;
+    const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
+    for (const {key,message} of stored) {
+      if (delivered.has(key)) {
+        savePendingPrivateText(document.defaultView, scope, key);
+        continue;
+      }
+      const queue = currentChatSendQueue();
+      if (queue.jobs.some(job => job.key === key)) continue;
+      const job = makeSendJob(queue, message, [], null, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      const checking = () => pendingSends.get(scope) === queue && queue.jobs.includes(job) && job.failed && currentUser?.id === queue.owner;
+      void privateSendReceipt(queue, key, checking, () => true, [0]).then(pair => {
+        if (!pair || !checking()) return;
+        removeSendJob(queue, job);
+        if (scope !== sendScope()) return;
+        renderPendingSend();
+        if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
+      });
+    }
   }
 
   async function drainSends(queue) {
@@ -8602,6 +8690,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
+            if (job.storedText) savePendingPrivateText(document.defaultView, queue.scope, job.key, job.message);
             job.preferences = null;
           }
           if (!queue.conversationId) {
@@ -8663,6 +8752,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
             const receipt = nativePrivate ? Promise.withResolvers() : null;
             job.acceptReceipt = receipt?.resolve;
+            const nativeSocial = servedByDsbot && queue.social;
+            const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
             try {
               const response = progress
                 ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
@@ -8674,11 +8765,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                       feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
                       beginReply();
                     }
-                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
+                  : nativeSocial ? AbortSignal.timeout(15000) : undefined);
               if (!progress) beginReply();
-              result = receipt
-                ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
-                : await response;
+              const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;
+              result = await (receipt ? Promise.race([posted, receipt.promise]) : posted);
+              if (nativeSocial && !currentJob()) continue;
+              if (nativeSocial && !result.body?.message?.id && unclearSocialDelivery(result.status)) {
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const confirmed = await socialSendReceipt(queue, job.key, currentJob);
+                if (!currentJob()) continue;
+                if (confirmed) result = {status:200, body:{message:confirmed}};
+              }
               if (nativePrivate && uncertainPrivateWrite(result)) {
                 if (progress) progress.hidden = true;
                 feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
@@ -8703,6 +8801,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);
           if (!accepted || !result.body.message?.id) {
             const code = result.body.error?.code;
+            if (queue.social && result.status === 409 && code === 'reply_unavailable' && job.reply && !job.sticker) {
+              if (isCurrent() && restoreUnavailableQuote(queue, job)) continue;
+              job.quoteUnavailable = true;
+              throw new Error(uiLabel('原消息已不可用。恢复草稿并取消引用后即可发送。',
+                'The original message is unavailable. Restore this draft and remove the quote to send.'));
+            }
             if (isCurrent() && job.message.direct_agent_request && code === 'direct_agent_unavailable') {
               const refreshed = await openSocialConversation(queue.conversationId, {acknowledge:false});
               const input = document.getElementById('chat-body');
@@ -8739,8 +8843,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             if (!isCurrent()) return;
             const append = (items, ...added) => [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
             if (queue.social) {
-              if (socialHistory?.readingHistory) void openSocialConversation(queue.conversationId);
-              else renderSocialMessages(append(lastSocialItems, result.body.message).sort((a,b) => a.seq - b.seq), {refresh:true});
+              renderDeliveredSocialMessage(queue.scope, result.body.message);
               if (currentConversation.public_agent?.open) {
                 showPublicChatState({open: true, pending: true});
                 schedulePoll(servedByDsbot ? 8000 : 2000);
@@ -8771,7 +8874,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback(uiLabel('已发送。', 'Sent.'));
             void restoring.then(finish, () => finish());
           } else finish();
-          if (queue.owner === currentUser?.id) void loadSessions();
+          if ((!queue.social || !isCurrent()) && queue.owner === currentUser?.id) void loadSessions();
         } catch (error) {
           job.failed = true;
           feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);

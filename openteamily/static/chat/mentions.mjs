@@ -38,7 +38,8 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   const staleStatus = doc.getElementById('chat-agent-mention-status');
   if (!input || !list || !chips) return {
     refresh() {}, clear() {}, forget() {}, openPicker() {}, canPick: () => false, keydown: () => false,
-    restoreDirect: () => false, prepareDirectLink: () => false, message: body => ({body}),
+    restoreDraft: targets => !targets?.length, restoreDirect: () => false, prepareDirectLink: () => false,
+    message: body => ({body}),
   };
   const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
   const launcher = pickerNode('open');
@@ -116,6 +117,17 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
 
   function restoreTargets(targets) {
     for (const target of targets) selected.set(agentKey({owner_id: target.owner_id, id: target.agent_id}), target);
+  }
+
+  function restoreDraft(targets = [], {directOnly = false} = {}) {
+    const group = refresh();
+    if (selected.size || (directOnly && !group?.direct) || (targets.length && !group)) return false;
+    if (targets.length) {
+      restoreTargets(targets);
+      remember();
+      renderSelected();
+    }
+    return true;
   }
 
   function refresh() {
@@ -364,6 +376,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
 
   return {
     refresh,
+    restoreDraft,
     openPicker,
     canPick: () => { const group = refresh(); return Boolean(picker && group && (!group.direct || group.agents.some(availableAgent)) && !input.disabled); },
     clear() {
@@ -385,13 +398,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       close();
       if (picker?.open) picker.close();
     },
-    restoreDirect(targets) {
-      if (!refresh()?.direct || selected.size || !Array.isArray(targets)) return false;
-      restoreTargets(targets);
-      remember();
-      renderSelected();
-      return true;
-    },
+    restoreDirect: targets => restoreDraft(targets, {directOnly:true}),
     prepareDirectLink({ownerId, agentId}) {
       const group = refresh();
       const key = agentKey({owner_id:ownerId,id:agentId});

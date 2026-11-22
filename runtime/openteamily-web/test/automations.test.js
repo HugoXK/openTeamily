@@ -775,18 +775,71 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   assert.equal(interrupted.error_code, 'interrupted')
   assert.equal(interrupted.finished, clock.now)
   assert.equal(restored.ops.runs({workspace_id: W, id: first.id}).has_pending, false)
-  assert.equal(restored.ops.runs({workspace_id: W, id: second.id, status: 'queued'}).items[0].id, queuedId)
+  const queued = restored.ops.runs({workspace_id: W, id: second.id, status: 'queued'}).items[0]
+  assert.equal(queued.id, queuedId)
+  assert.equal(queued.automation_revision,undefined)
   assert.equal(restored.ops.cancel({workspace_id: W, id: third.id, run_id: cancelledId}).run.status, 'cancelled')
   restored.start()
   restored.start()
   await Promise.all(restored.inflight.values())
   assert.deepEqual(calls.map(item => item.requestId), [`ot-automation:${queuedId}`])
-  assert.equal(restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run.status, 'succeeded')
+  const result = restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run
+  assert.equal(result.status,'succeeded')
+  assert.equal(result.automation_revision,1)
   assert.deepEqual(restored.db.prepare('SELECT run_id,status FROM ot_automation_run_notices ORDER BY run_id').all()
     .map(row => [row.run_id, row.status]), [[claimedId, 'interrupted'], [queuedId, 'succeeded']])
 })
 
-test('an automation queued behind an active native run survives a process interruption', async t => {
+test('explicit runs and retries refuse stale settings while replaying an accepted attempt', async () => {
+  const calls = []
+  const {e,feature} = fixture(async invocation => {
+    calls.push(invocation)
+    if (calls.length === 1) throw Error('First attempt failed')
+    return {text:'Retried after review'}
+  })
+  const created = e['automations/create']({workspace_id:W, template_id:'custom', title:'Review settings',
+    prompt:'Original task instructions', participants:['alice'], schedule:{kind:'now',time_zone:'UTC'},
+    idempotency_key:'review-settings-create'}).automation
+  const path = `/v1/workspaces/${W}/automations/${created.id}`
+  const send = (suffix, revision, key) => e['automations/v1']({method:'POST',path:path+suffix,
+    body:{expected_revision:revision},idempotency_key:key})
+  const started = await send('/run',1,'review-first-attempt')
+  assert.equal(started.status,202)
+  await Promise.all(feature.inflight.values())
+  const original = started.body.run
+  const retryPath = '/runs/'+original.id+'/retry'
+  const update = (revision,prompt) => e['automations/update']({workspace_id:W,id:created.id,revision,changes:{prompt}})
+  update(1,'Reviewed task revision two')
+  const staleRetry = await send(retryPath,1,'review-rejected-retry')
+  assert.equal(staleRetry.status,409)
+  assert.equal(staleRetry.body.error.code,'run_revision_changed')
+  assert.deepEqual(staleRetry.body.error.current,{revision:2})
+  const staleManual = await send('/run',1,'review-rejected-manual')
+  assert.equal(staleManual.status,409)
+  assert.equal(staleManual.body.error.code,'run_revision_changed')
+  assert.equal((await send(retryPath,'2','review-invalid-retry')).status,400)
+  assert.equal(calls.length,1)
+  assert.equal(e['automations/runs']({workspace_id:W,id:created.id}).items.length,1)
+
+  const retryKey = 'review-approved-retry'
+  const accepted = await send(retryPath,2,retryKey)
+  assert.equal(accepted.status,201)
+  assert.equal(accepted.body.run.automation_revision,2)
+  assert.equal(accepted.body.run.retry_of,original.id)
+  await Promise.all(feature.inflight.values())
+  update(2,'Later task revision three')
+  const replay = await send(retryPath,2,retryKey)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.run.id,accepted.body.run.id)
+  assert.equal(replay.body.run.status,'succeeded')
+  const receipt = await e['automations/v1']({method:'GET',path:path+retryPath,idempotency_key:retryKey})
+  assert.deepEqual(receipt.body,replay.body)
+  assert.deepEqual(calls.map(call => call.prompt.split('\n').at(-1)),[
+    'Original task instructions','Reviewed task revision two',
+  ])
+})
+
+test('queued runs keep their accepted settings revision through edits and a process interruption', async t => {
   const {e, feature, dbPath, clock} = fixture(() => new Promise(() => {}))
   const draft = {workspace_id:W, template_id:'custom', prompt:'Respond once', participants:['alice'],
     schedule:{kind:'now',time_zone:'UTC'}}
@@ -799,6 +852,8 @@ test('an automation queued behind an active native run survives a process interr
   assert.equal(running.status,'running')
   assert.equal(waiting.status,'queued')
   assert.deepEqual([...feature.inflight.keys()],[running.id])
+  const changed = e['automations/update']({workspace_id:W,id:next.id,revision:1,
+    changes:{title:'New name after admission',prompt:'Use the new instructions only in later runs'}}).automation
   await flush()
   feature.stop()
   feature.db.close()
@@ -819,8 +874,18 @@ test('an automation queued behind an active native run survives a process interr
   runtimeReady = true
   restored.tick()
   await Promise.all(restored.inflight.values())
-  assert.deepEqual(calls.map(({requestId})=>requestId),[`ot-automation:${waiting.id}`])
+  assert.deepEqual(calls.map(({requestId,prompt})=>[requestId,prompt]),[
+    [`ot-automation:${waiting.id}`,'[OpenTeamily 自动化 · Waiting before restart]\nRespond once'],
+  ])
   assert.equal(restored.ops.run(scope).run.status,'succeeded')
+  assert.equal(restored.ops.run(scope).run.automation_revision,1)
+  assert.doesNotMatch(JSON.stringify(restored.ops.run(scope)),/Respond once|queued_prompt/)
+  assert.equal(restored.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(waiting.id).queued_prompt,null)
+  const later = restored.ops.runNow({workspace_id:W,id:next.id,idempotency_key:'new-settings-run-0001'}).run
+  assert.notEqual(later.id,waiting.id)
+  assert.equal(later.automation_revision,changed.revision)
+  await Promise.all(restored.inflight.values())
+  assert.equal(calls[1].prompt,'[OpenTeamily 自动化 · New name after admission]\nUse the new instructions only in later runs')
 })
 
 test('a cold clock leaves due slots and manual runs unclaimed until a native runtime is available', async t => {
@@ -845,6 +910,7 @@ test('a cold clock leaves due slots and manual runs unclaimed until a native run
   assert.equal(removing.status,'queued')
   assert.deepEqual(feature.ops.runs({workspace_id:W,id:daily.id}).items,[])
   assert.equal(feature.ops.cancel({workspace_id:W,id:cancelled.id,run_id:removing.id}).run.status,'cancelled')
+  assert.equal(feature.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(removing.id).queued_prompt,null)
   assert.deepEqual(calls,[])
 
   runtimeReady = true
@@ -861,13 +927,99 @@ test('a cold clock leaves due slots and manual runs unclaimed until a native run
   assert.equal(feature.ops.runs({workspace_id:W,id:daily.id}).items[0].status,'succeeded')
 })
 
+test('pausing cancels only accepted scheduled work that has not started', async () => {
+  const calls = []
+  const held = Promise.withResolvers()
+  const {feature, e} = fixture(async invocation => {
+    calls.push(invocation)
+    if (calls.length === 1) await held.promise
+    return {text:'Finished'}
+  })
+  const draft = {workspace_id:W, template_id:'custom', prompt:'Run once', participants:['alice'],
+    schedule:{kind:'now',time_zone:'UTC'}, enabled:true, notification_policy:'all'}
+  const create = (title, key) => e['automations/create']({...draft,title,idempotency_key:key}).automation
+  const pause = item => e['automations/update']({workspace_id:W,id:item.id,revision:item.revision,changes:{enabled:false}})
+  const lookup = (item, run) => e['automations/run']({workspace_id:W,id:item.id,run_id:run.id}).run
+  const blocker = create('Already started', 'pause-blocker-fixture')
+  const [running] = feature.tick()
+  await flush()
+  const scheduled = create('Automatic queued run', 'pause-scheduled-fixture')
+  const manual = create('Explicit queued run', 'pause-manual-fixture')
+  const explicit = e['automations/runNow']({workspace_id:W,id:manual.id,idempotency_key:'pause-explicit-fixture'}).run
+  const [waiting] = feature.tick()
+  assert.equal(waiting.automation_id,scheduled.id)
+  assert.equal(waiting.status,'queued')
+  assert.equal(waiting.trigger,'scheduled')
+  assert.equal(pause(blocker).automation.active_run.status,'running')
+  assert.equal(pause(manual).automation.active_run.status,'queued')
+  const paused = pause(scheduled)
+  const cancelled = lookup(scheduled,waiting)
+  assert.equal(cancelled.status,'cancelled')
+  assert.equal(cancelled.automation_revision,1)
+  assert.equal(cancelled.result.cancelled,true)
+  assert.match(cancelled.result.error,/暂停/)
+  assert.equal(paused.cancelled_scheduled_runs,1)
+  assert.equal(paused.automation.active_run,undefined)
+  assert.equal(feature.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(waiting.id).queued_prompt,null)
+
+  const resumed = e['automations/update']({workspace_id:W,id:scheduled.id,revision:paused.automation.revision,changes:{enabled:true}})
+  assert.deepEqual(resumed.automation.schedule_status,{state:'once_cancelled'})
+  assert.deepEqual(feature.tick(),[])
+  held.resolve()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.deepEqual(calls.map(call=>call.requestId),[`ot-automation:${running.id}`,`ot-automation:${explicit.id}`])
+  assert.equal(lookup(blocker,running).status,'succeeded')
+  assert.equal(lookup(manual,explicit).status,'succeeded')
+  assert.equal(lookup(scheduled,waiting).status,'cancelled')
+  assert.equal(feature.db.prepare('SELECT COUNT(*) AS n FROM ot_automation_run_notices WHERE run_id=?').get(waiting.id).n,0)
+})
+
+test('a resumed recurring automation advances to the next slot after cancelling a queued slot', async () => {
+  const before = zonedEpoch('UTC',2027,1,4,8,55)
+  const due = zonedEpoch('UTC',2027,1,4,9,0)
+  const tomorrow = zonedEpoch('UTC',2027,1,5,9,0)
+  const held = Promise.withResolvers()
+  const calls = []
+  const {feature, e, clock} = fixture(async call => {
+    calls.push(call)
+    if (calls.length === 1) await held.promise
+    return {text:'Finished'}
+  },before)
+  const draft = {workspace_id:W,template_id:'custom',prompt:'Keep future recurring slots',participants:['alice'],
+    schedule:{kind:'daily',time:'09:00',time_zone:'UTC'}}
+  const create = (title, key, enabled) => e['automations/create']({...draft,title,enabled,idempotency_key:key}).automation
+  const blocker = create('Blocks first slot','recurring-blocker-fixture',false)
+  const daily = create('Daily workflow','recurring-paused-fixture',true)
+  const running = e['automations/runNow']({workspace_id:W,id:blocker.id,idempotency_key:'recurring-blocker-run'}).run
+  clock.now = due
+  const [waiting] = feature.tick()
+  assert.equal(waiting.status,'queued')
+  const change = (revision, enabled) => e['automations/update']({workspace_id:W,id:daily.id,revision,changes:{enabled}})
+  assert.equal(change(1,false).cancelled_scheduled_runs,1)
+  clock.now++
+  assert.deepEqual(change(2,true).automation.schedule_status,{state:'scheduled', at:tomorrow})
+  held.resolve()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.deepEqual(feature.tick(),[])
+  clock.now = tomorrow
+  const [next] = feature.tick()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.equal(next.due_at,tomorrow)
+  assert.deepEqual(calls.map(call=>call.requestId),[`ot-automation:${running.id}`,`ot-automation:${next.id}`])
+  assert.deepEqual(e['automations/runs']({workspace_id:W,id:daily.id}).items.map(run=>[run.id,run.status]),[
+    [next.id,'succeeded'],[waiting.id,'cancelled'],
+  ])
+})
+
 test('older pending native rows have unknown delivery and become interrupted after migration', t => {
   const {e, feature, dbPath, clock} = fixture()
   const {automation} = e['automations/create']({workspace_id: W, title: 'Previous owner runtime', template_id: 'custom',
     prompt: 'Check once', participants: ['alice'], schedule: {kind: 'now', time_zone: 'UTC'}, idempotency_key: 'r'.repeat(16)})
   const id = 'f'.repeat(32)
   feature.db.exec(`DROP TRIGGER ot_automation_notice_on_finish; DROP INDEX ot_automation_unclaimed_work;
-    ALTER TABLE ot_automation_runs DROP COLUMN claimed_at`)
+    ALTER TABLE ot_automation_runs DROP COLUMN claimed_at;
+    ALTER TABLE ot_automation_runs DROP COLUMN automation_revision;
+    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt`)
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()

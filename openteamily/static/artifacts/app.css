@@ -1434,7 +1434,26 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #duplicate-artifact-title { width: 100%; margin-top: .3rem; }
 #studio-copy-open { justify-self: start; }
 #studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
+#studio-copy-target-workspace { max-width: 100%; }
 #shared-work-copy-dialog { box-sizing: border-box; }
+#studio-personal-dialog {
+  box-sizing: border-box;
+  width: min(36rem, calc(100% - 1.5rem));
+  margin: auto;
+  border: 1px solid var(--ot-line);
+}
+#studio-personal-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+#studio-personal-dialog button { min-height: 2.75rem; }
+#studio-personal-preview {
+  background: var(--ot-surface-2);
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+  padding: .75rem;
+  overflow-wrap: anywhere;
+}
+#studio-personal-title { margin: 0; }
+#studio-personal-body { margin: .5rem 0 0; max-height: min(40dvh, 20rem); overflow: auto; white-space: pre-wrap; font: inherit; }
+#studio-personal-status:empty { display: none; }
 #work-version-dialog {
   box-sizing: border-box;
   width: min(45rem, calc(100% - 1.5rem));
