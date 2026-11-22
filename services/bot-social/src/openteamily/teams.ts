@@ -460,7 +460,11 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
         const r = roleOf(ot, t.id, me.ownerId);
         const pending = ot.get<any>("SELECT status FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", t.id, me.ownerId);
         const v = teamView(ot, t, me.ownerId);
-        return { id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at, membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null };
+        return {
+          id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at,
+          membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null,
+          ...(r && !r.suspended && v.workspace_id ? { workspace_id: v.workspace_id } : {}),
+        };
       }),
     };
   });

@@ -108,7 +108,7 @@ export async function waitForRuntime(read, {
       if (!validSignupUser(user)) continue;
       if (user !== expectedUser) return 'signup-mismatch';
     }
-    if (['ready', 'unmanaged', 'unavailable', 'setup'].includes(state)) return state;
+    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped'].includes(state)) return state;
   }
   return 'timeout';
 }

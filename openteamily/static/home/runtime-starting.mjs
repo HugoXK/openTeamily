@@ -15,6 +15,11 @@ export function mountRuntimeStarting(document, {
   let composing = false;
   let runtimeReady = false;
   let leaving = false;
+  let canStart = false;
+  const startupPath = view.location.pathname === '/runtime-starting';
+  const returnHome = startupPath && view.location.hash === '#home=1';
+  const chatTarget = !returnHome && ['/chat', '/chat/', '/messenger', '/messenger/', '/runtime-starting'].includes(view.location.pathname);
+  if (returnHome) document.getElementById('runtime-home')?.setAttribute('hidden', '');
 
   function saveDraft() {
     if (!draftScope || view.location.hash !== draftHash) return true;
@@ -26,10 +31,10 @@ export function mountRuntimeStarting(document, {
     return writeChatDrafts(view, draftOwner, drafts);
   }
 
-  function openChat() {
+  function openDestination() {
     if (leaving) return;
     leaving = true;
-    if (view.location.pathname === '/runtime-starting') view.location.replace('/chat' + (view.location.hash || ''));
+    if (startupPath) view.location.replace(returnHome ? '/' : '/chat' + (view.location.hash || ''));
     else view.location.reload();
   }
 
@@ -44,7 +49,7 @@ export function mountRuntimeStarting(document, {
       continueButton.hidden = false;
       return;
     }
-    openChat();
+    openDestination();
   }
 
   draft?.addEventListener('compositionstart', () => { composing = true; });
@@ -56,7 +61,7 @@ export function mountRuntimeStarting(document, {
     if (!composing) saveDraft();
     if (runtimeReady) finish();
   });
-  continueButton?.addEventListener('click', openChat);
+  continueButton?.addEventListener('click', openDestination);
 
   async function read(path, options = {}) {
     const response = await fetcher(path, {
@@ -67,13 +72,13 @@ export function mountRuntimeStarting(document, {
     return {status: response.status, body};
   }
 
-  async function start() {
+  async function start(wake = false) {
     if (checking) return;
     checking = true;
     retry.hidden = true;
     if (progress) progress.hidden = false;
-    title.textContent = '正在启动你的专属智能体';
-    status.textContent = '正在准备你的私人聊天。就绪后会自动继续。';
+    title.textContent = wake ? '正在启动你的专属智能体' : '正在检查智能体状态';
+    status.textContent = chatTarget ? '就绪后会自动打开聊天。' : '就绪后会自动返回当前页面。';
     const expectedUser = pendingSignupSession(view);
     const csrf = csrfCookie(document.cookie);
     const check = () => waitForRuntime(async () => {
@@ -90,7 +95,15 @@ export function mountRuntimeStarting(document, {
       }
       return reply;
     }, {expectedUser});
-    let state = await check();
+    let state;
+    if (wake) {
+      const result = await read('/v1/auth/runtime-start', {
+        method: 'POST', headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}, body: '{}',
+      }).catch(() => null);
+      state = result?.status === 401 ? 'signed-out' : await check();
+    } else {
+      state = await check();
+    }
     if (state === 'setup') {
       const result = await read('/v1/personal-agent', {method: 'POST', headers: {'X-CSRF-Token': csrf}})
         .catch(() => null);
@@ -110,16 +123,19 @@ export function mountRuntimeStarting(document, {
       finish();
       return;
     }
-    title.textContent = '专属智能体暂未就绪';
-    status.textContent = state === 'timeout'
-      ? '你的专属智能体仍在启动。点击重试即可继续检查。'
-      : '暂时无法连接到你的专属智能体。请重试。';
+    canStart = state === 'stopped';
+    title.textContent = canStart ? '你的专属智能体已停止' : '专属智能体暂未就绪';
+    status.textContent = canStart
+      ? (chatTarget ? '启动后会自动打开聊天。' : '启动后会自动返回当前页面。')
+      : state === 'timeout' ? '你的专属智能体仍在启动。点击重试即可继续检查。'
+        : '暂时无法连接到你的专属智能体。请重试。';
     if (progress) progress.hidden = true;
+    retry.textContent = canStart ? '启动我的智能体' : '重试';
     retry.hidden = false;
     checking = false;
   }
 
-  retry.addEventListener('click', start);
+  retry.addEventListener('click', () => start(canStart));
   return start();
 }
 

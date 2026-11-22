@@ -87,7 +87,9 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
 test("approval invites and the team directory queue join requests for owners and admins", async () => {
   const A = await home(S.base, "lead");
   const B = await home(S.base, "joiner");
-  const team = await A.ok("POST", "/v1/ot/teams", { name: "Open Research Guild" });
+  const team = await A.ok("POST", "/v1/ot/workspaces", {
+    name: "Open Research Guild", slug: "open-research-guild", idempotency_key: "team-directory-approval-test",
+  });
   const inv = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, { requires_approval: true, max_uses: 1 });
   const pending = await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
   assert.equal(pending.status, "pending");
@@ -107,13 +109,18 @@ test("approval invites and the team directory queue join requests for owners and
   const found = await C.ok("GET", "/v1/ot/directory?q=reading");
   assert.equal(found.teams.length, 1);
   assert.equal(found.teams[0].membership, null);
+  assert.equal(found.teams[0].workspace_id, undefined);
   assert.equal((await C.ok("POST", `/v1/ot/directory/${team.id}/join`)).status, "pending");
   assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "pending");
   const q2 = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);
   await A.ok("POST", `/v1/ot/teams/${team.id}/join-requests/${q2.requests[0].id}`, { decision: "approve" });
-  assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "member");
+  const joined = (await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0];
+  assert.equal(joined.membership, "member");
+  assert.equal(joined.workspace_id, team.workspace_id);
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: true });
-  assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "suspended");
+  const suspended = (await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0];
+  assert.equal(suspended.membership, "suspended");
+  assert.equal(suspended.workspace_id, undefined);
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: false });
   const cn = await C.ok("GET", "/v1/ot/notifications");
   assert.ok(cn.notifications.some((x: any) => x.kind === "team.join_decided" && x.data.decision === "approve"));

@@ -95,7 +95,7 @@
       <p id="onboarding-meta" class="note"></p>
       <div class="onboarding-actions">
         <button type="button" id="onboarding-skip" class="secondary">跳过引导</button>
-        <button type="submit" id="onboarding-save">继续 <span aria-hidden="true">→</span></button>
+        <button type="submit" id="onboarding-save" disabled>继续 <span aria-hidden="true">→</span></button>
       </div>
     </form>
     <section id="onboarding-steps" class="onboarding-card" hidden>
@@ -139,6 +139,15 @@
           <div id="onboarding-look" class="look-options"></div>
         </div>
         <p id="onboarding-look-preview" class="note"></p>
+        <div id="onboarding-first-task-panel" class="onboarding-first-task" hidden>
+          <label for="onboarding-first-task">首个聊天任务</label>
+          <select id="onboarding-first-task" aria-describedby="onboarding-first-task-hint"></select>
+          <p id="onboarding-first-task-hint" class="note">选中的任务会带入聊天草稿，可编辑后再发送。</p>
+          <label id="onboarding-first-task-preview-label" hidden>草稿预览
+            <textarea id="onboarding-first-task-preview" rows="3" readonly></textarea>
+          </label>
+          <p id="onboarding-first-task-status" class="note" role="status"></p>
+        </div>
         <div class="onboarding-actions">
           <button type="button" class="secondary" data-go="3">← 上一步</button>
           <button type="submit" class="secondary">保存形象</button>

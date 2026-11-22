@@ -647,7 +647,10 @@ function teamsRoutes(host) {
             : id
           const data = await bs.post(`/v1/ot/directory/${seg(teamId, 'team_id')}/join`)
           if (data.status === 'pending') return [202, { join_request: { id: data.request_id, status: 'pending' } }]
-          return [200, { status: data.status || 'member' }]
+          return [200, {
+            status: data.status || 'member',
+            ...(data.status === 'member' && HEX.test(data.workspace_id || '') ? { workspace_id: data.workspace_id } : {}),
+          }]
         })
       },
     },

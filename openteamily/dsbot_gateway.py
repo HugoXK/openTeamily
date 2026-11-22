@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .lifecycle import RuntimeFault
-from .runtime_autoprovision import owned_instance
+from .runtime_autoprovision import owned_instance, resumable_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -297,7 +297,7 @@ def _upstream_row(db, instance_id):
     return row
 
 
-def owner_runtime_readiness(db, user_id):
+def owner_runtime_readiness(db, user_id, manager_id=None):
     """The browser receives a state only, never the address or runtime cookie."""
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
         return 'unmanaged'
@@ -320,7 +320,9 @@ def owner_runtime_readiness(db, user_id):
         """, (iid,)).fetchone()
         if state is None or state[1] or state[2]:
             return 'unavailable'
-        return 'starting' if state[0] == 'running' or state[3] else 'unavailable'
+        if state[0] == 'running' or state[3]:
+            return 'starting'
+        return 'stopped' if resumable_instance(db, user_id, manager_id) is not None else 'unavailable'
     return 'ready'
 
 

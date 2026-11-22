@@ -66,6 +66,23 @@ body.app-workspace #main-panel {
   font-size: 0.8125rem;
 }
 
+#workspace-chat {
+  margin-inline-start: auto;
+  min-height: 2.75rem;
+  padding-inline: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  color: var(--ot-accent);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+#workspace-chat[hidden] { display: none; }
+#workspace-chat:hover { background: var(--ot-accent-soft); }
+#directory-results button { min-height: 2.75rem; }
+
 #members-panel h2,
 #invites-panel h2,
 #join-requests-panel h2,

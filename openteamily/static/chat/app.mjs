@@ -3820,8 +3820,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const link = document.getElementById('open-agent-dir');
     link.hidden = Boolean(session?.public_agent);
     if (session && session.source === 'social') {
-      link.href = '/members';
-      link.textContent = uiLabel('成员', 'Members');
+      const id = workspaceId();
+      const personal = inPersonalWorkspace();
+      const membersHref = /^[a-f0-9]{32}$/.test(id) ? '/members#workspace=' + id : '/members';
+      link.href = personal ? '/contacts' : membersHref;
+      link.textContent = personal ? uiLabel('联系人', 'Contacts') : uiLabel('成员', 'Members');
     } else {
       link.href = '/agents';
       link.textContent = uiLabel('资料', 'Resources');
