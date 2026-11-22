@@ -1250,7 +1250,7 @@ function detailFetcher(item, previewResult) {
     if (path.startsWith('/v1/discover/works')) {
       return {status: 200, json: async () => ({items: [item], cursor: null})};
     }
-    if (path === '/w/' + item.slug) return {status: 200, json: async () => item};
+    if (path === '/w/' + item.slug + '?view=preview') return {status: 200, json: async () => item};
     if (path === '/w/' + item.slug + '/preview') return previewResult(path);
     throw new Error('unexpected ' + path);
   };
@@ -1488,8 +1488,8 @@ test('an older detail response cannot overwrite a newer work', async () => {
   const fetcher = async path => {
     if (path === '/v1/auth/session') return commentResponse({}, 401);
     if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [first, second]});
-    if (path === '/w/slow-work') return new Promise(resolve => { finish = resolve; });
-    if (path === '/w/new-work') return commentResponse(second);
+    if (path === '/w/slow-work?view=preview') return new Promise(resolve => { finish = resolve; });
+    if (path === '/w/new-work?view=preview') return commentResponse(second);
     if (path.endsWith('/preview')) return commentResponse({preview: null});
     throw new Error('Unexpected ' + path);
   };

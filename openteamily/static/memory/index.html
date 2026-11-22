@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -67,12 +67,14 @@
   <section id="main-panel" hidden>
     <header class="memory-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
-      <h1 class="visually-hidden">记忆</h1>
+      <h1 class="visually-hidden memory-main-title">记忆</h1>
       <p id="view-title" class="memory-view-title">总览</p>
       <p id="whoami" class="visually-hidden"></p>
-      <label class="workspace-picker">工作区
+      <label class="workspace-picker"><span class="workspace-caption">工作区</span>
         <select id="workspace"></select>
       </label>
+      <button type="button" id="memory-mobile-graph" class="memory-mobile-tool" aria-expanded="false" aria-controls="overview-panel">图谱</button>
+      <button type="button" id="memory-mobile-refresh" class="memory-mobile-tool">刷新</button>
       <p id="graph-counts" class="memory-counts"></p>
       <div id="memory-citation" class="memory-citation" hidden>
         <a id="memory-citation-return">返回原对话</a>
@@ -260,6 +262,7 @@
       </section>
     <section id="memory-citation-preview" class="memory-editor" aria-labelledby="memory-citation-title" hidden>
       <header class="memory-citation-preview-head">
+        <button type="button" id="close-memory-citation-preview" class="memory-editor-back">‹ 返回列表</button>
         <p id="memory-citation-version" class="note"></p>
         <h2 id="memory-citation-title" tabindex="-1">引用的记忆</h2>
         <button type="button" id="memory-citation-edit" hidden>编辑当前版本</button>
@@ -269,6 +272,7 @@
     </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
       <div class="editor-topbar">
+        <button type="button" id="close-editor" class="memory-editor-back">‹ 返回列表</button>
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
@@ -343,7 +347,6 @@
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
-        <button type="button" id="close-editor">返回列表</button>
       </div>
       <div id="page-delete-confirm" role="alertdialog" aria-labelledby="page-delete-question" hidden>
         <p id="page-delete-question"></p>
@@ -367,6 +370,7 @@
       </form>
     </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
+      <button type="button" id="close-action-editor" class="memory-editor-back">‹ 返回列表</button>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
       <label>状态
@@ -385,7 +389,6 @@
       <div class="actions">
         <button type="submit" id="save-action">保存</button>
         <button type="button" id="delete-action">删除</button>
-        <button type="button" id="close-action-editor">返回列表</button>
       </div>
       <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
         <p id="action-delete-question"></p>
@@ -398,5 +401,6 @@
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

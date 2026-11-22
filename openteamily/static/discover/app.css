@@ -1041,6 +1041,26 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 }
 .feed-sections #discover-tabs a { padding-inline: .5rem; font-size: .8125rem; white-space: nowrap; }
 .feed-sections #catalog-tab-feed { display: none; }
+body.app-workspace > .app-rail > #login-panel.discover-guest-signin {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.discover-guest-signin a {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--ot-radius-sm);
+  color: var(--ot-accent-hover);
+  font-size: .875rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+.discover-guest-signin a:hover { background: var(--ot-accent-soft); }
 .feed-filters, .catalog-filters {
   gap: .25rem;
   margin: 0 0 .625rem;

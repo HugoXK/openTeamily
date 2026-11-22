@@ -497,6 +497,12 @@ function mount() {
   const draftButton = document.getElementById('generate-meeting-draft');
   const stopDraftButton = document.getElementById('stop-meeting-draft-wait');
   const draftStatus = document.getElementById('meeting-draft-status');
+  const draftTop = document.getElementById('meeting-draft-top');
+  const draftControls = document.getElementById('meeting-draft-controls');
+  const draftReview = document.getElementById('meeting-draft-review');
+  const draftHeading = document.getElementById('meeting-draft-heading');
+  const draftReviewError = document.getElementById('meeting-draft-review-error');
+  const smallDraftViewport = globalThis.matchMedia?.('(max-width: 700px)');
   let draft = null;
   const draftRequests = new Map();
   let storedDraft = null;
@@ -882,16 +888,35 @@ function mount() {
 
   function showDraft(record = null) {
     const waiting = draftIsActive(record?.state) || record?.state === 'submitting';
+    const next = record?.draft || null;
+    const durable = sameDraftContext(savedDraftSource(), storedDraft);
+    const label = record?.label || '';
+    const nearTitle = Boolean(smallDraftViewport?.matches && durable && label);
+    const restoreStop = document.activeElement === stopDraftButton;
+    const restoreReview = document.activeElement === draftReview;
+    if (nearTitle && draftStatus.parentNode !== draftTop) {
+      draftTop.prepend(draftStatus, stopDraftButton);
+    } else if (!nearTitle && draftStatus.parentNode !== draftControls) {
+      draftControls.append(stopDraftButton, draftStatus);
+    }
+    draftTop.hidden = !nearTitle;
+    draftReview.hidden = !nearTitle || !next;
+    draftControls.hidden = nearTitle && waiting;
     draftButton.disabled = waiting || !transcript.value.trim();
     draftButton.textContent = waiting ? '正在生成…' : record?.state === 'failed' ? '重试生成' : '生成纪要草稿';
     if (stopDraftButton) {
-      const moveFocus = !waiting && document.activeElement === stopDraftButton;
       stopDraftButton.hidden = !waiting || record.state === 'submitting';
-      stopDraftButton.textContent = savedDraftSource() ? '取消生成' : '停止等待';
-      if (moveFocus && !draftButton.disabled) draftButton.focus({preventScroll: true});
+      stopDraftButton.textContent = durable ? '取消生成' : '停止等待';
     }
-    const next = record?.draft || null;
+    if (restoreStop && !stopDraftButton.hidden && document.activeElement !== stopDraftButton) stopDraftButton.focus({preventScroll:true});
     draftPanel.hidden = !next;
+    if ((restoreStop && stopDraftButton.hidden) || (restoreReview && draftReview.hidden)) {
+      if (!draftReview.hidden) draftReview.focus({preventScroll:true});
+      else if (next) draftHeading.focus({preventScroll:true});
+      else if (!draftButton.disabled) draftButton.focus({preventScroll:true});
+      else if (nearTitle) draftTop.focus({preventScroll:true});
+    }
+    if (next !== draft) draftReviewError.textContent = '';
     if (next && next !== draft) {
       document.getElementById('meeting-draft-summary').textContent = next.summary;
       const items = document.getElementById('meeting-draft-items');
@@ -904,7 +929,6 @@ function mount() {
     }
     draft = next;
     draftStatus.dataset.state = record?.state || '';
-    const label = record?.label || '';
     if (draftStatus.textContent !== label) draftStatus.textContent = label;
   }
 
@@ -945,6 +969,12 @@ function mount() {
   }
 
   for (const field of [titleInput, attendeeInput, transcript]) field.addEventListener('input', syncDraft);
+  smallDraftViewport?.addEventListener?.('change', () => showDraft(draftForInput()));
+  draftReview.addEventListener('click', () => {
+    if (draftPanel.hidden || !draftForInput()?.draft) return;
+    draftPanel.scrollIntoView({block:'start'});
+    draftHeading.focus({preventScroll:true});
+  });
   stopDraftButton?.addEventListener('click', () => {
     const record = draftForInput();
     if (!draftIsActive(record?.state)) return;
@@ -1014,7 +1044,7 @@ function mount() {
       seen.add(key);
     }
     if (next.length > summary.maxLength || actions.length + additions.length > 50) {
-      draftStatus.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
+      draftReviewError.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
       return;
     }
     summary.value = next;
@@ -1025,6 +1055,7 @@ function mount() {
       syncDraft();
     } else discardDraft();
     draftStatus.textContent = '已填入摘要和行动项。确认后保存会议。';
+    summary.focus({preventScroll:true});
   });
 
   function hideAttendees() {
@@ -1422,7 +1453,8 @@ function mount() {
     fill(result.body.meeting, null, result.body.draft_job || null);
     if (globalThis.matchMedia?.('(max-width: 700px)').matches) {
       document.getElementById('main').scrollTop = 0;
-      document.getElementById('meeting-editor-pane')?.focus({preventScroll: true});
+      const focus = draftTop.hidden ? document.getElementById('meeting-editor-pane') : draftTop;
+      focus?.focus({preventScroll: true});
     }
     show('', '');
     return true;

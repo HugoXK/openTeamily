@@ -761,7 +761,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadPublicWork(entry) {
-    const path = '/w/' + entry.slug + (nativeCatalog ? '?view=preview' : '');
+    const path = '/w/' + entry.slug + '?view=preview';
     const result = await request('GET', path).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
@@ -2155,19 +2155,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await directoryLoad;
   }
 
-  document.getElementById('login-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    const result = await request('POST', '/v1/auth/login', {
-      username: document.getElementById('username').value.trim(),
-      password: document.getElementById('password').value,
-    });
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '登录失败。'));
-      return;
-    }
-    await load();
-  });
-
   workspaceSelect.addEventListener('change', loadManage);
   const manage = document.getElementById('catalog-manage');
   manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
@@ -2269,7 +2256,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();
-    await request('POST', '/v1/auth/logout', {});
+    const result = await request('POST', '/v1/auth/logout', {});
+    if (result.status >= 200 && result.status < 300 && typeof location?.reload === 'function') {
+      location.reload();
+      return;
+    }
     await load();
   });
 

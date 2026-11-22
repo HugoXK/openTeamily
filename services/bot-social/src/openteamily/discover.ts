@@ -399,7 +399,7 @@ function publicWorkPreview(ot: OtContext, slug: string) {
   };
 }
 
-function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
+function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string | null) {
   const kind = one(input.kind, "kind");
   const tab = one(input.tab, "tab") ?? "all";
   const sort = one(input.sort, "sort") ?? "latest";
@@ -453,7 +453,7 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   return {kind, sort, where: conditions.join(" AND "), args, workSearch};
 }
 
-function discoverCard(ot: OtContext, row: any, viewer: string, search: string) {
+function discoverCard(ot: OtContext, row: any, viewer: string | null, search: string) {
   const card = listingView(ot, row, viewer);
   if (!search) return card;
   const match = workSearchMatch("title", card.title, search)
@@ -462,6 +462,21 @@ function discoverCard(ot: OtContext, row: any, viewer: string, search: string) {
     ?? workSearchMatch("creator", card.creator.handle, search)
     ?? workSearchMatch("body", ot.get<{body: string}>("SELECT body FROM ot_discover_work_search WHERE listing_id = ?", row.id)?.body ?? null, search);
   return match ? {...card, match} : card;
+}
+
+function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
+  const {slug, title, creator, updated_at: timestamp} = card;
+  const updated = Math.floor(timestamp > 1e12 ? timestamp / 1000 : timestamp);
+  const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
+  if (card.kind === "agent") {
+    return {slug, name:title, summary:card.summary, category:card.category || "", updated,
+      chat_enabled:card.chat_enabled, creator:{handle:creator.handle, name:creator.display_name || author}};
+  }
+  return {slug, title, kind:card.work_kind || "document", author, updated, path:card.path,
+    likes:card.likes, collections:card.collections, comment_count:card.comment_count,
+    ...(card.site_available ? {site_available:true} : {}),
+    ...(card.file_available ? {file_available:true, file_mime:card.file_mime, file_bytes:card.file_bytes} : {}),
+    ...("match" in card && card.match ? {match:card.match} : {})};
 }
 
 function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
@@ -508,7 +523,7 @@ function popularWorks(ot: OtContext) {
   type Ranking = { context: string; keys: string; expires: number };
   const rankings = new Map<string, Ranking>();
 
-  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string, limit: number, cursor: string | undefined) => {
+  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string | null, limit: number, cursor: string | undefined) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
     const now = ot.now();
     let token: string;
@@ -617,6 +632,7 @@ function profileSocialPage<T extends ProfileSocialKey, R>(rows: T[], limit: numb
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const popular = popularWorks(ot);
+  const publicPopular = popularWorks(ot);
   registerWorkComments(app, ot);
   ot.db.function("ot_profile_fold", {deterministic: true}, foldProfileSearch);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
@@ -744,25 +760,23 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
       ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
-  app.get("/v1/ot/discover", async (req) => {
-    const me = ot.me(req);
-    const q = query(req);
-    const scope = discoverScope(ot, q, me.ownerId);
+  const readFeed = (q: Record<string, unknown>, viewer: string | null) => {
+    const scope = discoverScope(ot, q, viewer);
     const {kind, sort, where, args, workSearch} = scope;
     const cursor = one(q.cursor, "cursor");
     const pagination = one(q.pagination, "pagination");
     const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
     if (sort === "popular") {
       assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
-      return popular(scope, me.ownerId, limit, cursor);
+      return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor);
     }
-    const keyset = pagination === "keyset" && kind === "work";
+    const keyset = pagination === "keyset" && (kind === "work" || viewer === null);
     assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
     assert(cursor === undefined || (keyset && q.before === undefined), 400, "invalid_request", "invalid latest works pagination");
     const before = intParam(q.before, "before", 0, Number.MAX_SAFE_INTEGER);
     const boundary: unknown[] = before ? [before] : [];
     let condition = before ? " AND l.updated_at < ?" : "";
-    const scopeKey = keyset ? hashCode(JSON.stringify([me.ownerId, where, args])).slice(0, 24) : "";
+    const scopeKey = keyset ? hashCode(JSON.stringify([viewer, where, args])).slice(0, 24) : "";
     if (cursor !== undefined) {
       const match = LATEST_WORK_CURSOR.exec(cursor);
       assert(match && Number.isSafeInteger(Number(match[1])), 400, "invalid_request", "invalid latest works cursor");
@@ -772,12 +786,29 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     }
     const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE ${where}${condition} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
-    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, me.ownerId, workSearch));
+    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch));
     const last = rows[limit - 1] as WorkAnchor | undefined;
     const nextBefore = last?.updated_at ?? null;
     return keyset
       ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.updated_at}.${last.id}.${scopeKey}` : null}
       : {items: cards, next_before: nextBefore};
+  };
+  app.get("/v1/ot/discover", async (req) => readFeed(query(req), ot.me(req).ownerId));
+  app.get("/v1/ot/public/discover/:directory", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const {directory} = params(req);
+    assert(directory === "works" || directory === "agents", 404, "listing_not_found", "no such public directory");
+    const q = query(req);
+    const works = directory === "works";
+    const allowed = works ? ["limit", "cursor", "q", "creator", "sort", "kind"] : ["limit", "cursor", "q", "creator", "category"];
+    assert(Object.keys(q).every(key => allowed.includes(key)), 400, "invalid_request", "unknown public directory filter");
+    const ranked = q.sort === "popular";
+    const result = readFeed({
+      kind:works ? "work" : "agent", q:q.q, creator:q.creator, work_kind:q.kind, category:q.category,
+      sort:q.sort, cursor:q.cursor, pagination:ranked ? undefined : "keyset",
+      limit:String(Math.max(1,intParam(q.limit, "limit", 12, 24))),
+    }, null);
+    return {items:result.items.map(guestDiscoverCard), cursor:"next_cursor" in result ? result.next_cursor : null};
   });
   app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
     const me = ot.me(req);

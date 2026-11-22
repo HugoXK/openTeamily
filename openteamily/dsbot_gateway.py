@@ -746,7 +746,24 @@ __DSBOT_LOCATIONS__
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
   error_page 401 = @ot_login;
-  location @ot_login { return 302 /login; }
+  location @ot_login {
+    if ($uri = /discover/) { rewrite ^ /_ot_discover_guest/discover last; }
+    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/comments[.]mjs)?$") {
+      rewrite ^ /_ot_discover_guest$uri last;
+    }
+__GUEST_DISCOVER_FEEDS__
+    return 302 /login;
+  }
+  location ^~ /_ot_discover_guest/ {
+    internal;
+    limit_except GET HEAD { deny all; }
+    proxy_pass http://__PLATFORM__/;
+    proxy_set_header Host $host;
+    proxy_set_header Sec-Fetch-Site "";
+    proxy_set_header Cookie "";
+    proxy_set_header Authorization "";
+    proxy_set_header X-OT-Gateway-Key "";
+  }
   location / {
     proxy_pass http://__PLATFORM__;
     proxy_set_header Host $host;
@@ -776,6 +793,19 @@ def social_location(upstream):
         '    proxy_set_header X-Forwarded-Prefix /social;\n'
         '    proxy_set_header X-OT-Gateway-Key "";\n'
         '    proxy_read_timeout 60s;\n'
+        '    proxy_redirect off;\n'
+        '  }\n'
+        '  location ^~ /_ot_public_feed/ {\n'
+        '    internal;\n'
+        '    limit_except GET HEAD { deny all; }\n'
+        f'    proxy_pass http://{upstream}/v1/ot/public/discover/;\n'
+        '    proxy_http_version 1.1;\n'
+        '    proxy_set_header Host $host;\n'
+        '    proxy_set_header Cookie "";\n'
+        '    proxy_set_header Authorization "";\n'
+        '    proxy_set_header X-OT-Gateway-Key "";\n'
+        '    proxy_hide_header Set-Cookie;\n'
+        '    proxy_read_timeout 15s;\n'
         '    proxy_redirect off;\n'
         '  }\n'
         # Public agent homepages (/a/<slug>), works (/w/<slug>) and read-only shares
@@ -831,9 +861,11 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     social = social_location(bot_social) if bot_social else ''
+    guest_feeds = ('    rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;'
+                   if bot_social else '')
     configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
-            .replace('__SOCIAL_LOCATION__', social))
+            .replace('__SOCIAL_LOCATION__', social).replace('__GUEST_DISCOVER_FEEDS__', guest_feeds))
     if not bot_social_socket:
         return configuration
     if not bot_social:

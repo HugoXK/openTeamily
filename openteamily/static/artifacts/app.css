@@ -1890,6 +1890,50 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
   #main-panel.is-compact-catalog #artifact-dir { padding: 0 0 .25rem; background: transparent; }
   #main-panel.is-compact-catalog .artifact-main { padding: .25rem 0 1rem; }
 
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] li.artifact-item {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "kind favorite more" "cover cover cover" "title title title" "meta meta meta";
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] li.artifact-item[data-search-context="true"] {
+    grid-template-areas: "kind favorite more" "cover cover cover" "title title title" "match match match" "meta meta meta";
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-cover {
+    aspect-ratio: auto;
+    block-size: clamp(7.5rem, 35vw, 9rem);
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-cover :is(.thumb-document, .thumb-website),
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-cover :is(.thumb-document, .thumb-website) .thumb-page {
+    padding: .75rem 1rem 0;
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-cover :is(.thumb-block, .thumb-line) { font-size: .6875rem; }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] li.artifact-item > button.link {
+    display: -webkit-box;
+    justify-self: stretch;
+    min-height: 2.25rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] :is(.artifact-bookmark, .artifact-more) {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-bookmark {
+    grid-area: favorite;
+    position: static;
+    border-radius: .5rem;
+    background: transparent;
+    box-shadow: none;
+    cursor: pointer;
+  }
+  #main-panel.is-compact-catalog #artifact-list[data-layout="grid"] .artifact-bookmark[aria-pressed="true"] {
+    background: var(--ot-accent-soft);
+  }
+
   #main-panel.is-compact-catalog .workspace-picker {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

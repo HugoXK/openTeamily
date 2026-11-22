@@ -24,6 +24,44 @@ let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
 
+test("guest Discover pages only contain opted-in records and carry no viewer state", async () => {
+  const publisher = await home(S.base, "guest-directory-publisher");
+  const term = "anonymous-gallery-fixture";
+  const works = "/v1/ot/public/discover/works";
+  const agents = "/v1/ot/public/discover/agents";
+  const read = async (path: string, expected = 200) => {
+    const response = await fetch(S.base + path, {headers:{accept:"application/json"}});
+    assert.equal(response.status, expected);
+    if (expected === 200) assert.equal(response.headers.get("cache-control"),"no-store");
+    return response.json();
+  };
+  const published = await Promise.all(["one", "two", "three"].map(value =>
+    publisher.ok("PUT", "/v1/ot/listings", {kind:"work",work_kind:"document",ref:`private-${value}`,
+      slug:`guest-gallery-${value}`,title:`${term} ${value}`,snapshot:"A public preview body."})));
+  await publisher.ok("PUT","/v1/ot/listings",{kind:"agent",ref:"private-agent-ref",slug:"guest-gallery-agent",
+    title:`${term} helper`,summary:"Public description",category:"content-creation"});
+  await publisher.ok("DELETE", "/v1/ot/listings/" + published[2].id);
+  const first = await read(works + `?kind=document&q=${term}&limit=1`);
+  assert.equal(first.items.length,1);
+  assert.ok(first.cursor);
+  assert.deepEqual(Object.keys(first.items[0]).sort(),[
+    "author","collections","comment_count","kind","likes","match","path","slug","title","updated",
+  ]);
+  const next = await read(works + `?kind=document&q=${term}&limit=1&cursor=${first.cursor}`);
+  assert.equal(next.items.length,1);
+  assert.equal(next.cursor,null);
+  assert.deepEqual([first.items[0].slug,next.items[0].slug].sort(),["guest-gallery-one","guest-gallery-two"]);
+  await read(works + `?q=different&cursor=${first.cursor}`,400);
+  assert.equal((await read(works + `?sort=popular&q=${term}`)).items.length,2);
+  const hub = await read(agents + `?q=${term}`);
+  assert.deepEqual(hub.items.map((item: any) => item.slug),["guest-gallery-agent"]);
+  assert.deepEqual(Object.keys(hub.items[0].creator).sort(),["handle","name"]);
+  for (const extra of ["tab=following", "tab=collected", "cursor=a&cursor=b", "viewer=publisher"]) {
+    await read(works + "?" + extra,400);
+  }
+  await read("/v1/ot/discover",401);
+});
+
 test("work remix yields only exact listed document or website snapshots", async () => {
   const author = await home(S.base,"remix-author");
   const reader = await home(S.base,"remix-reader");

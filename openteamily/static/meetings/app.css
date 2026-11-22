@@ -121,6 +121,8 @@
 #meeting-draft-status { margin: 0; }
 #meeting-draft-status:empty { display: none; }
 #meeting-draft-status[data-state="failed"] { color: var(--ot-danger, #b42318); }
+#meeting-draft-review-error { color: var(--ot-danger, #b42318); }
+#meeting-draft-review-error:empty { display: none; }
 .meeting-draft { border: 1px solid var(--ot-line); border-radius: var(--ot-radius); padding: .85rem; }
 .meeting-draft h3 { margin: 0; }
 #meeting-draft-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -300,6 +302,20 @@
     background: var(--ot-surface);
   }
   #meeting-save-status { grid-row: 1; position: sticky; top: 3.65rem; z-index: 1; background: var(--ot-surface); border: 1px solid var(--ot-line); }
+  #meeting-draft-top:not([hidden]) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .4rem .65rem;
+    padding: .45rem .65rem;
+    background: var(--ot-bg-accent);
+    border: 1px solid var(--ot-line);
+    border-radius: var(--ot-radius);
+  }
+  #meeting-draft-top > button { min-height: 2.75rem; margin-inline-start: auto; }
+  #meeting-draft { scroll-margin-block-start: 4.5rem; }
+  #meeting-draft-heading { width: fit-content; }
   .meeting-mobile-toolbar button, #new-meeting, #meeting-resume, #meeting-search,
   #meeting-list-filters .meeting-open-filter, .meeting-list-pagination button,
   #save-meeting-artifact, #save-meeting-memory, .action-followup, #meeting-artifact-link, #meeting-memory-link { min-height: 2.75rem; }

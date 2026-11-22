@@ -1121,3 +1121,112 @@ html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: f
 #memory-review-body { min-height: 7rem; }
 #memory-review-excerpt { margin: .5rem 0; padding: .625rem; border-inline-start: 3px solid var(--ot-line); background: var(--ot-surface-2); overflow-wrap: anywhere; }
 .memory-views a[data-view="candidates"] { padding-inline-start: 2.125rem; }
+
+.memory-mobile-tool { display: none; }
+.memory-editor-back {
+  min-height: 2.75rem;
+  padding: 0 .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .5rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  body.app-workspace:not(.chat-open) > main > #main-panel { padding: .625rem .875rem 1rem; }
+  .memory-top {
+    gap: .375rem;
+    margin: 0 0 .5rem;
+    padding: 0 0 .5rem;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .memory-top .memory-main-title {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    clip: auto;
+    overflow: visible;
+  }
+  .memory-top .memory-view-title, .memory-top .memory-counts { display: none; }
+  .memory-top .workspace-picker { flex: 1 1 6rem; min-width: 0; margin: 0; }
+  .memory-top .workspace-picker .workspace-caption {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip: rect(0 0 0 0);
+    overflow: hidden;
+  }
+  .memory-top .workspace-picker select { min-height: 2.75rem; min-width: 0; width: 100%; max-width: 11rem; }
+  .memory-top .memory-mobile-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    padding: 0 .5rem;
+    border: 1px solid var(--ot-line);
+    border-radius: .5rem;
+    background: var(--ot-surface);
+    color: var(--ot-ink);
+    box-shadow: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .memory-top .memory-mobile-tool:active { background: var(--ot-accent-soft); }
+  .memory-top:has(+ #list-panel[data-view="overview"][data-mobile-graph="true"]) .memory-counts {
+    display: flex;
+    flex-basis: 100%;
+    padding: .25rem 0 0;
+  }
+  #main-panel:has(> #list-panel[data-view="page"]) > .memory-top:not(:has(#memory-citation:not([hidden]))) { display: none; }
+  #main-panel:has(> #list-panel[data-view="page"]) > .memory-top > :not(#memory-citation) { display: none; }
+
+  #list-panel:not([data-view="page"]) > .memory-dir {
+    order: -2;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: .375rem .625rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    min-width: 0;
+  }
+  #list-panel:not([data-view="page"]) > .memory-dir > * { grid-column: 1 / -1; }
+  #list-panel:not([data-view="page"]) .dir-header { display: none; }
+  #list-panel:not([data-view="page"]) .memory-dir #new-page {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 2.75rem;
+    padding: 0 .75rem;
+    white-space: nowrap;
+  }
+  #list-panel:not([data-view="page"]) .memory-dir .dir-search { grid-column: 2; grid-row: 1; min-width: 0; }
+  #list-panel:not([data-view="page"]) .memory-dir .dir-search input { min-height: 2.75rem; font-size: 1rem; }
+  #list-panel:not([data-view="page"]) #memory-list { max-height: none; overflow: visible; }
+  #list-panel:not([data-view="page"]) .memory-views {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: .25rem;
+    min-width: 0;
+    overflow-x: auto;
+    padding-block: .125rem;
+  }
+  #list-panel:not([data-view="page"]) .memory-views a {
+    flex: none;
+    width: auto;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    padding: 0 .5rem;
+    white-space: nowrap;
+  }
+  #list-panel:not([data-view="page"]) .memory-views .view-icon { display: none; }
+  #list-panel:not([data-view="overview"], [data-view="page"]) > .memory-dir > :not(.memory-views),
+  #list-panel[data-mobile-graph="true"] > .memory-dir > :not(.memory-views),
+  #list-panel[data-view="overview"]:not([data-mobile-graph="true"]) > :is(#overview-panel, #memory-side) { display: none; }
+  .editor-topbar { flex-wrap: wrap; gap: .375rem; }
+}
