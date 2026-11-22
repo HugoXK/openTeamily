@@ -2,6 +2,7 @@
 // through the existing edit route, without pressing 保存.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {actionToggleBody} from '../openteamily/static/meetings/app.mjs';
 
 class FakeElement {
   constructor(tag = 'div') {
@@ -39,6 +40,11 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = nodes; this.pickFirstOption(); }
   focus() {}
   click() { for (const handler of this.handlers.click || []) handler(); }
+  showModal() { this.open = true; }
+  close() {
+    this.open = false;
+    for (const handler of this.handlers.close || []) handler();
+  }
   reset() {}
   get options() { return this.children.filter((child) => child.tagName === 'option'); }
 }
@@ -80,7 +86,7 @@ function meeting(id = MEETING_ID, revision = 3, actions = [
   };
 }
 
-async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, native = false, mobile = false, readList, saveArtifact } = {}) {
+async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterWrite = () => {}, native = false, mobile = false, readList, saveArtifact, intercept } = {}) {
   const {doc, elements} = fakeDocument();
   if (native) doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
   const state = {calls: [], body: meeting(), posted: [], revokeWith};
@@ -88,6 +94,8 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, native
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
     state.calls.push(`${method} ${path}`);
+    const custom = intercept?.({method, path, options, state, json});
+    if (custom) return custom;
     if (path === '/v1/auth/session') return json(200, {user: {username: 'alice'}});
     if (path === '/v1/workspaces?limit=100' || path === '/v1/workspaces?scope=personal') {
       return json(200, {items: [{id: WORKSPACE, name: 'Team'}]});
@@ -121,6 +129,7 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, native
         done_count: payload.changes.action_items.filter((item) => item.done).length,
         action_count: payload.changes.action_items.length,
       };
+      await afterWrite();
       return json(200, {meeting: state.body});
     }
     throw new Error('unexpected ' + method + ' ' + path);
@@ -146,9 +155,20 @@ async function settle() {
 
 function checkbox(doc, index) {
   const row = doc.getElementById('action-list').children[index];
-  const label = row && row.children[2];
+  const label = row?.children.find(child => child.className === 'action-done');
   return label && label.children[0];
 }
+
+test('an inline completion carries every saved deadline and omits empty deadlines', () => {
+  const payload = actionToggleBody([
+    {text: 'A', done: false, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: '', due_date: ''},
+  ], 0, true, 3);
+  assert.deepEqual(payload.changes.action_items, [
+    {text: 'A', done: true, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: ''},
+  ]);
+});
 
 test('ticking an action item writes the meeting back without pressing 保存', async () => {
   const {doc, state, restore} = await mountPage('tick-' + Math.random());
@@ -194,20 +214,50 @@ test('a stale revision reverts the tick and says the meeting moved on', async ()
   }
 });
 
-test('a tick persists only the saved action and keeps unsaved edits local', async () => {
+test('only an unchanged saved action is toggled remotely while edited actions stay in the draft', async () => {
   const {doc, state, restore} = await mountPage('draft-isolation');
   try {
     const row = doc.getElementById('action-list').children[1];
     const title = row.children[0];
     title.value = 'draft text';
     title.handlers.input[0]();
-    const box = checkbox(doc, 1);
+    const savedBox = checkbox(doc, 0);
+    savedBox.checked = true;
+    await savedBox.handlers.change[0]();
+    assert.deepEqual(state.posted[0].changes.action_items, [
+      {text: 'A', done: true, owner: ''}, {text: 'B', done: false, owner: ''},
+    ]);
+    const draftBox = checkbox(doc, 1);
+    draftBox.checked = true;
+    await draftBox.handlers.change[0]();
+    assert.equal(state.posted.length, 1);
+    assert.equal(state.body.action_items[1].done, false);
+    assert.equal(title.value, 'draft text');
+    assert.equal(draftBox.checked, true);
+  } finally {
+    restore();
+  }
+});
+
+test('a committed action toggle is confirmed by reading the saved revision after response loss', async () => {
+  const {doc, state, restore} = await mountPage('action-ack-lost', {
+    native: true,
+    afterWrite() { throw new TypeError('Connection closed'); },
+  });
+  try {
+    const summary = doc.getElementById('meeting-summary');
+    summary.value = 'Unsaved summary';
+    const box = checkbox(doc, 0);
     box.checked = true;
     await box.handlers.change[0]();
-    assert.equal(state.posted[0].changes.action_items[1].text, 'B');
-    assert.equal(state.posted[0].changes.action_items[1].done, true);
-    assert.equal(title.value, 'draft text');
+    await settle();
+    assert.equal(state.posted.length, 1);
+    assert.equal(state.calls.filter(call => call === `GET /v1/workspaces/${WORKSPACE}/meetings/${MEETING_ID}`).length, 2);
+    assert.equal(state.body.revision, 4);
     assert.equal(box.checked, true);
+    assert.equal(summary.value, 'Unsaved summary');
+    assert.match(doc.getElementById('meeting-meta').textContent, /修订 4/);
+    assert.equal(doc.getElementById('status').textContent, '已标记完成。');
   } finally {
     restore();
   }
@@ -225,6 +275,7 @@ test('an earlier write cannot update the newly selected meeting', async () => {
     await doc.getElementById('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
+    await doc.getElementById('discard-meeting-edits').handlers.click[0]();
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
     finish();
     await sent;
@@ -324,7 +375,7 @@ test('native follow-up opens only saved open items and artifact save uses the st
     },
   });
   const ele = id => doc.getElementById(id);
-  const link = index => ele('action-list').children[index].children[4];
+  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-followup');
   try {
     assert.equal(link(0).href, `/automations?workspace=${WORKSPACE}&meeting=${MEETING_ID}&action=0&revision=3`);
     assert.equal(link(0).target, '_blank');
@@ -391,6 +442,211 @@ test('the mobile list return parks rather than replacing a meeting draft', async
     assert.equal(ele('meeting-layout').dataset.view, 'editor');
     assert.equal(ele('meeting-title').value, 'Unsent meeting');
     assert.equal(state.posted.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+const meetingPath = `/v1/workspaces/${WORKSPACE}/meetings`;
+
+test('a lost create acknowledgment replays the same data while keeping newer draft edits', async () => {
+  const writes = [];
+  const {doc, restore} = await mountPage('create-ack-lost', {
+    intercept({method, path, options, state, json}) {
+      if (method !== 'POST') return;
+      const body = JSON.parse(options.body);
+      writes.push({path, body, key: options.headers['Idempotency-Key']});
+      if (path !== meetingPath) {
+        assert.equal(body.revision, 1);
+        state.body = {...state.body, ...body.changes, revision: 2};
+        return json(200, {meeting: state.body});
+      }
+      if (writes.length === 1) {
+        state.body = {...meeting(MEETING_ID, 1, []), ...body};
+        return Promise.reject(new TypeError('connection lost'));
+      }
+      return json(200, {meeting: state.body});
+    },
+  });
+  const ele = id => doc.getElementById(id);
+  const submit = () => ele('meeting-form').handlers.submit[0]({preventDefault() {}});
+  try {
+    ele('new-meeting').click();
+    ele('meeting-title').value = '会后记录';
+    ele('meeting-transcript').value = '首份正文';
+    await submit();
+    assert.equal(ele('save-meeting').textContent, '确认并重试保存');
+    assert.equal(ele('save-meeting-mobile').formNoValidate, true);
+    ele('meeting-transcript').value = '更多正文';
+    await submit();
+    assert.match(writes[0].key, /^meeting-/);
+    assert.deepEqual(writes[1], writes[0]);
+    assert.equal(ele('meeting-transcript').value, '更多正文');
+    assert.match(ele('meeting-meta').textContent, /修订 1/);
+    assert.match(ele('meeting-save-status').textContent, /未保存的修改/);
+    await submit();
+    assert.equal(writes[2].path, `${meetingPath}/${MEETING_ID}`);
+    assert.equal(writes[2].body.changes.transcript, '更多正文');
+    assert.match(ele('meeting-meta').textContent, /修订 2/);
+    assert.equal(ele('save-meeting').textContent, '保存');
+    assert.equal(ele('meeting-save-status').textContent, '会议已保存。');
+  } finally {
+    await settle();
+    restore();
+  }
+});
+
+test('a definitive title collision clears the attempt and leaves the create draft editable', async () => {
+  const keys = [];
+  const {doc, restore} = await mountPage('create-duplicate', {
+    intercept({method, path, options, json}) {
+      if (path !== meetingPath || method !== 'POST') return;
+      keys.push(options.headers['Idempotency-Key']);
+      if (keys.length === 1) return json(503, {});
+      if (keys.length === 2) return json(409, {error: {message: 'A meeting with this title already exists'}});
+      return json(201, {meeting: {...meeting(MEETING_ID, 1, []), ...JSON.parse(options.body)}});
+    },
+  });
+  const ele = id => doc.getElementById(id);
+  const submit = () => ele('meeting-form').handlers.submit[0]({preventDefault() {}});
+  try {
+    ele('new-meeting').click();
+    ele('meeting-title').value = '已有标题';
+    ele('meeting-transcript').value = '正文保留';
+    await submit();
+    await submit();
+    assert.equal(keys[0], keys[1]);
+    assert.match(ele('meeting-save-status').textContent, /同名会议/);
+    assert.equal(ele('meeting-transcript').value, '正文保留');
+    assert.equal(ele('save-meeting').formNoValidate, false);
+    ele('meeting-title').value = '更换标题';
+    await submit();
+    assert.notEqual(keys[2], keys[1]);
+    assert.equal(ele('meeting-save-status').textContent, '会议已保存。');
+  } finally {
+    await settle();
+    restore();
+  }
+});
+
+test('a lost edit acknowledgment is verified by scoped read-back without replacing newer typing', async () => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const path = `${meetingPath}/${MEETING_ID}`;
+  const {doc, state, restore} = await mountPage('edit-ack-lost', {
+    native: true,
+    intercept({method, path: requested, options, state: fixture, json}) {
+      if (requested !== path || method !== 'POST') return;
+      const {revision, changes} = JSON.parse(options.body);
+      assert.equal(revision, 3);
+      fixture.body = {...fixture.body, ...changes, revision: 4,
+        action_items: changes.action_items.map(item => ({...item, text: item.text.trim()}))};
+      return held.then(() => json(503, {}));
+    },
+  });
+  const ele = id => doc.getElementById(id);
+  try {
+    ele('meeting-transcript').value = '已提交正文';
+    const row = ele('action-list').children[0];
+    row.children[0].value = '  经后端规范的行动项  ';
+    row.children[0].handlers.input[0]();
+    const writing = ele('meeting-form').handlers.submit[0]({preventDefault() {}});
+    ele('meeting-transcript').value = '仍在输入正文';
+    release();
+    await writing;
+    assert.equal(state.calls.filter(call => call === `POST ${path}`).length, 1);
+    assert.equal(state.calls.filter(call => call === `GET ${path}`).length, 2);
+    assert.equal(ele('meeting-transcript').value, '仍在输入正文');
+    assert.match(ele('meeting-meta').textContent, /修订 4/);
+    assert.match(ele('meeting-save-status').textContent, /未保存的修改/);
+  } finally {
+    await settle();
+    restore();
+  }
+});
+
+test('an older confirmed create cannot enter a newly selected draft', async () => {
+  let acknowledge;
+  const pending = new Promise(resolve => { acknowledge = resolve; });
+  const {doc, restore} = await mountPage('create-scope-fence', {
+    intercept({method, path, options, json}) {
+      if (path !== meetingPath || method !== 'POST') return;
+      return pending.then(() => json(201, {meeting: {...meeting(MEETING_ID, 1, []), ...JSON.parse(options.body)}}));
+    },
+  });
+  const ele = id => doc.getElementById(id);
+  try {
+    ele('new-meeting').click();
+    ele('meeting-title').value = '先创建的会议';
+    const writing = ele('meeting-form').handlers.submit[0]({preventDefault() {}});
+    ele('new-meeting').click();
+    ele('discard-meeting-edits').click();
+    ele('meeting-title').value = '新选中的草稿';
+    acknowledge();
+    await writing;
+    assert.equal(ele('meeting-title').value, '新选中的草稿');
+    assert.equal(ele('meeting-meta').textContent, '新会议');
+    assert.equal(ele('meeting-save-status').textContent, '');
+    assert.equal(ele('save-meeting').disabled, false);
+  } finally {
+    restore();
+  }
+});
+
+test('a failed navigation retains the unresolved create attempt in the visible draft', async () => {
+  const writes = [];
+  const {doc, restore} = await mountPage('failed-navigation-retains-attempt', {
+    intercept({method, path, options, json}) {
+      if (method === 'GET' && path === `${meetingPath}/${OTHER_MEETING_ID}`) return json(503, {});
+      if (method !== 'POST' || path !== meetingPath) return;
+      const body = JSON.parse(options.body);
+      writes.push({body, key: options.headers['Idempotency-Key']});
+      return writes.length === 1 ? json(503, {}) : json(200, {meeting: {...meeting(MEETING_ID, 1, []), ...body}});
+    },
+  });
+  const ele = id => doc.getElementById(id);
+  const submit = () => ele('meeting-form').handlers.submit[0]({preventDefault() {}});
+  try {
+    ele('new-meeting').click();
+    ele('meeting-title').value = '原会议草稿';
+    await submit();
+    await ele('meeting-list').handlers.click[0]({
+      target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
+    });
+    await ele('discard-meeting-edits').handlers.click[0]();
+    assert.equal(ele('save-meeting').textContent, '确认并重试保存');
+    ele('meeting-title').value = '仍在编辑的标题';
+    await submit();
+    assert.deepEqual(writes[1], writes[0]);
+    assert.equal(ele('meeting-title').value, '仍在编辑的标题');
+    assert.match(ele('meeting-meta').textContent, /修订 1/);
+  } finally {
+    await settle();
+    restore();
+  }
+});
+
+test('a meeting switch reads nothing and keeps pending edits until discard is confirmed', async () => {
+  const {doc, state, restore} = await mountPage('guard-editor-switch');
+  const element = id => doc.getElementById(id);
+  const openOther = () => element('meeting-list').handlers.click[0]({
+    target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
+  });
+  try {
+    element('meeting-transcript').value = 'Unsaved minutes';
+    const reads = state.calls.length;
+    await openOther();
+    assert.equal(element('meeting-unsaved-dialog').open, true);
+    assert.equal(state.calls.length, reads);
+    element('keep-meeting-edits').click();
+    assert.equal(element('meeting-unsaved-dialog').open, false);
+    assert.equal(element('meeting-transcript').value, 'Unsaved minutes');
+    assert.equal(state.calls.length, reads);
+    await openOther();
+    await element('discard-meeting-edits').handlers.click[0]();
+    assert.equal(element('meeting-transcript').value, '');
+    assert.equal(element('meeting-title').value, 'Other');
+    assert.deepEqual(state.calls.slice(reads), [`GET ${meetingPath}/${OTHER_MEETING_ID}`]);
   } finally {
     restore();
   }

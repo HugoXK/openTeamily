@@ -1,4 +1,5 @@
 import {servedByDsBot} from '../shell/dsbot-api.mjs';
+import {readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -207,6 +208,12 @@ export function mountOnboarding(document, {
   const customRoleLabel = document.getElementById('custom-role-label');
   const customRole = document.getElementById('custom-role');
   if (!status || !loginPanel || !mainPanel || !form) return;
+  const profileSave = document.getElementById('onboarding-save');
+  const firstTask = document.getElementById('onboarding-first-task');
+  const taskPreview = document.getElementById('onboarding-first-task-preview');
+  const taskPreviewLabel = document.getElementById('onboarding-first-task-preview-label');
+  const taskStatus = document.getElementById('onboarding-first-task-status');
+  const enter = document.getElementById('onboarding-enter');
   const automationCreation = mountAutomationCreation(document, send);
   let industries = [];
   let current = null;
@@ -218,6 +225,7 @@ export function mountOnboarding(document, {
   let progress = {step: 1, completed: false};
   let connections = null;
   let loadingConnections = null;
+  let taskOptions = new Map();
 
   const read = path => send('GET', path).catch(() => null);
 
@@ -318,6 +326,7 @@ export function mountOnboarding(document, {
       radio.value = role;
       radio.addEventListener('change', () => {
         customRoleLabel.hidden = radio.value !== '其他';
+        syncProfileReady();
         if (radio.value === '其他') customRole.focus();
       });
       const tile = document.createElement('span');
@@ -354,15 +363,23 @@ export function mountOnboarding(document, {
     return customRole.value.trim();
   }
 
+  function profileValues() {
+    return {industry: select.value === '其他' ? customIndustry.value.trim() : select.value, role: chosenRole()};
+  }
+
+  function syncProfileReady() {
+    const {industry, role} = profileValues();
+    profileSave.disabled = Boolean(writing) || !industry || !role;
+  }
+
   function fill(state) {
     current = state;
     select.value = state && state.industry && industries.some(item => item.name === state.industry)
       ? state.industry : (state && state.industry ? '其他' : '');
-    if (select.value === '其他' && state && state.industry && state.industry !== '其他') {
-      customIndustry.value = state.industry;
-    }
+    customIndustry.value = select.value === '其他' && state?.industry && state.industry !== '其他' ? state.industry : '';
     customRole.value = state && state.role || '';
     renderRoles();
+    syncProfileReady();
     const meta = document.getElementById('onboarding-meta');
     if (state && state.completed) {
       meta.textContent = '已完成' + (state.industry ? ' · ' + state.industry + (state.role ? ' · ' + state.role : '') : '') + '，可随时修改。';
@@ -483,6 +500,37 @@ export function mountOnboarding(document, {
     paintLook();
     document.getElementById('onboarding-steps-meta').textContent =
       '已选 ' + (steps.picks || []).length + ' 项';
+    renderFirstTasks(steps);
+  }
+
+  function renderFirstTasks(steps) {
+    const previous = firstTask.value;
+    const selected = new Set(steps.picks || []);
+    taskOptions = new Map((steps.recommendations || [])
+      .filter(item => item.kind === 'task' && selected.has(item.key))
+      .map(item => [item.key, item]));
+    const direct = document.createElement('option');
+    direct.value = '';
+    direct.textContent = '直接打开聊天';
+    firstTask.replaceChildren(direct);
+    for (const [key, task] of taskOptions) {
+      const option = document.createElement('option');
+      option.value = key;
+      option.textContent = task.title;
+      firstTask.append(option);
+    }
+    firstTask.value = taskOptions.has(previous) ? previous : '';
+    document.getElementById('onboarding-first-task-panel').hidden = !taskOptions.size;
+  }
+
+  function syncFirstTask() {
+    const task = taskOptions.get(firstTask.value);
+    taskPreviewLabel.hidden = !task;
+    taskPreview.value = task
+      ? `请帮我完成这项任务：${task.title}。\n${task.summary}\n如果缺少必要信息，请先问我。` : '';
+    enter.textContent = task
+      ? (progress.completed ? '保存并带着任务开始聊天' : '完成并带着任务开始聊天')
+      : (progress.completed ? '保存并打开聊天' : '完成并开始聊天');
   }
 
   function chosenLook() {
@@ -521,8 +569,7 @@ export function mountOnboarding(document, {
     }
     if (full || next.steps) renderSteps(data.steps);
     progress = savedProgress(data);
-    document.getElementById('onboarding-enter').textContent =
-      progress.completed ? '保存并打开聊天' : '完成并开始聊天';
+    syncFirstTask();
   }
 
   async function load() {
@@ -530,6 +577,8 @@ export function mountOnboarding(document, {
     if (writing) finishWriting(writing);
     user = null;
     data = null;
+    firstTask.value = '';
+    taskStatus.textContent = '';
     connections = null;
     loadingConnections = null;
     mainPanel.hidden = true;
@@ -573,7 +622,7 @@ export function mountOnboarding(document, {
     const own = generation;
     const live = () => generation === own;
     const controls = [...document.querySelectorAll(
-      '#onboarding-save,#onboarding-skip,#onboarding-steps [data-go],#onboarding-picks-form button[type="submit"],#onboarding-look-form button[type="submit"],#onboarding-enter',
+      '#onboarding-save,#onboarding-skip,#onboarding-steps [data-go],#onboarding-picks-form button[type="submit"],#onboarding-look-form button[type="submit"],#onboarding-first-task,#onboarding-enter',
     )];
     const before = controls.map(button => button.disabled);
     const task = {controls, before};
@@ -589,6 +638,7 @@ export function mountOnboarding(document, {
     if (writing !== task) return;
     writing = null;
     task.controls.forEach((button, index) => { button.disabled = task.before[index]; });
+    syncProfileReady();
   }
 
   async function save(path, body, live) {
@@ -601,7 +651,12 @@ export function mountOnboarding(document, {
     return result.body;
   }
 
-  async function openPersonal(live) {
+  function showFirstTaskError(text) {
+    show('', '');
+    taskStatus.textContent = text;
+  }
+
+  async function openPersonal(live, firstMessage = '') {
     show('loading', '正在打开你的私人聊天…');
     let personal = (await read('/v1/personal-agent'))?.body?.personal_agent;
     let href = personalChatPath(personal);
@@ -612,8 +667,34 @@ export function mountOnboarding(document, {
       personal = [200, 201].includes(result.status) ? result.body?.personal_agent : null;
       href = personalChatPath(personal);
     }
-    if (href) navigate(href);
-    else show('error', '引导已保存，暂时无法打开私人聊天。请重试。');
+    if (!href) {
+      show('error', '引导已保存，暂时无法打开私人聊天。请重试。');
+      return;
+    }
+    if (firstMessage) {
+      const owner = user.id;
+      if (!NATIVE_ID.test(owner || '') || (personal.workspace.owner_id && personal.workspace.owner_id !== owner)) {
+        showFirstTaskError('暂时无法确认个人工作区，请重新打开引导后重试。');
+        return;
+      }
+      const view = document.defaultView;
+      const drafts = readChatDrafts(view, owner);
+      const scope = JSON.stringify([owner, personal.workspace.id, 'agent', personal.agent.id, null]);
+      const existing = drafts.get(scope);
+      if (existing && existing !== firstMessage) {
+        showFirstTaskError('私人聊天已有未发送草稿。请选择「直接打开聊天」处理原草稿。');
+        firstTask.focus();
+        return;
+      }
+      drafts.set(scope, firstMessage);
+      if (!writeChatDrafts(view, owner, drafts)) {
+        showFirstTaskError('浏览器无法暂存任务。请复制草稿后，选择「直接打开聊天」。');
+        taskPreview.focus();
+        taskPreview.select();
+        return;
+      }
+    }
+    navigate(href);
   }
 
   for (const button of document.querySelectorAll('#onboarding-steps [data-go]')) {
@@ -652,12 +733,14 @@ export function mountOnboarding(document, {
   });
 
   function saveLook(finish) {
+    const firstMessage = finish ? taskPreview.value : '';
     void perform('正在保存形象…', async live => {
+      taskStatus.textContent = '';
       const look = chosenLook();
       const result = await save('/v1/onboarding/look', finish ? {look, finish: true} : {look}, live);
       if (!result) return;
       applyState(result);
-      if (finish) await openPersonal(live);
+      if (finish) await openPersonal(live, firstMessage);
       else show('ok', '已保存个人智能体形象。');
     });
   }
@@ -666,19 +749,24 @@ export function mountOnboarding(document, {
     event.preventDefault();
     saveLook(false);
   });
-  document.getElementById('onboarding-enter').addEventListener('click', () => saveLook(true));
+  enter.addEventListener('click', () => saveLook(true));
+  firstTask.addEventListener('change', () => {
+    syncFirstTask();
+    taskStatus.textContent = '';
+  });
 
   select.addEventListener('change', () => {
     current = null;
     customRole.value = '';
     renderRoles();
+    syncProfileReady();
   });
+  customIndustry.addEventListener('input', syncProfileReady);
+  customRole.addEventListener('input', syncProfileReady);
 
   form.addEventListener('submit', event => {
     event.preventDefault();
-    let industry = select.value;
-    if (industry === '其他') industry = customIndustry.value.trim();
-    const role = chosenRole();
+    const {industry, role} = profileValues();
     if (!industry) {
       show('error', '请选择或填写行业。');
       (select.value === '其他' ? customIndustry : select).focus();

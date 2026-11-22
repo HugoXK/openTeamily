@@ -49,7 +49,10 @@ class Element {
   }
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key]; }
-  removeAttribute(key) { delete this.attributes[key]; }
+  removeAttribute(key) {
+    delete this.attributes[key];
+    if (key === 'href') this.href = '';
+  }
   addEventListener(key, handler) { this.handlers[key] = handler; }
   querySelector(selector) {
     if (selector === '.graph-node') {
@@ -109,6 +112,12 @@ function fakeDocument() {
     },
     createElement(tag) { return new Element(tag); },
     createElementNS(_ns, tag) { return new Element(tag); },
+    createTextNode(text) {
+      const node = new Element();
+      node.nodeType = 3;
+      node.textContent = text;
+      return node;
+    },
     querySelectorAll() { return []; },
     addEventListener() {},
   };
@@ -131,7 +140,7 @@ function graphFetcher(graph) {
     if (path === '/v1/auth/session') return json(200, {user});
     if (path === '/v1/settings') return json(404, {error: {message: 'missing'}});
     if (path === '/v1/workspaces') return json(200, {items: [space]});
-    if (path === '/v1/workspaces/ws-1/memory') return json(200, {items: []});
+    if (path.split('?')[0] === '/v1/workspaces/ws-1/memory') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/actions') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/graph') return json(200, graph);
     throw new Error('unexpected ' + path);
@@ -244,6 +253,170 @@ test('the graph finishing in the background leaves a newly created page open', a
   await loaded;
   assert.equal(el('editor-form').hidden, false);
   assert.equal(el('list-panel').dataset.view, 'page');
+});
+
+test('late graph and action responses cannot replace the new workspace panels', async () => {
+  const {doc, el} = fakeDocument();
+  const oldGraph = Promise.withResolvers();
+  const oldActions = Promise.withResolvers();
+  const requested = new Set();
+  const ws = [{id:'ws-1',name:'旧工作区'},{id:'ws-2',name:'新工作区'}];
+  const action = (id,title) => ({id,title,status:'open'});
+  mount(doc,{fetcher:async path => {
+    const plain = path.split('?')[0];
+    requested.add(plain);
+    if (plain === '/v1/auth/session') return json(200,{user:{id:'user-1',username:'alice'}});
+    if (path === '/v1/workspaces?scope=personal') return json(200,{items:[]});
+    if (path === '/v1/workspaces') return json(200,{items:ws});
+    if (plain.endsWith('/memory/actions')) {
+      return plain.includes('/ws-1/') ? oldActions.promise : json(200,{items:[action('new-action','新工作区的行动')]});
+    }
+    if (plain.endsWith('/memory/graph')) return plain.includes('/ws-1/') ? oldGraph.promise : json(200,twoNodes);
+    if (plain.endsWith('/memory')) return json(200,{items:[],cursor:null,total:0});
+    return json(404,{});
+  }});
+  await tick();
+  assert.ok(requested.has('/v1/workspaces/ws-1/memory/actions'));
+  assert.ok(requested.has('/v1/workspaces/ws-1/memory/graph'), 'graph starts while actions is still pending');
+  el('workspace').value = 'ws-2';
+  await el('workspace').handlers.change();
+  const checkNew = () => {
+    assert.equal(el('action-list').children[0]?.children[0]?.dataset.id,'new-action');
+    assert.equal(el('graph-counts').children[0]?.children[0]?.textContent,'2');
+  };
+  checkNew();
+  oldActions.resolve(json(200,{items:[action('old-action','不应出现的旧行动')]}));
+  oldGraph.resolve(json(200,oneNode));
+  await tick();
+  checkNew();
+});
+
+test('a late page save keeps the newly opened editor and its draft', async () => {
+  const {doc, el} = fakeDocument();
+  const save = Promise.withResolvers();
+  const first = {id:'pg-1', title:'项目简报', body:'第一份约定', topics:[], revision:1, updated:20};
+  const second = {id:'pg-2', title:'运维手册', body:'第二份约定', topics:[], revision:1, updated:10};
+  const fallback = graphFetcher(twoNodes);
+  const requests = [];
+  mount(doc,{fetcher:async (path, options={}) => {
+    const plain = path.split('?')[0];
+    if (plain.endsWith('/memory')) return json(200,{items:[first,second],cursor:null,total:2});
+    if (plain.endsWith('/memory/pg-1') && options.method === 'POST') {
+      requests.push(JSON.parse(options.body));
+      return save.promise;
+    }
+    if (plain.endsWith('/memory/pg-1')) return json(200,{page:first});
+    if (plain.endsWith('/memory/pg-2')) return json(200,{page:second});
+    return fallback(path,options);
+  }});
+  await tick();
+  const openRecent = index => el('recent-list').children[index].children[0].click();
+  await openRecent(0);
+  const form = el('editor-form');
+  form.elements.body.value = '已提交的改动';
+  const saving = form.handlers.submit({preventDefault() {}});
+  assert.equal(requests[0].changes.body,'已提交的改动');
+  await openRecent(1);
+  form.elements.body.value = '另一页的新草稿';
+  save.resolve(json(200,{page:{...first,body:'已提交的改动',revision:2}}));
+  await saving;
+  assert.equal(form.elements.title.value,second.title);
+  assert.equal(form.elements.body.value,'另一页的新草稿');
+  assert.match(el('editor-meta').textContent,/修订 1/);
+});
+
+test('an action keeps its linked page before the full graph loads', async () => {
+  const {doc, el} = fakeDocument();
+  const graph = Promise.withResolvers();
+  const action = {id:'action-1', title:'检查旧记录', notes:'', status:'open', revision:1,
+    memory_page_id:'older-page', memory_page_title:'归档笔记'};
+  const fallback = graphFetcher(emptyGraph);
+  mount(doc,{fetcher:async (path, options) => {
+    const plain = path.split('?')[0];
+    if (plain.endsWith('/memory/graph')) return graph.promise;
+    if (plain.endsWith('/memory/actions')) return json(200,{items:[action]});
+    if (plain.endsWith('/memory/actions/action-1')) return json(200,{action});
+    return fallback(path,options);
+  }});
+  await tick();
+  await el('action-list').children[0].children[0].click();
+  const select = el('action-editor-form').elements.memory_page_id;
+  assert.equal(select.value,'older-page');
+  assert.equal(select.options.find(option => option.value === 'older-page')?.textContent,'归档笔记');
+  graph.resolve(json(200,{...emptyGraph,nodes:[
+    {id:'older-page', title:'归档笔记'},
+    {id:'another-old-page', title:'另一条旧记忆'},
+  ]}));
+  await tick();
+  assert.equal(select.value,'older-page');
+  assert.ok(select.options.some(option => option.value === 'another-old-page'));
+});
+
+test('actions search paginates through retry and opens a follow-up for the exact saved personal revision', async () => {
+  const {doc, el} = fakeDocument();
+  const workspace = 'a'.repeat(32), team = 'b'.repeat(32);
+  const first = {id:'c'.repeat(32), workspace_id:workspace, title:'Review summary', status:'open', revision:1};
+  const match = {id:'d'.repeat(32), workspace_id:workspace, title:'Review context', notes:'Saved notes', status:'open', revision:4,
+    source_chat:{kind:'social', workspace_id:team, conversation_id:'otc_team', message_id:'otm_source'}};
+  const spaces = [{id:workspace, name:'Personal', kind:'personal'},{id:team, name:'Team', kind:'team'}];
+  const requests = [];
+  let pages = 0;
+  const base = `/v1/workspaces/${workspace}/memory/actions`;
+  el('action-filter').value = 'open';
+  mount(doc, {fetcher:async (path, options) => {
+    const url = new URL(path, 'https://fixture.invalid');
+    const {pathname, searchParams} = url;
+    requests.push(`${options.method} ${path}`);
+    if (pathname === '/v1/auth/session') return json(200, {user:{id:'user',username:'alice'}});
+    if (pathname === '/v1/workspaces') return json(200, {items:spaces});
+    if (pathname === base && searchParams.get('status') === 'open' && searchParams.get('q') === 'Review') {
+      if (!searchParams.has('cursor')) return json(200, {items:[first], cursor:first.id});
+      assert.equal(searchParams.get('cursor'), first.id);
+      return ++pages === 1 ? json(503, {}) : json(200, {items:[first, match], cursor:null});
+    }
+    if (pathname === `${base}/${match.id}` && options.method === 'POST') {
+      const {revision, changes} = JSON.parse(options.body);
+      assert.equal(revision, 4);
+      return json(200, {action:{...match, ...changes, revision:5}});
+    }
+    if (pathname === `${base}/${match.id}`) return json(200, {action:match});
+    if (pathname.endsWith('/memory/actions')) return json(200, {items:[]});
+    if (pathname.endsWith('/memory/graph')) return json(200, emptyGraph);
+    if (pathname.endsWith('/memory')) return json(200, {items:[],cursor:null,total:0});
+    return json(404, {});
+  }});
+  await tick();
+  assert.match(el('action-empty').textContent, /未完成/);
+  el('action-filter').value = 'done';
+  await el('action-filter').handlers.change();
+  assert.match(el('action-empty').textContent, /已完成/);
+  assert.equal(el('action-list-filters').hidden, false);
+  el('action-filter').value = 'open';
+  el('action-search').value = 'Review';
+  const event = {preventDefault() {}};
+  await el('action-list-filters').handlers.submit(event);
+  assert.equal(el('action-list-count').textContent, '已显示 1 项行动');
+  await el('action-list-more').click();
+  assert.equal(el('action-list-retry').hidden, false);
+  assert.equal(el('action-list').children.length, 1);
+  await el('action-list-retry').click();
+  assert.equal(el('action-list-count').textContent, '已显示 2 项行动');
+  assert.equal(el('action-list-more').hidden, true);
+  await el('action-list').children[1].children[0].click();
+  const follow = el('action-follow-up');
+  assert.equal(follow.href, `/automations?workspace=${workspace}&memory_action=${match.id}&revision=4`);
+  assert.equal(el('action-source-chat').href, `/chat#workspace=${team}&social=otc_team&message=otm_source`);
+  assert.equal(requests.filter(path => path.startsWith('POST')).length, 0);
+  const editor = el('action-editor-form');
+  editor.elements.notes.value = 'An edited draft';
+  editor.handlers.input();
+  assert.equal(follow.href, '');
+  assert.match(el('action-follow-up-status').textContent, /保存修改/);
+  await editor.handlers.submit(event);
+  assert.equal(follow.href, `/automations?workspace=${workspace}&memory_action=${match.id}&revision=5`);
+  el('workspace').value = team;
+  await el('workspace').handlers.change();
+  assert.equal(el('action-search').value, '');
 });
 
 test('narrow stacking overrides the shell panel grid only while the list is visible', () => {

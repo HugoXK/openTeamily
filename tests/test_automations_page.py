@@ -10,9 +10,6 @@ from tests.test_management import Client, ORIGIN
 from tests.test_settings_page import RawClient
 
 
-SCHEDULE = {'kind': 'now', 'time_zone': 'UTC'}
-
-
 class AutomationsPageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -42,8 +39,9 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertIn('id="run-filter-succeeded"', html)
         self.assertIn('id="run-filter-all"', html)
         self.assertIn('没有符合这个筛选的运行记录。', html)
-        self.assertIn('模板目录', html)
-        self.assertIn('>模板<', html)
+        self.assertIn('name="template_id"', html)
+        self.assertIn('id="manual-run-status"', html)
+        self.assertIn('id="view-watched-run"', html)
         self.assertNotIn('生活类模板还没有从对照里记下来', html)
         self.assertNotIn('teamily.com', html)
         self.assertIn('/v1/workspaces', html)
@@ -76,21 +74,15 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/automations', query='runs=failed&template=daily_brief')['status'], 400,
                          'the one-shot template prefill and the run filter never share a URL')
 
-    def test_wrapper_still_exposes_the_automations_api(self):
-        workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
-                                     {'HTTP_IDEMPOTENCY_KEY': 'automation-page-space-0001'})
-        self.assertEqual(workspace['status'], 201, workspace)
-        wid = workspace['body']['workspace']['id']
-        created = self.client.call(
-            'POST', f'/v1/workspaces/{wid}/automations',
-            {'title': 'Morning briefing', 'prompt': '', 'template_id': 'daily_brief',
-             'schedule': SCHEDULE, 'participants': ['alice']},
-            {'HTTP_IDEMPOTENCY_KEY': 'automation-page-create-0001'},
-        )
-        self.assertEqual(created['status'], 201, created)
-        listed = self.client.call('GET', f'/v1/workspaces/{wid}/automations?category=work')
-        self.assertEqual(listed['status'], 200)
-        self.assertEqual([item['title'] for item in listed['body']['items']], ['Morning briefing'])
+    def test_platform_wrapper_defers_automation_reads_and_writes_to_dsbot(self):
+        collection = f'/v1/workspaces/{"a" * 32}/automations'
+        automation = f'{collection}/{"b" * 32}'
+        for method, path in (('GET', collection), ('POST', collection),
+                             ('GET', f'{automation}/runs/{"c" * 32}'), ('POST', f'{automation}/run')):
+            with self.subTest(method=method, path=path):
+                response = self.client.call(method, path, {} if method == 'POST' else None)
+                self.assertEqual(response['status'], 410)
+                self.assertEqual(response['body']['error']['code'], 'moved_to_dsbot')
 
 
 if __name__ == '__main__':

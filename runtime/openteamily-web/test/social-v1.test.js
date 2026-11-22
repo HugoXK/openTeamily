@@ -54,7 +54,12 @@ function fakeSocial() {
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
     if (path === '/v1/ot/invites/preview') return ok(200, { usable: body.code !== 'expired-invite-code',
       team: { id: 'ott_1', name: 'Studio', owner: me, summary: 'Private team summary' }, role: 'member', requires_approval: true })
-    if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
+    if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [
+      { id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: 'member' },
+      { id: 'ott_2', name: 'New Studio', summary: 's', member_count: 2, membership: null },
+    ] })
+    if (path === '/v1/ot/directory/ott_1/join') return ok(200, {status: 'member', workspace_id: WS})
+    if (path === '/v1/ot/directory/ott_2/join') return ok(200, {status: 'pending', request_id: 'otjr_2'})
     if (path === '/v1/ot/conversations?scope=member&team_id=ott_1' && init.method === 'GET') {
       return ok(200, { conversations: [{ id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }, { handle: 'ann.home', display_name: 'Ann', owner_id: 'own_ann', platform_user_id: 'b'.repeat(32) }], unread: 1, read_seq: 2, updated_at: 1_700_000_200_000, last_message: { body: 'hi', retracted: false } }] })
     }
@@ -142,6 +147,10 @@ test('directory and messenger v1 keep workspace ids and unix-second timestamps',
   const directory = await teams(host).endpoints.v1({ method: 'GET', path: '/v1/team-directory', query: 'q=studio' })
   assert.equal(directory.status, 200)
   assert.equal(directory.body.items[0].workspace_id, WS)
+  assert.equal(directory.body.items[1].workspace_id, 'ott_2')
+  const join = path => teams(host).endpoints.v1({method: 'POST', path: '/v1/team-directory/' + path + '/join'})
+  assert.deepEqual((await join('ott_1')).body, {status: 'member', workspace_id: WS})
+  assert.deepEqual((await join('ott_2')).body, {join_request: {id: 'otjr_2', status: 'pending'}})
   const listed = await messenger(host).endpoints.v1({ method: 'GET', path: `/v1/workspaces/${WS}/social/conversations` })
   assert.equal(listed.status, 200)
   assert.equal(listed.body.items[0].id, 'otc_1')
@@ -160,6 +169,7 @@ test('discover v1 maps a work feed into the page card shape', async () => {
   assert.equal(feed.body.items[0].kind, 'document')
   assert.equal(feed.body.items[0].kind_label, '文档')
   assert.equal(feed.body.items[0].author, 'ann')
+  assert.deepEqual(feed.body.items[0].creator, {handle: 'ann.home', name: 'Ann'})
   assert.equal(feed.body.items[0].own_work, true)
 })
 

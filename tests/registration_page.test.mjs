@@ -31,19 +31,58 @@ test('failure text never echoes response/exception credentials', async () => {
 });
 function elements(valid = true) {
   const ids = ['register-form', 'register-submit', 'register-status', 'register-username', 'register-password'];
-  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', disabled: false, focus() {}}]));
+  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', dataset: {}, disabled: false, focus() {}}]));
   all['register-form'].reportValidity = () => valid;
   all['register-form'].addEventListener = (_, fn) => { all.submit = fn; };
   return {all, document: {getElementById: id => all[id]}};
 }
-test('successful form clears password and navigates only to fixed home destination with a verified session', async () => {
+test('successful form clears the password and opens private Chat directly', async () => {
   const {all, document} = elements();
+  const user = {id: 'a'.repeat(32), username: synthetic};
+  const personal_chat = {workspace_id: 'b'.repeat(32), agent_id: 'c'.repeat(32)};
   let destination;
-  mountRegistration(document, path => { destination = path; }, async url => url==='/v1/auth/register'?{status:201}:{status:200,json:async()=>({user:{id:'fixture-id',username:synthetic}})});
+  mountRegistration(document, path => { destination = path; }, async url => url === '/v1/auth/register'
+    ? {status: 201, json: async () => ({user, personal_chat})}
+    : {status: 200, json: async () => ({user})});
   await all.submit({preventDefault() {}});
-  assert.equal(destination, '/');
+  assert.equal(destination, `/chat#workspace=${personal_chat.workspace_id}&agent=${personal_chat.agent_id}`);
   assert.equal(all['register-password'].value, '');
   assert.equal(all['register-submit'].disabled, true);
+});
+
+test('unmanaged signup and invalid targets keep the Home fallback', async () => {
+  for (const personal_chat of [undefined, {workspace_id: 'https://outside.invalid', agent_id: 'c'.repeat(32)}]) {
+    const {all, document} = elements();
+    const user = {id: 'a'.repeat(32), username: synthetic};
+    let destination;
+    mountRegistration(document, path => { destination = path; }, async url => url === '/v1/auth/register'
+      ? {status: 201, json: async () => ({user, personal_chat})}
+      : {status: 200, json: async () => ({user})});
+    await all.submit({preventDefault() {}});
+    assert.equal(destination, '/');
+  }
+});
+
+test('signup with a valid invitation resumes the login continuation while retaining the expected account', async () => {
+  const {all, document} = elements();
+  const hash = '#team-invite=validSyntheticInvite';
+  const values = new Map();
+  document.defaultView = {
+    location: {hash}, sessionStorage: {
+      setItem: (key, value) => values.set(key, value),
+      getItem: key => values.get(key),
+      removeItem: key => values.delete(key),
+    },
+  };
+  const id = 'a'.repeat(32);
+  let destination;
+  mountRegistration(document, path => { destination = path; }, async url => {
+    assert.equal(url, '/v1/auth/register');
+    return {status: 201, json: async () => ({user: {id, username: synthetic}})};
+  });
+  await all.submit({preventDefault() {}});
+  assert.equal(destination, '/login' + hash);
+  assert.equal(takeSignupSession(document.defaultView), id);
 });
 test('invalid forms do not send and failure does not navigate', async () => {
   for (const valid of [false, true]) {

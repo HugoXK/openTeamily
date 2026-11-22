@@ -3,6 +3,9 @@ import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { apply } from '../index.js'
+import { PAGE_PATH } from '../src/pages.js'
 import { loadFeatures, registerFeature } from '../src/features.js'
 import { attachRuntime, detachRuntime, runtime } from '../src/host.js'
 import { createDispatch } from '../src/dispatch.js'
@@ -34,6 +37,40 @@ test('features register namespaced endpoints; a broken feature is skipped, other
   const value = await table['alpha/ping'](7)
   assert.equal(value.pong, 7)
   assert.equal(value.dir, join(data, 'openteamily', 'features', 'alpha'))
+})
+
+test('native documents include saved appearance without waiting for another feature to initialize', async () => {
+  const coordination = mkdtempSync(join(tmpdir(), 'ot-startup-'))
+  const gate = join(coordination, 'gate.mjs')
+  writeFileSync(gate, 'export const block = Promise.withResolvers(); export const entered = Promise.withResolvers()')
+  const latch = await import(pathToFileURL(gate).href)
+  const dir = featuresDir({
+    settings: "export default () => ({ endpoints: { get: async () => ({settings: {values: {language: 'en',appearance:'dark'}}}) } })",
+    deferred: "export default async () => { const g = await import(" + JSON.stringify(pathToFileURL(gate).href) + "); g.entered.resolve(); await g.block.promise; return {endpoints:{}} }",
+  })
+  const routes = new Map()
+  const ctx = {
+    connection: {fetch: {register: route => routes.set(route.path, route)}},
+    effect: fn => fn(),
+  }
+  const pagesDir = fileURLToPath(new URL('../../../openteamily/static/', import.meta.url))
+  const {features} = apply(ctx, {pagesDir, featuresDir:dir, dataDir:coordination})
+  try {
+    await latch.entered.promise
+    const response = await Promise.race([
+      routes.get(PAGE_PATH).fetch(new Request('http://host' + PAGE_PATH + '?path=%2Fchat')),
+      new Promise((_, reject) => setTimeout(() => reject(Error('Chat waited for an unrelated feature')), 3000).unref()),
+    ])
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-language'), 'en')
+    assert.match(await response.text(), /<html data-shell-appearance="dark" data-theme-resolved="dark" data-shell-language="en" lang="en">/)
+    const memory = await routes.get(PAGE_PATH).fetch(new Request('http://host' + PAGE_PATH + '?path=%2Fmemory'))
+    assert.equal(memory.headers.get('cache-control'), 'no-store')
+    assert.match(await memory.text(), /<html data-shell-appearance="dark" data-theme-resolved="dark" data-shell-language="en"/)
+  } finally {
+    latch.block.resolve()
+    assert.deepEqual((await features).loaded, ['settings','deferred'])
+  }
 })
 
 test('duplicate and malformed endpoints are refused', () => {

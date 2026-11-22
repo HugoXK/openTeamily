@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, matchingMemoryPages, mount } from '../openteamily/static/memory/app.mjs';
+import { MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, mount } from '../openteamily/static/memory/app.mjs';
 
 class Element {
   constructor(tag = 'div') {
@@ -91,7 +91,14 @@ function fakeDocument() {
     createElementNS(_ns, tag) { return new Element(tag); },
     // The WYSIWYG memory editor renders the opened page body with text nodes.
     createTextNode(text) { const node = new Element('#text'); node.textContent = String(text); node.nodeType = 3; return node; },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (selector !== '.memory-filters [data-filter]') return [];
+      return ['all', 'updated', 'topics'].map(filter => {
+        const button = this.getElementById('filter-' + filter);
+        button.setAttribute('data-filter', filter);
+        return button;
+      });
+    },
     addEventListener() {},
   };
   return {doc, el: (id) => doc.getElementById(id)};
@@ -112,15 +119,23 @@ const pages = [
   {id: 'pg-notes', title: '会议记录', body: '讨论纪要', topics: [], updated: 1800000200, revision: 1, created_by: 'alice', updated_by: 'alice'},
 ];
 
-function directoryFetcher(requests) {
+function directoryFetcher(requests, search) {
   const space = {id: 'ws-1', name: 'Desk', owner_id: 'user-1'};
   const user = {id: 'user-1', username: 'alice'};
   return async (path, options) => {
-    requests.push({path, method: (options && options.method) || 'GET'});
+    requests.push({path, method: options?.method || 'GET', signal: options?.signal});
     if (path === '/v1/auth/session') return json(200, {user});
     if (path === '/v1/settings') return json(404, {error: {message: 'missing'}});
     if (path === '/v1/workspaces') return json(200, {items: [space]});
-    if (path === '/v1/workspaces/ws-1/memory') return json(200, {items: pages});
+    if (path.startsWith('/v1/workspaces/ws-1/memory?')) {
+      const query = new URLSearchParams(path.split('?')[1]);
+      assert.equal(query.get('order'), 'recent');
+      assert.equal(query.get('limit'), '20');
+      if (query.has('q') || query.has('topic') || query.has('updated_after')) return search(query);
+      return query.get('cursor') === 'older'
+        ? json(200, {items: [pages[2]], cursor: null, total: pages.length})
+        : json(200, {items: pages.slice(0, 2), cursor: 'older', total: pages.length});
+    }
     if (path === '/v1/workspaces/ws-1/memory/actions') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/graph') {
       return json(200, {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
@@ -142,20 +157,25 @@ function pageTitles(el) {
   return el('memory-list').children.map((li) => li.children[0].children[1].children[0].textContent);
 }
 
-test('matchingMemoryPages filters titles case-insensitively and leaves empty queries intact', () => {
-  assert.deepEqual(matchingMemoryPages(pages, '').map((row) => row.id), ['pg-brief', 'pg-ops', 'pg-notes']);
-  assert.deepEqual(matchingMemoryPages(pages, '  运维  ').map((row) => row.title), ['运维手册']);
-  assert.deepEqual(matchingMemoryPages(pages, '简报').map((row) => row.title), ['项目简报']);
-  assert.deepEqual(matchingMemoryPages([{id: 'pg-en', title: 'Project Brief'}], 'BRIEF').map((row) => row.title), ['Project Brief']);
-  assert.deepEqual(matchingMemoryPages(pages, 'zzz').map((row) => row.title), []);
-});
+function enterSearch(el, term) {
+  const input = el('search');
+  input.value = term;
+  input.handlers.input();
+  input.handlers.keydown({key: 'Enter', preventDefault() {}});
+}
 
-test('typing in the memory directory search filters in place and keeps an open editor', async () => {
+test('full-body search finds an unloaded page, shows the match and preserves the open draft', async () => {
   const requests = [];
   const {doc, el} = fakeDocument();
-  await mount(doc, {fetcher: directoryFetcher(requests)});
+  await mount(doc, {fetcher: directoryFetcher(requests, query => {
+    if (query.get('q') === '讨论') {
+      const hit = {...pages[2], match: {kind:'body', text:'昨日的讨论纪要', start:3, end:5}};
+      return json(200, {items:[hit], cursor: null, total:1});
+    }
+    return json(200, {items:[], cursor: null, total:0});
+  })});
   await tick();
-  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册', '会议记录']);
+  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
   assert.equal(el('filter-all-count').textContent, '3');
   assert.equal(el('list-empty').hidden, true);
   assert.ok(!requests.some((row) => row.path.includes('q=')));
@@ -164,46 +184,109 @@ test('typing in the memory directory search filters in place and keeps an open e
   await tick();
   assert.equal(el('editor-form').hidden, false);
   assert.equal(el('editor-form').elements.title.value, '项目简报');
-  const afterOpen = requests.length;
-  assert.ok(afterOpen > 0);
+  el('editor-form').elements.title.value = '仍未保存';
 
-  el('search').value = 'zzz-no-match';
-  el('search').handlers.input();
+  enterSearch(el, 'zzz-no-match');
   await tick();
-  assert.equal(requests.length, afterOpen, JSON.stringify(requests.slice(afterOpen)));
   assert.equal(el('editor-form').hidden, false);
-  assert.equal(el('editor-form').elements.title.value, '项目简报');
+  assert.equal(el('editor-form').elements.title.value, '仍未保存');
   assert.equal(el('memory-list').children.length, 0);
   assert.equal(el('list-empty').hidden, false);
   assert.equal(el('list-empty').textContent, MEMORY_EMPTY_NO_MATCH);
   assert.equal(el('filter-all-count').textContent, '3');
 
-  el('search').value = '运维';
-  el('search').handlers.input();
+  enterSearch(el, ' 讨论 ');
   await tick();
-  assert.equal(requests.length, afterOpen);
   assert.equal(el('editor-form').hidden, false);
-  assert.deepEqual(pageTitles(el), ['运维手册']);
+  assert.deepEqual(pageTitles(el), ['会议记录']);
+  assert.equal(el('memory-directory-status').textContent, '找到 1 条记忆');
+  const match = el('memory-list').children[0].children[0].children[1].children[1];
+  assert.equal(match.children[0].children[1].tagName, 'MARK');
+  assert.equal(match.children[0].children[1].textContent, '讨论');
   assert.equal(el('filter-all-count').textContent, '3');
   assert.equal(el('list-empty').hidden, true);
 
   el('search').focused = false;
   el('search').handlers.keydown({key: 'Escape', preventDefault() {}});
   await tick();
-  assert.equal(requests.length, afterOpen);
+  assert.deepEqual(requests.filter(row => row.path.includes('q=')).map(row => new URLSearchParams(row.path.split('?')[1]).get('q')),
+    ['zzz-no-match', '讨论']);
   assert.equal(el('search').value, '');
   assert.equal(el('search').focused, true);
-  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册', '会议记录']);
+  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
   assert.equal(el('filter-all-count').textContent, '3');
   assert.equal(el('list-empty').hidden, true);
   assert.equal(el('editor-form').hidden, false);
-  assert.equal(el('editor-form').elements.title.value, '项目简报');
+  assert.equal(el('editor-form').elements.title.value, '仍未保存');
 });
 
-test('updated filter count only counts pages edited in the last seven days', async () => {
-  const { recentlyUpdatedCount } = await import('../openteamily/static/memory/app.mjs');
-  const now = Date.UTC(2026, 10, 19) ;
-  const day = 86400;
-  assert.equal(recentlyUpdatedCount([{ updated: now / 1000 - day }, { updated: now / 1000 - 8 * day }, {}], now), 1);
-  assert.equal(recentlyUpdatedCount(null, now), 0);
+test('browsing and filtered paging reuse their own cursors and retry keeps existing matches', async () => {
+  const requests = [];
+  let failOnce = true;
+  const {doc, el} = fakeDocument();
+  await mount(doc, {fetcher: directoryFetcher(requests, query => {
+    assert.equal(query.get('q'), '记录');
+    if (!query.get('cursor')) return json(200, {items:[pages[2]], cursor:'search:older', total:2});
+    assert.equal(query.get('cursor'), 'search:older');
+    if (failOnce) {
+      failOnce = false;
+      return json(503, {});
+    }
+    return json(200, {items:[pages[2], pages[1]], cursor:null, total:2});
+  })});
+  await tick();
+  assert.equal(el('memory-load-more').hidden, false);
+  await el('memory-load-more').handlers.click();
+  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册', '会议记录']);
+  assert.equal(el('memory-load-more').hidden, true);
+
+  enterSearch(el, '记录');
+  await tick();
+  assert.deepEqual(pageTitles(el), ['会议记录']);
+  await el('memory-load-more').handlers.click();
+  assert.equal(el('memory-directory-retry').hidden, false);
+  assert.match(el('memory-directory-status').textContent, /无法加载更多/);
+  assert.deepEqual(pageTitles(el), ['会议记录']);
+  await el('memory-directory-retry').handlers.click();
+  assert.equal(el('memory-directory-retry').hidden, true);
+  assert.deepEqual(pageTitles(el), ['会议记录', '运维手册']);
+  el('memory-search-clear').handlers.click();
+  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册', '会议记录']);
+});
+
+test('a late old search stays ignored even when it returns after abort', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  let releaseSlow;
+  const slow = new Promise(resolve => { releaseSlow = resolve; });
+  await mount(doc, {fetcher: directoryFetcher(requests, query => query.get('q') === '旧请求'
+    ? slow : json(200, {items:[pages[1]], cursor:null, total:1}))});
+  await tick();
+  enterSearch(el, '旧请求');
+  await tick();
+  enterSearch(el, '新请求');
+  await tick();
+  assert.deepEqual(pageTitles(el), ['运维手册']);
+  const old = requests.find(row => row.path.includes('q=' + encodeURIComponent('旧请求')));
+  assert.equal(old.signal.aborted, true);
+  releaseSlow(json(200, {items:[pages[0]], cursor:null, total:1}));
+  await tick();
+  assert.deepEqual(pageTitles(el), ['运维手册']);
+});
+
+test('recent filter delegates the whole seven-day range and clears back to the saved browse window', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  await mount(doc, {fetcher: directoryFetcher(requests, query => {
+    assert.match(query.get('updated_after'), /^\d+$/);
+    assert.ok(Math.abs(Number(query.get('updated_after')) - (Date.now()/1000 - 7*86400)) < 3);
+    return json(200, {items:[pages[2]], total:1});
+  })});
+  await tick();
+  el('filter-updated').handlers.click();
+  await tick();
+  assert.deepEqual(pageTitles(el), ['会议记录']);
+  assert.equal(el('filter-updated').getAttribute('aria-pressed'), 'true');
+  el('filter-all').handlers.click();
+  assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
 });
