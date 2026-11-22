@@ -493,6 +493,39 @@ test('catalog failure displays an error and leaves loading state', async () => {
   assert.equal(doc.getElementById('discover-empty').hidden, true);
 });
 
+test('catalog history only reloads bounded pages for the same viewer and filters', async () => {
+  const {catalogQuery, mount} = await import('../openteamily/static/discover/app.mjs');
+  const query = '验收';
+  const category = 'content-creation';
+  const initial = catalogQuery(query, '', category);
+  const next = catalogQuery(query, 'page-one', category);
+  const key = (owner, path = initial) => JSON.stringify(['signed-in', owner, path]);
+  for (const [scope, pages, expected] of [
+    [key('reader'), 2, [initial, next]],
+    [key('someone-else'), 2, [initial]],
+    [key('reader', catalogQuery('另一条件', '', category)), 2, [initial]],
+    [key('reader'), 500, [initial]],
+  ]) {
+    const doc = fakeDocument();
+    const requests = [];
+    await mount(doc, {
+      location:{search:'?tab=agents&category=' + category + '&q=' + encodeURIComponent(query)},
+      history:{state:{discoverAgentDirectory:{key:scope, pages, scroll:320}}},
+      fetcher:async (path, {method}) => {
+        assert.equal(method, 'GET');
+        if (path === '/v1/auth/session') return commentResponse({user:{id:'reader', username:'alice'}});
+        if (path === '/v1/workspaces?limit=100') return commentResponse({items:[]});
+        requests.push(path);
+        return commentResponse(path === initial
+          ? {items:[{slug:'first-result',name:'First'}],cursor:'page-one'}
+          : {items:[{slug:'next-result',name:'Next'}]});
+      },
+    });
+    assert.deepEqual(requests, expected);
+    assert.equal(doc.getElementById('discover-list').children.length, expected.length);
+  }
+});
+
 test('catalog cards only link to profiles with a valid public slug', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();

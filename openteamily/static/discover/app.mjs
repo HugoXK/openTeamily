@@ -13,6 +13,8 @@ const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
 const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
+const CATALOG_RESTORE_PAGES = 12;
+const CATALOG_RETURN_LINKS = ['catalog-profile', 'catalog-chat', 'catalog-author'];
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -477,6 +479,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const catalogViewers = new WeakMap();
   const catalogActions = new Map();
   let cursor = '';
+  let catalogPages = 0;
+  let catalogDeparture = null;
   let activeQuery = '';
   let activeCategory = categoryFromSearch(location?.search);
   let remix = null;
@@ -2133,6 +2137,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('discover-empty').hidden = items.length > 0;
     for (const item of items.slice(start)) {
       const li = document.createElement('li');
+      if (validSlug(item.slug)) li.dataset.catalogSlug = item.slug;
       const card = document.createElement('article');
       const avatar = document.createElement('span');
       avatar.className = 'catalog-avatar';
@@ -2195,6 +2200,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       activeQuery = document.getElementById('catalog-query').value.trim();
       catalog = [];
       cursor = '';
+      catalogPages = 0;
+      catalogDeparture = null;
       renderCatalog([]);
       document.getElementById('discover-empty').hidden = true;
     }
@@ -2225,6 +2232,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalog.push(item);
       }
       cursor = listed.body.cursor || '';
+      catalogPages += 1;
       if (activeCreator) {
         const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
         if (author) {
@@ -2240,6 +2248,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (nativeCatalog && catalog.length > start) {
         void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start)});
       }
+      return seq;
     } catch (failure) {
       if (seq !== catalogRequest) return;
       error.hidden = false;
@@ -2252,6 +2261,44 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         more.disabled = false;
         document.getElementById('catalog-panel').setAttribute('aria-busy', 'false');
       }
+    }
+  }
+
+  function catalogPositionKey() {
+    const viewer = currentUser?.id;
+    if (sessionState !== 'guest' && typeof viewer !== 'string') return '';
+    return JSON.stringify([sessionState, viewer || null, catalogQuery(activeQuery, '', activeCategory, activeCreator?.handle)]);
+  }
+
+  function rememberCatalogPosition(trigger) {
+    const key = catalogPositionKey();
+    if (!key || !catalogPages || !history?.replaceState) return;
+    const slug = trigger?.closest?.('[data-catalog-slug]')?.dataset.catalogSlug;
+    const link = CATALOG_RETURN_LINKS.find(name => trigger?.classList?.contains(name));
+    const offset = link && trigger.getBoundingClientRect().top - initialView.getBoundingClientRect().top;
+    try {
+      history.replaceState({...history.state, discoverAgentDirectory:{
+        key, pages:Math.min(catalogPages, CATALOG_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
+        ...(link && validSlug(slug) ? {slug, link, offset} : {}),
+      }}, '');
+    } catch { /* The browser may disable history changes while leaving. */ }
+  }
+
+  async function restoreCatalogPosition(directoryLoad) {
+    const request = await directoryLoad;
+    const saved = history?.state?.discoverAgentDirectory;
+    if (!request || request !== catalogRequest || !saved || saved.key !== catalogPositionKey() ||
+        !Number.isInteger(saved.pages) || saved.pages < 1 || saved.pages > CATALOG_RESTORE_PAGES ||
+        !Number.isFinite(saved.scroll) || saved.scroll < 0) return;
+    while (catalogPages < saved.pages && cursor) {
+      if (await loadCatalog(true) !== catalogRequest || saved.key !== catalogPositionKey()) return;
+    }
+    const target = validSlug(saved.slug) && CATALOG_RETURN_LINKS.includes(saved.link)
+      ? document.querySelector(`#discover-list [data-catalog-slug="${saved.slug}"] .${saved.link}`) : null;
+    target?.focus({preventScroll: true});
+    initialView.scrollTop = saved.scroll;
+    if (target && Number.isFinite(saved.offset)) {
+      initialView.scrollTop += target.getBoundingClientRect().top - initialView.getBoundingClientRect().top - saved.offset;
     }
   }
 
@@ -2450,6 +2497,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const feedLoad = catalogView ? null : loadFeed();
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
+    const directoryReturn = directoryLoad && sessionLoad.then(() => {
+      if (attempt === sessionRequest) return restoreCatalogPosition(directoryLoad);
+    });
     await sessionLoad;
     if (attempt !== sessionRequest) return;
     loginPanel.hidden = Boolean(currentUser);
@@ -2470,7 +2520,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     if (!currentUser) {
       if (teamsView) await loadTeams();
-      await directoryLoad;
+      await directoryReturn;
       return;
     }
     document.getElementById('catalog-manage').hidden = !agentsView;
@@ -2496,13 +2546,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     if (teamsView) await loadTeams();
-    await Promise.all([directoryLoad, sharedPreview]);
+    await Promise.all([directoryReturn, sharedPreview]);
   }
 
   workspaceSelect.addEventListener('change', loadManage);
   const manage = document.getElementById('catalog-manage');
   manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
   if (agentsView) {
+    document.getElementById('discover-list').addEventListener('click', event => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target.closest?.('a');
+      if (!link || !CATALOG_RETURN_LINKS.some(name => link.classList.contains(name))) return;
+      catalogDeparture = link;
+      rememberCatalogPosition(link);
+    });
+    window?.addEventListener?.('pagehide', () => rememberCatalogPosition(catalogDeparture || document.activeElement));
+    window?.addEventListener?.('pageshow', () => { catalogDeparture = null; });
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.addEventListener('click', () => setCategory(chip.dataset.catalogCategory));
     }
