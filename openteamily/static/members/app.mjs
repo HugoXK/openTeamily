@@ -1069,19 +1069,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     receiveButton.textContent = '查看邀请';
   }
 
+  function invitationReceipt(result) {
+    const invitation = result?.status === 200 ? result.body?.invitation : null;
+    if (invitation?.membership === 'pending') return {pending: true};
+    if (invitation?.membership === 'member' && WORKSPACE_ID.test(invitation.workspace_id || '')) {
+      return {joined: invitation.workspace_id};
+    }
+    return null;
+  }
+
+  async function showInvitationReceipt({pending, joined}, selection) {
+    receiveForm.reset();
+    receiveToken.type = 'text';
+    resetInvitePreview();
+    receivePreview.hidden = false;
+    receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
+    if (pending) await loadMyRequests();
+    else if (selection === workspaceSelection && WORKSPACE_ID.test(joined || '')) {
+      pinWorkspace(joined);
+      await refreshWorkspaces({preferred: joined, explicit: true, initial: true});
+    } else await refreshWorkspaces();
+  }
+
+  const readInvitation = token => request('POST', '/v1/invites/preview', {token}, undefined, AbortSignal.timeout(8000));
+
   async function previewInvite(token) {
     const sequence = ++inviteRequest;
+    const viewer = currentUser, selection = workspaceSelection;
     previewed = '';
     receivePreview.hidden = false;
     receivePreview.textContent = '正在查看邀请…';
     receiveButton.disabled = true;
     try {
-      const result = await request('POST', '/v1/invites/preview', {token}).catch(() => null);
-      if (sequence !== inviteRequest) return;
+      const result = await readInvitation(token);
+      if (sequence !== inviteRequest || viewer !== currentUser) return;
+      const receipt = invitationReceipt(result);
+      if (receipt) {
+        receiveButton.disabled = false;
+        await showInvitationReceipt(receipt, selection);
+        return;
+      }
       const invitation = result?.body?.invitation;
       if (result?.status !== 200 || !invitation?.team_name) {
-        receivePreview.textContent = result?.status === 404 || result?.status === 410
-          ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
+        receivePreview.textContent = result?.status === 403 ? '暂时无法通过这条邀请加入工作区。'
+          : result?.status === 404 || result?.status === 410 ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
         return;
       }
       previewed = token;
@@ -1287,35 +1318,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (token !== previewed) return previewInvite(token);
-    const viewer = currentUser, selection = workspaceSelection;
+    const viewer = currentUser, selection = workspaceSelection, sequence = inviteRequest;
     accepting = true;
     receiveToken.readOnly = true;
     receiveButton.disabled = true;
     try {
-      const result = await request('POST', '/v1/invites/accept', {token}).catch(() => null);
-      if (viewer !== currentUser) return;
-      if (![200, 201, 202].includes(result?.status)) {
-        if (result?.status === 404 || result?.status === 410) {
+      const result = await request('POST', '/v1/invites/accept', {token}, undefined, AbortSignal.timeout(15000));
+      const current = () => viewer === currentUser && sequence === inviteRequest;
+      if (!current()) return;
+      if (![200, 201, 202].includes(result.status)) {
+        if (result.status === 0 || result.status === 408 || result.status >= 500) {
+          receivePreview.textContent = '正在确认加入结果…';
+          const checked = await readInvitation(token);
+          if (!current()) return;
+          const receipt = invitationReceipt(checked);
+          if (receipt) return await showInvitationReceipt(receipt, selection);
+        }
+        if (result.status === 404 || result.status === 410) {
           resetInvitePreview();
           receivePreview.hidden = false;
           receivePreview.textContent = '这条邀请已失效。';
         } else receivePreview.textContent = '暂时无法接受邀请，请重试。';
         return;
       }
-      receiveForm.reset();
-      receiveToken.type = 'text';
-      resetInvitePreview();
-      receivePreview.hidden = false;
       const pending = result.status === 202 || result.body.join_request?.status === 'pending';
-      receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
-      if (pending) await loadMyRequests();
-      else {
-        const joined = result.body.workspace?.id;
-        if (selection === workspaceSelection && WORKSPACE_ID.test(joined || '')) {
-          pinWorkspace(joined);
-          await refreshWorkspaces({preferred: joined, explicit: true, initial: true});
-        } else await refreshWorkspaces();
-      }
+      await showInvitationReceipt({pending, joined: result.body.workspace?.id}, selection);
     } finally {
       accepting = false;
       receiveToken.readOnly = false;

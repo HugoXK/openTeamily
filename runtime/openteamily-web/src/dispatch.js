@@ -142,7 +142,8 @@ async function composeAttachments(request, agent) {
     attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
   }
   return agent ? {body:form.get('body'), chat_language:form.get('chat_language'),
-    reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
+    reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0],
+      body:form.get('body') ?? undefined, reply_to:form.get('reply_to') ?? undefined}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {

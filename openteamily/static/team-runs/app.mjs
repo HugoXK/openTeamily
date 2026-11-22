@@ -24,6 +24,7 @@ const STEP_ERROR = {
   source_changed: '共享结果已更新。请打开最新版并发起后续任务。',
   source_unavailable: '无法读取引用的共享结果。',
 };
+const MUTATION_STATUS = {artifact: '已保存到作品库。', retry: '已提交重试。', cancel: '任务已取消。'};
 
 export function teamRunTarget(hash = '') {
   if (!hash || hash === '#') return {};
@@ -168,6 +169,11 @@ const cannotRead = status => status === 401 || status === 403 || status === 404;
 
 function matchesRun(run, workspace, id = run?.id) {
   return ID.test(id || '') && run?.id === id && run.workspace_id === workspace;
+}
+
+function runFromResponse(result, workspace, runId) {
+  const run = result.body.run;
+  return result.status === 200 && matchesRun(run, workspace, runId) && Array.isArray(run.steps) ? run : null;
 }
 
 export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalThis)) {
@@ -715,8 +721,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const target = scope(), read = ++reads, runId = detailId;
     const result = await request('GET', pathFor() + '/' + runId);
     if (!active(target) || read !== reads) return;
-    const run = result.body.run;
-    if (result.status === 200 && matchesRun(run, workspace, runId) && Array.isArray(run.steps)) {
+    const run = runFromResponse(result, workspace, runId);
+    if (run) {
       newRun.disabled = false;
       syncShareWorkspace();
       if (node('team-run-status').dataset.kind === 'read-error') show('team-run-status', '');
@@ -747,6 +753,25 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (initial.status === 'running') afterPoll(loadDetail);
   }
 
+  function confirmsMutation(run, action, step) {
+    if (action === 'cancel') return run.status === 'cancelled';
+    const latest = run.steps.find(item => item.position === step?.position);
+    if (!latest) return false;
+    if (action === 'artifact') return latest.status === 'succeeded' && ID.test(latest.saved_artifact_id || '');
+    return action === 'retry' && (latest.attempts > step.attempts ||
+      (latest.attempts === step.attempts && ['waiting', 'queued'].includes(latest.status)));
+  }
+
+  function showMutationResult(run, action, step) {
+    doing = '';
+    show('team-run-status', action === 'cancel' && run.status !== 'cancelled' ? '任务已结束。' : MUTATION_STATUS[action], 'ok');
+    renderDetail(run);
+    if (action === 'artifact') {
+      node('team-run-results').querySelector(`[data-position="${step.position}"] [data-step-action="open"]`)?.focus();
+    }
+    if (run.status === 'running') afterPoll(loadDetail);
+  }
+
   async function mutate(action, step) {
     if (doing || !current || screen !== 'detail') return;
     if ((action === 'cancel' && current.status !== 'running') || (action === 'remove' && current.status === 'running')) return;
@@ -761,28 +786,49 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const suffix = step ? `/steps/${step.position}/${action}` : '/' + action;
     const result = await request('POST', pathFor(target.workspace) + '/' + runId + suffix, action === 'retry' ? {attempt:step.attempts} : {});
     if (!active(target)) return;
-    doing = '';
-    if (result.status === 200 && action === 'remove') return showList({focus: true});
-    const run = result.body.run, artifact = result.body.artifact?.id;
-    if (action === 'artifact' && [200, 201].includes(result.status) && ID.test(artifact || '')) {
-      const steps = current.steps.map(item => item.position === step.position ? {...item, saved_artifact_id: artifact} : item);
-      show('team-run-status', '已保存到作品库。', 'ok');
-      renderDetail({...current, steps});
-      node('team-run-results').querySelector(`[data-position="${step.position}"] [data-step-action="open"]`)?.focus();
-    } else if (result.status === 200 && matchesRun(run, workspace, runId) && Array.isArray(run.steps)) {
-      show('team-run-status', '');
-      renderDetail(run);
-    } else {
-      if (cannotRead(result.status) && result.body?.error?.code !== 'source_unavailable') {
-        clearInaccessibleRunData();
-        show('team-run-status', errorMessage(result, '暂时无法读取任务。'), 'read-error');
-        return;
-      }
-      renderDetail(current);
-      show('team-run-status', errorMessage(result, isUncertain(result.status)
-        ? '暂时无法确认操作结果，正在刷新任务。' : '无法完成这次操作，请刷新后重试。'), 'error');
-      return loadDetail();
+    if (action === 'remove' && result.status === 200 && result.body.removed === runId) return showList({focus: true});
+    const accepted = [200, 201].includes(result.status);
+    const artifact = result.body.artifact;
+    if (action === 'artifact' && accepted && artifact?.workspace_id === target.workspace && ID.test(artifact.id || '')) {
+      const steps = current.steps.map(item => item.position === step.position ? {...item, saved_artifact_id: artifact.id} : item);
+      return showMutationResult({...current, steps}, action, step);
     }
+    const returned = runFromResponse(result, target.workspace, runId);
+    if (returned && (action === 'cancel' || action === 'retry')) return showMutationResult(returned, action, step);
+
+    let checked, observed;
+    const uncertain = accepted || isUncertain(result.status);
+    if (uncertain) {
+      show('team-run-status', '正在核对操作结果…');
+      checked = await request('GET', pathFor(target.workspace) + '/' + runId);
+      if (!active(target)) return;
+      observed = runFromResponse(checked, target.workspace, runId);
+      if (observed && confirmsMutation(observed, action, step)) return showMutationResult(observed, action, step);
+      // Verify the signed owner and the list before treating an absent run as deleted.
+      if (action === 'remove' && checked.status === 404) {
+        const [listed, session] = await Promise.all([
+          request('GET', pathFor(target.workspace)),
+          request('GET', '/v1/auth/session'),
+        ]);
+        if (!active(target)) return;
+        const items = listed.body.items;
+        if (session.status === 200 && ID.test(target.viewer?.id || '') && session.body.user?.id === target.viewer.id &&
+            listed.status === 200 && Array.isArray(items) && items.every(item => matchesRun(item, target.workspace)) &&
+            !items.some(item => item.id === runId)) return showList({focus: true});
+      }
+    }
+
+    doing = '';
+    const refusal = checked || result;
+    if (cannotRead(refusal.status) && refusal.body?.error?.code !== 'source_unavailable') {
+      clearInaccessibleRunData();
+      show('team-run-status', errorMessage(refusal, '暂时无法读取任务。'), 'read-error');
+      return;
+    }
+    renderDetail(observed || current);
+    show('team-run-status', errorMessage(result, uncertain
+      ? '暂时无法确认操作结果，请核对任务后重试。' : '无法完成这次操作，请刷新后重试。'), 'error');
+    if (!checked) return loadDetail();
     if (current.status === 'running') afterPoll(loadDetail);
   }
 

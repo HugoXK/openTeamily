@@ -52,7 +52,10 @@ function fakeSocial() {
       return ok(409, { error: { code, message: code } })
     }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
-    if (path === '/v1/ot/invites/preview') return ok(200, { usable: body.code !== 'expired-invite-code',
+    if (path === '/v1/ot/invites/preview') return ok(200, { usable: !body.code.startsWith('expired-'),
+      ...(body.code === 'expired-joined-invite' ? { membership: 'member', workspace_id: WS }
+        : body.code === 'expired-pending-invite' ? { membership: 'pending' }
+          : body.code === 'expired-suspended-invite' ? { membership: 'suspended', workspace_id: WS } : {}),
       team: { id: 'ott_1', name: 'Studio', owner: me, summary: 'Private team summary' }, role: 'member', requires_approval: true })
     if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [
       { id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: 'member' },
@@ -123,8 +126,17 @@ test('invite preview uses the signed-in connector and exposes only the name and 
     invitation: { team_name: 'Studio', role: 'member', requires_approval: true },
   })
   assert.equal((await preview('expired-invite-code')).status, 410)
+  const joined = await preview('expired-joined-invite')
+  assert.equal(joined.status, 200)
+  assert.equal(joined.body.invitation.membership, 'member')
+  assert.equal(joined.body.invitation.workspace_id, WS)
+  const pending = await preview('expired-pending-invite')
+  assert.equal(pending.status, 200)
+  assert.equal(pending.body.invitation.membership, 'pending')
+  assert.equal(pending.body.invitation.workspace_id, undefined)
+  assert.equal((await preview('expired-suspended-invite')).status, 403)
   assert.equal((await preview('https://external.test/')).status, 400)
-  assert.equal(social.calls.filter(row => row.path === '/v1/ot/invites/preview').length, 2)
+  assert.equal(social.calls.filter(row => row.path === '/v1/ot/invites/preview').length, 5)
   assert.ok(!social.calls.some(row => row.path === '/v1/ot/invites/accept'))
 })
 

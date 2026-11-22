@@ -179,6 +179,14 @@ export function sendPrivateAttachmentMessage(view, path, message, files, headers
   return uploadForm(view,path,headers,form,onProgress,240_000);
 }
 
+export function sendSocialAttachmentMessage(view, path, message, file, headers, onProgress) {
+  const form = new view.FormData();
+  form.append('file', file);
+  if (message.body) form.set('body', message.body);
+  if (message.reply_to) form.set('reply_to', message.reply_to);
+  return uploadForm(view, path, headers, form, onProgress);
+}
+
 export function unclearSocialDelivery(status) {
   return !status || status === 408 || status >= 500 || [200, 201].includes(status);
 }
@@ -198,7 +206,7 @@ function errorText(result) {
   return '发送失败，点击重试。';
 }
 
-export function mountChatFiles(document, {context, ownerId, csrfToken, createKey, confirmDelivery, sent}) {
+export function mountChatFiles(document, {context, ownerId, csrfToken, createKey, confirmDelivery, sent, onDraftChange}) {
   const input = document.getElementById('chat-attachment');
   if (!input) return {render() {}, reset() {}};
   const view = document.defaultView;
@@ -225,7 +233,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     }
     if (messageList.children.length) empty.hidden = true;
     if (draftRail) {
-      const items = current?.private ? drafts.get(current.scope) || [] : [];
+      const items = current ? drafts.get(current.scope) || [] : [];
       draftRail.hidden = items.length === 0;
       draftRail.replaceChildren(...items.map(item => item.card));
       field.required = items.length === 0;
@@ -266,13 +274,11 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
         remove(job);
         return;
       }
-      const form = new view.FormData();
-      form.append('file',job.file);
-      if (job.destination.reply) form.set('reply_to', job.destination.reply.message_id);
-      const result = await uploadForm(view, job.destination.path, {
+      const result = await sendSocialAttachmentMessage(view, job.destination.path,
+        {reply_to:job.destination.reply?.message_id}, job.file, {
         Accept: 'application/json',
         'X-CSRF-Token': csrfToken(), 'Idempotency-Key': job.key,
-      }, form, percentage => {
+      }, percentage => {
         if (percentage < 100) {
           job.progress.value = percentage;
         } else {
@@ -342,17 +348,18 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     if (kept.length) drafts.set(scope,kept);
     else drafts.delete(scope);
     render();
+    onDraftChange?.();
   }
 
-  function stageFiles(scope, files) {
+  function stageFiles(scope, files, privateChat) {
     const existing = drafts.get(scope) || [];
-    const valid = files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1)));
+    const valid = privateChat ? files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1))) : files;
     if (valid.length !== files.length) status.textContent = '智能体私聊支持图片、PDF、Office 文档和文本文件。';
     let bytes = existing.reduce((sum,item) => sum + item.file.size,0);
     const before = existing.length;
     for (const file of valid) {
-      if (existing.length >= 4 || bytes + file.size > MAX_CHAT_FILE_BYTES) {
-        status.textContent = '每条消息最多 4 个附件，合计 8 MB。';
+      if (existing.length >= 4 || (privateChat && bytes + file.size > MAX_CHAT_FILE_BYTES)) {
+        status.textContent = privateChat ? '每条消息最多 4 个附件，合计 8 MB。' : '一次最多选择 4 个附件。';
         break;
       }
       bytes += file.size;
@@ -363,24 +370,25 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
       remove.className = 'agent-file-remove';
       remove.addEventListener('click',() => {
         const current = context();
-        if (current?.private) clearDraft(current.scope,[file]);
+        if (current && draftFiles(current.scope).includes(file)) clearDraft(current.scope,[file]);
       });
       card.append(remove);
       existing.push({file,card,preview});
     }
     if (existing.length) drafts.set(scope,existing);
     render();
+    onDraftChange?.();
     return existing.length - before;
   }
 
-  function addFiles(picked, scope) {
+  function addFiles(picked, scope, {stage = false} = {}) {
     const destination = context();
-    if (!destination || !picked.length || (scope !== undefined && destination.scope !== scope)) return 0;
+    if (!destination || destination.blocked || !picked.length || (scope !== undefined && destination.scope !== scope)) return 0;
     status.textContent = '';
     const accepted = picked.filter(file => file.size > 0 && file.size <= MAX_CHAT_FILE_BYTES);
     if (accepted.length !== picked.length) status.textContent = '空文件和超过 8 MB 的文件无法发送。';
-    if (destination.private) {
-      return stageFiles(destination.scope,accepted);
+    if (destination.private || stage) {
+      return stageFiles(destination.scope, accepted, destination.private);
     }
     for (const file of accepted) enqueue(file, destination);
     render();
@@ -392,7 +400,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
   input.addEventListener('change', () => {
     const picked = [...input.files];
     input.value = '';
-    addFiles(picked);
+    addFiles(picked, undefined, {stage:true});
   });
   return {render,confirmFromHistory,draftFiles,clearDraft,addFiles, forget(scope) {
     clearDraft(scope);

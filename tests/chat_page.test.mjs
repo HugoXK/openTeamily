@@ -585,6 +585,33 @@ test('a confirmed attachment replaces its preview before the upload response arr
   assert.deepEqual(receipts, [{to:destination, message:undefined}]);
 });
 
+test('choosing a group attachment only creates a preview and removing it sends nothing', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = {
+    XMLHttpRequest: class { constructor() { assert.fail('file selection made an upload request'); } },
+    URL:{createObjectURL: () => 'blob:draft', revokeObjectURL() {}},
+  };
+  let destination = {scope:'first-group'};
+  const files = mountChatFiles(doc, {context:() => destination});
+  const input = el('chat-attachment');
+  const picked = new File(['preview'], 'preview.png', {type:'image/png'});
+  input.files = [picked];
+  await fire(input,'change');
+  assert.deepEqual(files.draftFiles('first-group'), [picked]);
+  assert.equal(el('agent-file-draft').hidden, false);
+  assert.equal(el('chat-body').required, false);
+  destination = {scope:'second-group'};
+  files.render();
+  assert.equal(el('agent-file-draft').hidden, true);
+  assert.equal(el('chat-body').required, true);
+  destination = {scope:'first-group'};
+  files.render();
+  const remove = descendants(el('agent-file-draft')).find(node => node.getAttribute('aria-label') === '移除 preview.png');
+  await fire(remove,'click');
+  assert.deepEqual(files.draftFiles('first-group'), []);
+  assert.equal(el('agent-file-draft').hidden, true);
+});
+
 test('message search pages by cursor through a 加载更多 control instead of stopping at 20', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher, requests} = chatFetcher();

@@ -81,6 +81,17 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
   assert.deepEqual(await C.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), direct);
   const D = await home(S.base, "dee");
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: inv.code })).status, 410, "used up");
+  const receipt = await C.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(receipt.usable, false);
+  assert.equal(receipt.membership, "member");
+  assert.equal(receipt.workspace_id, undefined, "an unbound team has no workspace to expose");
+  const stranger = await D.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(stranger.membership, undefined);
+  assert.equal(stranger.workspace_id, undefined);
+  await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: true });
+  const suspended = await C.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(suspended.membership, "suspended");
+  assert.equal(suspended.workspace_id, undefined);
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: "x".repeat(32) })).status, 404);
 });
 
@@ -138,6 +149,10 @@ test("approval invites and the team directory queue join requests for owners and
   const pending = await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
   assert.equal(pending.status, "pending");
   assert.deepEqual(await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), pending);
+  const preview = await B.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(preview.usable, false);
+  assert.equal(preview.membership, "pending");
+  assert.equal(preview.workspace_id, undefined);
   const notes = await A.ok("GET", "/v1/ot/notifications");
   assert.ok(notes.notifications.some((x: any) => x.kind === "team.join_request" && x.data.member.handle === B.handle));
   const queue = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);
