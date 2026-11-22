@@ -193,6 +193,17 @@ test("shared group workers judge ordinary text while explicit mentions preserve 
   assert.deepEqual(targets(command), both);
   const alias = await author.ok("POST", room + "/messages", {body: "@all 请都检查一下"});
   assert.deepEqual(targets(alias), targets(command));
+  const nativeAliases = [];
+  for (const body of ["@Everyone Please check", "＠全体 请检查"]) {
+    const message = await author.ok("POST", room + "/messages", {body});
+    assert.deepEqual(targets(message), both);
+    nativeAliases.push(message.id);
+  }
+  const literal = await author.ok("POST", room + "/messages", {
+    body: "请检查这个例子：\n```text\n@all\n```\n[提示 @everyone](/help) 和 ` @全体`",
+  });
+  assert.deepEqual(targets(literal), both);
+  assert.deepEqual(literal.mentions, []);
   const chinese = await author.ok("POST", room + "/messages", {
     body: `@所有人 @${colleague.handle} 都看一下`, client_key: "whole-room-exact-notice",
   });
@@ -200,6 +211,10 @@ test("shared group workers judge ordinary text while explicit mentions preserve 
   assert.equal((await author.ok("POST", room + "/messages", {body: chinese.body, client_key: "whole-room-exact-notice"})).id, chinese.id);
   const mentioned = await colleague.ok("GET", "/v1/ot/notifications");
   assert.equal(mentioned.notifications.filter((notice: any) => notice.kind === "messenger.mention" && notice.data.message_id === chinese.id).length, 1);
+  for (const id of nativeAliases) {
+    assert.equal(mentioned.notifications.filter((notice: any) => notice.kind === "messenger.mention" && notice.data.message_id === id).length, 1);
+  }
+  assert.equal(mentioned.notifications.some((notice: any) => notice.kind === "messenger.mention" && notice.data.message_id === literal.id), false);
   for (const actor of [author, outsider]) {
     assert.equal((await actor.ok("GET", "/v1/ot/notifications")).notifications.some((notice: any) => notice.data.message_id === chinese.id), false);
   }
@@ -208,7 +223,7 @@ test("shared group workers judge ordinary text while explicit mentions preserve 
   const colleagueId = await ownerId(colleague);
   const remote = command.reply_jobs.find((job: Job) => job.agent_owner_id === colleagueId);
   const agentInbox = await colleague.ok("GET", queue);
-  const discretionary = [conversation, observation, command].map(message => message.id);
+  const discretionary = [conversation, observation, command, literal].map(message => message.id);
   assert.deepEqual(agentInbox.jobs.filter((row: any) => row.discretionary).map((row: any) => row.message.id), discretionary);
   assert.equal(agentInbox.jobs.find((row: any) => row.job_id === remote.id).group_text_only, true);
   assert.equal(agentInbox.items.some((row: any) => row.message.id === command.id), false);
