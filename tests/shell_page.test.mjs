@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {mountActionMenus} from '../openteamily/static/shell/action-menu.mjs';
 import {
   applyResolvedTheme,
   CHANNELS_MENU_HREF,
@@ -290,4 +291,79 @@ test('shared hover and expanded states keep explicit contrast pairs', () => {
     assert.match(block, /background: var\(--ot-accent(?:-hover)?\)/);
     assert.match(block, /color: var\(--ot-on-accent\)/);
   }
+});
+
+function menuFixture() {
+  const document = new EventTarget();
+  function element(parent) {
+    const element = new EventTarget();
+    const attributes = new Map();
+    const children = [];
+    const ancestry = [element, ...(parent?.ancestry || [])];
+    parent?.children.push(element);
+    return Object.assign(element, {
+      children, ancestry, hidden: false,
+      setAttribute: (name, value) => attributes.set(name, value),
+      getAttribute: name => attributes.get(name),
+      closest: selector => selector === '[hidden]' ? ancestry.find(node => node.hidden) : element,
+      contains: target => target.ancestry.includes(element),
+      querySelectorAll: () => children,
+      focus() {
+        document.activeElement = element;
+        dispatch(document, 'focusin', {target: element});
+      },
+    });
+  }
+  function dispatch(element, type, {target = element, key} = {}) {
+    const event = new Event(type, {cancelable: true});
+    Object.defineProperties(event, {target: {value: target}, key: {value: key}});
+    element.dispatchEvent(event);
+    return event;
+  }
+  const button = element();
+  const menu = element();
+  menu.hidden = true;
+  const first = element(menu);
+  const hidden = element(menu);
+  hidden.hidden = true;
+  const disabled = element(menu);
+  disabled.disabled = true;
+  const last = element(menu);
+  const outside = element();
+  const menus = mountActionMenus(document);
+  return {document, button, menu, first, last, outside, menus, dispatch};
+}
+
+test('action menus skip unavailable entries, wrap arrows and return keyboard focus on Escape or Tab', () => {
+  const {document, button, menu, first, last, menus, dispatch} = menuFixture();
+  menus.bind(button, menu);
+  dispatch(button, 'keydown', {key: 'ArrowUp'});
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  assert.equal(document.activeElement, last);
+  assert.equal(last.tabIndex, -1);
+  dispatch(menu, 'keydown', {key: 'ArrowDown'});
+  assert.equal(document.activeElement, first);
+  dispatch(menu, 'keydown', {key: 'End'});
+  assert.equal(document.activeElement, last);
+  assert.equal(dispatch(menu, 'keydown', {key: 'Escape'}).defaultPrevented, true);
+  assert.equal(document.activeElement, button);
+  assert.equal(menu.hidden, true);
+  dispatch(button, 'click');
+  assert.equal(document.activeElement, first);
+  assert.equal(dispatch(menu, 'keydown', {key: 'Tab'}).defaultPrevented, false);
+  assert.equal(document.activeElement, button);
+  assert.equal(button.getAttribute('aria-expanded'), 'false');
+});
+
+test('outside focus is preserved and activation returns focus before running the selected action', () => {
+  const {document, button, menu, first, outside, dispatch, menus} = menuFixture();
+  menus.bind(button, menu);
+  dispatch(button, 'click');
+  outside.focus();
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, outside);
+  dispatch(button, 'click');
+  dispatch(menu, 'click', {target: first});
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, button);
 });

@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS ot_automation_runs (
  dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER, UNIQUE(automation_id, due_at));
 CREATE INDEX IF NOT EXISTS ot_automation_runs_recent ON ot_automation_runs(automation_id, started DESC, id DESC);
 CREATE INDEX IF NOT EXISTS ot_automation_runs_status_recent ON ot_automation_runs(status, automation_id, started DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_active_run ON ot_automation_runs(automation_id, started DESC, id DESC) WHERE status='queued';
 DROP INDEX IF EXISTS ot_automation_run_list;
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
@@ -162,6 +163,13 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const run = (sql, ...args) => db.prepare(sql).run(...args)
   const existingSlot = db.prepare('SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
 
+  function activeRun(id) {
+    const row = activeRunFor.get(id)
+    if (!row) return null
+    const {id:runId, automation_id, workspace_id, claimed_at} = row
+    return {id:runId, automation_id, workspace_id, status:claimed_at === null ? 'queued' : 'running'}
+  }
+
   function scheduleStatus(item, at = clock()) {
     if (!item.enabled) return {state:'paused'}
     if (!validSchedule(item.schedule)) return null
@@ -179,7 +187,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   function projected(item, at) {
-    return {...item, schedule_status:scheduleStatus(item, at)}
+    const pending = activeRun(item.id)
+    return {...item, schedule_status:scheduleStatus(item, at), ...(pending ? {active_run:pending} : {})}
   }
 
   // This feature is loaded once in the runtime that owns the volume. A previous
@@ -194,6 +203,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?
       WHERE status='queued' AND claimed_at IS NOT NULL`, clock(), JSON.stringify(dispatch))
   })
+  const activeRunFor = db.prepare(`SELECT id, automation_id, workspace_id, claimed_at FROM ot_automation_runs
+    WHERE automation_id=? AND status='queued' ORDER BY started DESC, id DESC LIMIT 1`)
 
   const workspaceOf = (payload) => {
     const id = payload?.workspace_id
@@ -505,8 +516,9 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
+    const pending = activeRun(row.id)
     return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null,
-      has_pending: hasActiveRun(row.id), schedule_status: scheduleStatus(view(row)), schedule_revision: row.revision }
+      has_pending: Boolean(pending), active_run: pending, schedule_status: scheduleStatus(view(row)), schedule_revision: row.revision }
   }
 
   async function saveRun(payload) {

@@ -155,6 +155,7 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
+    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
     ...(row.attachment ? { attachment: attachmentItem(row.attachment, workspaceId, row.conversation_id, row.id) } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),

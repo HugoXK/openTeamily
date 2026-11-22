@@ -204,10 +204,19 @@ test("managed reply claims replay without renewing the lease and fence each atte
   await owner.ok("POST", job, {...start, attempt: 3, claim_id: next});
   const delivery = {...final, job_id: id, attempt: 3, claim_id: next};
   const reply = await owner.ok("POST", answer, delivery);
+  assert.equal(reply.reply_job_id, id);
+  assert.equal(reply.client_key, undefined);
   assert.equal((await owner.ok("POST", answer, delivery)).id, reply.id);
   assert.equal((await post(answer, {...delivery, claim_id: other})).status, 409);
   assert.equal((await post(job, {...start, attempt: 3, claim_id: next})).status, 409);
-  assert.deepEqual((await sender.ok("GET", room + "/messages")).messages.map((row: any) => row.id), [source.id, reply.id]);
+  const ordinarySource = await sender.ok("POST", room + "/messages", {body: "A separate conversation turn"});
+  const untrackedKey = "job:otj_" + "0".repeat(26);
+  const ordinary = await owner.ok("POST", answer, {...final, reply_to: ordinarySource.id, client_key: untrackedKey});
+  assert.equal(ordinary.reply_job_id, undefined);
+  const messages = (await sender.ok("GET", room + "/messages")).messages;
+  assert.deepEqual(messages.map((row: any) => [row.id, row.reply_job_id]),
+    [[source.id, undefined], [reply.id, id], [ordinarySource.id, undefined], [ordinary.id, undefined]]);
+  assert.equal(messages[1].client_key, undefined);
 });
 
 test("activity snapshots are scoped and skip message content until the client needs it", async () => {

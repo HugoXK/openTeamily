@@ -311,8 +311,12 @@ test('manual execution queues only the named automation and leaves its scheduled
   const detail = await e['automations/v1']({method: 'GET', path: runsPath + '/' + accepted.body.run.id})
   assert.equal(detail.body.run.status, 'running')
   assert.equal((await e['automations/v1']({method: 'GET', path: runsPath + '?status=running'})).body.items[0].id, accepted.body.run.id)
+  const activeRun = {id:accepted.body.run.id, automation_id:target.id, workspace_id:W, status:'running'}
   assert.deepEqual((await e['automations/v1']({method: 'GET', path: runsPath + '?status=queued'})).body,
-    {items: [], cursor: null, has_pending: true, schedule_status: {state:'paused'}, schedule_revision: 1})
+    {items: [], cursor: null, has_pending: true, active_run:activeRun, schedule_status: {state:'paused'}, schedule_revision: 1})
+  assert.deepEqual(e['automations/get']({workspace_id:W,id:target.id}).automation.active_run, activeRun)
+  assert.deepEqual(e['automations/list']({workspace_id:W}).items.find(item => item.id === target.id).active_run, activeRun)
+  assert.equal(e['automations/get']({workspace_id:W,id:other.id}).automation.active_run, undefined)
   assert.equal((await e['automations/v1'](req)).body.run.id, accepted.body.run.id)
   assert.equal((await e['automations/v1']({...req, idempotency_key: 'x'.repeat(16)})).status, 409)
   assert.equal(calls.length, 1)

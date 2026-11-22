@@ -10,6 +10,7 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, signupDraftScope, signupSessionError } from '../home/runtime-readiness.mjs';
+import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -2266,7 +2267,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (waiting) {
       const heading = document.createElement('p');
       heading.className = 'reply-state';
-      heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+      heading.setAttribute('role', 'status');
+      heading.textContent = item.status === 'running' ? uiLabel('正在生成回复', 'Writing a reply') : uiLabel('正在准备回复', 'Preparing a reply');
       bubble.append(heading);
       if (partial) replyView = {bubble, heading, body};
     }
@@ -2308,6 +2310,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const anchoredMessage = anchor?.id && Array.from(list.children).find(node => node.dataset.messageId === anchor.id);
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchoredMessage) scroller.scrollTop += anchoredMessage.getBoundingClientRect().top - anchor.offset;
+    updateLatestMessageControl();
     return lastAgentItems.some(waitingAgentReply) && !tracking;
   }
 
@@ -2318,6 +2321,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.clearTimeout(watch.timer);
     globalThis.clearTimeout(watch.timeout);
     watch.controller?.abort();
+    closeReplyStream(watch);
   }
 
   function isCurrentReply(watch) {
@@ -2331,16 +2335,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function paintReplyProgress(view, snapshot) {
     const state = snapshot.state === 'running' ? 'running' : 'queued';
-    if (view.bubble.dataset.state !== state) {
-      view.bubble.dataset.state = state;
-      view.heading.textContent = state === 'running' ? '正在生成回复' : '正在准备回复';
-    }
+    if (view.bubble.dataset.state !== state) view.bubble.dataset.state = state;
+    const label = snapshot.phase === 'thinking' ? uiLabel('正在思考', 'Thinking')
+      : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
+      : uiLabel('正在生成回复', 'Writing a reply');
+    if (view.heading.textContent !== label) view.heading.textContent = label;
     if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
     view.body.textContent = snapshot.text;
     view.body.hidden = !snapshot.text;
     if (follow) scroller.scrollTop = scroller.scrollHeight;
+    else updateLatestMessageControl();
   }
 
   function scheduleReplyProgress(watch, delay = 400) {
@@ -2348,24 +2354,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
   }
 
-  async function pollReplyProgress(watch) {
-    if (!isCurrentReply(watch)) return;
-    const controller = watch.controller = new AbortController();
-    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
-    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
-    globalThis.clearTimeout(watch.timeout);
-    watch.controller = null;
-    if (!isCurrentReply(watch)) return;
-    const snapshot = result?.status === 200 ? result.body : null;
-    if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
-      watch.failures = 0;
-      watch.snapshot = snapshot;
-      paintReplyProgress(watch.view, snapshot);
-      scheduleReplyProgress(watch);
-      return;
-    }
-    const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
-    if (terminal && watch.posting) {
+  async function settleReplyProgress(watch) {
+    if (watch.posting) {
       const queue = pendingSends.get(watch.scope);
       const job = queue?.replying;
       if (job?.key === watch.key && job.acceptReceipt) {
@@ -2375,13 +2365,84 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return;
     }
-    watch.failures += 1;
-    if (terminal || (!watch.posting && watch.failures >= 4)) {
-      await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
-      scheduleReplyProgress(watch, 1500);
+    await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+    scheduleReplyProgress(watch, 1500);
+  }
+
+  async function pollReplyProgress(watch) {
+    if (!isCurrentReply(watch)) return;
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path + '&after=' + watch.revision, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!isCurrentReply(watch)) return;
+    const snapshot = result?.status === 200 ? result.body : null;
+    if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
+      watch.failures = 0;
+      watch.snapshot = snapshot;
+      paintReplyProgress(watch.view, snapshot);
+      const changed = Number.isSafeInteger(snapshot.revision) && snapshot.revision !== watch.revision;
+      if (changed) watch.revision = snapshot.revision;
+      const unchangedDelay = Number.isSafeInteger(snapshot.revision) ? 100 : 400;
+      scheduleReplyProgress(watch, changed ? 50 : unchangedDelay);
       return;
     }
+    if (['succeeded','failed','cancelled'].includes(snapshot?.state)) return settleReplyProgress(watch);
+    watch.failures += 1;
+    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch);
     scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
+  }
+
+  function closeReplyStream(watch) {
+    globalThis.clearTimeout(watch.streamTimeout);
+    const source = watch.stream;
+    watch.stream = null;
+    source?.close();
+  }
+
+  function startReplyStream(watch) {
+    const EventSource = document.defaultView?.EventSource;
+    if (typeof EventSource !== 'function') return false;
+    const params = new URLSearchParams({workspace:workspaceId(),agent:currentAgent.id,
+      conversation:currentConversation.id,key:watch.key});
+    let source;
+    try { source = new EventSource('/b/api/openteamily/reply-stream?' + params); } catch { return false; }
+    watch.stream = source;
+    const active = () => watch.stream === source && isCurrentReply(watch);
+    const fallback = () => {
+      if (!active()) return;
+      closeReplyStream(watch);
+      scheduleReplyProgress(watch, 0);
+    };
+    const timeout = delay => {
+      globalThis.clearTimeout(watch.streamTimeout);
+      watch.streamTimeout = globalThis.setTimeout(fallback, delay);
+    };
+    const keepalive = () => { if (active()) timeout(16000); };
+    source.addEventListener('open', keepalive);
+    source.addEventListener('heartbeat', keepalive);
+    source.addEventListener('error', fallback);
+    source.addEventListener('message', event => {
+      if (!active()) return;
+      let data;
+      try { data = JSON.parse(event.data); } catch { return fallback(); }
+      if (['succeeded','failed','cancelled'].includes(data?.state)) {
+        closeReplyStream(watch);
+        void settleReplyProgress(watch);
+        return;
+      }
+      if (data?.state !== 'running' && data?.state !== 'pending') return fallback();
+      keepalive();
+      if (typeof data.text !== 'string' && typeof data.append !== 'string') return fallback();
+      const text = typeof data.text === 'string' ? data.text : (watch.snapshot?.text || '') + data.append;
+      if (text.length > 20000) return fallback();
+      if (Number.isSafeInteger(data.revision)) watch.revision = data.revision;
+      watch.snapshot = {state:data.state,phase:data.phase,text};
+      paintReplyProgress(watch.view, watch.snapshot);
+    });
+    timeout(6000);
+    return true;
   }
 
   function syncReplyProgress() {
@@ -2400,8 +2461,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     stopReplyProgress();
     const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
-    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0};
-    scheduleReplyProgress(replyWatch);
+    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0, revision:0};
+    if (!startReplyStream(replyWatch)) scheduleReplyProgress(replyWatch);
     return true;
   }
 
@@ -2833,8 +2894,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let historyJump = 0;
   let groupReplyWatch = null;
   const groupReplyViews = new Map();
+  const groupReplyRetries = new Map();
+  let groupReplyScope = null;
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
+  const historyScroller = document.getElementById('message-scroller');
   const newerMessages = document.getElementById('chat-load-newer');
   const markThreadRead = document.getElementById('chat-mark-thread-read');
   const unreadActions = document.getElementById('chat-unread-actions');
@@ -2846,7 +2910,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearTimeout(unreadScrollTimer);
     socialHistory = state;
     if (!state || state.readingHistory) stopGroupReplyProgress();
-    if (!state) groupReplyViews.clear();
+    const scope = state && sendScope();
+    if (groupReplyScope !== scope) {
+      groupReplyScope = scope;
+      groupReplyViews.clear();
+      groupReplyRetries.clear();
+    }
     if (historyNotice) historyNotice.textContent = '';
     if (unreadNotice) unreadNotice.textContent = '';
     updateHistoryControls();
@@ -2867,16 +2936,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Boolean(privateHistory?.readingHistory || privateHistory?.loading || privateHistory?.jumping);
   }
 
+  function updateLatestMessageControl() {
+    if (!latestMessages || !historyScroller) return;
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    const atLatest = !historyScroller.clientHeight || messageScrollerAtBottom(historyScroller);
+    const hidden = !currentConversation || (!state?.readingHistory && atLatest);
+    const disabled = Boolean(state?.restoring);
+    if (latestMessages.hidden !== hidden) latestMessages.hidden = hidden;
+    if (latestMessages.disabled !== disabled) latestMessages.disabled = disabled;
+  }
+
   function updateHistoryControls() {
     const state = currentSource === 'agent' ? privateHistory : socialHistory;
     if (olderMessages) {
       olderMessages.hidden = !state?.cursor;
       olderMessages.disabled = Boolean(state?.loading || state?.jumping || state?.restoring);
     }
-    if (latestMessages) {
-      latestMessages.hidden = !state?.readingHistory;
-      latestMessages.disabled = Boolean(state?.restoring);
+    if (historyScroller) {
+      if (state?.readingHistory) historyScroller.dataset.readingHistory = '';
+      else delete historyScroller.dataset.readingHistory;
     }
+    updateLatestMessageControl();
     const unread = currentSource === 'social' ? state?.unread : null;
     if (newerMessages) {
       newerMessages.hidden = !unread?.after;
@@ -3050,21 +3130,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
   function openSocialLatest() {
-    const unread = socialHistory?.unread;
+    const state = socialHistory;
+    if (state?.restoring) return state.restoring;
+    const unread = state?.unread;
     const preserveUnread = Boolean(unread && unread.committed < unread.latest);
-    return openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    const opened = openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    if (!state) return opened;
+    state.restoring = opened.finally(() => {
+      if (socialHistory === state) {
+        state.restoring = null;
+        updateHistoryControls();
+      }
+    });
+    updateHistoryControls();
+    return state.restoring;
   }
 
   latestMessages?.addEventListener('click', () => {
-    if (currentSource === 'social' && currentConversation) openSocialLatest();
-    else if (currentSource === 'agent' && privateHistory) void restorePrivateLatest(privateHistory);
+    if (!currentConversation || !historyScroller) return;
+    historyScroller.focus({preventScroll: true});
+    if (currentSource === 'social' && (socialHistory?.readingHistory || (liveBanner && !liveBanner.hidden))) {
+      void openSocialLatest();
+    } else if (currentSource === 'agent' && privateHistory?.readingHistory) {
+      void restorePrivateLatest(privateHistory);
+    } else {
+      historyScroller.scrollTop = historyScroller.scrollHeight;
+      updateLatestMessageControl();
+    }
   });
   markThreadRead?.addEventListener('click', () => {
     const state = socialHistory;
     if (unreadNotice) unreadNotice.textContent = '';
     if (state?.unread) void commitUnread(state, state.unread.latest, true);
   });
-  document.getElementById('message-scroller')?.addEventListener('scroll', scheduleUnreadRead, {passive: true});
+  historyScroller?.addEventListener('scroll', () => {
+    updateLatestMessageControl();
+    scheduleUnreadRead();
+  }, {passive: true});
+  globalThis.addEventListener('resize', updateLatestMessageControl);
   newerMessages?.addEventListener('click', async () => {
     const state = socialHistory;
     const unread = state?.unread;
@@ -3113,26 +3216,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
   }
 
-  function paintGroupReplyProgress(items) {
+  function withGroupReplyScroll(update) {
+    const scroller = document.getElementById('message-scroller');
+    const top = scroller.scrollTop;
+    const follow = messageScrollerAtBottom(scroller);
+    const viewportTop = scroller.getBoundingClientRect().top;
+    const anchor = !follow && [...document.getElementById('message-list').children]
+      .find(row => row.getBoundingClientRect().bottom > viewportTop);
+    const offset = anchor && anchor.getBoundingClientRect().top;
+    update();
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+    if (anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
+    if (!follow) updateLatestMessageControl();
+  }
+
+  function paintGroupReplyProgress(items, {preserveMissing = false} = {}) {
     const changes = [];
     for (const [id, view] of groupReplyViews) {
       const item = items.get(id);
+      // The live snapshot disappears just before the durable reply or failure arrives.
+      if (!item && preserveMissing && view.row.dataset.state === 'running') {
+        view.missingSince ??= Date.now();
+        if (Date.now() - view.missingSince < 2000) continue;
+      } else view.missingSince = null;
       const snapshot = matchesGroupReply(item, view) ? item : null;
       const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
       if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
-    const scroller = document.getElementById('message-scroller');
-    const top = scroller.scrollTop;
-    const follow = messageScrollerAtBottom(scroller);
-    for (const {view, text, state} of changes) {
-      view.preview.textContent = text;
-      view.preview.hidden = !text;
-      view.row.dataset.state = state;
-      view.note.textContent = view.job.agent_name + GROUP_REPLY_LABELS[state];
-    }
-    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+    withGroupReplyScroll(() => {
+      for (const {view, text, state} of changes) {
+        view.preview.textContent = text;
+        view.preview.hidden = !text;
+        view.row.dataset.state = state;
+        view.note.textContent = groupReplyLabel(state);
+      }
+    });
   }
 
   function stopGroupReplyProgress() {
@@ -3178,7 +3298,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       watch.items = items;
       if (watch.degraded) stopPolling();
       watch.degraded = false;
-      paintGroupReplyProgress(items);
+      paintGroupReplyProgress(items, {preserveMissing: true});
       // Replies can settle before the first progress poll, between tab visits,
       // or while Social activity delivery is reconnecting. Reconcile from the
       // durable transcript even when this watch never saw an active snapshot.
@@ -3210,7 +3330,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const scope = sendScope();
     if (groupReplyWatch?.scope === scope) {
-      paintGroupReplyProgress(groupReplyWatch.items);
+      paintGroupReplyProgress(groupReplyWatch.items, {preserveMissing: true});
       return;
     }
     stopGroupReplyProgress();
@@ -3220,69 +3340,102 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     scheduleGroupReplyProgress(groupReplyWatch);
   }
 
-  const GROUP_REPLY_LABELS = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
-  function renderReplyJobs(item) {
-    const rows = document.createElement('div');
-    rows.className = 'group-reply-jobs';
-    for (const job of item.reply_jobs || []) {
-      if (job.status === 'replied') continue;
-      const row = document.createElement('div');
-      row.className = 'group-reply-job';
-      row.dataset.state = job.status;
-      row.dataset.replyJobId = job.id;
-      if (Number.isSafeInteger(job.attempt)) row.dataset.replyAttempt = String(job.attempt);
-      const note = document.createElement('span');
-      note.textContent = job.agent_name + (GROUP_REPLY_LABELS[job.status] || '');
-      row.append(note);
-      if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
-        const preview = document.createElement('div');
-        preview.className = 'group-reply-preview';
-        preview.hidden = true;
-        preview.setAttribute('aria-live', 'off');
-        groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview});
-        row.append(preview);
+  const groupReplyLabels = {
+    queued: ['正在等待智能体', 'Waiting for the agent'],
+    running: ['正在生成回复', 'Writing a reply'],
+    failed: ['回复未完成', 'Reply could not be completed'],
+  };
+  const groupReplyLabel = state => uiLabel(...(groupReplyLabels[state] || groupReplyLabels.queued));
+
+  const groupReplyAuthor = name => name + uiLabel(' · AI 智能体', ' · AI agent');
+  const groupReplyButton = row => [...(row?.children || [])].find(node => node.className === 'group-reply-retry');
+
+  function setGroupReplyRetryButton(button, busy) {
+    if (!button) return;
+    button.setAttribute('aria-disabled', String(busy));
+    button.textContent = busy ? uiLabel('重试中…', 'Retrying…') : uiLabel('重试', 'Retry');
+  }
+
+  function renderGroupReplyRow(item, job, row = document.createElement('li'), previous) {
+    const attempt = Number.isSafeInteger(job.attempt) ? String(job.attempt) : '';
+    const sameAttempt = row.dataset.replyAttempt === attempt;
+    const previewBefore = sameAttempt ? previous?.preview : null;
+    const wasRunning = sameAttempt && row.dataset.state === 'running';
+    row.className = 'other group-reply-job';
+    row.tabIndex = -1;
+    row.dataset.replyJobId = job.id;
+    row.dataset.state = job.status;
+    row.dataset.replyAttempt = attempt;
+    const role = document.createElement('p');
+    role.className = 'role';
+    role.textContent = groupReplyAuthor(job.agent_name);
+    const note = document.createElement('div');
+    note.className = 'group-reply-state';
+    note.setAttribute('role', 'status');
+    note.textContent = groupReplyLabel(job.status);
+    row.replaceChildren(role, note);
+    if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
+      const preview = previewBefore || document.createElement('div');
+      preview.className = 'group-reply-preview body';
+      preview.hidden = !preview.textContent;
+      preview.setAttribute('aria-live', 'off');
+      if (wasRunning) {
+        row.dataset.state = 'running';
+        note.textContent = groupReplyLabel('running');
       }
-      if (job.can_retry) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = '重试';
-        button.setAttribute('aria-label', '重试 ' + job.agent_name);
-        button.addEventListener('click', async () => {
-          const cid = currentConversation.id;
-          const scope = sendScope();
-          button.disabled = true;
-          button.textContent = '重试中…';
-          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`,
-            {job_id: job.id, attempt: job.attempt})
-            .catch(() => ({status: 0, body: {}}));
-          if (sendScope() !== scope || currentSource !== 'social' || currentConversation?.id !== cid) return;
-          if (result.status === 200) {
-            // A response from a poll started before the click may still be in flight.
-            socialOpen++;
-            const list = document.getElementById('message-list');
-            const message = lastSocialItems.find(current => current.id === item.id);
-            if (message) {
-              for (const previous of message.reply_jobs || []) groupReplyViews.delete(previous.id);
-              message.reply_jobs = result.body.reply_jobs;
-              const target = [...list.children].find(element => element.dataset.messageId === item.id);
-              const jobs = target?.querySelector('.group-reply-jobs');
-              if (jobs) jobs.replaceWith(renderReplyJobs(message));
-              syncGroupReplyProgress();
-            }
-            if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
-            show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
-          } else {
-            button.disabled = false;
-            button.textContent = '重试';
-            show('error', messageFor(result.body.error, '暂时无法重试，请稍后再试。'));
-            if (result.status === 409) void openSocialConversation(cid, {refresh: true});
-          }
-        });
-        row.append(button);
-      }
-      rows.append(row);
+      groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
+        missingSince: sameAttempt ? previous?.missingSince : null});
+      row.append(preview);
+    } else groupReplyViews.delete(job.id);
+    if (job.can_retry) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'group-reply-retry';
+      button.setAttribute('aria-label', uiLabel('重试 ', 'Retry ') + job.agent_name);
+      setGroupReplyRetryButton(button, groupReplyRetries.has(job.id));
+      button.addEventListener('click', () => retryGroupReply(item, job));
+      row.append(button);
     }
-    return rows;
+    return row;
+  }
+
+  async function retryGroupReply(item, job) {
+    if (groupReplyRetries.has(job.id)) return;
+    const cid = currentConversation.id;
+    const scope = sendScope();
+    const findRow = () => [...document.getElementById('message-list').children]
+      .find(row => row.dataset.replyJobId === job.id);
+    const retry = Symbol();
+    groupReplyRetries.set(job.id, retry);
+    setGroupReplyRetryButton(groupReplyButton(findRow()), true);
+    const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`,
+      {job_id: job.id, attempt: job.attempt}).catch(() => ({status: 0, body: {}}));
+    if (groupReplyRetries.get(job.id) !== retry) return;
+    groupReplyRetries.delete(job.id);
+    if (sendScope() !== scope || currentSource !== 'social' || currentConversation?.id !== cid) return;
+    const next = result.status === 200 && result.body.reply_jobs?.find(candidate => candidate.id === job.id);
+    const row = findRow();
+    const button = groupReplyButton(row);
+    const source = lastSocialItems.find(message => message.id === item.id && !message.retracted);
+    const current = source?.reply_jobs?.find(candidate => candidate.id === job.id);
+    if (next) {
+      if (current && next.attempt > current.attempt) {
+        const updated = {...source, reply_jobs: source.reply_jobs.map(candidate => candidate === current ? next : candidate)};
+        lastSocialItems = lastSocialItems.map(message => message === source ? updated : message);
+        if (row?.dataset.state && row.dataset.state !== 'replied') {
+          const focused = Boolean(button && document.activeElement === button);
+          withGroupReplyScroll(() => renderGroupReplyRow(updated, next, row));
+          if (focused) (groupReplyButton(row) || row).focus({preventScroll: true});
+        }
+        syncGroupReplyProgress();
+      } else setGroupReplyRetryButton(button, false);
+      if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+      show('ok', uiLabel('已重新请求回复。', 'Reply requested again.'), {announceOnly: true});
+    } else {
+      setGroupReplyRetryButton(button, false);
+      show('error', messageFor(result.body.error, uiLabel('暂时无法重试，请稍后再试。', 'Could not retry. Try again.')));
+      if (result.status === 409 && !readingSocialContext()) void openSocialConversation(cid, {refresh: true});
+    }
   }
 
   const groupMemoryDialog = document.getElementById('group-memory-dialog');
@@ -3420,8 +3573,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const oldTop = scroller.scrollTop;
     const wasAtLatest = oldHeight - oldTop - scroller.clientHeight < 48;
     clearVoicePlayers();
-    lastSocialItems = items || [];
     const list = document.getElementById('message-list');
+    const scope = sendScope();
+    const sameReplyScope = list.dataset.groupReplyScope === scope;
+    list.dataset.groupReplyScope = scope;
+    const existingGroupReplies = new Map();
+    let focusedGroupReply;
+    const active = document.activeElement;
+    if (sameReplyScope) {
+      for (const row of list.children) {
+        const id = row.dataset.replyJobId;
+        if (!id) continue;
+        existingGroupReplies.set(id, row);
+        if (active?.closest?.('[data-reply-job-id]') === row) focusedGroupReply = {id, active, retry: active === groupReplyButton(row)};
+      }
+    }
+    const previousGroupViews = sameReplyScope ? new Map(groupReplyViews) : new Map();
+    if (sameReplyScope && items?.some(item => item.reply_jobs?.length)) {
+      // An earlier history read can settle after the retry receipt. Keep the
+      // acknowledged attempt until the transcript catches up.
+      const previousJobs = new Map(lastSocialItems.flatMap(item => item.reply_jobs || []).map(job => [job.id, job]));
+      items = items.map(item => item.reply_jobs?.some(job => previousJobs.get(job.id)?.attempt > job.attempt)
+        ? {...item, reply_jobs: item.reply_jobs.map(job => previousJobs.get(job.id)?.attempt > job.attempt ? previousJobs.get(job.id) : job)}
+        : item);
+    }
+    lastSocialItems = items || [];
+    const durableGroupReplies = new Set(lastSocialItems
+      .filter(item => item.role === 'agent' && item.reply_job_id)
+      .map(item => item.reply_job_id));
     // Keep an open model attached to its original message when a sync rebuilds the list.
     const models = new Map();
     const focusedModelControl = document.activeElement?.closest('.chat-file-model3d') ? document.activeElement : null;
@@ -3446,7 +3625,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         list.append(divider);
         needsDivider = false;
       }
-      const li = document.createElement('li');
+      const groupReplyID = item.role === 'agent' && item.reply_job_id;
+      const li = (groupReplyID && existingGroupReplies.get(groupReplyID)) || document.createElement('li');
+      if (groupReplyID) {
+        li.replaceChildren();
+        li.dataset.replyJobId = groupReplyID;
+        li.dataset.state = 'replied';
+        delete li.dataset.replyAttempt;
+        li.tabIndex = -1;
+      }
       li.dataset.messageId = item.id;
       if (Number.isSafeInteger(item.seq)) li.dataset.messageSeq = String(item.seq);
       const mine = item.user_id === (currentUser && currentUser.id);
@@ -3454,7 +3641,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
+      role.textContent = groupReplyID ? groupReplyAuthor(item.agent_name)
+        : item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
         : (mine ? uiLabel('我', 'Me') : ((member && member.username) || uiLabel('成员', 'Member')));
       const body = document.createElement('div');
       body.className = 'body';
@@ -3471,7 +3659,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.append(role);
       if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
       li.append(body, time);
-      if (!item.retracted && item.reply_jobs?.length) li.insertBefore(renderReplyJobs(item), time);
       if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
@@ -3594,8 +3781,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
       }
       list.append(li);
+      if (!item.retracted) {
+        for (const job of item.reply_jobs || []) {
+          if (job.status === 'replied' || durableGroupReplies.has(job.id)) continue;
+          list.append(renderGroupReplyRow(item, job, existingGroupReplies.get(job.id), previousGroupViews.get(job.id)));
+        }
+      }
     }
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
+    if (focusedGroupReply) {
+      const target = [...list.children].find(row => row.dataset.replyJobId === focusedGroupReply.id);
+      const focusTarget = focusedGroupReply.active.isConnected ? focusedGroupReply.active
+        : (focusedGroupReply.retry && groupReplyButton(target)) || target;
+      focusTarget?.focus({preventScroll: true});
+    }
     renderPendingSend();
     syncGroupReplyProgress();
     attachmentSender?.render();
@@ -3605,6 +3804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
     } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
+    updateLatestMessageControl();
     return false;
   }
 
@@ -4841,12 +5041,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  function closeComposeMenu() {
-    const menu = document.getElementById('compose-menu');
-    const button = document.getElementById('new-conversation');
-    menu.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-  }
+  const composeMenuButton = document.getElementById('new-conversation');
+  const composeMenu = mountActionMenus(document).bind(composeMenuButton, document.getElementById('compose-menu'), {
+    onOpen() {
+      document.getElementById('compose-add-contact').hidden = inPersonalWorkspace();
+      const meetingNotes = document.getElementById('compose-meeting-notes');
+      if (meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
+    },
+  });
 
   function selectedMemberCount() {
     return document.querySelectorAll('#member-choices input:checked').length;
@@ -4939,12 +5141,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncComposeCreate();
   }
 
-  function closeComposeDialog() {
+  let composeOpener;
+  function closeComposeDialog({focus = false} = {}) {
+    const opener = composeOpener;
+    composeOpener = null;
     document.getElementById('compose-dialog').hidden = true;
     document.getElementById('compose-social-form').reset();
     setGroupMode('custom');
     applyMemberFilter();
     syncSelectedCount();
+    if (focus && opener?.isConnected !== false) opener?.focus({preventScroll: true});
   }
 
   function renderMemberChoices(single, preserveSelection = false) {
@@ -4985,8 +5191,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     refreshDirectorySearch();
   }
 
-  function openComposeDialog(mode) {
-    closeComposeMenu();
+  function openComposeDialog(mode, {keyboard = false} = {}) {
+    composeMenu.close({focus: true});
+    composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
@@ -5004,6 +5211,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupMode('custom');
     if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
+    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-title' : 'compose-dialog-title')
+      .focus({preventScroll: true});
   }
 
   function setSearchTab(name) {
@@ -5022,7 +5231,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = true;
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
-    closeComposeMenu();
+    composeMenu.close();
     // The panel is a child of the session pane, which the narrow stylesheet
     // paints only in the sessions-open state. Opening search has to reveal it
     // there, or the panel is laid out inside a display:none parent.
@@ -6513,24 +6722,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
   });
 
-  document.getElementById('new-conversation').addEventListener('click', event => {
-    event.stopPropagation();
-    const menu = document.getElementById('compose-menu');
-    const button = document.getElementById('new-conversation');
-    const open = menu.hidden;
-    document.getElementById('compose-add-contact').hidden = servedByDsbot
-      && workspaces.some(space => space.id === workspaceId() && space.kind === 'personal');
-    const meetingNotes = document.getElementById('compose-meeting-notes');
-    if (open && meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
-    menu.hidden = !open;
-    button.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
   for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
     const button = document.getElementById(id);
     button.hidden = !servedByDsbot;
     button.addEventListener('click', () => {
-      closeComposeMenu();
-      document.getElementById('new-conversation').focus();
+      composeMenu.close({focus: true});
       chatCalls.openMeeting(action);
     });
   }
@@ -6625,9 +6821,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已添加智能体。');
   });
 
-  document.getElementById('compose-new-group').addEventListener('click', () => openComposeDialog('group'));
+  document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
-  document.getElementById('compose-dialog-cancel').addEventListener('click', closeComposeDialog);
+  document.getElementById('compose-dialog-cancel').addEventListener('click', () => closeComposeDialog({focus: true}));
   document.getElementById('compose-mode-switch').addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
     if (!button || composeMode !== 'group') return;
@@ -6979,12 +7175,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  document.addEventListener('click', event => {
-    const menu = document.getElementById('compose-menu');
-    if (menu.hidden) return;
-    if (event.target.closest('.compose-menu')) return;
-    closeComposeMenu();
-  });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (chatMore?.getAttribute('aria-expanded') === 'true') {
@@ -6992,9 +7182,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatMore.focus();
       return;
     }
-    closeComposeMenu();
+    if (!document.getElementById('compose-dialog').hidden && !composing) {
+      event.preventDefault();
+      closeComposeDialog({focus: true});
+      return;
+    }
     if (isSearchOpen()) closeSearchPanel();
-    closeComposeDialog();
   });
 
   const plus = document.querySelector('details.composer-plus');

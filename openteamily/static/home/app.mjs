@@ -1,6 +1,7 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
+import { discoverIntentFromHash } from '../shell/discover-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -88,6 +89,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let profile = null;
   let selectedId = '';
   let loading = false;
+  let signingIn = false;
   let overviewVersion = 0;
 
   async function request(method, path, body) {
@@ -341,10 +343,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const hash = view.location?.pathname === '/login' ? view.location.hash : '';
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
+        const discover = discoverIntentFromHash(hash);
         const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
-          (intent ? publicAgentContinuation(intent) : work?.continuation);
+          (intent ? publicAgentContinuation(intent) : work?.continuation || discover?.continuation);
         const register = loginPanel.querySelector?.('.login-register-button');
-        if (register && continuation) register.href = '/register' + continuation;
+        if (register) register.href = '/register' + (continuation || '');
+        const back = document.getElementById('login-return-discover');
+        if (back) {
+          back.hidden = !discover;
+          if (discover) back.href = discover.target;
+        }
         show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
         return;
       }
@@ -369,6 +377,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const invite = teamInviteFromHash(hash);
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
+        const discover = discoverIntentFromHash(hash);
         if (invite) {
           if (await initializePersonalAgent() && view.location.hash === hash) {
             view.location.replace('/members' + teamInviteHash(invite));
@@ -383,6 +392,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
             target: work.target, backPath: '/w/' + work.slug,
             loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
             errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
+          });
+        } else if (discover) {
+          await continuePublicActivity({
+            target: discover.target, backPath: discover.target,
+            loadingText: '正在返回发现…', errorText: '暂时无法打开你的发现页。', retryId: 'discover-login-retry',
           });
         } else {
           view.location.replace('/');
@@ -445,17 +459,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const result = await request('POST', '/v1/auth/login', {
-      username: form.elements.username.value,
-      password: form.elements.password.value,
-    });
-    if (result.status !== 200) {
-      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
-        : (result.body.error && result.body.error.message) || '无法登录。');
-      return;
+    if (signingIn) return;
+    signingIn = true;
+    const submit = form.querySelector?.('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    show(document, 'loading', '正在登录…');
+    try {
+      const result = await request('POST', '/v1/auth/login', {
+        username: form.elements.username.value,
+        password: form.elements.password.value,
+      });
+      if (result.status !== 200) {
+        show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
+          : (result.body.error && result.body.error.message) || '无法登录。');
+        return;
+      }
+      form.reset();
+      await load();
+    } catch {
+      show(document, 'error', '无法连接到本实例，请重试。');
+    } finally {
+      signingIn = false;
+      if (submit) submit.disabled = false;
     }
-    form.reset();
-    await load();
   });
 
   const logout = document.getElementById('logout-form');

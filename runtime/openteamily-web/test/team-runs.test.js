@@ -32,10 +32,10 @@ async function fixture(reply, {runWorkspace = W, database = ':memory:'} = {}) {
     save: async () => {},
   }
   const services = {rt, ctx: {}, mainBot: async () => 'main', chatTurn: async () => assert.fail('Expected native Bot execution'),
-    async nativeTurn(bot, session, text, rid) {
+    async nativeTurn(bot, session, text, rid, options) {
       const [key] = Object.entries(bots[bot].openteamily.sessionKeys).find(([,id]) => id === session)
       turns.push({key, text, rid, bot, session})
-      const out = reply ? await reply(key, text) : {text: `out:${key.split(':')[4]}`}
+      const out = reply ? await reply(key, text, options?.onProgress) : {text: `out:${key.split(':')[4]}`}
       return {...out, sessionId:session, turnId:'turn-' + turns.length}
     },
   }
@@ -51,6 +51,11 @@ async function fixture(reply, {runWorkspace = W, database = ':memory:'} = {}) {
   } }
   const agents = createAgents({ db: new DatabaseSync(':memory:'), host }).endpoints
   for (const [k, v] of Object.entries(agents)) table[`agents/${k}`] = v
+  table['agents/groupTurn'] = (payload, call) => {
+    assert.equal(call.internal, true)
+    assert.equal(typeof payload.onProgress, 'function')
+    return agents.turn(payload, {onProgress:payload.onProgress})
+  }
   const dataDir = mkdtempSync(join(tmpdir(), 'ot-tr-works-'))
   registerFeature(table, 'artifacts', artifacts(featureHost({name:'artifacts', identity, dataDir, table})))
   const a = (await agents.create({ workspace_id: runWorkspace, name: '研究', idempotency_key: 'a'.repeat(16) })).agent
@@ -106,20 +111,83 @@ test('a failed step blocks dependants; retry resets them and finishes the run', 
   await assert.rejects(e.retry({ workspace_id: W, id: run.id, position: 1 }), (err) => err.status === 409)
 })
 
+test('only the authorized live attempt can expose an ephemeral preview', async () => {
+  const controls = new Map()
+  const {feature, e, a, b, state, turns, db} = await fixture((key, _prompt, onProgress) => {
+    const [, , , , position, attempt] = key.split(':')
+    if (position !== '0') return {text:`finished ${position}`}
+    const control = Promise.withResolvers()
+    controls.set(attempt, {...control, onProgress})
+    return control.promise
+  }, {runWorkspace:TEAM})
+  const {run} = await e.create(body(a, b, {workspace_id:TEAM}))
+  const path = `/v1/workspaces/${TEAM}/team-runs/${run.id}`
+  const get = async () => (await e.v1({method:'GET', path})).body.run
+  const tick = () => new Promise(resolve => setImmediate(resolve))
+  await tick()
+  const first = controls.get('1')
+  const long = '临'.repeat(19_999) + '🚀rest'
+  first.onProgress(long)
+  const partial = (await get()).steps[0]
+  assert.equal(partial.status, 'running')
+  assert.equal(partial.output, '')
+  assert.equal(partial.preview.length, 20_000)
+  assert.ok(partial.preview.isWellFormed())
+  assert.equal(db.prepare('SELECT output FROM team_run_steps WHERE run_id=? AND position=0').get(run.id).output, '')
+  assert.equal((await e.v1({method:'POST', path:path+'/steps/0/artifact'})).status, 409)
+  assert.ok(!(await e.v1({method:'GET', path:path.slice(0, path.lastIndexOf('/'))})).body.items[0].steps)
+  state.teams = []
+  assert.equal((await e.v1({method:'GET', path})).status, 404)
+  state.teams = [{id:TEAM}]
+  first.onProgress('discarded attempt')
+  first.reject(new Error('DS-Bot turn timed out'))
+  await settle(feature)
+  assert.equal((await get()).steps[0].preview, undefined)
+
+  const retry = attempt => e.v1({method:'POST', path:path+'/steps/0/retry', body:{attempt}})
+  assert.equal((await retry(1)).status, 200)
+  await tick()
+  const second = controls.get('2')
+  second.onProgress('new preview')
+  first.onProgress('stale callback')
+  assert.equal((await get()).steps[0].preview, 'new preview')
+  second.reject(new Error('DS-Bot turn timed out'))
+  await settle(feature)
+  assert.equal((await retry(1)).status, 409)
+  assert.equal((await retry(0)).status, 400)
+  assert.equal((await retry(2)).status, 200)
+  await tick()
+  controls.get('3').resolve({text:'authoritative reply'})
+  await settle(feature)
+  const completed = await get()
+  assert.equal(completed.steps[0].output, 'authoritative reply')
+  assert.equal(completed.steps[0].preview, undefined)
+  assert.match(turns.at(-1).text, /authoritative reply/)
+  assert.doesNotMatch(turns.at(-1).text, /preview|discarded|stale/)
+})
+
 test('cancel stops pending steps and ignores late replies; validation refuses bad graphs', async () => {
   const pending = []
-  const release = () => { for (const r of pending.splice(0)) r({ text: 'late' }) }
-  const { feature, e, a, b, agents, turns } = await fixture(() => new Promise((r) => { pending.push(r) }))
+  const release = () => {
+    for (const {resolve, preview} of pending.splice(0)) {
+      preview('late draft')
+      resolve({text:'late'})
+    }
+  }
+  const { feature, e, a, b, agents, turns } = await fixture((_key, _text, preview) =>
+    new Promise(resolve => { pending.push({resolve, preview}) }))
   const { run } = await e.create(body(a, b))
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(turns.length, 2)
+  pending[0].preview('visible before cancel')
+  assert.equal((await e.get({workspace_id:W, id:run.id})).run.steps[0].preview, 'visible before cancel')
   const cancelled = (await e.cancel({ workspace_id: W, id: run.id })).run
   assert.equal(cancelled.status, 'cancelled')
   await new Promise((r) => setImmediate(r))
   release()
   await settle(feature)
   const after = (await e.get({ workspace_id: W, id: run.id })).run
-  assert.ok(after.steps.every((s) => s.status === 'cancelled'))
+  assert.ok(after.steps.every((s) => s.status === 'cancelled' && !s.preview && !s.output))
   assert.equal(turns.length, 2)
   await e.remove({ workspace_id: W, id: run.id })
   await assert.rejects(e.get({ workspace_id: W, id: run.id }), (err) => err.status === 404)

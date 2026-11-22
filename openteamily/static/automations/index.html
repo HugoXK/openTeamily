@@ -98,8 +98,15 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
-        <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        <div class="editor-run-actions">
+          <button type="button" id="tick-automation" hidden>运行一次</button>
+          <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        </div>
         <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
+        <div class="manual-run-feedback">
+          <p id="manual-run-status" class="note" role="status"></p>
+          <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
+        </div>
       </header>
       <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
         <h2 id="meeting-action-source-heading">会议行动项</h2>
@@ -173,12 +180,7 @@
       <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
-        <button type="button" id="tick-automation" hidden>运行一次</button>
         <button type="button" id="remove-automation" hidden>删除</button>
-      </div>
-      <div class="manual-run-feedback">
-        <p id="manual-run-status" class="note" role="status"></p>
-        <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
       </div>
     </form>
     <section id="run-panel" hidden>
@@ -204,11 +206,6 @@
     </section>
   </section>
   </main>
-  <nav class="mobile-primary-nav" aria-label="主导航">
-    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
-    <a href="/space"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
-    <a href="/automations" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg>自动化</a>
-    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
-  </nav>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

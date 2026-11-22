@@ -61,12 +61,15 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
         const [key, extra] = req.query.getAll('key')
         const [receipt, repeated] = req.query.getAll('receipt')
+        const [after, repeatedAfter] = req.query.getAll('after')
         if (!key || extra !== undefined || repeated !== undefined || (receipt !== undefined && receipt !== '1')
-            || [...req.query.keys()].some(name => name !== 'key' && name !== 'receipt')) {
+            || repeatedAfter !== undefined || (after !== undefined && (receipt || !/^(0|[1-9][0-9]{0,8})$/.test(after)))
+            || [...req.query.keys()].some(name => !['key','receipt','after'].includes(name))) {
           throw new FeatureError(400, 'invalid', 'Supply one message send key')
         }
         const {message, reply, ...progress} = await call('replyProgress', {
           workspace_id:workspaceId,id,conversation_id:conversationId,key,receipt:receipt === '1',
+          ...(after !== undefined ? {after:Number(after),signal:req.signal} : {}),
         })
         return {body: message ? {...progress,...publicPair({message,reply}, workspaceId, id)} : progress}
       }) },

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { createAgents } from '../features/agents/index.js'
 import { digest } from '../featurekit/http.js'
-import { createLegacyDispatch } from '../src/dispatch.js'
+import { createLegacyDispatch, createReplyStreamDispatch, REPLY_STREAM_PATH } from '../src/dispatch.js'
 import { sendPrivateAttachmentMessage } from '../../../openteamily/static/chat/files.mjs'
 
 const workspace = 'a'.repeat(32)
@@ -649,11 +649,11 @@ test('live replies reveal only the current native snapshot and keep the final re
     lock = current.catch(() => {})
     return current
   }
-  runtime.nativeTurn = (bot, sessionId, _prompt, _requestId, {onProgress, files, onStaged}) => runtime.exclusive(async () => {
+  runtime.nativeTurn = (bot, sessionId, _prompt, _requestId, {onProgress, onPhase, files, onStaged}) => runtime.exclusive(async () => {
     turns += 1
     assert.equal(bot,'agent')
     if (files) onStaged(files.map(file => ({title:file.title,mime:file.mime,bytes:file.data.length,ref:{id:'fixture'}})))
-    started.resolve(onProgress)
+    started.resolve({onProgress,onPhase})
     const text = await completion.promise
     return {text,sessionId,turnId:1}
   })
@@ -666,13 +666,60 @@ test('live replies reveal only the current native snapshot and keep the final re
   const request = legacyRequest(e)
   const key = 'live-reply-key-1234'
   const progress = (scope = convo, value = `key=${key}`) => request(scope+'/reply-progress',{},value)
+  const streamDispatch = createReplyStreamDispatch({endpoints:{
+    'agents/replyStream': (payload,call) => {
+      assert.equal(call.internal,true)
+      return e.replyStream(payload,call.request)
+    },
+  }})
+  const streamURL = 'http://dsbot' + REPLY_STREAM_PATH + '?' + new URLSearchParams({
+    workspace, agent:agent.id, conversation:conversation.id, key,
+  })
+  const openStream = options => streamDispatch(new Request(streamURL,options))
+  const nextEvent = async reader => {
+    while (true) {
+      const {value,done} = await reader.read()
+      assert.equal(done,false)
+      const text = new TextDecoder().decode(value)
+      if (text.startsWith('data: ')) return JSON.parse(text.slice(6))
+    }
+  }
+  assert.equal((await streamDispatch(new Request(streamURL+'&key='+key))).status,400)
+  assert.equal((await streamDispatch(new Request(streamURL.replace(workspace,'b'.repeat(32))))).status,404)
+  const abort = new AbortController()
+  const streaming = await openStream({signal:abort.signal})
+  assert.match(streaming.headers.get('content-type'), /^text\/event-stream/)
+  const reader = streaming.body.getReader()
+  assert.deepEqual(await nextEvent(reader),{state:'pending',append:''})
   assert.equal((await progress()).status,404)
   const send = () => request(convo+'/messages',{method:'POST',
     headers:{'Content-Type':'application/json','Idempotency-Key':key}, body:JSON.stringify({body:'Take your time'})})
   const pending = send()
-  const update = await started.promise
+  const {onProgress:update,onPhase} = await started.promise
   assert.deepEqual(await (await progress()).json(),{state:'running',text:''})
-  update('实际输出')
+  const watch = async (revision, publish) => {
+    let returned = false
+    const next = progress(convo, `key=${key}&after=${revision}`).then(async res => {
+      returned = true
+      return res.json()
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(returned,false)
+    publish()
+    return next
+  }
+  assert.deepEqual(await watch(0, () => onPhase('thinking')),
+    {state:'running',text:'',phase:'thinking',revision:1})
+  const next = await nextEvent(reader)
+  assert.equal(next.state, 'running')
+  assert.equal(next.phase, 'thinking')
+  assert.deepEqual(await watch(1, () => { update('实际输出'); onPhase('writing') }),
+    {state:'running',text:'实际输出',phase:'writing',revision:3})
+  assert.deepEqual(await nextEvent(reader),{state:'running',phase:'writing',revision:3,append:'实际输出'})
+  abort.abort()
+  assert.equal((await reader.read()).done,true)
+  const reconnected = (await openStream()).body.getReader()
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:3,append:'实际输出'})
   const first = await progress()
   assert.equal(first.headers.get('cache-control'),'no-store')
   assert.deepEqual(await first.json(),{state:'running',text:'实际输出'})
@@ -690,12 +737,18 @@ test('live replies reveal only the current native snapshot and keep the final re
   assert.equal((await progress(convo.replace(workspace,'b'.repeat(32)))).status,404)
   assert.equal((await progress(convo.replace(conversation.id,other.id))).status,404)
   assert.equal((await progress(convo,`key=${key}&key=${key}`)).status,400)
+  assert.equal((await progress(convo,`key=${key}&after=1&after=2`)).status,400)
+  assert.equal((await progress(convo,`key=${key}&receipt=1&after=1`)).status,400)
   const retry = send()
   update('')
   assert.deepEqual(await (await progress()).json(),{state:'running',text:''})
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:4,text:''})
   update('重新输出')
   assert.deepEqual(await (await progress()).json(),{state:'running',text:'重新输出'})
-  completion.resolve('完整回复')
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:5,append:'重新输出'})
+  assert.deepEqual(await watch(5, () => completion.resolve('完整回复')),{state:'succeeded'})
+  assert.equal((await nextEvent(reconnected)).state,'succeeded')
+  assert.equal((await reconnected.read()).done,true)
   const [firstSend,retrySend] = await Promise.all([pending,retry])
   const result = await firstSend.json()
   assert.deepEqual(await retrySend.json(),result)
@@ -714,7 +767,7 @@ test('live replies reveal only the current native snapshot and keep the final re
   form.append('file',new Blob(['data'],{type:'text/plain'}),'example.txt')
   const attachmentSend = request(fileConvo+'/messages',{method:'POST',
     headers:{'Idempotency-Key':fileKey},body:form})
-  const updateAttachment = await Promise.race([started.promise,attachmentSend.then(response => {
+  const {onProgress:updateAttachment} = await Promise.race([started.promise,attachmentSend.then(response => {
     assert.fail(`Native turn did not start (HTTP ${response.status})`)
   })])
   updateAttachment('正在读附件')

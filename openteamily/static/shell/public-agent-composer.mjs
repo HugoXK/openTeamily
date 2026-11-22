@@ -1,4 +1,4 @@
-import {PUBLIC_AGENT_MESSAGE_LIMIT, stagePublicAgentOpening} from './public-agent-link.mjs';
+import {PUBLIC_AGENT_MESSAGE_LIMIT, publicAgentIntentFromHash, stagePublicAgentOpening} from './public-agent-link.mjs';
 
 export function mountPublicAgentComposer(document) {
   const form = document.getElementById('public-agent-composer');
@@ -7,8 +7,13 @@ export function mountPublicAgentComposer(document) {
   const status = document.getElementById('public-agent-composer-status');
   const view = document.defaultView;
   if (!input || !submit || !status || !view) return;
+  let selected = null;
 
   function update() {
+    if (selected && input.value !== selected.text) {
+      selected.button.setAttribute('aria-pressed', 'false');
+      selected = null;
+    }
     submit.disabled = !input.value.trim() || input.value.length > PUBLIC_AGENT_MESSAGE_LIMIT;
     status.hidden = true;
     status.textContent = '';
@@ -17,7 +22,7 @@ export function mountPublicAgentComposer(document) {
   form.addEventListener('submit', event => {
     event.preventDefault();
     if (submit.disabled) return;
-    const continuation = stagePublicAgentOpening(view, {
+    const continuation = selected?.text === input.value ? selected.hash : stagePublicAgentOpening(view, {
       slug: form.dataset.slug, listingId: form.dataset.listingId, text: input.value,
     });
     if (!continuation) {
@@ -28,6 +33,28 @@ export function mountPublicAgentComposer(document) {
     submit.disabled = true;
     view.location.assign('/login' + continuation);
   });
+  for (const link of document.querySelectorAll('a[data-public-agent-starter]')) {
+    const hash = link.hash;
+    const intent = publicAgentIntentFromHash(hash);
+    if (intent?.slug !== form.dataset.slug || intent.quickStart === undefined) continue;
+    const text = link.firstElementChild?.textContent;
+    if (!text) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = link.className;
+    button.textContent = text;
+    button.setAttribute('aria-pressed', 'false');
+    button.addEventListener('click', () => {
+      selected?.button.setAttribute('aria-pressed', 'false');
+      selected = {button, hash, text};
+      button.setAttribute('aria-pressed', 'true');
+      input.value = text;
+      update();
+      input.focus();
+      input.setSelectionRange(text.length, text.length);
+    });
+    link.replaceWith(button);
+  }
   input.addEventListener('input', update);
   view.addEventListener('pageshow', event => { if (event.persisted) update(); });
   input.disabled = false;

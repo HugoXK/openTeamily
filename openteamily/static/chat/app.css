@@ -236,6 +236,14 @@ body.app-workspace > #status[data-announce-only="true"] {
 
 #chat-back { display: none; }
 
+.chat-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 #message-scroller {
   display: flex;
   flex-direction: column;
@@ -248,7 +256,7 @@ body.app-workspace > #status[data-announce-only="true"] {
 #message-scroller > * { flex-shrink: 0; }
 
 /* A short live thread stays near the composer. Overflow and history keep chronological scrolling. */
-#message-scroller:has(> #chat-back-to-latest[hidden]) > #message-list:has(> li) {
+#message-scroller:not([data-reading-history]) > #message-list:has(> li) {
   margin-block-start: auto;
 }
 
@@ -587,36 +595,30 @@ body.app-workspace > #status[data-announce-only="true"] {
   font-weight: 500;
 }
 
-.group-reply-jobs { display: grid; gap: 0.25rem; margin-top: 0.4rem; }
-.group-reply-jobs:empty { display: none; }
-.group-reply-job {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.1rem 0.55rem;
+#message-list > li[data-reply-job-id] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+#message-list > li[data-reply-job-id]:focus-visible {
+  outline: 2px solid var(--ot-accent);
+  outline-offset: 2px;
+}
+.group-reply-state {
   color: var(--ot-muted);
   font-size: 0.8rem;
-  overflow-wrap: anywhere;
 }
-.group-reply-job[data-state="failed"] { color: var(--ot-danger); }
-.group-reply-preview {
-  flex: 0 0 100%;
-  color: var(--ot-ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.group-reply-job button {
-  min-height: 2rem;
-  padding: 0.15rem 0.45rem;
-  border: 1px solid currentColor;
-  border-radius: 0.45rem;
+.group-reply-job[data-state="failed"] .group-reply-state { color: var(--ot-danger); }
+.group-reply-preview:not([hidden]) { margin-top: 0.25rem; }
+#message-list .group-reply-job > .group-reply-retry {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  margin: 0.15rem 0 0;
   background: transparent;
   color: var(--ot-accent-hover);
-  font: inherit;
   cursor: pointer;
 }
-.group-reply-job button:hover { background: var(--ot-bg-accent); }
-.group-reply-job button:disabled { opacity: 0.6; cursor: wait; }
+#message-list .group-reply-job > .group-reply-retry:hover { background: var(--ot-surface); }
+.group-reply-job .group-reply-retry[aria-disabled="true"] { opacity: 0.6; cursor: wait; }
 
 #group-agent-action { padding: .6rem 1rem; border-bottom: 1px solid var(--ot-line); }
 #group-agent-action[hidden] { display: none; }
@@ -1360,6 +1362,7 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   position: absolute; top: calc(100% + .375rem); left: auto; right: 0; z-index: 20; min-width: 11rem; padding: .375rem;
   border: 1px solid var(--ot-line); border-radius: .75rem; background: var(--ot-surface); box-shadow: var(--ot-shadow-lg);
   display: grid; gap: 1px;
+  max-height: min(28rem, calc(100dvh - 5.5rem)); overflow: auto; overscroll-behavior: contain;
 }
 #compose-menu[hidden] { display: none; }
 #compose-menu > :is(a, button) {
@@ -1367,6 +1370,12 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   background: transparent; box-shadow: none; color: var(--ot-ink); font-size: .8125rem; text-align: left; text-decoration: none;
 }
 #compose-menu > :is(a, button):hover:not(:disabled) { background: var(--ot-bg-accent); }
+#compose-menu > :is(a, button):focus-visible {
+  background: var(--ot-bg-accent); outline: 2px solid var(--ot-accent); outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  #compose-menu > :is(a, button) { min-height: 2.75rem; }
+}
 #compose-menu > button:disabled { color: var(--ot-muted); opacity: .6; }
 #compose-menu svg { flex: 0 0 auto; width: 16px; height: 16px; opacity: .75; }
 
@@ -2301,12 +2310,19 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   font-size: .8125rem;
 }
 #chat-back-to-latest:not([hidden]) {
-  display: block;
-  position: sticky;
-  inset-block-end: .5rem;
+  position: absolute;
+  inset-block-end: .625rem;
+  inset-inline: 0;
   z-index: 2;
-  margin: .5rem auto 1rem;
+  margin-inline: auto;
+  width: max-content;
+  max-width: calc(100% - 1rem);
+  min-height: 44px;
+  padding-inline: .875rem;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 999px;
   background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-sm);
 }
 
 #message-list > li.chat-unread-divider {

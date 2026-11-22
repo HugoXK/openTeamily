@@ -86,12 +86,15 @@ class SettingsPage:
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-share.mjs': ('shell', 'public-agent-share.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/discover-link.mjs': ('shell', 'discover-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
@@ -216,11 +219,21 @@ class SettingsPage:
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
         if path == '/discover':
-            if query in ('tab=agents', 'tab=agents&section=groups'):
-                return True
+            pairs = parse_qsl(query, keep_blank_values=True)
+            filters = dict(pairs)
+            if filters.get('tab') == 'agents':
+                if len(filters) != len(pairs) or not all(filters.values()):
+                    return False
+                text = filters.get('q', '')
+                if 'section' in filters:
+                    return (filters['section'] == 'groups' and filters.keys() <= {'tab', 'section', 'q'}
+                            and len(text) <= 60 and not any(ord(ch) < 32 for ch in text))
+                return (filters.keys() <= {'tab', 'category', 'q'}
+                        and ('category' not in filters or filters['category'] in discover.AGENT_CATEGORY_SLUGS)
+                        and len(text) <= 80 and not any(ord(ch) < 32 for ch in text))
             # Feed filters and work detail links use the same management page.
             seen = set()
-            for key, value in parse_qsl(query, keep_blank_values=True):
+            for key, value in pairs:
                 if key in seen or not value:
                     return False
                 seen.add(key)

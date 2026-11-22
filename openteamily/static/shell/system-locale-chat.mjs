@@ -100,8 +100,6 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.group.members": ["成员", "Members"],
   "chat.group.no_members_to_invite": ["没有可邀请的工作区成员。", "No workspace members available to invite."],
   "chat.cancel": ["取消", "Cancel"],
-  "chat.nav.primary": ["主导航", "Primary navigation"],
-  "chat.nav.settings": ["设置", "Settings"],
   "chat.auth.sign_in": ["登录", "Sign in"],
   "chat.auth.username": ["用户名", "Username"],
   "chat.auth.password": ["密码", "Password"],

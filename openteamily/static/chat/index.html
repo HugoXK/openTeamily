@@ -22,6 +22,7 @@
   <link rel="modulepreload" href="/shell/work-notification.mjs">
   <link rel="modulepreload" href="/shell/public-agent-link.mjs">
   <link rel="modulepreload" href="/shell/chat-utils.mjs">
+  <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
   <link rel="modulepreload" href="/look/app.mjs">
   <link rel="modulepreload" href="/home/runtime-readiness.mjs">
@@ -95,7 +96,7 @@
       </label>
       <div class="compose-menu">
         <button type="button" id="new-conversation" class="toolbar-add" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建" aria-label="创建" data-ui-title="chat.create" data-ui-label="chat.create">+</button>
-        <div id="compose-menu" role="menu" hidden>
+        <div id="compose-menu" role="menu" aria-labelledby="new-conversation" hidden>
           <a href="/agents" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 14 10 M14 4v2 M18 8h2 M17 5l1-1 M10 6l1 1 M17 11l1 1"/></svg><span data-ui-text="chat.compose.create_agent">创建智能体</span></a>
           <button type="button" role="menuitem" id="compose-new-group"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6 M16 4.5a3.5 3.5 0 0 1 0 7 M18 14c2 .8 3 2.8 3 6"/></svg><span data-ui-text="chat.compose.new_group">新建群组</span></button>
           <a href="/contacts" role="menuitem" data-ui-text="chat.compose.add_contact">添加联系人</a>
@@ -175,7 +176,7 @@
     </section>
     <section id="compose-dialog" hidden>
       <form id="compose-social-form">
-        <h2 id="compose-dialog-title"><span data-ui-text="chat.compose.new_group">新建群组</span></h2>
+        <h2 id="compose-dialog-title" tabindex="-1"><span data-ui-text="chat.compose.new_group">新建群组</span></h2>
         <p id="compose-intro" class="compose-intro" data-ui-text="chat.group.create_intro">添加名称，然后邀请好友并添加 AI 智能体。</p>
         <div id="compose-mode-switch" class="compose-mode-switch" role="tablist" aria-label="群组类型" data-ui-label="chat.group.kind">
           <button type="button" id="compose-mode-custom" role="tab" data-group-mode="custom" aria-selected="true">
@@ -216,12 +217,7 @@
       </form>
     </section>
   </section>
-  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="chat.nav.primary">
-    <a href="/chat" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span data-ui-text="chat.nav.chat">聊天</span></a>
-    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span data-ui-text="chat.nav.discover">发现</span></a>
-    <a href="/contacts"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="chat.nav.contacts">联系人</span></a>
-    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg><span data-ui-text="chat.nav.settings">设置</span></a>
-  </nav>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
@@ -648,26 +644,28 @@
       <ul id="group-agent-requests" aria-live="polite"></ul>
       </details>
     </section>
-    <div id="message-scroller">
-      <div id="chat-empty" class="note">
-        <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
-        <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
-        <p class="empty-next">
-          <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
-          <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>
-        </p>
+    <div class="chat-timeline">
+      <div id="message-scroller" tabindex="-1">
+        <div id="chat-empty" class="note">
+          <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
+          <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
+          <p class="empty-next">
+            <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
+            <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>
+          </p>
+        </div>
+        <div class="chat-history-toolbar">
+          <button type="button" id="chat-load-older" hidden data-ui-text="chat.messages.older">加载更早的消息</button>
+          <span id="chat-history-status" class="note" role="status"></span>
+        </div>
+        <ol id="message-list"></ol>
+        <div id="chat-unread-actions" hidden>
+          <button type="button" id="chat-load-newer" data-ui-text="chat.messages.newer" hidden>加载后续消息</button>
+          <button type="button" id="chat-mark-thread-read" data-ui-text="chat.messages.mark_thread_read" hidden>将此会话标为已读</button>
+          <span id="chat-unread-status" role="status"></span>
+        </div>
       </div>
-      <div class="chat-history-toolbar">
-        <button type="button" id="chat-load-older" hidden data-ui-text="chat.messages.older">加载更早的消息</button>
-        <span id="chat-history-status" class="note" role="status"></span>
-      </div>
-      <ol id="message-list"></ol>
-      <div id="chat-unread-actions" hidden>
-        <button type="button" id="chat-load-newer" data-ui-text="chat.messages.newer" hidden>加载后续消息</button>
-        <button type="button" id="chat-mark-thread-read" data-ui-text="chat.messages.mark_thread_read" hidden>将此会话标为已读</button>
-        <span id="chat-unread-status" role="status"></span>
-      </div>
-      <button type="button" id="chat-back-to-latest" hidden data-ui-text="chat.messages.back_latest">回到最新消息</button>
+      <button type="button" id="chat-back-to-latest" aria-controls="message-list" hidden data-ui-text="chat.messages.back_latest">回到最新消息</button>
     </div>
     <p id="public-chat-status" class="note" role="status" hidden></p>
     <details id="public-draft-recovery" hidden>

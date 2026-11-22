@@ -475,6 +475,86 @@ test('meeting draft uses only the native text inference service and never saves 
     `/meetings#workspace=${WS}&meeting=${saved.body.meeting.id}`)
 })
 
+test('saved meeting draft jobs replay, queue, and discard late or revised results', async t => {
+  const bot = await boot()
+  const other = await boot()
+  const gateway = new Request('http://fixture', {headers:{'x-ot-owner-username':'fixture-user'}})
+  const call = (actor, method, path, body) => actor.features.table['meetings/v1']({method,path,body}, {request:gateway})
+  const route = base('draft')
+  const read = (meeting, actor = bot) => call(actor,'GET',`${route}?meeting=${meeting.id}&revision=${meeting.revision}`)
+  const command = (meeting, options) => call(bot,'POST',route,{meeting_id:meeting.id,revision:meeting.revision,...options})
+  const start = (meeting, previous_job_id = null) => command(meeting,{mode:'start',previous_job_id})
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+  const pending = []
+  attachRuntime({rt:{},ctx:{},textOnly:()=> assert.fail('use isolated background inference'), backgroundTextOnly:prompt => {
+    const completion = Promise.withResolvers()
+    pending.push({source:JSON.parse(prompt.split('\n').at(-1)), completion})
+    return completion.promise
+  }})
+  t.after(detachRuntime)
+  const {meeting:first} = (await bot.call('meetings','POST',base(),body,key())).body
+  const {meeting:second} = (await bot.call('meetings','POST',base(),{...body,title:'后续会议'},key())).body
+  const accepted = await start(first)
+  assert.equal(accepted.status,202)
+  assert.equal(accepted.body.job.state,'running')
+  const job = accepted.body.job.id
+  assert.equal((await start(first)).body.job.id,job)
+  const queued = await start(second)
+  assert.equal(queued.body.job.state,'queued')
+  assert.equal(pending.length,1)
+  assert.equal(pending[0].source.transcript,body.transcript)
+  assert.equal((await read(first,other)).status,404)
+  assert.equal((await call(bot,'GET',`${base('draft','b'.repeat(32))}?meeting=${first.id}&revision=1`)).status,404)
+  assert.equal((await command(first,{mode:'cancel',job_id:job})).body.job.state,'cancelled')
+  pending[0].completion.resolve('{"summary":"迟到的结果","action_items":[]}')
+  await flush()
+  assert.equal((await read(first)).body.job.state,'cancelled')
+  assert.equal((await read(first)).body.job.draft,undefined)
+  assert.equal((await read(second)).body.job.state,'running')
+  assert.equal(pending.length,2)
+  assert.equal((await bot.call('meetings','POST',base(second.id),{revision:1,changes:{transcript:'已编辑原会议正文'}})).status,200)
+  pending[1].completion.resolve('{"summary":"已失效的结果","action_items":[]}')
+  await flush()
+  assert.equal((await read(second)).status,409)
+  assert.equal((await read({...second,revision:2})).body.job,null)
+  const retry = (await start(first,job)).body.job
+  assert.notEqual(retry.id,job)
+  assert.equal((await start(first,job)).body.job.id,retry.id)
+  pending[2].completion.resolve('{"summary":"待核对的结果","action_items":[]}')
+  await flush()
+  const detail = await call(bot,'GET',base(first.id))
+  assert.deepEqual(detail.body.draft_job,{id:retry.id,state:'ready',draft:{summary:'待核对的结果',action_items:[]}})
+  assert.equal(detail.body.meeting.summary,body.summary)
+  const reopened = await boot(bot.vol)
+  assert.deepEqual((await read(first,reopened)).body.job,detail.body.draft_job)
+  assert.equal((await command(first,{mode:'dismiss',job_id:job})).body.job.state,'ready')
+  assert.deepEqual((await command(first,{mode:'dismiss',job_id:retry.id})).body.job,{id:retry.id,state:'dismissed'})
+})
+
+test('a DS-Bot restart marks a held saved draft interrupted without automatically rerunning it', async t => {
+  const bot = await boot()
+  const {meeting} = (await bot.call('meetings','POST',base(),body,key())).body
+  const gateway = new Request('http://fixture', {headers:{'x-ot-owner-username':'fixture-user'}})
+  const route = base('draft')
+  const completion = Promise.withResolvers()
+  let turns = 0
+  attachRuntime({rt:{},ctx:{},textOnly:() => { turns += 1; return completion.promise }})
+  t.after(detachRuntime)
+  const start = await bot.features.table['meetings/v1']({method:'POST',path:route,
+    body:{mode:'start',meeting_id:meeting.id,revision:1,previous_job_id:null}}, {request:gateway})
+  assert.equal(start.status,202)
+  const reopened = await boot(bot.vol)
+  const read = () => reopened.features.table['meetings/v1']({method:'GET',path:`${route}?meeting=${meeting.id}&revision=1`}, {request:gateway})
+  const {job} = (await read()).body
+  assert.equal(job.id,start.body.job.id)
+  assert.equal(job.state,'failed')
+  assert.match(job.error,/重启/)
+  completion.resolve('{"summary":"旧进程返回的结果","action_items":[]}')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(turns,1)
+  assert.deepEqual((await read()).body.job,job)
+})
+
 test('meeting data persists in this volume only; another DS-Bot never sees it', async () => {
   const vol = volume()
   const first = await boot(vol)

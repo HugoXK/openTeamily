@@ -203,9 +203,11 @@ test('native reply progress matches the admitted request, session, turn and atte
   const other = {id:'chat2'}
   const agent = {id:session.id, session}
   const progress = []
+  const phases = []
   rt.sendUser = async request => { log.push(request) }
   const result = runTurn(rt, ctx, 'bot1', 'read this', 'own-rpc', 1000, [{type:'file', receiptId:'file1'}], {
     onProgress: value => progress.push(value),
+    onPhase: value => phases.push(value),
   })
   const event = (type, data, subject = session) => ctx.emit('session/event', subject, {type, data})
   let revision = 0
@@ -233,14 +235,17 @@ test('native reply progress matches the admitted request, session, turn and atte
   delta('first', 'private reasoning', 'reasoning-delta')
   delta('first', 'private tool input', 'tool-call-delta')
   assert.deepEqual(progress, [])
+  assert.deepEqual(phases, ['thinking'])
 
   delta('first', 'draft to discard')
   assert.deepEqual(progress, ['draft to discard'])
+  assert.deepEqual(phases, ['thinking','writing'])
   event('assistant/attempt', {turn:5,step:1})
   stream('end', {attemptId:'first',outcome:{kind:'committed',eventType:'assistant/attempt',seq:12}})
   delta(undefined, 'unidentified late stream data')
   event('llm/retry-started', {turn:5,step:1})
   assert.deepEqual(progress, ['draft to discard', ''])
+  assert.equal(phases.at(-1), 'preparing')
 
   stream('start', {attemptId:'retry',turn:5,step:1})
   event('turn/start', {turn:4})

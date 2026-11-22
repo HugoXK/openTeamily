@@ -22,6 +22,77 @@ function markNavigation() {
     if (target === here || inSettings || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
+  const more = document.querySelector('.mobile-nav-more');
+  if (more) {
+    if (document.querySelector('#mobile-nav-destinations [aria-current="page"]')) more.setAttribute('aria-current', 'location');
+    else more.removeAttribute('aria-current');
+  }
+}
+
+const mobileDestinations = [
+  ['/chat', 'chat', '聊天', 'Chats', 'M4 4h16v12H9l-5 4V4Z'],
+  ['/discover', 'discover', '发现', 'Discover', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z'],
+  ['/space', 'space', '作品', 'Space', 'm12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5'],
+  ['/contacts', 'contacts', '联系人', 'Contacts', 'M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2'],
+  ['/automations', 'automations', '自动化', 'Automations', 'M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9'],
+  ['/meetings', 'meetings', '会议', 'Meetings', 'M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16'],
+  ['/settings', 'settings', '设置', 'Settings', 'M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4'],
+];
+
+function updateMobileNavigationLanguage(doc, language) {
+  const nav = doc.querySelector('.mobile-primary-nav');
+  if (!nav) return;
+  const english = language === 'en';
+  const locale = english ? 'en' : 'zh-CN';
+  if (doc.documentElement.lang === locale) nav.removeAttribute('lang');
+  else nav.setAttribute('lang', locale);
+  nav.setAttribute('aria-label', english ? 'Main navigation' : '主导航');
+  for (const [, key, zh, en] of mobileDestinations) {
+    nav.querySelector(`[data-ui-text="shell.${key}"]`).textContent = english ? en : zh;
+  }
+  nav.querySelector('[data-ui-text="shell.more"]').textContent = english ? 'More' : '更多';
+}
+
+function bindMobileNavigation(doc) {
+  const nav = doc.querySelector('.mobile-primary-nav');
+  if (!nav || nav.querySelector('.mobile-nav-more')) return;
+  const icon = path => `<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="${path}"/></svg>`;
+  const link = ([href, key, , , path]) => `<a href="${href}">${icon(path)}<span data-ui-text="shell.${key}"></span></a>`;
+  nav.innerHTML = mobileDestinations.slice(0, 3).map(link).join('')
+    + `<button type="button" class="mobile-nav-more" aria-expanded="false" aria-controls="mobile-nav-destinations">
+        ${icon('M4 12h2 M11 12h2 M18 12h2')}<span data-ui-text="shell.more"></span>
+      </button>
+      <div id="mobile-nav-destinations" class="mobile-nav-destinations" hidden>
+        ${mobileDestinations.slice(3).map(link).join('')}
+      </div>`;
+  updateMobileNavigationLanguage(doc, doc.documentElement.lang);
+
+  const button = nav.querySelector('.mobile-nav-more');
+  const panel = nav.querySelector('#mobile-nav-destinations');
+  const close = (returnFocus = false) => {
+    if (panel.hidden) return;
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    if (returnFocus) button.focus({preventScroll: true});
+  };
+  button.addEventListener('click', event => {
+    if (!panel.hidden) return close(true);
+    panel.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    if (event.detail === 0) panel.querySelector('a').focus({preventScroll: true});
+  });
+  nav.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || panel.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close(true);
+  });
+  nav.addEventListener('focusout', event => {
+    if (!nav.contains(event.relatedTarget)) close();
+  });
+  doc.addEventListener('pointerdown', event => {
+    if (!nav.contains(event.target)) close();
+  }, {capture: true});
 }
 
 /* The account stores no location, so「日落到日出」has no sunrise to read. Until one exists, the
@@ -139,14 +210,14 @@ function syncAccountSlot(doc) {
   const slot = doc.querySelector('.account-slot');
   const panel = signedInPanel(doc);
   if (!slot) return;
-  const visible = Boolean(panel && !panel.hasAttribute('hidden'));
+  const who = doc.getElementById('whoami');
+  const name = accountNameFromLabel(who ? who.textContent : '', who ? who.dataset : null);
+  const visible = Boolean(panel && !panel.hasAttribute('hidden') && (!panel.hasAttribute('data-guest-access') || name));
   if (visible) slot.removeAttribute('hidden');
   else {
     slot.setAttribute('hidden', '');
     closeAccountMenu(doc);
   }
-  const who = doc.getElementById('whoami');
-  const name = accountNameFromLabel(who ? who.textContent : '', who ? who.dataset : null);
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
   const button = doc.getElementById('account-menu-button');
@@ -235,15 +306,36 @@ function bindAccountMenu(doc) {
   const menu = doc.getElementById('account-menu');
   if (!button || !menu || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
+  const items = () => [...menu.querySelectorAll('a[href], button:not(:disabled)')]
+    .filter(item => item.getClientRects().length > 0);
+  const openMenu = () => {
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+  };
   button.addEventListener('click', event => {
     event.stopPropagation();
-    const open = menu.hasAttribute('hidden');
-    if (open) {
-      menu.removeAttribute('hidden');
-      button.setAttribute('aria-expanded', 'true');
+    if (menu.hidden) {
+      openMenu();
+      if (event.detail === 0) items()[0]?.focus({preventScroll: true});
     } else {
       closeAccountMenu(doc);
     }
+  });
+  button.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    openMenu();
+    items().at(event.key === 'ArrowDown' ? 0 : -1)?.focus();
+  });
+  menu.addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const entries = items();
+    if (!entries.length) return;
+    event.preventDefault();
+    const active = entries.indexOf(doc.activeElement);
+    if (event.key === 'Home') entries[0].focus();
+    else if (event.key === 'End') entries.at(-1).focus();
+    else entries[(active + entries.length + (event.key === 'ArrowDown' ? 1 : -1)) % entries.length].focus();
   });
   doc.addEventListener('click', event => {
     const slot = doc.querySelector('.account-slot');
@@ -252,7 +344,13 @@ function bindAccountMenu(doc) {
     closeAccountMenu(doc);
   });
   doc.addEventListener('keydown', event => {
-    if (event.key === 'Escape') closeAccountMenu(doc);
+    if (event.key !== 'Escape' || event.defaultPrevented || menu.hidden) return;
+    const focused = doc.activeElement;
+    closeAccountMenu(doc);
+    if (focused === button || menu.contains(focused)) {
+      event.preventDefault();
+      button.focus({preventScroll: true});
+    }
   });
   const panel = signedInPanel(doc);
   const who = doc.getElementById('whoami');
@@ -348,6 +446,7 @@ function enhanceChrome() {
   for (const nav of document.querySelectorAll('nav')) {
     if (!nav.getAttribute('aria-label')) nav.setAttribute('aria-label', '管理导航');
   }
+  bindMobileNavigation(document);
   markNavigation();
   decorateStatus(document.getElementById('status'));
   bindAccountMenu(document);
@@ -371,8 +470,10 @@ export function startShell(doc = document, options = {}) {
   const target = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const run = async () => {
     enhanceChrome();
-    const loaded = options.values !== undefined ? { values: options.values } : await loadSettings();
+    const guest = signedInPanel(doc)?.hasAttribute('data-guest-access') && !csrfCookie(doc.cookie);
+    const loaded = options.values !== undefined ? { values: options.values } : guest ? null : await loadSettings();
     const values = (loaded && loaded.values) || { appearance: 'system' };
+    if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
     applyResolvedTheme(doc, values, options.now, options.media);
     syncAppearanceButton(doc, values, options.now, options.media);
     if (doc.body && typeof MutationObserver === 'function') {

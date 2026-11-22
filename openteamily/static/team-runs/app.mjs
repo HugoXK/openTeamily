@@ -110,6 +110,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const drafts = new Map();
   const creates = new Map();
   const saved = new Map();
+  const previewNodes = new Map();
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
@@ -119,7 +120,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   function show(id, text, kind = '') {
     const element = node(id);
     if (element.textContent !== text) element.textContent = text;
-    element.dataset.kind = kind;
+    if (element.dataset.kind !== kind) element.dataset.kind = kind;
   }
 
   function make(tag, text, className) {
@@ -185,6 +186,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     hideQuestion();
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
+    previewNodes.clear();
     node('team-run-results').replaceChildren();
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
@@ -201,7 +203,12 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     detailId = id;
     current = null;
     screen = next;
+    main.dataset.screen = next;
+    const detailScope = node('team-run-detail-scope');
+    if (detailScope) detailScope.textContent = next === 'detail' ? spaces.find(item => item.id === workspace)?.name || '' : '';
     lastList = lastSteps = '';
+    previewNodes.clear();
+    node('team-run-results').replaceChildren();
     listView.hidden = next !== 'list';
     editor.hidden = next !== 'editor';
     detail.hidden = next !== 'detail';
@@ -214,9 +221,13 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     shares.selectRun(null);
   }
 
-  function afterPoll(work) {
+  function afterPoll(work, delay = document.hidden ? 8000 : screen === 'detail' ? 1000 : 3500) {
     clearTimeout(timer);
-    timer = setTimeout(work, document.hidden ? 8000 : screen === 'detail' ? 1600 : 3500);
+    timer = setTimeout(work, delay);
+  }
+
+  function refreshVisibleRun() {
+    if (!document.hidden && screen === 'detail' && !doing && (!current || current.status === 'running')) afterPoll(loadDetail, 0);
   }
 
   function renderList(items) {
@@ -453,14 +464,26 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       : errorMessage(result, '无法启动任务，请检查步骤后重试。'), 'error');
   }
 
+  function updatePreviews(steps) {
+    for (const item of steps) {
+      const preview = previewNodes.get(item.position);
+      if (!preview) continue;
+      const text = item.status === 'running' && typeof item.preview === 'string' ? item.preview : '';
+      if (preview.text.textContent !== text) preview.text.textContent = text;
+      preview.panel.hidden = !text;
+    }
+  }
+
   function renderResults(run) {
-    const fingerprint = JSON.stringify([run.steps, doing, run.steps.map(step => saved.get(savedKey(step)))]);
-    if (fingerprint === lastSteps) return;
+    const structure = run.steps.map(({preview, ...step}) => step);
+    const fingerprint = JSON.stringify([structure, doing, run.steps.map(step => saved.get(savedKey(step)))]);
+    if (fingerprint === lastSteps) return updatePreviews(run.steps);
     lastSteps = fingerprint;
     const container = node('team-run-results');
     const activeElement = document.activeElement;
     const position = activeElement?.closest?.('[data-position]')?.dataset.position;
     const action = activeElement?.dataset.stepAction;
+    previewNodes.clear();
     container.replaceChildren();
     for (const item of run.steps) {
       const card = make('li', '', 'result-step');
@@ -475,7 +498,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       if (item.depends_on?.length) card.append(make('p', '引用第 ' + item.depends_on.map(index => index + 1).join('、') + ' 步', 'note'));
       if (item.status === 'failed') card.append(make('p', STEP_ERROR[item.error_code] || '此步骤没有完成。', 'result-error'));
       if (item.status === 'failed' && item.attempts >= LIMITS.attempts) card.append(make('p', '已达到重试上限。', 'note'));
-      if (item.output) card.append(make('pre', item.output, 'step-output'));
+      if (item.status === 'running') {
+        const panel = make('div', '', 'step-preview');
+        const text = make('pre', '', 'step-output');
+        panel.hidden = true;
+        panel.append(make('p', '生成预览', 'step-preview-label'), text);
+        card.append(panel);
+        previewNodes.set(item.position, {panel, text});
+      } else if (item.status === 'succeeded' && item.output) card.append(make('pre', item.output, 'step-output'));
       else if (item.status === 'succeeded') card.append(make('p', '这一步没有返回文字。', 'note'));
       const actions = make('div', '', 'team-run-actions');
       if (item.status === 'failed' && item.attempts < LIMITS.attempts && run.status !== 'cancelled') {
@@ -505,13 +535,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         (same || heading).focus({preventScroll: true});
       }
     }
+    updatePreviews(run.steps);
   }
 
   function renderDetail(run) {
     current = run;
     const counts = run.progress || {};
-    node('team-run-heading').textContent = run.title;
-    node('team-run-goal-detail').textContent = run.goal || '';
+    show('team-run-heading', run.title);
+    show('team-run-goal-detail', run.goal || '');
     show('team-run-progress', `${STATUS[run.status] || '状态未知'} · ${counts.succeeded ?? 0}/${counts.total ?? run.steps.length} 步完成`);
     cancel.hidden = run.status !== 'running';
     remove.hidden = run.status === 'running';
@@ -543,7 +574,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       show('team-run-status', errorMessage(result, '暂时无法刷新任务。'), 'read-error');
       if (!current) node('team-run-progress').textContent = '';
     }
-    if (current?.status === 'running' && result.status !== 403 && result.status !== 404) afterPoll(loadDetail);
+    if (isUncertain(result.status)) afterPoll(loadDetail, document.hidden ? 8000 : 2500);
+    else if (current?.status === 'running') afterPoll(loadDetail);
   }
 
   function openDetail(id, initial, {address = true} = {}) {
@@ -552,7 +584,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (address) updateLocation(id);
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
-    node('team-run-results').replaceChildren();
     cancel.hidden = remove.hidden = reuse.hidden = true;
     show('status', '');
     if (initial) renderDetail(initial);
@@ -565,7 +596,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   async function mutate(action, step) {
     if (doing || !current || screen !== 'detail') return;
     if ((action === 'cancel' && current.status !== 'running') || (action === 'remove' && current.status === 'running')) return;
-    if (step && !current.steps.some(item => item.position === step.position && item.status === step.status)) return;
+    if (step && !current.steps.some(item => item.position === step.position && item.status === step.status && item.attempts === step.attempts)) return;
     const target = scope(), runId = detailId;
     doing = action;
     ++reads;
@@ -574,7 +605,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     renderDetail(current);
     show('team-run-status', '正在处理…');
     const suffix = step ? `/steps/${step.position}/${action}` : '/' + action;
-    const result = await request('POST', pathFor(target.workspace) + '/' + runId + suffix, {});
+    const result = await request('POST', pathFor(target.workspace) + '/' + runId + suffix, action === 'retry' ? {attempt:step.attempts} : {});
     if (!active(target)) return;
     doing = '';
     if (result.status === 200 && action === 'remove') return showList({focus: true});
@@ -588,6 +619,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       show('team-run-status', '');
       renderDetail(run);
     } else {
+      if (cannotRead(result.status)) {
+        clearInaccessibleRunData();
+        show('team-run-status', errorMessage(result, '暂时无法读取任务。'), 'read-error');
+        return;
+      }
       renderDetail(current);
       show('team-run-status', errorMessage(result, isUncertain(result.status)
         ? '暂时无法确认操作结果，正在刷新任务。' : '无法完成这次操作，请刷新后重试。'), 'error');
@@ -728,12 +764,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   newRun.addEventListener('click', showEditor);
   picker.addEventListener('change', () => choose({workspace: picker.value}, true));
   view.addEventListener('hashchange', () => choose(teamRunTarget(view.location.hash)));
-  node('team-runs-refresh').addEventListener('click', () => {
+  function refresh() {
     if (!spaces.length) return load();
     if (screen === 'detail') return loadDetail();
     if (screen === 'editor') return loadAgents();
     return loadList();
-  });
+  }
+  node('team-runs-refresh').addEventListener('click', refresh);
+  node('team-run-detail-refresh')?.addEventListener('click', refresh);
   for (const back of document.querySelectorAll('[data-back-to-team-runs]')) back.addEventListener('click', () => showList({focus: true}));
   cancel.addEventListener('click', () => ask('cancel'));
   remove.addEventListener('click', () => ask('remove'));
@@ -753,6 +791,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
     show('status', '无法退出登录，请重试。', 'error');
   });
+  view?.addEventListener('online', refreshVisibleRun);
+  document.addEventListener?.('visibilitychange', refreshVisibleRun);
   return load();
 }
 

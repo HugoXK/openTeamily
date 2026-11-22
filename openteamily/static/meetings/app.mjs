@@ -97,6 +97,14 @@ const meetingKey = prefix => prefix + (globalThis.crypto?.randomUUID
 const meetingIdPattern = /^[a-f0-9]{32}$/;
 const unavailable = {status: 0, body: {}};
 const SAVE_TIMEOUT_MS = 12000;
+const DRAFT_WAIT_MS = 185000;
+const DRAFT_POLL_MS = 1200;
+const DRAFT_LABEL = {
+  queued: '已排队，轮到这场会议后开始整理。', running: 'DS-Bot 正在整理纪要…',
+  ready: '草稿已生成，请核对后采用。', cancelled: '已取消生成。可以重新生成草稿。',
+  failed: '生成失败，请重试。', dismissed: '',
+};
+const draftIsActive = state => state === 'queued' || state === 'running';
 
 function ambiguousSave(status) {
   return status === 0 || status === 408 || status >= 500;
@@ -487,9 +495,18 @@ function mount() {
   const summary = document.getElementById('meeting-summary');
   const draftPanel = document.getElementById('meeting-draft');
   const draftButton = document.getElementById('generate-meeting-draft');
+  const stopDraftButton = document.getElementById('stop-meeting-draft-wait');
   const draftStatus = document.getElementById('meeting-draft-status');
+  const draftTop = document.getElementById('meeting-draft-top');
+  const draftControls = document.getElementById('meeting-draft-controls');
+  const draftReview = document.getElementById('meeting-draft-review');
+  const draftHeading = document.getElementById('meeting-draft-heading');
+  const draftReviewError = document.getElementById('meeting-draft-review-error');
+  const smallDraftViewport = globalThis.matchMedia?.('(max-width: 700px)');
   let draft = null;
-  let draftRequest = null;
+  const draftRequests = new Map();
+  let storedDraft = null;
+  let draftPoll = 0;
 
   filters.hidden = !native;
 
@@ -764,59 +781,256 @@ function mount() {
     }
   }
 
-  function updateDraftButton() {
-    draftButton.disabled = Boolean(draftRequest) || !transcript.value.trim();
+  function draftOwner() {
+    return JSON.stringify([viewer, workspaceId(), current?.id || callDraft?.id || selection]);
   }
 
-  function clearDraft() {
-    draft = null;
-    if (draftRequest) draftRequest.stale = true;
-    draftPanel.hidden = true;
-    draftStatus.textContent = draftRequest ? '上一条生成请求仍在处理。' : '';
-    updateDraftButton();
+  function draftInput() {
+    return {title: titleInput.value.trim(), attendees: parseAttendees(attendeeInput.value), transcript: transcript.value};
   }
 
-  for (const field of [titleInput, attendeeInput, transcript]) {
-    field.addEventListener('input', clearDraft);
+  function savedDraftContext() {
+    if (!native || !current?.id || !Number.isSafeInteger(current.revision)) return null;
+    return {workspace:workspaceId(), meeting:current.id, revision:current.revision, viewer};
   }
-  draftButton.addEventListener('click', async () => {
-    if (draftButton.disabled || !workspaceId()) return;
-    clearDraft();
-    const target = {workspace: workspaceId(), transcript: transcript.value};
-    draftRequest = target;
-    updateDraftButton();
-    draftStatus.textContent = 'DS-Bot 正在整理纪要…';
-    try {
-      const result = await request('POST', `${base()}/draft`, {
-        title: titleInput.value.trim(), attendees: parseAttendees(attendeeInput.value), transcript: target.transcript,
-      });
-      if (target.stale || workspaceId() !== target.workspace) return;
-      if (result.status !== 200 || !result.body.draft) {
-        draftStatus.textContent = messageFor(result.body.error, '生成失败，请重试。');
+
+  function sameDraftContext(left, right) {
+    return Boolean(left && right && left.workspace === right.workspace && left.meeting === right.meeting &&
+      left.revision === right.revision && left.viewer === right.viewer);
+  }
+
+  function savedDraftSource() {
+    const context = savedDraftContext();
+    if (!context || (current.transcript || '') !== transcript.value || current.title.trim() !== titleInput.value.trim()) return null;
+    const attendees = parseAttendees(attendeeInput.value);
+    const savedAttendees = parseAttendees((current.attendees || []).join(', '));
+    return attendees.length === savedAttendees.length && attendees.every((name, index) => name === savedAttendees[index]) ? context : null;
+  }
+
+  function storedJob(job) {
+    if (!job || !meetingIdPattern.test(job.id) || !Object.hasOwn(DRAFT_LABEL, job.state)) return null;
+    return {id:job.id, state:job.state, label:job.state === 'failed' ? job.error || DRAFT_LABEL.failed : DRAFT_LABEL[job.state],
+      ...(job.state === 'ready' && job.draft ? {draft:job.draft} : {})};
+  }
+
+  function storedResult(response, target) {
+    const data = response.body;
+    if (![200, 202].includes(response.status) || data.viewer_username !== target.viewer || data.workspace_id !== target.workspace ||
+      data.meeting_id !== target.meeting || data.revision !== target.revision || !Object.hasOwn(data, 'job')) return null;
+    return {job:storedJob(data.job)};
+  }
+
+  function readStoredDraft(target) {
+    const query = new URLSearchParams({meeting:target.meeting, revision:target.revision});
+    return request('GET', `/v1/workspaces/${target.workspace}/meetings/draft?${query}`, undefined, undefined, AbortSignal.timeout(SAVE_TIMEOUT_MS))
+      .catch(() => unavailable);
+  }
+
+  function stopDraftPoll() {
+    clearTimeout(draftPoll);
+    draftPoll = 0;
+  }
+
+  function pollStoredDraft(target) {
+    if (draftPoll || target.reading) return;
+    draftPoll = setTimeout(async () => {
+      draftPoll = 0;
+      if (storedDraft !== target || !sameDraftContext(savedDraftSource(), target) || form.hidden || form.inert) return;
+      target.reading = true;
+      const version = target.version;
+      const result = await readStoredDraft(target);
+      target.reading = false;
+      if (storedDraft !== target || !sameDraftContext(savedDraftContext(), target)) return;
+      if (version !== target.version) {
+        syncDraft();
         return;
       }
-      draft = result.body.draft;
-      document.getElementById('meeting-draft-summary').textContent = draft.summary;
+      const observed = storedResult(result, target);
+      if (!target.command && observed) target.job = observed.job;
+      else if (!target.command && [401, 403, 404, 409].includes(result.status)) {
+        target.job = {state:'failed', label:'会议已变化。请重新打开会议后再生成纪要。'};
+      } else if (!target.command) target.stale = true;
+      if (observed) target.stale = false;
+      syncDraft();
+    }, DRAFT_POLL_MS);
+  }
+
+  async function controlStoredDraft(target, mode) {
+    if (target.command) return;
+    const prior = target.job;
+    target.command = mode;
+    target.version = (target.version || 0) + 1;
+    syncDraft();
+    const path = `/v1/workspaces/${target.workspace}/meetings/draft`;
+    const body = {mode, meeting_id:target.meeting, revision:target.revision,
+      ...(mode === 'start' ? {previous_job_id:prior?.id || null} : {job_id:prior.id})};
+    const result = await request('POST', path, body, undefined, AbortSignal.timeout(SAVE_TIMEOUT_MS)).catch(() => unavailable);
+    let observed = storedResult(result, target);
+    if (!observed && ambiguousSave(result.status)) {
+      observed = storedResult(await readStoredDraft(target), target);
+      if (mode === 'start' && observed?.job?.id === prior?.id) observed = null;
+    }
+    target.command = '';
+    if (storedDraft !== target || !sameDraftContext(savedDraftContext(), target)) return;
+    if (observed?.job) {
+      target.applied = false;
+      target.stale = false;
+      target.job = observed.job;
+    } else if ([401, 403, 404, 409].includes(result.status)) {
+      target.job = {state:'failed', label:'会议已变化。请重新打开会议后再生成纪要。'};
+    } else if (mode === 'start') {
+      target.job = {id:prior?.id, state:'failed', label:messageFor(result.body.error, '暂时无法确认生成请求，请重试。')};
+    } else {
+      target.stale = true;
+    }
+    syncDraft();
+  }
+
+  function showDraft(record = null) {
+    const waiting = draftIsActive(record?.state) || record?.state === 'submitting';
+    const next = record?.draft || null;
+    const durable = sameDraftContext(savedDraftSource(), storedDraft);
+    const label = record?.label || '';
+    const nearTitle = Boolean(smallDraftViewport?.matches && durable && label);
+    const restoreStop = document.activeElement === stopDraftButton;
+    const restoreReview = document.activeElement === draftReview;
+    if (nearTitle && draftStatus.parentNode !== draftTop) {
+      draftTop.prepend(draftStatus, stopDraftButton);
+    } else if (!nearTitle && draftStatus.parentNode !== draftControls) {
+      draftControls.append(stopDraftButton, draftStatus);
+    }
+    draftTop.hidden = !nearTitle;
+    draftReview.hidden = !nearTitle || !next;
+    draftControls.hidden = nearTitle && waiting;
+    draftButton.disabled = waiting || !transcript.value.trim();
+    draftButton.textContent = waiting ? '正在生成…' : record?.state === 'failed' ? '重试生成' : '生成纪要草稿';
+    if (stopDraftButton) {
+      stopDraftButton.hidden = !waiting || record.state === 'submitting';
+      stopDraftButton.textContent = durable ? '取消生成' : '停止等待';
+    }
+    if (restoreStop && !stopDraftButton.hidden && document.activeElement !== stopDraftButton) stopDraftButton.focus({preventScroll:true});
+    draftPanel.hidden = !next;
+    if ((restoreStop && stopDraftButton.hidden) || (restoreReview && draftReview.hidden)) {
+      if (!draftReview.hidden) draftReview.focus({preventScroll:true});
+      else if (next) draftHeading.focus({preventScroll:true});
+      else if (!draftButton.disabled) draftButton.focus({preventScroll:true});
+      else if (nearTitle) draftTop.focus({preventScroll:true});
+    }
+    if (next !== draft) draftReviewError.textContent = '';
+    if (next && next !== draft) {
+      document.getElementById('meeting-draft-summary').textContent = next.summary;
       const items = document.getElementById('meeting-draft-items');
-      items.replaceChildren(...draft.action_items.map(item => {
+      items.replaceChildren(...next.action_items.map(item => {
         const row = document.createElement('li');
         row.textContent = item.owner ? `${item.text}（${item.owner}）` : item.text;
         return row;
       }));
-      items.hidden = !draft.action_items.length;
-      draftPanel.hidden = false;
-      draftStatus.textContent = '草稿已生成，请核对后采用。';
-    } catch {
-      if (!target.stale && workspaceId() === target.workspace) draftStatus.textContent = '连接失败，请重试。';
-    } finally {
-      if (draftRequest === target) {
-        draftRequest = null;
-        if (target.stale) draftStatus.textContent = '';
-        updateDraftButton();
+      items.hidden = !next.action_items.length;
+    }
+    draft = next;
+    draftStatus.dataset.state = record?.state || '';
+    if (draftStatus.textContent !== label) draftStatus.textContent = label;
+  }
+
+  function draftForInput(saved = savedDraftSource()) {
+    if (saved) {
+      if (!sameDraftContext(saved, storedDraft)) return null;
+      if (storedDraft.command) return {state:'submitting', label:storedDraft.command === 'dismiss' ? '正在丢弃草稿…'
+        : storedDraft.command === 'cancel' ? '正在取消生成…' : '正在提交生成请求…'};
+      if (storedDraft.applied) return null;
+      const record = storedDraft.job;
+      return record && storedDraft.stale ? {...record, label:draftIsActive(record.state)
+        ? '暂时无法刷新生成状态，正在重试。' : '暂时无法确认操作结果，请重试。'} : record;
+    }
+    const record = draftRequests.get(draftOwner());
+    return record?.input === JSON.stringify(draftInput()) ? record : null;
+  }
+
+  function syncDraft() {
+    const saved = savedDraftSource();
+    const record = draftForInput(saved);
+    showDraft(record);
+    if (storedDraft && !storedDraft.command && sameDraftContext(saved, storedDraft) && draftIsActive(record?.state)) {
+      pollStoredDraft(storedDraft);
+    } else stopDraftPoll();
+  }
+
+  function updateDraft(target) {
+    if (!form.hidden && !form.inert && draftForInput() === target) showDraft(target);
+  }
+
+  function discardDraft() {
+    const record = draftForInput();
+    if (record) {
+      draftRequests.delete(draftOwner());
+      record.controller.abort();
+    }
+    syncDraft();
+  }
+
+  for (const field of [titleInput, attendeeInput, transcript]) field.addEventListener('input', syncDraft);
+  smallDraftViewport?.addEventListener?.('change', () => showDraft(draftForInput()));
+  draftReview.addEventListener('click', () => {
+    if (draftPanel.hidden || !draftForInput()?.draft) return;
+    draftPanel.scrollIntoView({block:'start'});
+    draftHeading.focus({preventScroll:true});
+  });
+  stopDraftButton?.addEventListener('click', () => {
+    const record = draftForInput();
+    if (!draftIsActive(record?.state)) return;
+    if (sameDraftContext(savedDraftSource(), storedDraft)) {
+      void controlStoredDraft(storedDraft, 'cancel');
+      return;
+    }
+    record.state = 'stopped';
+    record.label = '已停止等待。可为当前正文重新生成。';
+    record.controller.abort();
+    syncDraft();
+    draftButton.focus();
+  });
+  draftButton.addEventListener('click', async () => {
+    if (draftButton.disabled || !workspaceId()) return;
+    const saved = savedDraftSource();
+    if (saved) {
+      if (!sameDraftContext(saved, storedDraft)) storedDraft = {...saved, job:null};
+      void controlStoredDraft(storedDraft, 'start');
+      return;
+    }
+    const owner = draftOwner();
+    const input = draftInput();
+    const target = {input: JSON.stringify(input), state: 'running', label: 'DS-Bot 正在整理纪要…', controller: new AbortController()};
+    draftRequests.get(owner)?.controller.abort();
+    draftRequests.delete(owner);
+    draftRequests.set(owner, target);
+    for (const [key, record] of draftRequests) {
+      if (draftRequests.size <= 12) break;
+      if (record.state !== 'running') draftRequests.delete(key);
+    }
+    syncDraft();
+    stopDraftButton?.focus();
+    const timer = setTimeout(() => target.controller.abort(), DRAFT_WAIT_MS);
+    const settle = (state, label, result) => {
+      if (draftRequests.get(owner) !== target || target.state !== 'running') return;
+      Object.assign(target, {state, label, draft: result});
+      updateDraft(target);
+    };
+    try {
+      const result = await request('POST', `${base()}/draft`, input, undefined, target.controller.signal);
+      if (result.status !== 200 || !result.body.draft) {
+        settle('failed', messageFor(result.body.error, '生成失败，请重试。'));
+        return;
       }
+      settle('ready', '草稿已生成，请核对后采用。', result.body.draft);
+    } catch {
+      settle('failed', target.controller.signal.aborted ? '等待超时，正文仍在。请重试。' : '连接失败，正文仍在。请重试。');
+    } finally {
+      clearTimeout(timer);
     }
   });
-  document.getElementById('discard-meeting-draft').addEventListener('click', clearDraft);
+  document.getElementById('discard-meeting-draft').addEventListener('click', () => {
+    if (sameDraftContext(savedDraftSource(), storedDraft)) void controlStoredDraft(storedDraft, 'dismiss');
+    else discardDraft();
+  });
   document.getElementById('apply-meeting-draft').addEventListener('click', () => {
     if (!draft) return;
     const note = summary.value.trim();
@@ -830,14 +1044,18 @@ function mount() {
       seen.add(key);
     }
     if (next.length > summary.maxLength || actions.length + additions.length > 50) {
-      draftStatus.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
+      draftReviewError.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
       return;
     }
     summary.value = next;
     actions.push(...additions);
     renderActions();
-    clearDraft();
+    if (sameDraftContext(savedDraftSource(), storedDraft)) {
+      storedDraft.applied = true;
+      syncDraft();
+    } else discardDraft();
     draftStatus.textContent = '已填入摘要和行动项。确认后保存会议。';
+    summary.focus({preventScroll:true});
   });
 
   function hideAttendees() {
@@ -875,7 +1093,7 @@ function mount() {
 
   function chooseAttendee(username) {
     attendeeInput.value = attendeeInsert(attendeeInput.value, username);
-    clearDraft();
+    syncDraft();
     hideAttendees();
     attendeeInput.focus();
   }
@@ -1093,7 +1311,7 @@ function mount() {
     rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id} : {new: '1'});
   }
 
-  function fill(meeting, source = null) {
+  function fill(meeting, source = null, draftJob = undefined) {
     if (inboxReturn) inboxReturn.hidden = true;
     if (mobileBack) mobileBack.hidden = false;
     selection += 1;
@@ -1103,6 +1321,11 @@ function mount() {
     hideAttendees();
     current = meeting;
     callDraft = source;
+    const draftContext = savedDraftContext();
+    if (draftJob !== undefined || !sameDraftContext(draftContext, storedDraft)) {
+      stopDraftPoll();
+      storedDraft = draftContext ? {...draftContext, job:storedJob(draftJob)} : null;
+    }
     resume.hidden = true;
     clearNoteCopies();
     setReceiptMode(false);
@@ -1116,7 +1339,7 @@ function mount() {
     attendeeInput.value = (details?.attendees || []).join(', ');
     document.getElementById('meeting-summary').value = meeting ? (meeting.summary || '') : '';
     document.getElementById('meeting-transcript').value = meeting ? (meeting.transcript || '') : '';
-    clearDraft();
+    syncDraft();
     actions = meeting ? (meeting.action_items || []).map((item, savedIndex) => ({...item, savedIndex})) : [];
     renderActions();
     syncRecord();
@@ -1127,13 +1350,15 @@ function mount() {
     resetSave();
     current = null;
     callDraft = null;
+    storedDraft = null;
+    stopDraftPoll();
     actions = [];
     actionFollowups = [];
     resume.hidden = true;
     clearNoteCopies();
     setReceiptMode(false);
     audio.reset();
-    clearDraft();
+    showDraft();
     hideAttendees();
     form.hidden = true;
     form.inert = false;
@@ -1205,7 +1430,8 @@ function mount() {
     const workspace = workspaceId(), pendingSelection = ++selection;
     resetSave();
     audio.reset();
-    clearDraft();
+    stopDraftPoll();
+    showDraft();
     if (!read) {
       form.inert = true;
       show('loading', '正在打开会议…');
@@ -1220,13 +1446,15 @@ function mount() {
         showSave('error', '上次保存结果还未确认。草稿已保留，请重试。');
       }
       syncWriting();
+      syncDraft();
       show('error', messageFor(result.body.error, '无法打开会议。'));
       return;
     }
-    fill(result.body.meeting);
+    fill(result.body.meeting, null, result.body.draft_job || null);
     if (globalThis.matchMedia?.('(max-width: 700px)').matches) {
       document.getElementById('main').scrollTop = 0;
-      document.getElementById('meeting-editor-pane')?.focus({preventScroll: true});
+      const focus = draftTop.hidden ? document.getElementById('meeting-editor-pane') : draftTop;
+      focus?.focus({preventScroll: true});
     }
     show('', '');
     return true;
@@ -1237,9 +1465,11 @@ function mount() {
     resetSave();
     current = null;
     callDraft = null;
+    storedDraft = null;
+    stopDraftPoll();
     sharing.sync();
     audio.reset();
-    clearDraft();
+    showDraft();
     hideAttendees();
     form.hidden = true;
     setReceiptMode(true);
@@ -1338,6 +1568,8 @@ function mount() {
       current = null;
       callDraft = null;
       viewer = '';
+      storedDraft = null;
+      stopDraftPoll();
       search.value = '';
       openOnly.checked = false;
       resume.hidden = true;
@@ -1597,6 +1829,7 @@ function mount() {
     layout.dataset.view = 'editor';
     resume.hidden = true;
     sharing.sync();
+    syncDraft();
     document.getElementById('main').scrollTop = 0;
     document.getElementById('meeting-editor-pane')?.focus?.({preventScroll: true});
   });
@@ -1671,7 +1904,7 @@ function mount() {
     selection += 1;
     syncLibraryLink();
     audio.reset();
-    clearDraft();
+    showDraft();
     hideAttendees();
     memberCache = {workspace: '', items: [], failed: false};
     resetList();

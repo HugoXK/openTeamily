@@ -389,6 +389,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionEditor = document.getElementById('action-editor-form');
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
+  const mobileGraph = document.getElementById('memory-mobile-graph');
+  const mobileRefresh = document.getElementById('memory-mobile-refresh');
   const citationHeader = document.getElementById('memory-citation');
   const citationReturn = document.getElementById('memory-citation-return');
   const citationStatus = document.getElementById('memory-citation-status');
@@ -1059,8 +1061,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   const candidates = mountCandidates(document, {request, workspaceId});
 
+  function setMobileGraph(open) {
+    listPanel.dataset.mobileGraph = String(open);
+    if (!mobileGraph) return;
+    mobileGraph.setAttribute('aria-expanded', String(open));
+    mobileGraph.textContent = open ? '列表' : '图谱';
+  }
+
+  mobileGraph?.addEventListener('click', () => {
+    if (listPanel.dataset.view !== 'overview') return;
+    setMobileGraph(listPanel.dataset.mobileGraph !== 'true');
+    listPanel.scrollTop = 0;
+  });
+  mobileRefresh?.addEventListener('click', async () => {
+    if (!workspaceId() || mobileRefresh.disabled || listPanel.dataset.view !== 'overview') return;
+    mobileRefresh.disabled = true;
+    try { await loadWorkspace(); }
+    finally { mobileRefresh.disabled = false; }
+  });
+
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    if (currentView !== 'overview') setMobileGraph(false);
+    if (mobileGraph) mobileGraph.hidden = currentView !== 'overview';
+    if (mobileRefresh) mobileRefresh.hidden = currentView !== 'overview';
     pageRequest += 1;
     setCitation(currentView === 'profile' ? citationFor('profile') : null);
     hideCitationPreview();
@@ -1550,6 +1574,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const panel = document.getElementById(id);
       if (panel) panel.hidden = true;
     }
+    if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
   }
 
   const rich = document.getElementById('editor-rich');
@@ -2379,6 +2404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
     button.addEventListener('click', (event) => {
       if (button.tagName === 'A') event.preventDefault();
+      setMobileGraph(false);
       showView(button.getAttribute('data-view'));
     });
   }
@@ -2674,7 +2700,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  document.getElementById('close-editor').addEventListener('click', () => loadWorkspace());
+  function returnToList() {
+    setMobileGraph(false);
+    if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
+    return loadWorkspace();
+  }
+
+  document.getElementById('close-editor').addEventListener('click', returnToList);
+  document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
   const newActionOpen = document.getElementById('new-action-open');
   if (newActionOpen) {
@@ -2756,7 +2789,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openDeleteConfirm('action', currentAction);
   });
 
-  document.getElementById('close-action-editor').addEventListener('click', () => loadWorkspace());
+  document.getElementById('close-action-editor').addEventListener('click', returnToList);
 
   loadSession();
   return {renderGraph};

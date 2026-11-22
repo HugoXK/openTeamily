@@ -3,6 +3,7 @@ import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
 import { confirmSignupSession, pendingSignupSession, readChatDrafts, rememberSignupSession, signupDraftScope, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
 import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
+import { discoverIntentFromHash, discoverLoginHref } from '../openteamily/static/shell/discover-link.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
 
 const alice = 'a'.repeat(32);
@@ -217,4 +218,39 @@ test('public work login resumes the requested panel for one safe work slug', asy
     '#work-comments=one&work-comments=two', '#work-comments=writer-demo&next=/profile',
     '#work-detail=https%3A%2F%2Fexample.invalid', '#work-comments=..%2Fwork', '#public-agent=writer-demo',
   ]) assert.equal(publicWorkIntentFromHash(hash), null);
+});
+
+test('Discover continuation preserves the public view and drops private or unknown parameters', () => {
+  const href = discoverLoginHref('?work=public-example&kind=document&q=%E4%BC%9A%E8%AE%AE&comments=1&workspace=secret&next=//outside.test');
+  const hash = href.slice('/login'.length);
+  assert.deepEqual(discoverIntentFromHash(hash), {
+    continuation: hash,
+    target: '/discover?kind=document&q=%E4%BC%9A%E8%AE%AE&work=public-example&comments=1',
+  });
+  assert.equal(discoverIntentFromHash('#discover=%2F%2Foutside.test').target, '/discover');
+  assert.equal(discoverIntentFromHash('#discover=&next=%2Fsettings'), null);
+  assert.equal(discoverIntentFromHash('#discover=&discover='), null);
+  assert.equal(discoverIntentFromHash('#discover=' + 'a'.repeat(2400)), null);
+});
+
+test('confirmed sign-in opens the same Discover view without a dashboard detour', async () => {
+  const href = discoverLoginHref('?tab=agents&category=education&q=Tutor');
+  const {document, view} = homeFixture('/login', href.slice('/login'.length));
+  const destinations = [], calls = [];
+  view.location.replace = target => destinations.push(target);
+  mount(document, {fetcher: async (path, {method}) => {
+    calls.push([method, path]);
+    const result = {
+      '/v1/auth/session': {user: {id: alice, username: 'alice'}},
+      '/v1/personal-agent': {personal_agent: {runtime_provisioning: {readiness: 'ready'}}},
+      '/v1/workspaces?scope=personal': {items: [{id: bob}]},
+    };
+    assert.ok(Object.hasOwn(result, path));
+    return {status: 200, json: async () => result[path]};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(destinations, ['/discover?tab=agents&category=education&q=Tutor']);
+  assert.deepEqual(calls, [
+    ['GET', '/v1/auth/session'], ['POST', '/v1/personal-agent'], ['GET', '/v1/workspaces?scope=personal'],
+  ]);
 });

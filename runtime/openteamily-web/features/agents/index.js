@@ -14,6 +14,7 @@ import { agentsV1 } from './v1.js'
 import { PRIVATE_FILE_COUNT, privateFiles, fingerprintAttachments } from './files.js'
 import { importOfficialBundle } from './migrate.js'
 import { sendId, textReplyKey, textReplyAttempt } from './private-reply.js'
+import { replyStream, waitForReplyChange } from './reply-stream.js'
 import { rank, noteBlock, personalizationBlock } from '../chat/recall.js'
 
 export const CATEGORIES = ['content-creation', 'customer-support', 'data-analysis', 'design', 'education', 'engineering',
@@ -97,6 +98,7 @@ export function createAgents({ db, host }) {
     WHERE role='user' AND json_extract(meta,'$.nativePending')=1;`)
   const activeTurns = new Map()
   const liveReplies = new Map()
+  let activeReplyStreams = 0
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
@@ -331,26 +333,50 @@ export function createAgents({ db, host }) {
     }
   }
 
+  function scopedReplyLookup(p) {
+    const agent = load(ws(p), p.id)
+    const {id} = conversation(agent, p.conversation_id)
+    if (typeof p.key !== 'string' || !IDEM.test(p.key)) fail('invalid', 'Invalid message send key', 400)
+    const textId = sendId('text', 'reply', id, p.key)
+    const attachmentId = sendId('attachment', 'reply', id, p.key)
+    const find = () => one(`SELECT id,status FROM agent_messages
+      WHERE conversation_id=? AND role='assistant' AND id IN (?,?) ORDER BY rowid DESC LIMIT 1`,
+      id, textId, attachmentId)
+    return {id, textId, find}
+  }
+
   async function trackSend(userId, replyId, perform, onAccepted) {
-    const progress = {text: '', ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
+    const progress = {text:'', phase:'preparing', revision:0, waiters:new Set(), ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
+    const wake = () => { for (const waiter of progress.waiters) waiter() }
     liveReplies.set(replyId, progress)
     const promise = perform(text => {
-      if (typeof text === 'string') progress.text = text.slice(0, LIMITS.text)
+      if (typeof text !== 'string') return
+      const snapshot = text.slice(0, LIMITS.text)
+      if (snapshot === progress.text) return
+      progress.text = snapshot
+      progress.revision += 1
+      wake()
+    }, phase => {
+      if (!['preparing','thinking','writing'].includes(phase) || phase === progress.phase) return
+      progress.phase = phase
+      progress.revision += 1
+      wake()
     })
     activeTurns.set(userId, promise)
     try { return await promise } finally {
       liveReplies.delete(replyId)
       activeTurns.delete(userId)
+      wake()
     }
   }
 
   function runTextReply({agent, convo, userId, replyId, text, userMeta, replyMeta, attempt, extra, returnFailed}) {
-    return trackSend(userId, replyId, async onProgress => {
+    return trackSend(userId, replyId, async (onProgress, onPhase) => {
       try {
         const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, extra)
         const requestId = attempt === 1 ? `ot-agent:${userId}` : `ot-agent:${userId}:retry:${attempt}`
         const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:requestId,reply_language:userMeta.replyLanguage,context},
-          {onProgress})
+          {onProgress,onPhase})
         run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
         run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
           JSON.stringify({...replyMeta,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id,memory_refs:refs,memory_profile_workspace:personalWorkspace}), replyId)
@@ -419,7 +445,7 @@ export function createAgents({ db, host }) {
       run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
-    return trackSend(userId, replyId, async onProgress => {
+    return trackSend(userId, replyId, async (onProgress, onPhase) => {
       let staged = []
       let remaining = 12_000
       const excerpts = []
@@ -437,7 +463,7 @@ export function createAgents({ db, host }) {
         const reply = await turn({agent_id:agent.id, key:convo.id, text:prompt, request_id:`ot-agent:${userId}`,
           reply_language:p.reply_language, context}, {
           files,
-          onProgress,
+          onProgress,onPhase,
           onStaged(value) {
             staged = value.map((file, index) => ({
               ...file, ...(files[index]?.resource ? {resource:files[index].resource} : {}), ...(stickerId ? {sticker:true} : {}),
@@ -906,23 +932,39 @@ export function createAgents({ db, host }) {
       return {status:202,...sentPair(userId, replyId)}
     },
     async replyProgress(p) {
-      const agent = load(ws(p), p.id)
-      const convo = conversation(agent, p.conversation_id)
-      const key = p.key
-      if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Invalid message send key', 400)
-      const reply = one(`SELECT id,status FROM agent_messages
-        WHERE conversation_id=? AND role='assistant' AND id IN (?,?) ORDER BY rowid DESC LIMIT 1`,
-        convo.id, sendId('text', 'reply', convo.id, key), sendId('attachment', 'reply', convo.id, key))
+      const {id, textId, find} = scopedReplyLookup(p)
+      let reply = find()
       if (!reply) fail('not-found', 'Reply not found', 404)
-      const result = reply.status === 'running' ? {state: 'running', text: liveReplies.get(reply.id)?.text || ''} : {state: reply.status}
+      let progress = liveReplies.get(reply.id)
+      if (reply.status === 'running' && progress && p.after === progress.revision && progress.waiters.size < 8) {
+        await waitForReplyChange(progress, 1400, p.signal)
+        reply = find()
+        if (!reply) fail('not-found', 'Reply not found', 404)
+        progress = liveReplies.get(reply.id)
+      }
+      const result = reply.status === 'running' ? {state:'running', text:progress?.text || '',
+        ...(p.after !== undefined && progress ? {revision:progress.revision, phase:progress.phase} : {})} : {state:reply.status}
       if (!p.receipt) return result
-      const kind = reply.id === sendId('text', 'reply', convo.id, key) ? 'text' : 'attachment'
-      const userId = sendId(kind, 'user', convo.id, key)
+      const kind = reply.id === textId ? 'text' : 'attachment'
+      const userId = sendId(kind, 'user', id, p.key)
       const pair = sentPair(userId, reply.id)
       if (kind === 'attachment' && reply.status === 'running' && !pair.message.meta.files?.length) {
         return {state:'pending'}
       }
       return {...result,...pair}
+    },
+    replyStream(p, request) {
+      const {find} = scopedReplyLookup(p)
+      if (activeReplyStreams >= 8) fail('busy', 'Too many reply streams', 429)
+      activeReplyStreams += 1
+      return replyStream({
+        request,
+        release: () => { activeReplyStreams -= 1 },
+        findReply() {
+          const row = find()
+          return {state: row?.status ?? 'pending', progress: row?.status === 'running' ? liveReplies.get(row.id) : undefined}
+        },
+      })
     },
     turn,
     async publicReply(p) {
@@ -1043,6 +1085,10 @@ export default async function agents(host) {
   timer.unref?.()
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.replyStream = async (payload, call) => {
+    if (!call?.internal || !call.request) fail('not-found', 'Internal endpoint', 404)
+    return endpoints.replyStream(payload, call.request)
+  }
   wrapped.startupEntry = endpoints.startupEntry
   wrapped.groupTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)

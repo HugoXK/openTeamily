@@ -2,6 +2,7 @@ export const SHELL_MESSAGES = {
   'shell.skip': ['跳到主要内容', 'Skip to main content'],
   'shell.nav': ['应用导航', 'App navigation'],
   'shell.nav.mobile': ['主导航', 'Main navigation'],
+  'shell.more': ['更多', 'More'],
   'shell.brand.home': ['OpenTeamily 首页', 'OpenTeamily home'],
   'shell.home': ['首页', 'Home'],
   'shell.chat': ['聊天', 'Chats'],

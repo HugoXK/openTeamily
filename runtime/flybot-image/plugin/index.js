@@ -79,7 +79,7 @@ export function apply(ctx, config = {}) {
       }
       if (stored.length) options.onStaged?.(stored)
       bridge.requireModel(botId)
-      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress })
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress, onPhase: options.onPhase })
     })
     const readNativeAttachment = async file => {
       const store = attachmentStore()

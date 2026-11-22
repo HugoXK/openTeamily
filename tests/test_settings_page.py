@@ -67,7 +67,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['body'], b'')
 
     def test_static_validators_revalidate_get_and_head_without_a_body(self):
-        for path in ('/shell/app.css', '/look/app.mjs'):
+        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs'):
             first = self.raw.call('GET', path)
             self.assertEqual(first['status'], 200)
             self.assertEqual(first['headers']['Cache-Control'], 'private, no-cache')
@@ -178,6 +178,16 @@ class SettingsPageTests(unittest.TestCase):
                 query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&work=public-preview'
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
         for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
+
+    def test_discover_agent_and_team_catalogues_can_restore_public_search(self):
+        for query in ('tab=agents&category=education&q=%E8%AF%BE%E7%A8%8B',
+                      'tab=agents&section=groups&q=research'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
+        for query in ('tab=agents&q=one&q=two', 'tab=agents&q=%0A', 'tab=agents&category=unknown',
+                      'tab=agents&section=groups&category=education', 'tab=agents&feed=following'):
             with self.subTest(query=query):
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
 

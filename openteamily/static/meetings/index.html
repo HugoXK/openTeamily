@@ -133,6 +133,9 @@
         </article>
         <form id="meeting-form" hidden>
           <p id="meeting-call-source" class="note" tabindex="-1" hidden>来自通话</p>
+          <div id="meeting-draft-top" role="group" aria-label="纪要草稿" tabindex="-1" hidden>
+            <button type="button" id="meeting-draft-review" class="secondary" aria-controls="meeting-draft" hidden>查看草稿</button>
+          </div>
           <label>标题 <input id="meeting-title" maxlength="120" required></label>
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
@@ -154,18 +157,20 @@
             </div>
             <p class="note" id="meeting-audio-status" role="status"></p>
           </details>
-          <div class="meeting-actions">
+          <div id="meeting-draft-controls" class="meeting-actions">
             <button type="button" id="generate-meeting-draft" class="secondary" disabled>生成纪要草稿</button>
+            <button type="button" id="stop-meeting-draft-wait" class="secondary" hidden>停止等待</button>
             <p id="meeting-draft-status" class="note" role="status"></p>
           </div>
           <section id="meeting-draft" class="meeting-draft" aria-labelledby="meeting-draft-heading" hidden>
-            <h3 id="meeting-draft-heading">纪要草稿</h3>
+            <h3 id="meeting-draft-heading" tabindex="-1">纪要草稿</h3>
             <p id="meeting-draft-summary"></p>
             <ul id="meeting-draft-items" hidden></ul>
             <div class="meeting-actions">
               <button type="button" id="apply-meeting-draft">采用草稿</button>
               <button type="button" id="discard-meeting-draft" class="secondary">丢弃草稿</button>
             </div>
+            <p id="meeting-draft-review-error" class="note" role="status"></p>
           </section>
           <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <fieldset>
@@ -230,11 +235,6 @@
     </section>
   </dialog>
   </main>
-  <nav class="mobile-primary-nav" aria-label="主导航">
-    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
-    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg>发现</a>
-    <a href="/space?view=meetings" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
-    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
-  </nav>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

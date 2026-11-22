@@ -237,7 +237,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
     const content = escapeHtml(choice);
     if (!canChat) return `<li class="starter-preview">${content}</li>`;
     const href = escapeHtml(`${chatHref}&quick-start=${index}&quick-start-version=${version}`);
-    return `<li><a class="starter" href="${href}"><span>${content}</span><span aria-hidden="true">↗</span></a></li>`;
+    return `<li><a class="starter" href="${href}" data-public-agent-starter><span>${content}</span></a></li>`;
   }).join("");
   const startList = choiceItems ? `
 <section class="starters" aria-labelledby="quick-starts">
@@ -263,13 +263,13 @@ a:focus-visible{outline:2px solid #176750;outline-offset:4px}
 .brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);font-weight:750;text-decoration:none}
 .brand-mark{display:grid;place-items:center;width:1.85rem;height:1.85rem;border-radius:.55rem;background:var(--green);color:#fff;font-weight:800}
 .discover{font-size:.9rem;text-underline-offset:3px}
-.agent-home{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
-.profile{min-width:0}
+.agent-home{display:grid;grid-template:"profile conversation" max-content "description conversation" 1fr / minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:1.1rem clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
+.profile{grid-area:profile;min-width:0}
 .avatar{display:grid;place-items:center;width:4rem;height:4rem;border:1px solid #bacfc3;border-radius:1.15rem;background:#e0eee3;color:#1b503f;font-weight:760;font-size:1.7rem}
 h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;letter-spacing:-.035em;overflow-wrap:anywhere}
 h2,h3,p{margin:0}
 .creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
-.description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.description{grid-area:description;white-space:pre-wrap;overflow-wrap:anywhere}
 .profile-share{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.35rem .75rem;margin-top:.85rem}
 .profile-share [hidden]{display:none}
 .profile-share button,.profile-share summary{min-height:2.75rem;padding:.55rem .7rem;border-radius:.55rem;font:inherit;font-size:.9rem;cursor:pointer}
@@ -283,7 +283,7 @@ h2,h3,p{margin:0}
 .profile-share input{display:block;width:100%;margin:.25rem 0 .55rem;padding:.45rem .55rem;border:1px solid #98bead;border-radius:.4rem;color:var(--ink);font:inherit}
 .profile-share details a,[data-copy-profile-status]{font-size:.85rem}
 [data-copy-profile-status]{flex-basis:100%;color:var(--muted)}
-.conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
+.conversation{grid-area:conversation;min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
 .chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
@@ -297,13 +297,22 @@ h2,h3,p{margin:0}
 #public-agent-composer button:disabled{opacity:.55;cursor:default}
 #public-agent-composer-status{font-size:.9rem;color:#914224}
 .chat-fallback{font-size:.9rem;justify-self:start;text-underline-offset:3px}
-.starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
-.starters h3{margin-bottom:.7rem;font-size:.97rem}
-.starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
-.starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
-.starter{text-decoration:none}
-.starter:hover{border-color:#98bead;background:#edf6ed}
-@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+.starters{margin:0 0 1rem}
+.starters h3{margin-bottom:.45rem;font-size:.92rem}
+.starters ul{display:flex;flex-wrap:wrap;gap:.45rem;list-style:none;margin:0;padding:0}
+.starters li{min-width:0;max-width:100%}
+.starter,.starter-preview{display:inline-block;max-width:100%;min-height:2.75rem;padding:.55rem .7rem;border:1px solid var(--line);border-radius:.55rem;background:#f8faf8;font:inherit;font-size:.9rem;text-align:start;overflow-wrap:anywhere}
+.starter{color:var(--green);text-decoration:none;cursor:pointer}
+.starter:hover,.starter[aria-pressed="true"]{border-color:#98bead;background:#edf6ed}
+.starter:focus-visible{outline:2px solid #176750;outline-offset:3px}
+@media(max-width:44rem){.agent-home{grid-template:"profile" "conversation" "description" / minmax(0,1fr);padding:1.25rem 1rem 2rem;gap:1rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.05rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+@media(max-width:44rem){
+  .profile{display:grid;grid-template-columns:auto minmax(0,1fr);place-items:start;column-gap:.75rem}
+  .avatar{grid-row:1/span 2}
+  .profile h1{grid-column:2;margin:0;font-size:clamp(1.4rem,7vw,1.8rem);align-self:center}
+  .profile .creator{grid-column:2}
+  .profile-share{grid-column:1/-1;width:100%;margin-top:.65rem}
+}
 </style>
 </head><body>
 <header class="site-header"><div class="topbar">
@@ -324,14 +333,14 @@ ${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
   </details>
   <p data-copy-profile-status role="status" aria-live="polite" hidden></p>
 </div>
-${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">
 <h2 id="conversation-title">网页对话</h2>
 <p class="help">${canChat ? "登录后确认发送。发送的消息会与智能体发布者共享。" : "该智能体暂未开放访客聊天。"}</p>
-${composer}
 ${startList}
+${composer}
 </section>
+${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </main>
 </body></html>
 `;
@@ -399,7 +408,7 @@ function publicWorkPreview(ot: OtContext, slug: string) {
   };
 }
 
-function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
+function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string | null) {
   const kind = one(input.kind, "kind");
   const tab = one(input.tab, "tab") ?? "all";
   const sort = one(input.sort, "sort") ?? "latest";
@@ -453,7 +462,7 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   return {kind, sort, where: conditions.join(" AND "), args, workSearch};
 }
 
-function discoverCard(ot: OtContext, row: any, viewer: string, search: string) {
+function discoverCard(ot: OtContext, row: any, viewer: string | null, search: string) {
   const card = listingView(ot, row, viewer);
   if (!search) return card;
   const match = workSearchMatch("title", card.title, search)
@@ -462,6 +471,21 @@ function discoverCard(ot: OtContext, row: any, viewer: string, search: string) {
     ?? workSearchMatch("creator", card.creator.handle, search)
     ?? workSearchMatch("body", ot.get<{body: string}>("SELECT body FROM ot_discover_work_search WHERE listing_id = ?", row.id)?.body ?? null, search);
   return match ? {...card, match} : card;
+}
+
+function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
+  const {slug, title, creator, updated_at: timestamp} = card;
+  const updated = Math.floor(timestamp > 1e12 ? timestamp / 1000 : timestamp);
+  const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
+  if (card.kind === "agent") {
+    return {slug, name:title, summary:card.summary, category:card.category || "", updated,
+      chat_enabled:card.chat_enabled, creator:{handle:creator.handle, name:creator.display_name || author}};
+  }
+  return {slug, title, kind:card.work_kind || "document", author, updated, path:card.path,
+    likes:card.likes, collections:card.collections, comment_count:card.comment_count,
+    ...(card.site_available ? {site_available:true} : {}),
+    ...(card.file_available ? {file_available:true, file_mime:card.file_mime, file_bytes:card.file_bytes} : {}),
+    ...("match" in card && card.match ? {match:card.match} : {})};
 }
 
 function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
@@ -508,7 +532,7 @@ function popularWorks(ot: OtContext) {
   type Ranking = { context: string; keys: string; expires: number };
   const rankings = new Map<string, Ranking>();
 
-  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string, limit: number, cursor: string | undefined) => {
+  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string | null, limit: number, cursor: string | undefined) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
     const now = ot.now();
     let token: string;
@@ -617,6 +641,7 @@ function profileSocialPage<T extends ProfileSocialKey, R>(rows: T[], limit: numb
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const popular = popularWorks(ot);
+  const publicPopular = popularWorks(ot);
   registerWorkComments(app, ot);
   ot.db.function("ot_profile_fold", {deterministic: true}, foldProfileSearch);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
@@ -744,25 +769,23 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
       ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
-  app.get("/v1/ot/discover", async (req) => {
-    const me = ot.me(req);
-    const q = query(req);
-    const scope = discoverScope(ot, q, me.ownerId);
+  const readFeed = (q: Record<string, unknown>, viewer: string | null) => {
+    const scope = discoverScope(ot, q, viewer);
     const {kind, sort, where, args, workSearch} = scope;
     const cursor = one(q.cursor, "cursor");
     const pagination = one(q.pagination, "pagination");
     const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
     if (sort === "popular") {
       assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
-      return popular(scope, me.ownerId, limit, cursor);
+      return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor);
     }
-    const keyset = pagination === "keyset" && kind === "work";
+    const keyset = pagination === "keyset" && (kind === "work" || viewer === null);
     assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
     assert(cursor === undefined || (keyset && q.before === undefined), 400, "invalid_request", "invalid latest works pagination");
     const before = intParam(q.before, "before", 0, Number.MAX_SAFE_INTEGER);
     const boundary: unknown[] = before ? [before] : [];
     let condition = before ? " AND l.updated_at < ?" : "";
-    const scopeKey = keyset ? hashCode(JSON.stringify([me.ownerId, where, args])).slice(0, 24) : "";
+    const scopeKey = keyset ? hashCode(JSON.stringify([viewer, where, args])).slice(0, 24) : "";
     if (cursor !== undefined) {
       const match = LATEST_WORK_CURSOR.exec(cursor);
       assert(match && Number.isSafeInteger(Number(match[1])), 400, "invalid_request", "invalid latest works cursor");
@@ -772,12 +795,29 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     }
     const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE ${where}${condition} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
-    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, me.ownerId, workSearch));
+    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch));
     const last = rows[limit - 1] as WorkAnchor | undefined;
     const nextBefore = last?.updated_at ?? null;
     return keyset
       ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.updated_at}.${last.id}.${scopeKey}` : null}
       : {items: cards, next_before: nextBefore};
+  };
+  app.get("/v1/ot/discover", async (req) => readFeed(query(req), ot.me(req).ownerId));
+  app.get("/v1/ot/public/discover/:directory", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const {directory} = params(req);
+    assert(directory === "works" || directory === "agents", 404, "listing_not_found", "no such public directory");
+    const q = query(req);
+    const works = directory === "works";
+    const allowed = works ? ["limit", "cursor", "q", "creator", "sort", "kind"] : ["limit", "cursor", "q", "creator", "category"];
+    assert(Object.keys(q).every(key => allowed.includes(key)), 400, "invalid_request", "unknown public directory filter");
+    const ranked = q.sort === "popular";
+    const result = readFeed({
+      kind:works ? "work" : "agent", q:q.q, creator:q.creator, work_kind:q.kind, category:q.category,
+      sort:q.sort, cursor:q.cursor, pagination:ranked ? undefined : "keyset",
+      limit:String(Math.max(1,intParam(q.limit, "limit", 12, 24))),
+    }, null);
+    return {items:result.items.map(guestDiscoverCard), cursor:"next_cursor" in result ? result.next_cursor : null};
   });
   app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
     const me = ot.me(req);

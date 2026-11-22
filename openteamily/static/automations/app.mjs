@@ -68,6 +68,11 @@ function runActive(run) {
   return run?.status === 'queued' || run?.status === 'running';
 }
 
+function scopedActiveRun(run, workspace, automation) {
+  return runActive(run) && /^[a-f0-9]{32}$/.test(run.id) && run.workspace_id === workspace && run.automation_id === automation
+    ? run : null;
+}
+
 // A run that ended can be asked for again; a queued run is cancelled instead,
 // and a finished success has nothing to re-run.
 export function retryAllowed(run) {
@@ -422,31 +427,56 @@ function renderList(items, list, empty, onOpen) {
     avatar.className = 'avatar';
     avatar.dataset.tone = String(mark.tone);
     avatar.textContent = mark.label;
-    const copy = document.createElement('div');
+    avatar.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('span');
     copy.className = 'item-meta';
     const open = document.createElement('button');
     open.type = 'button';
-    open.className = 'link';
-    open.textContent = item.title;
-    open.addEventListener('click', () => onOpen(item));
+    open.className = 'automation-row';
+    open.dataset.automationId = item.id;
+    open.setAttribute('aria-label', item.title);
+    open.addEventListener('click', () => onOpen(item, open));
+    const title = document.createElement('strong');
+    title.className = 'item-title';
+    title.textContent = item.title;
     const meta = document.createElement('span');
     meta.className = 'item-schedule';
+    meta.id = 'automation-schedule-' + item.id;
+    const description = [meta.id];
     meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
-    copy.appendChild(open);
+    copy.appendChild(title);
     copy.appendChild(meta);
+    const running = scopedActiveRun(item.active_run, item.workspace_id, item.id);
+    if (running) {
+      const pill = document.createElement('span');
+      pill.className = 'status-pill item-run-status';
+      pill.id = 'automation-execution-' + item.id;
+      description.push(pill.id);
+      pill.dataset.status = running.status;
+      pill.textContent = runStatusLabel(running);
+      copy.appendChild(pill);
+    }
     const consumed = item.schedule_status?.state === 'once_triggered';
     if (item.schedule_status && !consumed) {
       const next = document.createElement('span');
       next.className = 'item-schedule item-next-run';
       renderNextRun(next, item);
-      if (!next.hidden) copy.appendChild(next);
+      if (!next.hidden) {
+        next.id = 'automation-next-' + item.id;
+        description.push(next.id);
+        copy.appendChild(next);
+      }
     }
     const state = document.createElement('span');
     state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
+    state.id = 'automation-state-' + item.id;
     state.textContent = consumed ? '单次计划已触发' : item.enabled ? '已启用' : '未启用';
-    row.appendChild(avatar);
-    row.appendChild(copy);
-    row.appendChild(state);
+    description.push(state.id);
+    open.setAttribute('aria-describedby', description.join(' '));
+    open.appendChild(avatar);
+    open.appendChild(copy);
+    open.appendChild(state);
+    row.appendChild(open);
     list.appendChild(row);
   }
 }
@@ -462,6 +492,7 @@ function renderCatalog(items, list, empty, onOpen) {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'catalog-card';
+    open.dataset.templateId = item.id;
     const title = document.createElement('strong');
     title.textContent = item.title || '';
     const summary = document.createElement('span');
@@ -469,7 +500,7 @@ function renderCatalog(items, list, empty, onOpen) {
     summary.textContent = item.prompt || '';
     open.appendChild(title);
     open.appendChild(summary);
-    open.addEventListener('click', () => onOpen(item));
+    open.addEventListener('click', () => onOpen(item, open));
     row.appendChild(open);
     list.appendChild(row);
   }
@@ -479,6 +510,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
+  const main = document.getElementById('main');
   const form = document.getElementById('editor-form');
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
@@ -518,6 +550,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let runTimer = 0;
   let runRequest = 0;
   let listRequest = 0;
+  let listTimer = 0;
+  let listFingerprint = '';
+  let listReturn = null;
   let recentRuns = [];
   let runCursors = [''];
   let pendingRunCursors = null;
@@ -685,8 +720,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function showRunHistory() {
-    const anchor = manualRunStatus?.textContent && manualRunStatus.scrollIntoView ? manualRunStatus : runPanel;
-    anchor?.scrollIntoView?.({block: 'start'});
+    runPanel?.scrollIntoView?.({block: 'start'});
     runHeading?.focus({preventScroll: true});
   }
 
@@ -990,7 +1024,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (ok) {
       runCursors = cursors;
       nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
-      activeRun = typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive);
+      const pending = scopedActiveRun(listed.body.active_run, target.workspace, target.automation);
+      if (pending) watchedRuns.set(target.key, pending);
+      activeRun = Boolean(pending) || (typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive));
       const upcoming = listed.body.schedule_status;
       if (listed.body.schedule_revision === current.revision &&
           (upcoming?.state !== current.schedule_status?.state || upcoming?.at !== current.schedule_status?.at)) {
@@ -1009,7 +1045,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncRunControls();
     const watched = watchedRuns.get(target.key);
     let updated = watched && items.find(item => item.id === watched.id && watchMatches(item, target));
-    if (!updated && runActive(watched)) {
+    const reportedActive = ok && scopedActiveRun(listed.body.active_run, target.workspace, target.automation);
+    if (!updated && runActive(watched) && reportedActive?.id !== watched.id) {
       const exact = await runRequestWithTimeout('GET', `${path}/${encodeURIComponent(watched.id)}`);
       if (!stillCurrent()) return;
       if (watchedRuns.get(target.key) === watched && exact.status === 200 && exact.body.run?.id === watched.id && watchMatches(exact.body.run, target)) {
@@ -1106,10 +1143,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.classList.remove('is-editing');
   }
 
-  function openEditor(item, source = null) {
+  function openEditor(item, source = null, opener = null) {
+    listReturn = opener && {opener, workspace: workspaceId(), category, query: search.value, scroll: main.scrollTop || 0};
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
+    globalThis.clearTimeout(listTimer);
+    listRequest += 1;
     editorRequest += 1;
     if (linkRetry) linkRetry.hidden = true;
     saveButton.disabled = false;
@@ -1119,7 +1159,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meetingSource = source;
     draftSave = null;
     recentRuns = [];
-    activeRun = false;
+    const target = runScope();
+    const pending = scopedActiveRun(item?.active_run, target.workspace, target.automation);
+    if (pending) watchedRuns.set(target.key, pending);
+    activeRun = Boolean(pending);
     runFingerprint = '';
     document.getElementById('run-list').textContent = '';
     document.getElementById('run-empty').hidden = true;
@@ -1145,7 +1188,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderManualRunNote();
     loadRuns();
     if ((!item?.id && !source) || editorOptions?.open) void loadTemplates();
-    if (source && heading) heading.focus();
+    main.scrollTop = 0;
+    heading?.focus({preventScroll: true});
   }
 
   function renderManualRunNote() {
@@ -1249,12 +1293,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function loadList({startup} = {}) {
+  async function loadList({startup, quiet = false} = {}) {
+    globalThis.clearTimeout(listTimer);
     const id = workspaceId();
     if (!id) return;
     const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
+    const searchText = search.value;
+    const refreshPending = () => {
+      listTimer = globalThis.setTimeout(() => {
+        if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
+      }, document.hidden ? 12000 : 3500);
+    };
+    const renderItems = items => {
+      const fingerprint = JSON.stringify(items);
+      if (!quiet || listFingerprint !== fingerprint) {
+        const focused = document.activeElement?.dataset?.automationId;
+        listFingerprint = fingerprint;
+        renderList(items, list, empty, (item, opener) => openEditor(item, null, opener));
+        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
+      }
+      if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
+    };
     if (category === 'work' || category === 'life') {
       const render = () => {
         const loading = templateState === 'idle' || templateState === 'loading';
@@ -1263,11 +1324,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }[templateState];
         if (templateRetry) templateRetry.hidden = templateState !== 'failed';
         renderCatalog(catalogItems(templates, category, search.value), list, empty,
-          item => openEditor(draftFromTemplate(item, currentUser && currentUser.username)));
+          (item, opener) => openEditor(draftFromTemplate(item, currentUser && currentUser.username), null, opener));
         setBusy(list, loading);
         setBusy(empty, loading);
       };
-      render();
+      if (!quiet || templateState !== 'ready') render();
       if (templateState === 'idle' || templateState === 'loading') {
         await loadTemplates();
         if (seq === listRequest && !listPanel.hidden && workspaceId() === id) render();
@@ -1279,26 +1340,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (projected) {
       empty.textContent = '这个分类下还没有自动化。';
       setBusy(empty, false);
-      renderList(projected, list, empty, item => openEditor(item));
+      renderItems(projected);
       return;
     }
-    setBusy(list, true);
-    list.textContent = '';
-    empty.hidden = false;
-    setBusy(empty, true);
-    empty.textContent = '正在加载自动化…';
+    if (!quiet) {
+      setBusy(list, true);
+      list.textContent = '';
+      empty.hidden = false;
+      setBusy(empty, true);
+      empty.textContent = '正在加载自动化…';
+    }
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
       .catch(() => ({status: 0, body: {}}));
     if (seq !== listRequest || workspaceId() !== id) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
+      if (quiet && ![401, 403, 404].includes(listed.status)) {
+        refreshPending();
+        return;
+      }
+      list.textContent = '';
       empty.hidden = false;
       empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       return;
     }
     empty.textContent = '这个分类下还没有自动化。';
-    renderList(listed.body.items || [], list, empty, item => openEditor(item));
+    renderItems(listed.body.items || []);
   }
 
   function fillWorkspaces(items) {
@@ -1519,13 +1587,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   newButton.addEventListener('click', () => {
     clearEditorLink();
-    openEditor(null);
+    openEditor(null, null, newButton);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
   scheduleSettings?.addEventListener('input', renderEditorSchedule);
 
   backButton.addEventListener('click', async () => {
-    editorRequest += 1;
+    const transition = ++editorRequest;
+    const position = listReturn;
+    listReturn = null;
     clearEditorLink();
     closeConfirm({restoreFocus: false});
     discardMeetingDraft();
@@ -1536,7 +1606,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
-    await loadList();
+    const restore = position?.workspace === workspaceId() && position?.category === category && position?.query === search.value;
+    const returnFocus = () => {
+      const opener = restore ? position.opener : null;
+      const automation = opener?.dataset.automationId;
+      const template = opener?.dataset.templateId;
+      const resolved = opener?.isConnected ? opener : Array.from(listPanel.querySelectorAll('button[data-automation-id], button[data-template-id]'))
+        .find(button => automation ? button.dataset.automationId === automation : template && button.dataset.templateId === template);
+      const control = resolved || newButton;
+      main.scrollTop = restore && resolved ? position.scroll : 0;
+      control.focus({preventScroll: true});
+      control.scrollIntoView?.({block: 'nearest'});
+    };
+    returnFocus();
+    const focused = document.activeElement;
+    await loadList({quiet: restore});
+    if (editorRequest === transition && focused && !focused.isConnected && document.activeElement === document.body) returnFocus();
   });
 
   form.addEventListener('submit', async event => {
@@ -1676,6 +1761,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runSubmissions.clear();
     watchedRuns.clear();
     stopRunPoll();
+    globalThis.clearTimeout(listTimer);
     await load();
   });
 

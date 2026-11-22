@@ -436,7 +436,10 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
     const cursor = url.searchParams.get('cursor');
     return {status: 200, json: async () => query
       ? {items: []}
-      : {items: [{name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one', summary: '<script>not HTML</script>'}],
+      : {items: [{
+        name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one',
+        summary: '<script>not HTML</script>', chat_enabled: Boolean(cursor),
+      }],
         cursor: cursor ? null : 'fixture-one'}};
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents'}});
@@ -450,9 +453,14 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
   assert.equal(profile.href, '/a/fixture-one');
   assert.equal(profile.textContent, 'Fixture');
   assert.equal(card.children[1].children[1].textContent, '<script>not HTML</script>');
-  assert.equal(classHits(card, 'catalog-use')[0].textContent, '复制');
+  assert.equal(classHits(card, 'catalog-use').length, 0);
+  assert.equal(classHits(card, 'catalog-chat')[0].href, '/a/fixture-one');
+  assert.equal(classHits(card, 'catalog-chat')[0].textContent, '查看主页');
   await el('catalog-more').handlers.click();
   assert.equal(el('discover-list').children.length, 2);
+  const chat = classHits(el('discover-list').children[1], 'catalog-chat')[0];
+  assert.equal(chat.href, '/a/fixture-two#conversation-title');
+  assert.equal(chat.textContent, '聊天');
   assert.equal(el('catalog-more').hidden, true);
   el('catalog-query').value = 'nothing & 中文';
   el('catalog-search').handlers.submit({preventDefault() {}});
@@ -1196,12 +1204,11 @@ test('copy distinguishes a failed workspace read from an empty workspace list', 
   }
 });
 
-test('copy asks a signed-out visitor to sign in and sends no writes', async () => {
+test('guest agent cards link to the public homepage without exposing private copy actions', async () => {
   const {el, calls, use}=await setupRemix({signedIn:false});
-  const before = calls.length;
-  await use.handlers.click();
-  assert.match(el('status').textContent,/请登录/);
-  assert.equal(calls.length,before);
+  assert.equal(use,undefined);
+  assert.equal(classHits(el('discover-list'), 'catalog-chat')[0].href, '/a/weekly-digest');
+  assert.equal(calls.some(([path, method])=>method!=='GET' || path.endsWith('/remix')), false);
 });
 
 test('the status line is a polite live region for the create receipt', () => {
@@ -1250,7 +1257,7 @@ function detailFetcher(item, previewResult) {
     if (path.startsWith('/v1/discover/works')) {
       return {status: 200, json: async () => ({items: [item], cursor: null})};
     }
-    if (path === '/w/' + item.slug) return {status: 200, json: async () => item};
+    if (path === '/w/' + item.slug + '?view=preview') return {status: 200, json: async () => item};
     if (path === '/w/' + item.slug + '/preview') return previewResult(path);
     throw new Error('unexpected ' + path);
   };
@@ -1488,8 +1495,8 @@ test('an older detail response cannot overwrite a newer work', async () => {
   const fetcher = async path => {
     if (path === '/v1/auth/session') return commentResponse({}, 401);
     if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [first, second]});
-    if (path === '/w/slow-work') return new Promise(resolve => { finish = resolve; });
-    if (path === '/w/new-work') return commentResponse(second);
+    if (path === '/w/slow-work?view=preview') return new Promise(resolve => { finish = resolve; });
+    if (path === '/w/new-work?view=preview') return commentResponse(second);
     if (path.endsWith('/preview')) return commentResponse({preview: null});
     throw new Error('Unexpected ' + path);
   };
@@ -1632,7 +1639,7 @@ test('guest comments are loaded on demand and render literal text with a safe si
   const [row] = classHits(doc.getElementById('feed-comments-list'), 'feed-comment-body');
   assert.equal(row.textContent, '<script>公开文本</script>');
   assert.equal(doc.getElementById('feed-comments-form').hidden, true);
-  assert.equal(doc.getElementById('feed-comments-login').href, '/login#work-comments=ci-fixture-doc');
+  assert.equal(doc.getElementById('feed-comments-login').href, '/login#discover=work%3Dci-fixture-doc%26comments%3D1');
   assert.equal(requests.every(([, method]) => method === 'GET'), true);
 });
 
