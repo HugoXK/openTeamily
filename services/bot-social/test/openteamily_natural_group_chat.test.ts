@@ -59,7 +59,7 @@ test("an existing single-member agent group answers naturally without creating f
   assert.deepEqual(targets(requested), targets(hello));
   const inbox = await owner.ok("GET", queue);
   assert.ok(inbox.jobs.some((row: any) => row.message.id === hello.id && row.discretionary === true));
-  assert.ok(inbox.jobs.some((row: any) => row.message.id === requested.id && !row.discretionary));
+  assert.ok(inbox.jobs.some((row: any) => row.message.id === requested.id && row.discretionary === true));
   assert.deepEqual((await owner.ok("GET", "/v1/ot/agent-inbox")).items, []);
   const replies = await Promise.all(hello.reply_jobs.map((job: Job) => answer(owner, room, hello, job)));
   assert.deepEqual((await owner.ok("GET", queue)).jobs.filter((row: any) => replies.some(reply => reply.id === row.message.id)), []);
@@ -147,14 +147,14 @@ test("ordinary agents can remain silent using a scoped claim and see only visibl
   await owner.ok("DELETE", room + "/agents/" + third.agent_id);
   assert.equal((await owner.call("POST", path(third), {action: "pass", attempt: 1, claim_id: claimThird.claim_id})).status, 409);
 
-  const required = await send("都回复我一下");
+  const required = await send("@所有人 都回复我一下");
   const only = required.reply_jobs[0];
   const oldStart = {...start(only, required.revision), accept_discretionary_reply: undefined};
   assert.deepEqual(await owner.ok("POST", path(only), oldStart), {ok: true});
   assert.equal((await owner.call("POST", path(only), {action: "pass", attempt: 1, claim_id: oldStart.claim_id})).status, 409);
 });
 
-test("shared conversation uses natural fanout only for explicit all-agent language and isolates other owners", async () => {
+test("shared group workers judge ordinary text while explicit mentions preserve their audience and isolation", async () => {
   const [author, colleague, outsider] = await Promise.all([
     home(service.base, "natural-author"), home(service.base, "natural-peer"), home(service.base, "natural-other"),
   ]);
@@ -165,15 +165,17 @@ test("shared conversation uses natural fanout only for explicit all-agent langua
     kind: "group", team_id: team.id, title: "共享产品讨论", members: [colleague.handle], agents: [lead],
   });
   const room = roomPath(group);
-  await colleague.ok("PUT", room + "/agents/" + engineer.agent_ref, {name: engineer.name, auto_reply: true});
+  await colleague.ok("PUT", room + "/agents/" + engineer.agent_ref, {name: engineer.name});
   assert.deepEqual((await author.ok("GET", room)).group_agent_routing, {mode: "shared", policy: {mode: "default"}, can_edit: true});
   const conversation = await author.ok("POST", room + "/messages", {body: "你们好，这里先讨论排期"});
-  assert.deepEqual(targets(conversation), []);
-  assert.deepEqual((await colleague.ok("GET", queue)).items.map((item: any) => [item.message.id, item.mode]), [[conversation.id, "auto"]]);
+  const both = [lead.agent_ref, engineer.agent_ref];
+  assert.deepEqual(targets(conversation), both);
+  assert.deepEqual(conversation.mentions, []);
+  assert.deepEqual((await colleague.ok("GET", queue)).items, []);
   const observation = await author.ok("POST", room + "/messages", {body: "所有智能体回复得太慢"});
-  assert.deepEqual(targets(observation), []);
+  assert.deepEqual(targets(observation), both);
   const command = await author.ok("POST", room + "/messages", {body: "让智能体都回复我一下"});
-  assert.deepEqual(targets(command), [lead.agent_ref, engineer.agent_ref]);
+  assert.deepEqual(targets(command), both);
   const alias = await author.ok("POST", room + "/messages", {body: "@all 请都检查一下"});
   assert.deepEqual(targets(alias), targets(command));
   const chinese = await author.ok("POST", room + "/messages", {
@@ -191,6 +193,8 @@ test("shared conversation uses natural fanout only for explicit all-agent langua
   const colleagueId = await ownerId(colleague);
   const remote = command.reply_jobs.find((job: Job) => job.agent_owner_id === colleagueId);
   const agentInbox = await colleague.ok("GET", queue);
+  const discretionary = [conversation, observation, command].map(message => message.id);
+  assert.deepEqual(agentInbox.jobs.filter((row: any) => row.discretionary).map((row: any) => row.message.id), discretionary);
   assert.equal(agentInbox.jobs.find((row: any) => row.job_id === remote.id).group_text_only, true);
   assert.equal(agentInbox.items.some((row: any) => row.message.id === command.id), false);
   assert.equal((await outsider.ok("GET", queue)).jobs.length, 0);
@@ -202,7 +206,7 @@ test("shared conversation uses natural fanout only for explicit all-agent langua
   assert.equal(quoted.reply_jobs[0].agent_owner_id, colleagueId);
 });
 
-test("plural inference is bounded when a group has a large agent roster", async () => {
+test("ordinary group judgment is bounded when a group has a large agent roster", async () => {
   const owner = await home(service.base, "natural-cap");
   const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true, title: "Roster", agents: [lead]});
   const room = roomPath(group);
