@@ -4081,6 +4081,46 @@ test('an exact shared chat and its group sidebar are usable while the personal s
   }
 });
 
+test('an exact team workspace private chat opens before personal startup and keeps its draft when that startup settles', async () => {
+  const hash = `#workspace=${linkTeam}&agent=${linkAgent}&conversation=${linkThread}`;
+  const fixture = linkedChatFixture(hash, {narrow:true});
+  const {doc, el, routes, calls, messages, restore} = fixture;
+  const personal = Promise.withResolvers();
+  const permission = Promise.withResolvers();
+  const scope = linkBase(linkTeam);
+  const startup = linkPersonalThreadEntry.replace('workspace=' + linkWork, 'workspace=' + linkTeam);
+  routes.set(startup, () => personal.promise);
+  routes.set('/v1/workspaces?limit=100', () => permission.promise);
+  routes.set(scope + linkNativeLatest, () => json(200, {agent:{...fixture.agent, workspace_id:linkTeam},
+    conversation:{...fixture.nativeThread, workspace_id:linkTeam}, items:fixture.nativeRows}));
+  try {
+    const opening = mount(doc, {fetcher:fixture.fetcher});
+    await settle();
+    assert.ok(calls.some(call => call.path === startup));
+    assert.equal(calls.some(call => call.path === scope + linkNativeLatest), false);
+    permission.resolve(json(200, {items:[
+      {id:linkWork, name:'Personal', kind:'personal'}, {id:linkTeam, name:'Team', kind:'team'},
+    ]}));
+    await settle();
+    assert.equal(el('workspace').value, linkTeam);
+    assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(el('chat-body').disabled, false);
+    el('chat-body').value = 'draft entered before personal startup';
+    await fire(el('chat-body'), 'input');
+    personal.resolve(linkedChatSnapshot(fixture));
+    await opening;
+    await settle();
+    assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(el('chat-body').value, 'draft entered before personal startup');
+    assert.equal(calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+    assert.equal(calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), false);
+  } finally {
+    permission.resolve(json(503, {}));
+    personal.resolve(json(503, {}));
+    restore();
+  }
+});
+
 test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(

@@ -1611,7 +1611,8 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   }
   page.form.hidden = true;
   const view = new FakeNode();
-  view.location = {search, hash: '', pathname: '/space'};
+  const initial = new URL('/space'+search, 'https://example.test');
+  view.location = {search:initial.search, hash:initial.hash, pathname:initial.pathname};
   view.history = {
     replaceState(_state, _title, relative) {
       const url = new URL(relative, 'https://example.test');
@@ -1634,6 +1635,39 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   };
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
+
+test('Space keeps the selected workspace in its catalog address and reloads the intended catalog', async () => {
+  const personal = 'c'.repeat(32);
+  const respond = path => {
+    if (path === '/v1/workspaces?scope=personal') return reply({body: {items:[{id:personal,name:'个人空间'}]}});
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items:[
+      {id:personal,name:'个人空间'}, {id:linkedWorkspace,name:'团队空间'},
+    ]}});
+    if (path === '/v1/workspaces/'+personal+'/artifacts' || path === linkedCatalog) return reply({body: {items:[]}});
+  };
+  const page = linkFixture(respond,'');
+  await page.mounted;
+  await nextTask();
+  const picker = page.elements.get('workspace');
+  picker.value = linkedWorkspace;
+  await picker.dispatch('change');
+  assert.equal(page.view.location.hash, '#workspace='+linkedWorkspace);
+  assert.equal(page.view.location.search, '');
+  const restored = linkFixture(respond,page.view.location.hash);
+  await restored.mounted;
+  assert.equal(restored.elements.get('workspace').value,linkedWorkspace);
+  assert.ok(restored.calls.some(call => call.path === linkedCatalog));
+  assert.equal(restored.calls.some(call => call.path === '/v1/workspaces/'+personal+'/artifacts'),false);
+});
+
+test('Space leaves an inaccessible pinned workspace unselected before starting any catalog read', async () => {
+  const page = linkFixture(() => undefined,'#workspace='+'d'.repeat(32));
+  await page.mounted;
+  assert.equal(page.elements.get('workspace').value,'');
+  assert.match(page.elements.get('status').textContent,/无法访问此工作区/);
+  assert.equal(page.elements.get('new-menu-button').disabled,true);
+  assert.equal(page.calls.some(call => /\/artifacts(?:\?|$)/.test(call.path)),false);
+});
 
 test('copying a historic version recovers a lost receipt without discarding an unsaved Space draft', async () => {
   const copy = {...linkedRecord,id:'c'.repeat(32),title:'历史副本',body:'第一版内容'};

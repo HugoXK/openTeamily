@@ -130,7 +130,8 @@ function linkedMeetingAction(params) {
   if (params.getAll('action').length !== 1 || params.getAll('revision').length !== 1 ||
       !/^(?:[0-9]|[1-4][0-9])$/.test(index ?? '') || !/^[1-9][0-9]*$/.test(revision ?? '') ||
       !Number.isSafeInteger(Number(revision))) return null;
-  return {index:Number(index), revision:Number(revision)};
+  const inbox = params.getAll('from').length === 1 && params.get('from') === 'actions';
+  return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1'};
 }
 const unavailable = {status: 0, body: {}};
 const SAVE_TIMEOUT_MS = 12000;
@@ -757,15 +758,8 @@ function mount() {
         return confirmNavigation(async () => {
           if (!currentInbox(state)) return;
           setInbox(false, {focus:false});
-          if (!await openMeeting(item.meeting_id)) return;
-          if (inboxReturn) {
-            inboxReturn.hidden = false;
-            if (mobileBack) mobileBack.hidden = true;
-          }
-          if (current?.id === item.meeting_id && current.revision === item.revision) {
-            const target = document.querySelector(`#action-list .action-row:nth-child(${item.action_index + 1}) input`);
-            target?.focus();
-          }
+          await openMeeting(item.meeting_id, undefined, undefined,
+            {index:item.action_index, revision:item.revision, inbox:true, mine:state.mine});
         });
       });
       const done = document.createElement('button');
@@ -828,14 +822,23 @@ function mount() {
     inboxWrites.add(key);
     button.disabled = true;
     button.textContent = '正在完成…';
-    const result = await saveRequest('POST', `/v1/workspaces/${state.workspace}/meetings/${item.meeting_id}/action`,
-      {index:item.action_index, revision:item.revision});
+    const path = `/v1/workspaces/${state.workspace}/meetings/${item.meeting_id}`;
+    const result = await saveRequest('POST', path + '/action', {index:item.action_index, revision:item.revision});
+    let meeting = result.body.meeting;
+    const matchesRevision = ({status, body:{viewer_username, meeting:record}}) => status === 200 &&
+      viewer_username === state.viewer && record?.id === item.meeting_id &&
+      record.workspace_id === state.workspace && record.revision === item.revision + 1;
+    let success = matchesRevision(result) && result.body.action?.index === item.action_index && result.body.action.done === true;
+    if (!success && currentInbox(state) && (ambiguousSave(result.status) || result.status === 200)) {
+      button.textContent = '正在确认…';
+      const checked = await saveRequest('GET', path);
+      meeting = checked.body.meeting;
+      const action = meeting?.action_items?.[item.action_index];
+      success = matchesRevision(checked) && action?.done === true && action.text === item.text &&
+        (action.owner || '') === item.owner && (action.due_date || '') === (item.due_date || '');
+    }
     inboxWrites.delete(key);
     if (!currentInbox(state)) return;
-    const meeting = result.body.meeting;
-    const success = result.status === 200 && result.body.viewer_username === state.viewer && meeting?.id === item.meeting_id &&
-      meeting.workspace_id === state.workspace && meeting.revision === item.revision + 1 &&
-      result.body.action?.index === item.action_index && result.body.action.done === true;
     if (success) {
       state.items = state.items.filter(row => row.meeting_id !== item.meeting_id || row.action_index !== item.action_index);
       if (current?.id === item.meeting_id && current.revision === item.revision && !writing && !saveRetry && !saveConflict) {
@@ -1803,14 +1806,20 @@ function mount() {
     if (transcriptQuery) transcriptSearch.open(transcriptQuery);
     show('', '');
     if (actionReference) {
+      if (actionReference.inbox && inboxReturn) {
+        inboxMine.checked = actionReference.mine;
+        inboxReturn.hidden = false;
+        if (mobileBack) mobileBack.hidden = true;
+      }
       const target = current.revision === actionReference.revision &&
         document.querySelector(`#action-list [data-meeting-action-index="${actionReference.index}"]`);
       if (target) {
         target.tabIndex = -1;
         target.dataset.sourceAction = '';
         target.scrollIntoView({block:'center'});
-        target.focus({preventScroll:true});
-        rewriteLocation({meeting:id, action:actionReference.index, revision:actionReference.revision});
+        (actionReference.inbox ? target.querySelector('input') || target : target).focus({preventScroll:true});
+        rewriteLocation({meeting:id, action:actionReference.index, revision:actionReference.revision,
+          ...(actionReference.inbox ? {from:'actions'} : {}), ...(actionReference.mine ? {mine:'1'} : {})});
       } else show('ok', '会议已更新，当前展示最新纪要。');
     }
     return true;

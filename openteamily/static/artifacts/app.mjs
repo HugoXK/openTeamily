@@ -288,6 +288,11 @@ export function queryForView(kind, scope) {
   return '';
 }
 
+function workspaceFromFragment(hash) {
+  const matches = new URLSearchParams((hash || '').slice(1)).getAll('workspace');
+  return matches.length === 1 && /^[0-9a-f]{32}$/.test(matches[0]) ? matches[0] : '';
+}
+
 export function artifactOrigin(item, workspace) {
   if (!item?.source) return null;
   const source = item.source;
@@ -1314,7 +1319,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const fragment = (catalogKind === 'meetings' || catalogScope === 'automation') && workspaceId()
+    const fragment = /^[0-9a-f]{32}$/.test(workspaceId())
       ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
     const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     writeSpaceAddress(url);
@@ -3348,7 +3353,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return loading.activityVersion;
   }
 
-  function fillWorkspaces(items, selected) {
+  function fillWorkspaces(items, selected, {exact = false} = {}) {
     workspaceSelect.textContent = '';
     for (const item of items) {
       const option = document.createElement('option');
@@ -3357,6 +3362,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceSelect.appendChild(option);
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    else if (exact) workspaceSelect.value = '';
     workspaceResolved = true;
     workspacePending.hidden = true;
     syncWorkspaceCreation();
@@ -3379,8 +3385,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
-    const linkedWorkspace = linkedStudio?.workspace || requested?.workspace ||
-      (catalogKind === 'meetings' || catalogScope === 'automation' || newKind ? fragment.get('workspace') : '');
+    const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
       !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
@@ -3439,7 +3444,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     const workspaces = space.body.items || [];
     const personal = sharedWork && workspaces.find(item => item.kind === 'personal');
-    fillWorkspaces(workspaces, personal?.id || linkedWorkspace || workspaceId());
+    fillWorkspaces(workspaces, personal?.id || linkedWorkspace || workspaceId(), {exact: Boolean(linkedWorkspace)});
     void supplemental?.then(shared => {
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
@@ -3472,19 +3477,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
       return;
     }
-    if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
-      workspaceSelect.value = '';
-      syncWorkspaceCreation();
-      notifications.setWorkspace('');
-      meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
-      renderCatalog();
-      return;
-    }
-    if ((newKind || catalogScope === 'automation') && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
-      workspaceSelect.value = '';
-      syncWorkspaceCreation();
-      notifications.setWorkspace('');
-      show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
+    if (linkedWorkspace && workspaceId() !== linkedWorkspace && !requested?.artifact) {
+      catalog?.controller?.abort();
+      catalog?.more?.abort();
+      catalog = null;
+      allItems = [];
+      meetingItems = [];
+      meetingError = catalogKind === 'meetings' ? '无法打开此工作区的会议资料。请选择其他工作区。' : '';
+      listStatus();
+      showCatalog();
+      if (!meetingError) show('error', newKind || catalogScope === 'automation'
+        ? '你没有访问此工作区的权限。请选择可以访问的工作区。'
+        : '无法访问此工作区。请选择其他工作区。');
       return;
     }
     if (requested) {
@@ -3554,8 +3558,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterCreators = [];
     filterSessions = [];
     renderFilterControls();
-    if (catalogKind === 'meetings' || catalogScope === 'automation' ||
-        artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    syncViewUrl();
     void loadList();
   });
   function cancelScheduledSearch() {
@@ -4618,8 +4621,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void load();
         return;
       }
-      if (catalogView?.workspace && [...workspaceSelect.options].some(option => option.value === catalogView.workspace)) {
-        workspaceSelect.value = catalogView.workspace;
+      const targetWorkspace = catalogView?.workspace || workspaceFromFragment(view.location.hash);
+      if (targetWorkspace && ![...workspaceSelect.options].some(option => option.value === targetWorkspace)) {
+        void load();
+        return;
+      }
+      if (targetWorkspace && workspaceId() !== targetWorkspace) {
+        workspaceSelect.value = targetWorkspace;
         notifications.setWorkspace(workspaceId());
         syncStudioWorkspace();
       }
