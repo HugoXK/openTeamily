@@ -1,5 +1,6 @@
 import { loadPersonalAgentBootstrap } from '../../../flybot-image/agent-bootstrap.mjs'
 import { nativeAgents } from './native.js'
+import { nativeHistoryProjection } from './native-history-projection.js'
 import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
 // openteamily/agents.py + the agent conversation dispatch in app.py).
@@ -106,6 +107,7 @@ export function createAgents({ db, host }) {
   let activeReplyStreams = 0
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
+  const historyProjection = nativeHistoryProjection({host,db})
   const one = (sql, ...a) => db.prepare(sql).get(...a)
   const all = (sql, ...a) => db.prepare(sql).all(...a)
   const run = (sql, ...a) => db.prepare(sql).run(...a)
@@ -830,6 +832,8 @@ export function createAgents({ db, host }) {
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       const memory = memorySetting(await conversationMemoryMode(row, agent))
+      const pendingHistory = historyProjection.pending(row.id)
+      if (pendingHistory) await pendingHistory
       return {
         agent: view(observed),
         conversation: {...conversation(agent, row.id), ...mapping, ...memory},
@@ -1206,12 +1210,12 @@ export function createAgents({ db, host }) {
   }
   endpoints.v1 = agentsV1({ endpoints, chatDirectory, host, log: host?.log })
   const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(endpoints, bundle) : endpoints.import(bundle))
-  return { endpoints, migrate }
+  return { endpoints, migrate, attachHistory:historyProjection.attach }
 }
 
 export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
-  const { endpoints, migrate } = createAgents({ db, host })
+  const { endpoints, migrate, attachHistory } = createAgents({ db, host })
   await importPending({ host, db, migrate })
   if (!await endpoints['personal-binding']()) {
     let bootstrap
@@ -1227,6 +1231,9 @@ export default async function agents(host) {
   }
   const timer = setTimeout(() => endpoints.reconcile().catch(() => host.log('native agent history reconciliation pending; retry agents/reconcile')), 10000)
   timer.unref?.()
+  const runtime = host.currentRuntime?.()
+  if (runtime) attachHistory(runtime)
+  else void host.runtime().then(attachHistory, () => {})
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
   wrapped.replyStream = async (payload, call) => {

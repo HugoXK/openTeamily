@@ -407,6 +407,18 @@ body.app-workspace #main-panel {
   margin-block: .75rem;
 }
 
+.run-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .75rem;
+}
+
+.run-related a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+}
+
 #manual-run-note { margin: 0 0 .75rem; }
 .manual-run-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; }
 #manual-run-status { margin: .25rem 0; scroll-margin-top: .75rem; }

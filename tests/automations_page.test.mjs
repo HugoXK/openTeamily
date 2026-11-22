@@ -570,6 +570,37 @@ test('an exact linked run stays visible when older than the first page of histor
   assert.equal(calls.filter(target => target === path + '/runs/' + run).length, 1);
 });
 
+test('exact failure and retry links are scoped and render without waiting for filtered history', async () => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const original = 'c'.repeat(32);
+  const retry = 'd'.repeat(32);
+  const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+  const history = Promise.withResolvers();
+  const older = {id:original, workspace_id:workspace, automation_id:automation, status:'failed',
+    error_code:'provider_error', latest_retry:{id:retry,status:'succeeded'}};
+  doc.defaultView = {location:{search:`?workspace=${workspace}&automation=${automation}&run=${original}&runs=failed`}};
+  await mount(doc, {fetcher:async target => {
+    if (target === '/v1/auth/session') return respond({user:{id:'owner',username:'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace,name:'个人工作区',kind:'personal'}]});
+    if (target === path) return respond({automation:{id:automation,workspace_id:workspace,title:'日报',enabled:false}});
+    if (target === path+'/runs/'+original) return respond({run:older});
+    if (target === path+'/runs?limit=20&status=failed') return history.promise;
+    assert.fail('Unexpected request ' + target);
+  }});
+  const exact = elements.get('run-list').children[0];
+  assert.equal(exact.dataset.runId,original);
+  assert.equal(elements.get('run-filter-failed').attributes['aria-current'],'true');
+  assert.match(exact.textContent,/模型提供方/);
+  const link = exact.children[1].children.flatMap(child=>child.children).find(child=>child.dataset.runControl==='latest-retry');
+  assert.equal(link.textContent,'查看重试 · 已完成');
+  assert.equal(link.href,`/automations?workspace=${workspace}&automation=${automation}&run=${retry}`);
+  history.resolve(respond({items:[]}));
+  await flush();
+  assert.equal(elements.get('run-list').children[0].dataset.runId,original);
+});
+
 const SOURCE_WORKSPACE = 'a'.repeat(32);
 const SOURCE_MEETING = 'b'.repeat(32);
 const FOLLOW_UP = 'c'.repeat(32);

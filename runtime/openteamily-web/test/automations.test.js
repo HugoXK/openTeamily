@@ -642,6 +642,8 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   assert.equal(retried.status, 201)
   assert.equal(retried.run.status, 'running')
   assert.equal(retried.run.trigger, 'retry')
+  assert.equal(retried.run.retry_of, failed.id)
+  assert.deepEqual(e['automations/run'](retry).run.latest_retry, {id:retried.run.id,status:'running'})
   assert.equal((await e['automations/v1'](receipt)).body.run.id, retried.run.id)
   assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
   const anotherRetry = {...retry, idempotency_key: 'y'.repeat(16)}
@@ -658,6 +660,25 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   assert.equal(e['automations/run'](running).run.status, 'succeeded')
   assert.equal((await e['automations/v1'](receipt)).body.run.status, 'succeeded')
   assert.equal(e['automations/runs'](running).has_pending, false)
+  const read = path => e['automations/v1']({method:'GET',path})
+  const runs = `/v1/workspaces/${W}/automations/${automation.id}/runs`
+  assert.deepEqual((await read(runs+'?status=failed')).body.items[0].latest_retry, {id:retried.run.id,status:'succeeded'})
+  assert.equal((await read(runs+'/'+retried.run.id)).body.run.retry_of, failed.id)
+  assert.equal((await read(runs.replace(W,'b'.repeat(32))+'/'+failed.id)).status,404)
+  const newer = e['automations/retry'](anotherRetry)
+  await flush()
+  release()
+  await Promise.all(feature.inflight.values())
+  assert.deepEqual((await read(runs+'/'+failed.id)).body.run.latest_retry, {id:newer.run.id,status:'succeeded'})
+
+  // History cleanup can remove a run independently of its original retry receipt.
+  const remove = feature.db.prepare('DELETE FROM ot_automation_runs WHERE id=?')
+  remove.run(newer.run.id)
+  assert.equal((await read(runs+'/'+newer.run.id)).status,404)
+  assert.deepEqual((await read(runs+'/'+failed.id)).body.run.latest_retry, {id:retried.run.id,status:'succeeded'})
+  remove.run(failed.id)
+  assert.equal((await read(runs+'/'+failed.id)).status,404)
+  assert.equal((await read(runs+'/'+retried.run.id)).body.run.retry_of,undefined)
 })
 
 test('startup interrupts claimed turns and resumes only previously unclaimed runs', async t => {

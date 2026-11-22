@@ -312,7 +312,7 @@
 #meeting-discussion-preview { background: var(--ot-bg); color: var(--ot-ink); }
 .meeting-discussion-option { display: flex; align-items: center; gap: .4rem; }
 #meeting-discussion-dialog .meeting-actions { justify-content: flex-end; }
-#meeting-discussion-dialog button, #meeting-discussion { min-height: 2.75rem; }
+#meeting-discussion-dialog button, #meeting-discussion, #shared-meeting-discussion { min-height: 2.75rem; }
 
 @media (max-width: 700px) {
   .meeting-page-top {
