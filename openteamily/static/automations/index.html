@@ -161,6 +161,15 @@
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
         <p id="automation-next-run" class="note" hidden></p>
+        <div id="automation-notification-settings" hidden>
+          <label for="automation-notification-policy">运行结果通知</label>
+          <select id="automation-notification-policy" name="notification_policy" aria-describedby="automation-notification-help">
+            <option value="scheduled" selected>仅计划运行</option>
+            <option value="all">所有运行（含手动）</option>
+            <option value="off">关闭通知</option>
+          </select>
+          <p id="automation-notification-help" class="note">运行通知显示在聊天的「通知」里。</p>
+        </div>
       </fieldset>
       <details id="automation-editor-options" class="editor-options">
         <summary>更多设置</summary>

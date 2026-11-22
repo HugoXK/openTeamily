@@ -3,6 +3,7 @@
 import { compatHandler } from '../../lib/b4/compat.js'
 import { Fault } from '../../lib/b4/http.js'
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
+import { listAutomationNotifications } from '../social/automation-notifications.js'
 
 export default function overview(host) {
   const bs = () => sharedBotSocial(host)
@@ -21,10 +22,11 @@ export default function overview(host) {
   }
   const summary = async wid => {
     const team = await bs().get('/v1/ot/teams/by-workspace/' + wid)
-    const [agents, artifacts, meetings, automations, social, notices] = await Promise.all([
+    const [agents, artifacts, meetings, automations, social, notices, automationNotices] = await Promise.all([
       host.call('agents/list', { workspace_id: wid }), collection('artifacts', wid), collection('meetings', wid),
       host.call('automations/list', { workspace_id: wid }), bs().get('/v1/ot/conversations'),
       bs().get('/v1/ot/notifications?limit=1&workspace_id=' + wid),
+      listAutomationNotifications(host, wid, {limit:1, unread:true}),
     ])
     const conversations = []
     for (const agent of agents.items || []) {
@@ -35,7 +37,7 @@ export default function overview(host) {
     return { workspace: { id: wid, name: team.name, kind: team.kind || (team.slug ? 'team' : 'workspace') },
       recent_conversations: conversations, recent_artifacts: artifacts, recent_meetings: meetings,
       counts: { agents: agents.items.length, artifacts: artifacts.length, meetings: meetings.length, automations: automations.items.length },
-      unread_notifications: notices.unread }
+      unread_notifications: notices.unread + (automationNotices?.unread_count ?? 0) }
   }
   return { endpoints: { v1: compatHandler([{ method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/overview$/,
     async handle({ match, query }) {

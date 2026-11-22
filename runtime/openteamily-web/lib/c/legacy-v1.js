@@ -25,7 +25,7 @@ const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
-const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:''}
+const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:'',reply_policy:'mode'}
 const DISCOVER_MEDIA_KINDS = new Map([
   ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
   ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
@@ -254,6 +254,7 @@ function rethrow(error) {
     call_recording_changed: 'call_recording_changed',
     meeting_ended: 'meeting_ended',
     group_management_conflict: 'group_management_conflict',
+    group_reply_lead_unavailable: 'group_reply_lead_unavailable',
     group_owner_transfer_required: 'group_owner_transfer_required',
     ownership_changed: 'ownership_changed',
     member_suspended: 'member_suspended',
@@ -875,19 +876,27 @@ function messengerRoutes(host, wakeReplies) {
       async handle({match,body}) {
         return wrap(async () => {
           const [ , workspace, id ] = match
-          const {action, revision, title, member_id:memberId} = body || {}
+          const {action, revision, title, member_id:memberId, mode, lead} = body || {}
           const field = typeof action === 'string' && Object.hasOwn(GROUP_MANAGEMENT_FIELDS,action) ? GROUP_MANAGEMENT_FIELDS[action] : null
+          const policy = action === 'reply_policy'
           if (field === null || !Number.isSafeInteger(revision) || revision < 0 ||
-              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field) ||
+              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field && !(policy && key === 'lead')) ||
               (field === 'title' && (typeof title !== 'string' || !title.trim() || title.length > 80)) ||
               (field === 'member_id' && (typeof memberId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(memberId)))) {
             throw new Fault(400, 'invalid', '群聊管理请求无效。')
+          }
+          if (policy) {
+            if (!['default','everyone','lead'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
+              throw new Fault(400, 'invalid', '请选择有效的智能体回复策略。')
+            }
+            if (mode === 'lead') sharedAgentTargets([lead])
           }
           const bs = client(host)
           const binding = await host.call('agents/personal-binding', {})
           const direct = binding?.workspace_id === workspace
           const result = await bs.post(`/v1/ot/conversations/${seg(id,'conversation_id')}/management`, {
-            action, revision, ...(field ? {[field]:body[field]} : {}), ...(direct ? {direct:true} : {workspace}),
+            action, revision, ...(field ? {[field]:body[field]} : {}), ...(policy && mode === 'lead' ? {lead} : {}),
+            ...(direct ? {direct:true} : {workspace}),
           })
           if (action === 'leave') {
             if (result.left === true && result.conversation_id === id) return [200,{left:true,conversation_id:id}]

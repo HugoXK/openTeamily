@@ -1,9 +1,11 @@
 // Stream C: Bot Social connection status and the user's shared profile/notifications.
 import { compatHandler } from '../../lib/b4/compat.js'
-import { Fault } from '../../lib/b4/http.js'
+import { bodyOf, Fault } from '../../lib/b4/http.js'
 import { sharedBotSocial, qs } from '../../lib/c/bot-social.js'
 import { wrap } from '../../lib/c/legacy-v1.js'
 import { HEX32 } from '../../featurekit/http.js'
+import { automationNoticeKind, automationNoticePrefix, isAutomationNoticeId,
+  listAutomationNotifications, readAutomationNotifications } from './automation-notifications.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/
 const CONVERSATION = /^otc_[0-9A-HJKMNP-TV-Z]{26}$/
@@ -11,12 +13,13 @@ const MESSAGE = /^otm_[0-9A-HJKMNP-TV-Z]{26}$/
 const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 
 function notificationKind(kind) {
-  if (kind === undefined || kind === 'work') return kind
+  if (kind === undefined || kind === 'work' || kind === 'automation') return kind
   throw new Fault(400, 'invalid', '无效的通知类型。')
 }
 
 function notificationItem(notification, workspace) {
   const {id, seq, kind, data, created_at, read} = notification
+  if (kind === automationNoticeKind || (typeof id === 'string' && id.startsWith(automationNoticePrefix))) return null
   const header = {id,seq,kind,created:Math.floor(created_at / 1000),read}
   if (kind === 'artifact.shared') {
     const {conversation_id,message_id,title,actor_username} = data ?? {}
@@ -46,8 +49,48 @@ function notificationItem(notification, workspace) {
   return {...data,...header}
 }
 
+function recentNotifications(shared, local, workspace, limit) {
+  const rows = local.map(item => ({item, time:item.created * 1000}))
+  for (const notice of shared) {
+    const item = notificationItem(notice, workspace)
+    if (item) rows.push({item, time:notice.created_at})
+  }
+  return rows.sort((a, b) => b.time - a.time || (b.item.seq ?? 0) - (a.item.seq ?? 0) ||
+    (a.item.id < b.item.id ? 1 : a.item.id > b.item.id ? -1 : 0)).slice(0, limit).map(row => row.item)
+}
+
+function notificationRead(body) {
+  const input = bodyOf(body, ['notification_id', 'all', 'kind'])
+  const {notification_id:id, all} = input
+  const one = typeof id === 'string' && id.length > 0 && id.length <= 128 && !Object.hasOwn(input, 'all')
+  if (!one && !(all === true && !Object.hasOwn(input, 'notification_id'))) {
+    throw new Fault(400, 'invalid', '请选择一条通知或标记全部为已读。')
+  }
+  const kind = notificationKind(input.kind)
+  const local = one && id.startsWith(automationNoticePrefix)
+  if (local && !isAutomationNoticeId(id)) throw new Fault(400, 'invalid', '无效的通知编号。')
+  if (one && ((kind === 'work' && local) || (kind === 'automation' && !local))) {
+    throw new Fault(404, 'not_found', '找不到这条通知。')
+  }
+  return {kind, local, selection:one ? {notification_id:id} : {all:true}}
+}
+
+function sharedUnread(result) {
+  if (!Number.isSafeInteger(result?.unread) || result.unread < 0) {
+    throw new Fault(503, 'notifications_unavailable', '暂时无法确认共享通知的未读数量。')
+  }
+  return result.unread
+}
+
 export default function social(host) {
   const bs = () => sharedBotSocial(host)
+  const personalScope = async workspace => (await host.call?.('agents/personal-binding', {}))?.workspace_id === workspace
+  const listShared = (workspace, personal, limit, unread, kind) => bs().get('/v1/ot/notifications' + qs({
+    limit, latest:'1', ...(personal ? {personal:'1'} : {workspace_id:workspace}), unread:unread ? '1' : undefined, kind,
+  }))
+  const readShared = (workspace, personal, selection, kind) => bs().post('/v1/ot/notifications/read', {
+    ...selection, ...(personal ? {personal:true} : {workspace_id:workspace}), kind,
+  })
   return {
     pages: ['contacts'],
     endpoints: {
@@ -69,7 +112,9 @@ export default function social(host) {
         { method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications$/,
           handle: ({ match, query }) => wrap(async () => {
             const params = new URLSearchParams(query)
-            if (params.getAll('kind').length > 1 || params.getAll('limit').length > 1) {
+            const filter = params.get('filter')
+            if ([...params.keys()].some(key => !['kind', 'limit', 'filter'].includes(key) || params.getAll(key).length > 1) ||
+                (filter !== null && filter !== 'all' && filter !== 'unread')) {
               throw new Fault(400, 'invalid', '无效的通知列表请求。')
             }
             const kind = notificationKind(params.get('kind') ?? undefined)
@@ -78,22 +123,43 @@ export default function social(host) {
             if (!/^[0-9]{1,3}$/.test(rawLimit) || limit < 1 || limit > 200) {
               throw new Fault(400, 'invalid', '无效的通知列表长度。')
             }
-            const binding = await host.call?.('agents/personal-binding', {})
-            const personal = binding?.workspace_id === match[1]
-            const scope = personal ? {personal:'1'} : {workspace_id:match[1]}
-            const unread = params.get('filter') === 'unread' ? '1' : undefined
-            const data = await bs().get('/v1/ot/notifications' + qs({limit,latest:'1',...scope,unread,kind}))
-            const items = data.notifications.map(n => notificationItem(n, match[1])).filter(Boolean)
-            return [200, {items, unread_count:data.unread, limit}]
+            const workspace = match[1], unread = filter === 'unread'
+            const [shared, local] = await Promise.all([
+              kind === 'automation' ? null : personalScope(workspace).then(personal => listShared(workspace, personal, limit, unread, kind)),
+              kind === 'work' ? null : listAutomationNotifications(host, workspace, {limit, unread}, kind !== 'automation'),
+            ])
+            if (shared !== null && !Array.isArray(shared?.notifications)) {
+              throw new Fault(503, 'notifications_unavailable', '暂时无法读取共享通知。')
+            }
+            return [200, {items:recentNotifications(shared?.notifications ?? [], local?.items ?? [], workspace, limit),
+              unread_count:(shared === null ? 0 : sharedUnread(shared)) + (local?.unread_count ?? 0), limit}]
           }) },
         { method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications\/read$/,
           handle: ({ match, body }) => wrap(async () => {
-            const kind = notificationKind(body?.kind)
-            const binding = await host.call?.('agents/personal-binding', {})
-            const personal = binding?.workspace_id === match[1]
-            const scope = personal ? {personal:true} : {workspace_id:match[1]}
-            const result = await bs().post('/v1/ot/notifications/read', { notification_id: body?.notification_id, all: body?.all, ...scope, kind })
-            return [200, { unread_count: result.unread }]
+            const workspace = match[1], {kind, local, selection} = notificationRead(body)
+            if (kind === 'automation') {
+              const result = await readAutomationNotifications(host, workspace, selection)
+              return [200, {unread_count:result.unread_count}]
+            }
+            const personal = await personalScope(workspace)
+            if (kind === 'work') {
+              const result = await readShared(workspace, personal, selection, kind)
+              return [200, {unread_count:sharedUnread(result)}]
+            }
+            if (local) {
+              const shared = sharedUnread(await listShared(workspace, personal, 1, true))
+              const result = await readAutomationNotifications(host, workspace, selection)
+              return [200, {unread_count:shared + result.unread_count}]
+            }
+            const before = await listAutomationNotifications(host, workspace, {limit:1, unread:true})
+            const shared = sharedUnread(await readShared(workspace, personal, selection))
+            if (!selection.all || before === null) return [200, {unread_count:shared + (before?.unread_count ?? 0)}]
+            try {
+              const result = await readAutomationNotifications(host, workspace, selection)
+              return [200, {unread_count:shared + result.unread_count}]
+            } catch {
+              throw new Fault(503, 'notifications_partial_read', '未能确认所有通知均已标记，请刷新后重试。')
+            }
           }) },
       ]),
       status: async () => bs().status(),

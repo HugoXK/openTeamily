@@ -1,5 +1,5 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
-import { mountAgentMentions } from './mentions.mjs';
+import { hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountGroupInviteLink } from './group-invite-link.mjs';
@@ -392,7 +392,7 @@ export function groupAgentSummary(conversation) {
 }
 
 function activeGroupAgent(conversation, target) {
-  return target && (conversation?.agent_members || []).find(agent => !agent.archived &&
+  return target && (conversation?.agent_members || []).find(agent => !agent.archived && !agent.native_deleted &&
     agent.owner_id === target.owner_id && (agent.id || agent.agent_id) === target.agent_id);
 }
 
@@ -594,7 +594,17 @@ export function notificationBadgeText(count) {
   return value > 99 ? '99+' : String(value);
 }
 
-export function notificationSummary(item) {
+const AUTOMATION_RUN_FINISHED = 'automation.run_finished';
+
+export function notificationSummary(item, label = zh => zh) {
+  if (item.kind === AUTOMATION_RUN_FINISHED) {
+    const status = {
+      succeeded: label('已完成', 'completed'), failed: label('失败', 'failed'),
+      timeout: label('已超时', 'timed out'), interrupted: label('已中断', 'was interrupted'),
+    }[item.status] || label('已结束', 'ended');
+    const title = item.title || label('自动化', 'Automation');
+    return label(`「${title}」运行${status}`, `“${title}” ${status}`);
+  }
   const workSummary = workNotificationSummary(item);
   if (workSummary) return workSummary;
   if (item.kind === 'discover.published') {
@@ -783,10 +793,16 @@ const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
 const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
 const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
-const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder', 'team.owner_transferred']);
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder', 'team.owner_transferred', AUTOMATION_RUN_FINISHED]);
 
 export function notificationTarget(item, workspace) {
   if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === AUTOMATION_RUN_FINISHED) {
+    const {workspace_id, automation_id:automation, run_id:run} = item;
+    if (workspace_id !== workspace || ![workspace, automation, run].every(id => typeof id === 'string' && NOTIFICATION_ID.test(id))) return null;
+    const target = '/automations?' + new URLSearchParams({workspace, automation, run});
+    return item.path == null || item.path === target ? target : null;
+  }
   if (item?.kind === 'team.owner_transferred') {
     if (!NOTIFICATION_ID.test(workspace || '') || item.workspace_id !== workspace) return null;
     return '/members#' + new URLSearchParams({workspace});
@@ -1093,6 +1109,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const replyPanel = document.getElementById('chat-reply-preview');
   const replyDraftTitle = document.getElementById('chat-reply-author');
   const replyDraftBody = document.getElementById('chat-reply-excerpt');
+  document.getElementById('chat-body').addEventListener('input', renderGroupComposerRouting);
 
   function renderGroupComposerRouting() {
     const node = document.getElementById('group-composer-routing');
@@ -1100,14 +1117,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       !currentConversation.public_agent ? currentConversation : null;
     const scope = sendScope();
     const mentions = groupMentions?.scope === scope ? groupMentions : null;
-    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived);
-    node.hidden = !conversation || (!agents.length && !mentions?.stale);
+    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived && !agent.native_deleted);
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    const body = document.getElementById('chat-body').value;
+    const everyone = conversation && hasEveryoneMention(body);
+    node.hidden = !conversation;
     if (node.hidden) return;
-    const routing = conversation.group_agent_routing;
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
-    if (mentions?.stale) {
+    if (everyone) {
+      kind = 'targeted';
+      text = agents.length ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
+        : uiLabel('将提及群内所有成员', 'Everyone in the group will be mentioned');
+    } else if (hasGroupAllMention(body)) {
+      kind = 'targeted';
+      text = agents.length ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
+        : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (mentions?.stale) {
       kind = 'attention';
       text = uiLabel('请移除不可用的智能体后再发送。', 'Remove unavailable agents before sending.');
     } else if (mentions?.targets.length) {
@@ -1117,15 +1145,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
-    } else if (routing?.mode === 'personal') {
-      text = auto || routing.default === 'auto' ? uiLabel('按群内自动回复设置运行 · 说「你们好」可请全员回复',
-        'Group auto-reply settings apply · Say “hello everyone” to ask all agents')
-        : routing.default === 'all' ? uiLabel('群内智能体会回复 · 用 @ 可指定回复对象', 'Group agents reply by default · Use @ to pick who replies')
-          : uiLabel('用 @ 指定群内智能体回复', 'Use @ to choose which group agents reply');
-    } else if (routing?.mode === 'shared') {
-      text = auto ? uiLabel('按群内自动回复设置运行 · 用 @ 指定回复', 'Group auto-reply settings apply · Use @ to pick who replies')
-        : uiLabel('用 @ 指定回复 · 说「让智能体都回复」可请全员回复', 'Use @ to pick who replies · Ask all agents to reply for a group answer');
-    } else text = uiLabel('用 @ 指定群内智能体回复', 'Use @ to choose which group agents reply');
+    } else if (policy?.mode === 'everyone') {
+      text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
+    } else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) text = uiLabel(`${lead.name} 优先判断是否回复 · 可用 @所有人`, `${lead.name} decides whether to reply first · Use @all to ask them all`);
+      else {
+        kind = 'attention';
+        text = uiLabel('优先智能体不可用 · 可用 @ 指定回复对象', 'Preferred agent unavailable · Use @ to pick who replies');
+      }
+    } else if (!agents.length) text = uiLabel('用 @所有人提及群内所有成员', 'Use @all to mention everyone in the group');
+    else if (auto) text = uiLabel('按自动回复设置运行 · 可用 @所有人', 'Group auto-reply settings apply · Use @all to ask all agents');
+    else text = uiLabel('由智能体按内容决定是否回复 · 可用 @所有人', 'Agents decide whether to reply · Use @all to ask them all');
     const label = document.getElementById('group-composer-routing-text');
     if (label.textContent !== text) label.textContent = text;
     node.dataset.kind = kind;
@@ -1986,7 +2017,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('group-agent-empty');
     empty.hidden = choices.size > 0;
     list.replaceChildren();
-    for (const request of requests || []) {
+    for (const request of (requests || []).filter(item => item.status !== 'passed')) {
       const item = document.createElement('li');
       item.textContent = groupAgentName(request.agent_name, request.agent_owner_name,
         request.agent_owner_id, request.agent_owner_handle) + ' · ' +
@@ -3959,13 +3990,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (Date.now() - view.missingSince < 2000) continue;
       } else view.missingSince = null;
       const snapshot = matchesGroupReply(item, view) ? item : null;
+      if (snapshot?.status === 'passed') {
+        changes.push({id, view, passed:true});
+        continue;
+      }
       const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
       if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
     withGroupReplyScroll(() => {
-      for (const {view, text, state} of changes) {
+      for (const {id, view, text, state, passed} of changes) {
+        if (passed) {
+          view.row.remove();
+          groupReplyViews.delete(id);
+          continue;
+        }
         view.preview.textContent = text;
         view.preview.hidden = !text;
         view.row.dataset.state = state;
@@ -4161,8 +4201,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         lastSocialItems = lastSocialItems.map(message => message === source ? updated : message);
         if (row?.dataset.state && row.dataset.state !== 'replied') {
           const focused = Boolean(button && document.activeElement === button);
-          withGroupReplyScroll(() => renderGroupReplyRow(updated, next, row));
-          if (focused) (groupReplyButton(row) || row).focus({preventScroll: true});
+          withGroupReplyScroll(() => {
+            if (next.status === 'passed') { row.remove(); groupReplyViews.delete(next.id); }
+            else renderGroupReplyRow(updated, next, row);
+          });
+          if (focused && next.status !== 'passed') (groupReplyButton(row) || row).focus({preventScroll: true});
         }
         syncGroupReplyProgress();
       } else setGroupReplyRetryButton(button, false);
@@ -4543,7 +4586,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
       if (!item.retracted) {
         for (const job of item.reply_jobs || []) {
-          if (job.status === 'replied' || durableGroupReplies.has(job.id)) continue;
+          if (job.status === 'replied' || job.status === 'passed' || durableGroupReplies.has(job.id)) continue;
           list.append(renderGroupReplyRow(item, job, existingGroupReplies.get(job.id), previousGroupViews.get(job.id)));
         }
       }
@@ -4642,7 +4685,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('notification-list');
     if (!list) return;
     const mentionsOnly = notificationKind?.value === 'mention';
+    const automationsOnly = notificationKind?.value === 'automation';
     const items = (body.items || []).filter(item => (!mentionsOnly || item.kind === 'mention' || item.kind === 'messenger.mention')
+      && (!automationsOnly || item.kind === AUTOMATION_RUN_FINISHED)
       && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
@@ -4652,17 +4697,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (target) button.href = target;
       else {
         button.type = 'button';
-        if (invalidLink) { button.disabled = true; button.title = '通知目标不可用'; }
+        if (invalidLink) { button.disabled = true; button.title = uiLabel('通知目标不可用', 'Notification destination unavailable'); }
       }
       button.className = 'notification-item' + (item.read ? '' : ' is-unread');
       button.dataset.notification = item.id;
       button.dataset.notificationKind = item.kind;
       const readKey = `${scope.epoch}:${item.id}`;
       if (notificationReads.has(readKey)) button.setAttribute('aria-busy', 'true');
-      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
-      const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item, uiLabel);
+      button.append(summary);
+      if (item.kind !== AUTOMATION_RUN_FINISHED) {
+        const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+        button.append(excerpt);
+      }
       const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
-      button.append(summary, excerpt, time);
+      button.append(time);
       button.addEventListener('click', async event => {
         if (target) event.preventDefault();
         if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
@@ -4702,7 +4751,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('notifications-empty');
     if (empty) {
       empty.hidden = items.length > 0 || Boolean(notificationNotice && !notificationNotice.hidden);
-      empty.textContent = mentionsOnly
+      empty.textContent = automationsOnly
+        ? (notificationUnread?.checked ? uiLabel('暂无未读自动化通知。', 'No unread automation notices.')
+          : uiLabel('暂无自动化运行通知。', 'No automation run notices.')) : mentionsOnly
         ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
         : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
     }
@@ -5104,6 +5155,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupInfo(currentConversation);
   }
 
+  function renderGroupReplyPolicy(conversation) {
+    const section = document.getElementById('group-reply-policy');
+    const summary = document.getElementById('group-reply-policy-summary');
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
+      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    if (section.hidden) return;
+    if (policy?.mode === 'everyone') summary.textContent = uiLabel('全员回复', 'All agents reply');
+    else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) {
+        const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
+        summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
+      } else summary.textContent = uiLabel('优先智能体不可用。普通消息暂不触发回复。',
+        'Preferred agent unavailable. Ordinary messages currently do not trigger replies.');
+    } else summary.textContent = uiLabel('跟随群组默认', 'Uses the group default');
+  }
+
   function setGroupInfoTab(which) {
     const agentsTab = document.getElementById('group-info-tab-agents');
     const peopleTab = document.getElementById('group-info-tab-people');
@@ -5116,6 +5186,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
+    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -5421,6 +5492,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
+    renderGroupReplyPolicy(conversation);
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     const feedbackScope = group ? sendScope() : '';
     if (feedbackScope !== groupInfoFeedbackScope) groupInfoAddFeedback.textContent = '';
@@ -8151,7 +8223,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       field.value = '';
       publicDraft.persist({now: false});
       field.focus({preventScroll: true});
-      if (social && message.agent_mentions?.length) agentMentions.forget(scope);
+      if (social && (message.agent_mentions?.length || (currentConversation?.kind === 'group' && hasGroupAllMention(message.body)))) {
+        agentMentions.forget(scope);
+      }
+      renderGroupComposerRouting();
     }
     consumeReplyDraft(scope, reply);
     if (files.length) attachmentSender.clearDraft(scope, files);
