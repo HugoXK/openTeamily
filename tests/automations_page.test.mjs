@@ -408,7 +408,7 @@ test('a native result link reads the item early and opens only once its workspac
     if (path === '/v1/workspaces?limit=100') return teams.promise;
     if (path === detailPath) return respond({automation:item});
     if (path === exactPath) return exact.promise;
-    if (path === `${detailPath}/runs?limit=20`) return respond({items:[]});
+    if (path === `${detailPath}/runs?limit=20`) return respond({items:[result]});
     throw new Error('unexpected ' + path);
   }});
   try {
@@ -423,6 +423,7 @@ test('a native result link reads the item early and opens only once its workspac
     await flush();
     assert.equal(elements.get('editor-form').hidden, false);
     assert.equal(elements.get('run-link-note').textContent, '正在读取这次运行…');
+    assert.equal(elements.get('run-list').children[0].children[1].hidden, true);
     elements.get('editor-form').elements.title.value = '已编辑的标题';
     exact.resolve(respond({run:result}));
     await mounted;
@@ -430,6 +431,7 @@ test('a native result link reads the item early and opens only once its workspac
     assert.equal(elements.get('editor-heading').textContent, item.title);
     assert.equal(elements.get('editor-form').elements.title.value, '已编辑的标题');
     assert.equal(elements.get('run-link-status').hidden, true);
+    assert.equal(elements.get('run-list').children[0].children[1].hidden, false);
     assert.match(elements.get('run-list').textContent, /已打开确切结果/);
     assert.equal(calls.filter(([,path]) => path === detailPath).length, 1);
     assert.equal(calls.filter(([,path]) => path === exactPath).length, 1);

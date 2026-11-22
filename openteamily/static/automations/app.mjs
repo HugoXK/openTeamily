@@ -1035,7 +1035,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible,
       hasRetry && [activeRun, runSettingsChanged, current?.revision],
       hasRetry && submission?.state, hasRetry && submission?.source,
-      visible.map(item => [savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
+      visible.map(item => [expandedRuns.has(item.id), savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
         cancellingRuns.has(`${target.key}/${item.id}`)])]);
     if (runFingerprint === fingerprint) return;
     runFingerprint = fingerprint;
