@@ -1,7 +1,3 @@
-/* Team wizard step 1, laid out from the 2026-11-16 Teamily capture
-   (inventory/create-team-step1.png). Steps 2–3 are not restyled from
-   invented screenshots. Palette stays OpenTeamily tokens. */
-
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -67,8 +63,7 @@ body.app-workspace #main-panel {
 }
 
 #wizard-form,
-#step-1,
-#step-later {
+#wizard-form > .step {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -156,6 +151,16 @@ body.app-workspace #main-panel {
   box-shadow: inset 0 0 0 1px var(--ot-accent);
 }
 
+.mode-card:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: .64;
+}
+
+.mode-card:has(input:focus-visible) {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 2px;
+}
+
 .mode-card input {
   position: absolute;
   opacity: 0;
@@ -210,6 +215,7 @@ body.app-workspace #main-panel {
 
 .team-wizard .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: .6rem;
 }
@@ -229,13 +235,48 @@ body.app-workspace #main-panel {
   border-color: var(--ot-line);
 }
 
-#step-later .note {
+#invite-result {
   margin: 0 0 1rem;
-  padding: .75rem .85rem;
-  border-radius: .75rem;
-  background: var(--ot-surface-2);
+  padding: .9rem;
+  border-radius: .85rem;
+  background: var(--ot-surface);
   border: 1px solid var(--ot-line);
-  line-height: 1.45;
+}
+
+#invite-result h3 {
+  margin: 0 0 .25rem;
+  font-size: .9rem;
+}
+
+#invite-result .actions {
+  margin-top: .65rem;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.team-destinations a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 999px;
+  padding: .55rem .95rem;
+  font-size: .875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.team-destinations a:last-child {
+  background: var(--ot-accent-soft);
+  border-color: var(--ot-accent);
+}
+
+@media (max-width: 700px) {
+  .team-wizard .team-destinations {
+    justify-content: flex-start;
+  }
 }
 
 #convert-workspace-field {

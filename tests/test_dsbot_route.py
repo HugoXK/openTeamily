@@ -23,8 +23,6 @@ class FakeRunner:
         self.calls.append(list(args))
         if args[:3] == ['inspect', '--type', 'container'] and args[3] == 'openteamily-web-1':
             return json.dumps([{'Name': '/openteamily-web-1', 'NetworkSettings': {'Networks': self.web_networks}}]), ''
-        if args[:3] == ['inspect', '--type', 'container']:
-            return json.dumps([{'NetworkSettings': {'Networks': {f'ot-{IID}_default': {'IPAddress': '172.30.5.9'}}}}]), ''
         if args[:2] == ['network', 'connect']:
             self.web_networks[args[2]] = {}
             return '', ''
@@ -32,17 +30,19 @@ class FakeRunner:
 
 
 class FakeEngine:
-    def __init__(self, root, runner, logs=URL, healthy=True):
+    def __init__(self, root, runner, logs=URL, healthy=True, private_ip='172.30.5.9'):
         self.registry = SimpleNamespace(root=root, config={'dsbot_gateway': {'web_container': 'openteamily-web-1'}})
         self.runner, self.logs, self.healthy = runner, logs, healthy
+        self.private_ip = private_ip
         self.log_reads = 0
+        self.inspections = 0
 
     def inspect(self, iid, heartbeat=lambda: None):
-        return {'present': True, 'healthy': self.healthy, 'process_ref': REF if self.healthy else None}
+        self.inspections += 1
+        return {'present': True, 'healthy': self.healthy, 'process_ref': REF if self.healthy else None,
+                'private_ip': self.private_ip}
 
     def compose(self, iid, operation, heartbeat=lambda: None, tail=100):
-        if operation == 'ps':
-            return 'f' * 64 + '\n', ''
         assert operation == 'logs'
         self.log_reads += 1
         return f'dsh web ready\n{self.logs}\n', ''
@@ -80,6 +80,7 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(seen, [(URL, '172.30.5.9:8080')])
         self.assertEqual(client.reports[0][:2], (IID, '172.30.5.9:8080'))
         self.assertEqual(client.reports[0][3], REF)
+        self.assertEqual(engine.inspections, 1)
         self.assertIn(['network', 'connect', f'ot-{IID}_default', 'openteamily-web-1'], runner.calls)
         cache = self.root / 'secrets' / f'dsbot-launch-{IID}.json'
         self.assertEqual(oct(os.stat(cache).st_mode & 0o777), '0o600')
@@ -88,6 +89,15 @@ class PublishTests(unittest.TestCase):
         dsbot_route.publish(engine, client, IID, exchange=exchange)
         self.assertEqual(engine.log_reads, 1)
         self.assertEqual(sum(1 for c in runner.calls if c[:2] == ['network', 'connect']), 1)
+
+    def test_invalid_address_fails_before_connecting_the_web_container(self):
+        for ip in (None, '127.0.0.1', '8.8.8.8'):
+            with self.subTest(ip=ip):
+                runner, client = FakeRunner(), FakeClient()
+                with self.assertRaisesRegex(ManagerError, 'runtime_address'):
+                    dsbot_route.publish(FakeEngine(self.root, runner, private_ip=ip), client, IID)
+                self.assertEqual(runner.calls, [])
+                self.assertEqual(client.reports, [])
 
     def test_new_process_needs_its_own_launch_url(self):
         runner, client = FakeRunner(), FakeClient()

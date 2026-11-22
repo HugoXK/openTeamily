@@ -62,7 +62,7 @@ export function registerFeature(table, name, spec) {
 
 // Load every features/<name>/index.js. A feature that fails to load is reported and
 // skipped; the others and the core keep working.
-export async function loadFeatures({ dir, identity, dataDir, log = console.error }) {
+export async function loadFeatures({ dir, identity, dataDir, log = console.error, onRegistered = () => {} }) {
   const table = {}
   const loaded = []
   const failed = []
@@ -70,6 +70,10 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
   try {
     names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
   } catch { return { table, loaded, failed } }
+  // HTML only needs the saved locale. Agents still load after Chat, which adopts
+  // retained private-chat rows before the Agents bundle can be accepted.
+  const priority = name => name === 'settings' ? 0 : name === 'chat' ? 1 : 2
+  names.sort((a,b) => priority(a) - priority(b) || a.localeCompare(b))
   for (const name of names) {
     if (!FEATURE_NAME.test(name)) { failed.push({ name, error: 'invalid name' }); continue }
     try {
@@ -79,6 +83,7 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
       const host = featureHost({ name, identity, dataDir, log, table })
       registerFeature(table, name, await factory(host))
       loaded.push(name)
+      onRegistered(name, table)
     } catch (error) {
       failed.push({ name, error: String(error?.message ?? error).slice(0, 200) })
       log(`openteamily-web: feature ${name} not loaded: ${String(error?.message ?? error).slice(0, 200)}`)

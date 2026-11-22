@@ -1,78 +1,79 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dsbotRoute, dsbotRequest, dsbotServed, PLUGIN_API } from '../openteamily/static/chat/dsbot.mjs';
+import { dsbotServed } from '../openteamily/static/chat/dsbot.mjs';
+import { envelope, movedTarget } from '../openteamily/static/shell/dsbot-api.mjs';
+import { socialMessageFromHash, socialMessageHref } from '../openteamily/static/shell/chat-utils.mjs';
 
-const agent = 'a'.repeat(32);
-const base = `/v1/workspaces/${'w'.repeat(32)}/agents/${agent}`;
+test('social message links are exact, same-origin and can omit a sender-owned personal workspace', () => {
+  const team = 'a'.repeat(32);
+  const personal = socialMessageHref({conversation:'otc_group', message:'otm_first'});
+  const shared = socialMessageHref({workspace:team, conversation:'otc_group', message:'otm_first'});
+  assert.equal(personal, '/chat#social=otc_group&message=otm_first');
+  assert.equal(shared, '/chat#workspace=' + team + '&social=otc_group&message=otm_first');
+  assert.equal(socialMessageFromHash(personal.slice(5)), personal);
+  assert.equal(socialMessageFromHash(shared.slice(5)), shared);
+  for (const hash of [
+    '#workspace=&social=otc_group&message=otm_first', '#social=x&social=y&message=z',
+    '#social=x&message=%2F%2Fthird-party.example', '#social=x&message=y&next=https://third-party.example',
+    '#social=x', '#workspace=invalid&social=x&message=y', '#social=x&message=' + 'z'.repeat(81),
+  ]) assert.equal(socialMessageFromHash(hash), '', hash);
+});
 
-test('only the personal agent private chat is routed to the DS-Bot plugin', () => {
-  assert.deepEqual(dsbotRoute('GET', `${base}/conversations?limit=100`, undefined, agent).endpoint, 'chat/conversations');
-  assert.equal(dsbotRoute('POST', `${base}/conversations`, {title: 't'}, agent).endpoint, 'chat/create');
-  assert.deepEqual(dsbotRoute('POST', `${base}/conversations/c1/messages`, {body: 'hi'}, agent).payload, {conversation_id: 'c1', text: 'hi'});
-  assert.equal(dsbotRoute('GET', `${base}/conversations/c1`, undefined, agent).endpoint, 'chat/messages');
-  assert.equal(dsbotRoute('POST', `${base}/conversations/c1/read`, {}, agent).shape, 'read');
-  assert.equal(dsbotRoute('GET', `${base}/conversations`, undefined, 'b'.repeat(32)), null);
-  assert.equal(dsbotRoute('GET', `${base}/conversations`, undefined, ''), null);
-  assert.equal(dsbotRoute('POST', `${base}/conversations/c1/messages/m1/artifact`, {}, agent), null);
+test('private chat identifies the account DS-Bot and shares the agents transport', () => {
   assert.equal(dsbotServed({querySelector: () => null}), false);
   assert.equal(dsbotServed({querySelector: () => ({})}), true);
+  const origin = 'https://openteamily.example';
+  const base = `/v1/workspaces/${'a'.repeat(32)}/agents/${'b'.repeat(32)}/conversations`;
+  const privateChat = `${base}/${'c'.repeat(32)}`;
+  for (const path of [base, privateChat, `${privateChat}/messages`]) {
+    assert.deepEqual(movedTarget(path, origin), {feature: 'agents', path});
+  }
+  const path = `${privateChat}/messages`;
+  const body = {body: 'hello'};
+  const wrapped = envelope(movedTarget(path, origin), 'POST', {'Idempotency-Key':'retry-one-message'}, body);
+  assert.deepEqual(wrapped, {
+    endpoint: 'agents/v1',
+    payload: {method:'POST', path, idempotency_key:'retry-one-message', body},
+  });
 });
 
-test('plugin responses are shaped like the legacy API', async () => {
+test('native Chat starts scoped reads without the browser transport or optional modules', async () => {
+  const original = globalThis.window;
   const calls = [];
-  const fetcher = async (url, init) => {
-    calls.push([url, JSON.parse(init.body)]);
-    const {endpoint} = JSON.parse(init.body);
-    const value = endpoint === 'chat/conversations' ? {items: [{id: 'c1', title: 'T', created: 1, updated: 2}]}
-      : endpoint === 'chat/messages' ? {items: [{id: 'm1', role: 'assistant', text: 'hello', created: 3, meta: {memory_refs: [{id: 'p'}]}}]}
-      : {reply: {id: 'r1'}};
-    return {status: 200, json: async () => ({ok: true, value})};
-  };
-  const open = await dsbotRequest(fetcher, dsbotRoute('GET', `${base}/conversations/c1`, undefined, agent), agent, {});
-  assert.equal(open.status, 200);
-  assert.equal(open.body.conversation.id, 'c1');
-  assert.deepEqual(open.body.items[0].body, 'hello');
-  assert.equal(open.body.items[0].status, 'succeeded');
-  const sent = await dsbotRequest(fetcher, dsbotRoute('POST', `${base}/conversations/c1/messages`, {body: 'x'}, agent), agent, {});
-  assert.equal(sent.status, 201);
-  assert.equal(calls[0][0], PLUGIN_API);
-  const failing = async () => ({status: 200, json: async () => ({ok: false, error: {code: 'chat/runtime-unavailable', message: 'no'}})});
-  const failed = await dsbotRequest(failing, dsbotRoute('GET', `${base}/conversations`, undefined, agent), agent, {});
-  assert.equal(failed.status, 502);
-  assert.equal(failed.body.error.code, 'chat/runtime-unavailable');
-});
+  const document = {querySelector: selector => selector === 'meta[name="openteamily-instance"]' ? {} : null};
+  const workspace = 'a'.repeat(32), agent = 'b'.repeat(32), conversation = 'c'.repeat(32);
+  const hash = `#workspace=${workspace}&agent=${agent}&conversation=${conversation}`;
+  const location = {hash, href: 'https://openteamily.example/chat' + hash};
+  globalThis.window = {document, location, fetch: async (path, init) => {
+    calls.push({path, init});
+    return Response.json({items: []});
+  }};
+  document.defaultView = globalThis.window;
+  try {
+    const {takeChatReads} = await import('../openteamily/static/chat/startup.mjs?test-direct-early-read');
+    assert.equal(calls[0].path, '/v1/auth/session');
+    const [first, second] = calls;
+    assert.equal(calls.length, 2);
+    assert.equal(first.init.credentials, 'same-origin');
+    const {pathname, searchParams} = new URL(second.path, location.href);
+    assert.equal(pathname, '/v1/workspaces');
+    assert.deepEqual(Object.fromEntries(searchParams), {
+      scope: 'personal', include: 'chat', workspace, entry_agent: agent, entry_conversation: conversation, directory: '0',
+    });
+    assert.equal(second.init.credentials, 'same-origin');
+    assert.ok(second.init.signal instanceof AbortSignal);
+    const early = takeChatReads(document);
+    assert.equal((await early.localRequest).status, 200);
+    assert.equal(takeChatReads(document), null);
 
-test('first list imports the user\'s own legacy history into their DS-Bot once', async () => {
-  const c1 = 'c'.repeat(32);
-  const plugin = [];
-  let done = false;
-  const legacy = [];
-  const fetcher = async (url, init) => {
-    if (url === PLUGIN_API) {
-      const {endpoint, payload} = JSON.parse(init.body);
-      plugin.push(endpoint);
-      if (endpoint === 'chat/importStatus') return {status: 200, json: async () => ({ok: true, value: {done}})};
-      if (endpoint === 'chat/import') {
-        if (payload.finish) done = true;
-        else assert.deepEqual(payload.conversations[0].messages.map(m => m.id), ['m1', 'm2']);
-        return {status: 200, json: async () => ({ok: true, value: {conversations: payload.conversations.length, messages: 2}})};
-      }
-      return {status: 200, json: async () => ({ok: true, value: {items: []}})};
-    }
-    legacy.push(url);
-    if (url.includes('/messages')) {
-      return {status: 200, json: async () => ({items: [
-        {id: 'm1', role: 'user', body: 'hi', status: 'succeeded', created: 1},
-        {id: 'm2', role: 'assistant', body: 'hello', status: 'succeeded', created: 2},
-        {id: 'm3', role: 'assistant', body: '', status: 'failed', created: 3}], cursor: null})};
-    }
-    return {status: 200, json: async () => ({items: [{id: c1, title: 'Old'}], cursor: null})};
-  };
-  const route = dsbotRoute('GET', `${base}/conversations?limit=100`, undefined, agent);
-  await dsbotRequest(fetcher, route, agent, {});
-  assert.deepEqual(legacy, [`${base}/conversations?limit=100`, `${base}/conversations/${c1}/messages?limit=200`]);
-  assert.deepEqual(plugin, ['chat/importStatus', 'chat/import', 'chat/import', 'chat/conversations']);
-  legacy.length = 0;
-  await dsbotRequest(fetcher, route, agent, {});
-  assert.deepEqual(legacy, [], 'no second import');
+    calls.length = 0;
+    location.hash = '#public-agent=fixture-agent';
+    location.href = 'https://openteamily.example/chat' + location.hash;
+    const publicPage = await import('../openteamily/static/chat/startup.mjs?test-public-early-read');
+    assert.deepEqual(calls.map(entry => entry.path), ['/v1/auth/session']);
+    assert.equal(publicPage.takeChatReads(document).localRequest, null);
+  } finally {
+    if (original === undefined) delete globalThis.window;
+    else globalThis.window = original;
+  }
 });

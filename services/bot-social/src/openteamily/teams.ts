@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS ot_join_requests (
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const RESERVED = new Set(["admin", "api", "automations", "docs", "health", "invite", "invites", "login", "logout", "me", "members", "new", "settings", "static", "team", "teams", "v1", "workspaces"]);
 const DAY = 86_400_000;
+const MAX_OWNED_TEAMS = 50;
 
 export function roleOf(ot: OtContext, teamId: string, ownerId: string): { role: string; suspended: boolean } | undefined {
   const row = ot.get<any>("SELECT role, suspended FROM ot_team_members WHERE team_id = ? AND owner_id = ?", teamId, ownerId);
@@ -85,19 +86,34 @@ function notifyAdmins(ot: OtContext, teamId: string, kind: string, data: Record<
 }
 
 function usable(i: any, now: number) { return !i.revoked && !i.frozen && i.expires_at > now && i.use_count < i.max_uses; }
+function inviteCanGrantRole(invite: {role: string; created_by: string}, ownerId: string) {
+  return invite.role !== "admin" || invite.created_by === ownerId;
+}
 
 /** Accept an invite (by row) for `ownerId`: direct membership, or a pending request when approval is required. */
 function acceptInvite(ot: OtContext, invite: any, ownerId: string) {
   const now = ot.now();
-  assert(usable(invite, now), 410, "invite_unusable", "this invite has expired, been used up, paused or revoked");
   const existing = roleOf(ot, invite.team_id, ownerId);
-  if (existing) return { status: existing.suspended ? "suspended" : "member", team_id: invite.team_id };
-  const team = ot.get<any>("SELECT id, name FROM ot_teams WHERE id = ?", invite.team_id);
+  const team = ot.get<any>("SELECT id, name, owner_id, workspace_id FROM ot_teams WHERE id = ?", invite.team_id);
+  if (existing) return { status: existing.suspended ? "suspended" : "member",
+    team_id: invite.team_id, workspace_id: team.workspace_id, role: existing.role };
+  assert(inviteCanGrantRole(invite, team.owner_id), 410, "invite_unusable", "this invite has expired, been used up, paused or revoked");
+  const prior = invite.requires_approval
+    ? ot.get<any>("SELECT * FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", invite.team_id, ownerId)
+    : null;
+  if (prior?.status === "pending" && prior.invite_id === invite.id) {
+    return { status: "pending", team_id: invite.team_id, request_id: prior.id };
+  }
+  assert(usable(invite, now), 410, "invite_unusable", "this invite has expired, been used up, paused or revoked");
   if (invite.requires_approval) {
-    const prior = ot.get<any>("SELECT * FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", invite.team_id, ownerId);
     if (prior?.status === "pending") return { status: "pending", team_id: invite.team_id, request_id: prior.id };
-    const id = prior?.id ?? newId("otjr");
-    ot.run("INSERT INTO ot_join_requests(id, team_id, owner_id, invite_id, role, status, created_at) VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(team_id, owner_id) DO UPDATE SET status = 'pending', invite_id = excluded.invite_id, role = excluded.role, created_at = excluded.created_at, decided_at = NULL, decided_by = NULL",
+    // A decided application is replaced on reapply. Its previous ID must no
+    // longer be actionable from an open approval panel or an older notification.
+    const id = newId("otjr");
+    ot.run(`INSERT INTO ot_join_requests(id, team_id, owner_id, invite_id, role, status, created_at)
+      VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(team_id, owner_id) DO UPDATE SET id = excluded.id,
+      status = 'pending', invite_id = excluded.invite_id, role = excluded.role, created_at = excluded.created_at,
+      decided_at = NULL, decided_by = NULL`,
       id, invite.team_id, ownerId, invite.id, invite.role, now);
     ot.run("UPDATE ot_invites SET use_count = use_count + 1 WHERE id = ?", invite.id);
     notifyAdmins(ot, invite.team_id, "team.join_request", { team_id: team.id, team_name: team.name, request_id: id, member: ot.profileView(ownerId) });
@@ -106,7 +122,7 @@ function acceptInvite(ot: OtContext, invite: any, ownerId: string) {
   addMember(ot, invite.team_id, ownerId, invite.role, invite.created_by);
   ot.run("UPDATE ot_invites SET use_count = use_count + 1 WHERE id = ?", invite.id);
   notifyAdmins(ot, invite.team_id, "team.member_joined", { team_id: team.id, team_name: team.name, member: ot.profileView(ownerId) });
-  return { status: "member", team_id: invite.team_id };
+  return { status: "member", team_id: invite.team_id, workspace_id: team.workspace_id, role: invite.role };
 }
 
 function createInvite(ot: OtContext, teamId: string, by: string, b: any) {
@@ -141,7 +157,7 @@ function ensureTeamColumns(ot: OtContext) {
 
 function insertTeam(ot: OtContext, meOwnerId: string, { name, slug, summary, workspaceId }: { name: string; slug: string | null; summary: string; workspaceId: string | null }) {
   if (workspaceId) assert(!ot.get("SELECT 1 FROM ot_teams WHERE workspace_id = ?", workspaceId), 409, "workspace_bound", "that workspace already has a team");
-  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < 50, 429, "too_many_teams", "an account can own at most 50 teams");
+  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < MAX_OWNED_TEAMS, 429, "too_many_teams", "an account can own at most 50 teams");
   const id = newId("ott");
   const now = ot.now();
   ot.tx(() => {
@@ -223,8 +239,12 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
       return workspaceView(team, me.ownerId);
     }
     if (slug !== null) assert(!ot.get("SELECT 1 FROM ot_teams WHERE slug = ?", slug), 409, "slug_taken", "that team id is taken");
-    const team = insertTeam(ot, me.ownerId, { name, slug, summary: "", workspaceId: randomBytes(16).toString("hex") });
-    ot.run("INSERT INTO ot_workspace_requests(owner_id, key_hash, request_hash, team_id, created_at) VALUES (?,?,?,?,?)", me.ownerId, keyHash, requestHash, team.id, ot.now());
+    const team = ot.tx(() => {
+      const created = insertTeam(ot, me.ownerId, { name, slug, summary: "", workspaceId: randomBytes(16).toString("hex") });
+      ot.run("INSERT INTO ot_workspace_requests(owner_id, key_hash, request_hash, team_id, created_at) VALUES (?,?,?,?,?)",
+        me.ownerId, keyHash, requestHash, created.id, ot.now());
+      return created;
+    });
     return reply.status(201).send(workspaceView(team, me.ownerId));
   });
   // Turn an existing workspace into a named team (legacy POST /v1/teams mode=convert).
@@ -319,6 +339,29 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     ot.notify(target, "team.membership_changed", { team_id: team.id, team_name: team.name });
     return memberView(ot, ot.get("SELECT * FROM ot_team_members WHERE team_id = ? AND owner_id = ?", team.id, target));
   });
+  app.post("/v1/ot/teams/:id/members/:handle/transfer-ownership", async (req) => {
+    const me = ot.me(req);
+    return ot.tx(() => {
+      const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner"]);
+      assert(team.owner_id === me.ownerId, 409, "ownership_changed", "team ownership has changed");
+      const target = ot.ownerByHandle(params(req).handle);
+      assert(target !== me.ownerId, 400, "invalid_request", "choose another team member");
+      const current = roleOf(ot, team.id, target);
+      assert(current, 404, "member_not_found", "not a member of this team");
+      assert(!current.suspended, 409, "member_suspended", "restore member access before transferring ownership");
+      assert(ot.get<{n: number}>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", target)!.n < MAX_OWNED_TEAMS,
+        409, "too_many_teams", "the new owner can own at most 50 teams");
+      ot.run("UPDATE ot_team_members SET role = 'member' WHERE team_id = ? AND owner_id = ?", team.id, me.ownerId);
+      ot.run("UPDATE ot_team_members SET role = 'owner' WHERE team_id = ? AND owner_id = ?", team.id, target);
+      const now = ot.now();
+      ot.run("UPDATE ot_teams SET owner_id = ?, updated_at = ? WHERE id = ?", target, now, team.id);
+      // Usable administrator grants should not become valid again if an owner returns.
+      ot.run(`UPDATE ot_invites SET revoked = 1 WHERE team_id = ? AND role = 'admin' AND revoked = 0
+        AND expires_at > ? AND use_count < max_uses`, team.id, now);
+      ot.notify(target, "team.owner_transferred", { team_id: team.id, team_name: team.name, workspace_id: team.workspace_id });
+      return { transferred: true };
+    });
+  });
   app.delete("/v1/ot/teams/:id/members/:handle", async (req) => {
     const me = ot.me(req);
     const teamId = params(req).id;
@@ -326,7 +369,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     if (target === me.ownerId) {
       const r = roleOf(ot, teamId, me.ownerId);
       assert(r, 404, "team_not_found", "no such team");
-      assert(r.role !== "owner", 409, "owner_cannot_leave", "the owner cannot leave; delete the team instead");
+      assert(r.role !== "owner", 409, "owner_cannot_leave", "transfer ownership to another member before leaving");
     } else {
       const { role } = requireMember(ot, teamId, me.ownerId, ["owner", "admin"]);
       const current = roleOf(ot, teamId, target);
@@ -341,8 +384,10 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
   // ---- invites
   app.post("/v1/ot/teams/:id/invites", async (req, reply) => {
     const me = ot.me(req);
-    const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
-    return reply.status(201).send(createInvite(ot, team.id, me.ownerId, body(req)));
+    const { team, role } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
+    const b = body(req);
+    assert(role === "owner" || b.role !== "admin", 403, "forbidden", "only the team owner can create admin invites");
+    return reply.status(201).send(createInvite(ot, team.id, me.ownerId, b));
   });
   app.get("/v1/ot/teams/:id/invites", async (req) => {
     const me = ot.me(req);
@@ -351,9 +396,10 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
   });
   app.patch("/v1/ot/teams/:id/invites/:invite", async (req) => {
     const me = ot.me(req);
-    const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
+    const { team, role } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
     const inv = ot.get<any>("SELECT * FROM ot_invites WHERE id = ? AND team_id = ?", params(req).invite, team.id);
     assert(inv, 404, "invite_not_found", "no such invite");
+    assert(role === "owner" || inv.role !== "admin", 403, "forbidden", "only the team owner can manage admin invites");
     const b = body(req);
     if (b.frozen !== undefined) { assert(typeof b.frozen === "boolean", 400, "invalid_request", "frozen must be true or false"); ot.run("UPDATE ot_invites SET frozen = ? WHERE id = ?", b.frozen ? 1 : 0, inv.id); }
     if (b.revoked === true) ot.run("UPDATE ot_invites SET revoked = 1 WHERE id = ?", inv.id);
@@ -365,14 +411,18 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     const inv = ot.get<any>("SELECT * FROM ot_invites WHERE code_hash = ?", hashCode(code));
     assert(inv, 404, "invite_not_found", "no such invite");
     const team = ot.get<any>("SELECT * FROM ot_teams WHERE id = ?", inv.team_id);
-    return { team: { id: team.id, name: team.name, summary: team.summary, owner: ot.profileView(team.owner_id) }, role: inv.role, requires_approval: !!inv.requires_approval, usable: usable(inv, ot.now()), expires_at: inv.expires_at };
+    return { team: { id: team.id, name: team.name, summary: team.summary, owner: ot.profileView(team.owner_id) },
+      role: inv.role, requires_approval: !!inv.requires_approval, usable: inviteCanGrantRole(inv, team.owner_id) && usable(inv, ot.now()),
+      expires_at: inv.expires_at };
   });
   app.post("/v1/ot/invites/accept", async (req) => {
     const me = ot.me(req);
     const code = text(body(req).code, "code", { min: 16, max: 128 });
-    const inv = ot.get<any>("SELECT * FROM ot_invites WHERE code_hash = ?", hashCode(code));
-    assert(inv, 404, "invite_not_found", "no such invite");
-    return ot.tx(() => acceptInvite(ot, inv, me.ownerId));
+    return ot.tx(() => {
+      const inv = ot.get<any>("SELECT * FROM ot_invites WHERE code_hash = ?", hashCode(code));
+      assert(inv, 404, "invite_not_found", "no such invite");
+      return acceptInvite(ot, inv, me.ownerId);
+    });
   });
 
   // ---- join requests
@@ -384,13 +434,15 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
   });
   app.post("/v1/ot/teams/:id/join-requests/:request", async (req) => {
     const me = ot.me(req);
-    const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
+    const { team, role } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
     const decision = body(req).decision;
     assert(decision === "approve" || decision === "reject", 400, "invalid_request", "decision must be approve or reject");
     return ot.tx(() => {
       const r = ot.get<any>("SELECT * FROM ot_join_requests WHERE id = ? AND team_id = ?", params(req).request, team.id);
       assert(r, 404, "request_not_found", "no such join request");
       assert(r.status === "pending", 409, "already_decided", "this request was already decided");
+      assert(decision !== "approve" || r.role !== "admin" || role === "owner",
+        403, "forbidden", "only the team owner can approve admin access");
       ot.run("UPDATE ot_join_requests SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?", decision === "approve" ? "approved" : "rejected", ot.now(), me.ownerId, r.id);
       if (decision === "approve") addMember(ot, team.id, r.owner_id, r.role, me.ownerId);
       ot.notify(r.owner_id, "team.join_decided", { team_id: team.id, team_name: team.name, decision });
@@ -399,8 +451,9 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/join-requests/mine", async (req) => {
     const me = ot.me(req);
-    const rows = ot.all<any>("SELECT r.*, t.name AS team_name FROM ot_join_requests r JOIN ot_teams t ON t.id = r.team_id WHERE r.owner_id = ? ORDER BY r.created_at DESC LIMIT 100", me.ownerId);
-    return { requests: rows.map((r) => ({ ...requestView(ot, r), team_name: r.team_name })) };
+    const rows = ot.all<any>(`SELECT r.*, t.name AS team_name, t.workspace_id FROM ot_join_requests r
+      JOIN ot_teams t ON t.id = r.team_id WHERE r.owner_id = ? ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, me.ownerId);
+    return { requests: rows.map((r) => ({ ...requestView(ot, r), team_name: r.team_name, workspace_id: r.workspace_id })) };
   });
 
   // ---- directory
@@ -431,7 +484,11 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
         const r = roleOf(ot, t.id, me.ownerId);
         const pending = ot.get<any>("SELECT status FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", t.id, me.ownerId);
         const v = teamView(ot, t, me.ownerId);
-        return { id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at, membership: r ? "member" : pending?.status === "pending" ? "pending" : null };
+        return {
+          id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at,
+          membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null,
+          ...(r && !r.suspended && v.workspace_id ? { workspace_id: v.workspace_id } : {}),
+        };
       }),
     };
   });

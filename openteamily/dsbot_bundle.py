@@ -48,6 +48,27 @@ def _via_artifact(table, order):
 
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
+    'message-assists': [('message_assists', "SELECT a.*, t.status AS task_status, CASE WHEN json_valid(t.result) THEN json_extract(t.result,'$.text') ELSE NULL END AS result_text FROM message_assists a LEFT JOIN runtime_tasks t ON t.id=a.task_id AND t.user_id=a.user_id WHERE a.user_id=? ORDER BY a.created,a.id")],
+    'skills': [
+        ('imported_skill_heads', 'SELECT * FROM imported_skill_heads WHERE user_id=? ORDER BY skill_id'),
+        ('imported_skill_versions', 'SELECT * FROM imported_skill_versions WHERE user_id=? ORDER BY skill_id,created,version'),
+        ('skill_bindings', 'SELECT * FROM skill_bindings WHERE user_id=? ORDER BY scope,skill_id'),
+        ('skill_installs', 'SELECT * FROM skill_installs WHERE user_id=? ORDER BY installed,skill_id'),
+    ],
+    'skill-run-history': [('skill_run_history', """
+        SELECT r.task_id AS id, r.scope, r.skill_id, t.prompt, t.status,
+               t.created, t.updated, COALESCE(m.acknowledged, 0) AS loaded,
+               CASE WHEN t.status='succeeded' AND json_valid(t.result) THEN
+                    CASE WHEN json_type(t.result, '$.text')='text'
+                         THEN json_extract(t.result, '$.text') END
+               END AS result_text
+        FROM skill_runs r
+        JOIN runtime_tasks t ON t.id=r.task_id AND t.user_id=r.user_id
+        LEFT JOIN skill_task_material m ON m.task_id=t.id
+        WHERE r.user_id=? AND t.status IN ('succeeded','failed')
+        ORDER BY t.created,t.id
+    """)],
+    'skill-secrets': [('skill_secrets', 'SELECT name,updated FROM skill_secrets WHERE user_id=? ORDER BY name')],
     'meetings': [
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '
                      'WHERE w.owner_id = ? ORDER BY m.id'),
@@ -96,6 +117,7 @@ FEATURE_TABLES.update({
          'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY r.id'),
     ],
     'agents': [
+        ('personal_agents', 'SELECT * FROM personal_agents WHERE user_id=? ORDER BY agent_id'),
         ('workspace_agents', _scoped('workspace_agents')),
         ('workspace_agent_categories',
          'SELECT c.* FROM workspace_agent_categories c JOIN workspace_agents a ON a.id = c.agent_id '
@@ -186,6 +208,32 @@ def build(db, user_id, feature, now=None, data_dir=None):
     return bundle
 
 
+def build_personal_bootstrap(db, user_id, instance_id, now):
+    """Seed the initial roster and welcome message for an auto-provisioned DS-Bot."""
+    from .security import digest
+    binding = db.execute('SELECT * FROM personal_agents WHERE user_id=?', (user_id,)).fetchone()
+    if binding is None:
+        return None
+    workspace = binding['workspace_id']
+    roster = db.execute(
+        'SELECT a.* FROM workspace_agents a LEFT JOIN builtin_agents b ON b.agent_id=a.id '
+        'WHERE a.workspace_id=? AND (a.id=? OR b.workspace_id=?) ORDER BY a.id',
+        (workspace, binding['agent_id'], workspace)).fetchall()
+    welcome = db.execute(
+        'SELECT * FROM agent_conversations WHERE workspace_id=? AND agent_id=? AND key_hash=?',
+        (workspace, binding['agent_id'], digest('personal-conversation:' + user_id))).fetchone()
+    messages = db.execute(
+        'SELECT * FROM agent_messages WHERE conversation_id=? AND seq=1 AND role=?',
+        (welcome['id'], 'assistant')).fetchall() if welcome else []
+    raw = {'personal_agents': [binding], 'workspace_agents': roster,
+           'agent_conversations': [welcome] if welcome else [], 'agent_messages': messages}
+    tables = {name: canonical([dict(row) for row in rows]) for name, rows in raw.items()}
+    manifest = {name: {'rows': len(raw[name]), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+                for name, text in tables.items()}
+    return {'format': FORMAT, 'version': 1, 'feature': 'agents', 'instance_id': instance_id,
+            'created': now, 'tables': tables, 'manifest': manifest}
+
+
 def dumps(bundle):
     return json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
@@ -207,6 +255,13 @@ def sealed_secrets(db, store, user_id, feature, seal_key):
         row = model_api.load_account(db, user_id)
         if row is not None and row['key_blob']:
             out['model_api_key'] = model_api.wrap(bytes(seal_key), model_api.secret(store, row))
+    elif feature == 'skill-secrets':
+        from . import skill_secrets
+        rows = db.execute('SELECT name,key_blob FROM skill_secrets WHERE user_id=? ORDER BY name', (user_id,)).fetchall()
+        if rows:
+            key = skill_secrets.wrapping_key(store)
+            for row in rows:
+                out['secret:' + row['name']] = model_api.wrap(bytes(seal_key), model_api.unwrap(key, row['key_blob']))
     elif feature == 'connectors':
         key = composio.user_key(store, db, user_id)
         if key:
@@ -219,7 +274,7 @@ def sealed_secrets(db, store, user_id, feature, seal_key):
 def build_with_secrets(db, store, user_id, feature, seal_key=None, now=None):
     """build() plus, for B4 features, sealed secrets and their digest."""
     bundle = build(db, user_id, feature, now)
-    if seal_key is not None and feature in ('model-api', 'connectors'):
+    if seal_key is not None and feature in ('model-api', 'connectors', 'skill-secrets'):
         secrets = sealed_secrets(db, store, user_id, feature, seal_key)
         bundle['seal_key_id'] = hashlib.sha256(bytes(seal_key)).hexdigest()
         bundle['secrets'] = secrets

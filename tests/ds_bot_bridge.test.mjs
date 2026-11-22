@@ -1,56 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
-  createBridge, createBridgeServer, forwardModel, handleMcp, mcpTool, skillCapabilityName, MODEL_ID, TOOLS_CAPABILITY,
-  userModelOverride, MODEL_OVERRIDE,
+  createBridge, createBridgeServer, forwardModel, runTurn, startBridge, MODEL_ID,
+  userModelOverride, MODEL_OVERRIDE, prepareNativeChat, textOnlyCompletion,
 } from '../runtime/flybot-image/ds-bot-bridge.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 const close = server => new Promise(resolve => server.close(resolve))
 
-function skill(id, content = 'Answer politely.') {
-  return { id, name: 'Polite ' + id, version: '1.0.0', content, digest: createHash('sha256').update(content).digest('hex'),
-    permissions: ['model_context'], format: 'openteamily.prompt-skill.v1', source: 'bundled-original' }
-}
-
-test('skill capability names satisfy DS-Bot capability naming', () => {
-  for (const id of ['a', 'writing-helper', 'x'.repeat(64), 'a--b-']) {
-    const name = skillCapabilityName(id)
-    assert.match(name, /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
-    assert.ok(name.length <= 32)
-  }
-  assert.notEqual(skillCapabilityName('a'), skillCapabilityName('b'))
-})
-
-test('MCP bridge lists connected tools and only calls them during a task', async () => {
-  const tool = { type: 'function', function: { name: 'GMAIL_FETCH', description: 'Fetch', parameters: { type: 'object', properties: {} } } }
-  const state = { tools: [tool], active: null }
-  const init = await handleMcp(state, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
-  assert.equal(init.result.protocolVersion, '2025-06-18')
-  assert.equal(await handleMcp(state, { jsonrpc: '2.0', method: 'notifications/initialized' }), null)
-  const listed = await handleMcp(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
-  assert.deepEqual(listed.result.tools, [mcpTool(tool)])
-  const idle = await handleMcp(state, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'GMAIL_FETCH', arguments: {} } })
-  assert.equal(idle.result.isError, true)
-  const calls = []
-  state.active = { tools: [tool], toolCalls: 0, bridge: { execute: async (id, name, args) => { calls.push([name, args]); return { ok: 1 } } } }
-  const unknown = await handleMcp(state, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'OTHER', arguments: {} } })
-  assert.equal(unknown.result.isError, true)
-  const done = await handleMcp(state, { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'GMAIL_FETCH', arguments: { q: 1 } } })
-  assert.equal(done.result.isError, false)
-  assert.deepEqual(JSON.parse(done.result.content[0].text), { ok: 1 })
-  assert.deepEqual(calls, [['GMAIL_FETCH', { q: 1 }]])
-  assert.equal((await handleMcp(state, { jsonrpc: '2.0', id: 6, method: 'nope' })).error.code, -32601)
-})
-
-test('loopback proxy swaps in the task model and key; DS-Bot only holds the placeholder', async () => {
+test('loopback proxy uses the configured model and key; DS-Bot holds a per-boot token', async () => {
   const seen = []
   const upstream = createServer((req, res) => {
     let raw = ''
@@ -62,8 +27,9 @@ test('loopback proxy swaps in the task model and key; DS-Bot only holds the plac
     })
   })
   const upstreamPort = await listen(upstream)
-  const modelApi = { base_url: `http://127.0.0.1:${upstreamPort}/v1`, model: 'real-model', api_key: 'synthetic-task-key' }
-  const state = { token: 'placeholder-token', active: { modelApi, modelCalls: 0 }, modelCalls: 0, tools: [], startupModel: () => null }
+  const modelApi = { base_url: `http://127.0.0.1:${upstreamPort}/v1`, model: 'real-model', api_key: 'synthetic-model-key' }
+  let model = modelApi
+  const state = { token: 'placeholder-token', startupModel: () => model }
   const proxy = createBridgeServer(state)
   const port = await listen(proxy)
   const url = `http://127.0.0.1:${port}`
@@ -77,10 +43,10 @@ test('loopback proxy swaps in the task model and key; DS-Bot only holds the plac
     assert.equal(response.status, 200)
     assert.match(await response.text(), /\[DONE\]/)
     assert.equal(seen[0].path, '/v1/chat/completions')
-    assert.equal(seen[0].auth, 'Bearer synthetic-task-key')
+    assert.equal(seen[0].auth, 'Bearer synthetic-model-key')
     assert.equal(seen[0].body.model, 'real-model')
-    assert.equal(state.active.modelCalls, 1)
-    state.active = null
+    assert.equal((await fetch(url + '/mcp', { method: 'POST', body: '{}' })).status, 404)
+    model = null
     const idle = await fetch(url + '/v1/chat/completions', { method: 'POST', headers: { authorization: 'Bearer placeholder-token' }, body: '{}' })
     assert.equal(idle.status, 503)
   } finally { await close(proxy); await close(upstream) }
@@ -112,7 +78,7 @@ test('exact-HTTP grant: redirects are rejected and only the granted path is used
   await assert.rejects(forwardModel(wrong, Buffer.from('{}'), res, { httpRequester: fake(200) }), /grant/)
 })
 
-function fakeRuntime({ useModel = true } = {}) {
+function fakeRuntime() {
   const ctx = new EventEmitter()
   const on = ctx.on.bind(ctx)
   ctx.on = (name, fn) => { on(name, fn); return () => ctx.off(name, fn) }
@@ -127,12 +93,13 @@ function fakeRuntime({ useModel = true } = {}) {
     setProviderKey: async () => {},
     bootstrap: async () => { log.push(['bootstrap']) },
     updateBot: async (id, patch) => { log.push(['updateBot', patch.model]); bot.model = 'openteamily/' + patch.model },
-    capabilitySave: async (item, opts) => { log.push(['save', item.kind, item.name, opts.ui]) },
-    changeCapabilityAttachment: async (action, item, caller) => { log.push([action, item.name, caller]) },
+    capabilityDelete: async (name, opts) => {
+      log.push(['delete', name, opts.ui])
+      delete rt.state.capabilities.items[name]
+    },
     displayItems: (_sid, [event]) => (event.type === 'assistant/message' ? [{ kind: 'bot', text: event.data.text }] : []),
     sendUser: async ({ sessionId, content, requestId }) => {
       log.push(['sendUser', sessionId, content[0].text, requestId])
-      if (useModel) bridgeState.active.modelCalls += 1
       setImmediate(() => {
         const session = { id: sessionId }
         ctx.emit('session/event', session, { type: 'turn/start' })
@@ -145,75 +112,304 @@ function fakeRuntime({ useModel = true } = {}) {
   return { rt, ctx, log, bind: state => { bridgeState = state } }
 }
 
-function fakeManagement(task, access) {
-  const calls = []
-  const requester = async (origin, token, method, path, body) => {
-    calls.push([method, path, body])
-    if (path === '/v1/agent/tasks' && method === 'GET') return { items: [task] }
-    if (path.endsWith('/claim')) return { task }
-    if (path.endsWith('/model-access')) return access
-    if (path.endsWith('/skills/ack')) return { acknowledged: true }
-    if (path.endsWith('/tools')) return { tools: [{ type: 'function', function: { name: 'GITHUB_LIST', parameters: { type: 'object' } } }] }
-    return {}
+test('the DeepSeek Flash vision model updates a retained provider and follows account changes', async () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, { port: 1 })
+  fake.bind(bridge.state)
+  let model = 'DeepSeek-V4.1-Flash-1017'
+  bridge.state.startupModel = () => ({model})
+  fake.rt.addProvider = async () => { throw new Error('openteamily is already set up') }
+  const updates = []
+  fake.rt.saveProviderModels = async ({provider,models}) => updates.push([provider,models[0].input])
+  await bridge.prepareModel()
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[['openteamily',['text','image']]])
+  model = 'another-text-only-model'
+  await bridge.prepareModel()
+  model = 'deepseek-flash'
+  await bridge.prepareModel()
+  assert.deepEqual(updates,[
+    ['openteamily',['text','image']], ['openteamily',['text']], ['openteamily',['text','image']],
+  ])
+})
+
+test('a missing model is actionable and does not block other native providers', () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, {port:1})
+  const bot = fake.rt.botOf('bot1')
+  bot.model = 'openteamily/' + MODEL_ID
+  bridge.state.startupModel = () => null
+  assert.throws(() => bridge.requireModel(bot.id), {code:'agents/model-unconfigured', status:503})
+  bot.model = 'other-provider/alternate'
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+  bot.model = MODEL_ID
+  bridge.state.startupModel = () => ({model:'owner-selected'})
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+})
+
+test('a provisioned DS-Bot starts its native proxy and runs a turn without polling retired routes', async t => {
+  const origins = []
+  const management = createServer((req, res) => {
+    origins.push(req.url)
+    res.writeHead(410).end('{}')
+  })
+  const managementPort = await listen(management)
+  t.after(async () => { management.closeAllConnections(); await close(management) })
+  const home = mkdtempSync(join(tmpdir(), 'ot-native-only-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  const keyFile = join(home, 'runtime-key.json')
+  writeFileSync(keyFile, JSON.stringify({
+    origin: 'http://127.0.0.1:' + managementPort,
+    token: 'synthetic-runtime-key', hostname: 'native-fixture',
+  }))
+  const fake = fakeRuntime()
+  const rt = fake.rt
+  rt.state.capabilities = { items: {
+    'ot-tools': { kind: 'mcp', transport: 'streamable-http', url: 'http://127.0.0.1:18731/mcp?catalog=0123456789abcdef' },
+    'ot-apps': { kind: 'mcp', transport: 'streamable-http', url: 'http://127.0.0.1:3022/mcp' },
+  } }
+  const value = startBridge(rt, fake.ctx, {
+    env: { DSH_HOME: home, OPENTEAMILY_RUNTIME_KEY_FILE: keyFile },
+    port: 0,
+    log: () => {},
+  })
+  t.after(async () => {
+    const stopped = once(value.server, 'close')
+    value.dispose()
+    value.server.closeAllConnections()
+    await stopped
+  })
+  fake.bind(value.bridge.state)
+  await once(value.server, 'listening')
+  const models = await fetch('http://127.0.0.1:' + value.server.address().port + '/v1/models', {
+    headers: { authorization: 'Bearer ' + value.bridge.state.token },
+  })
+  assert.equal(models.status, 200)
+  const turn = await value.bridge.exclusive(async () => {
+    await value.bridge.prepareModel()
+    return runTurn(rt, fake.ctx, value.bridge.botId, 'native hello', 'native-fixture')
+  })
+  assert.equal(turn.text, 'reply from DS-Bot')
+  assert.deepEqual(fake.log.find(entry => entry[0] === 'sendUser'), ['sendUser', 'chat1', 'native hello', 'native-fixture'])
+  assert.deepEqual(fake.log.filter(entry => entry[0] === 'delete'), [['delete', 'ot-tools', true]])
+  assert.deepEqual(Object.keys(rt.state.capabilities.items), ['ot-apps'])
+  assert.deepEqual(origins, [])
+})
+
+test('sending to a live mapped part selects its route without changing the foreground or touching other parts', async () => {
+  const foreground = 'foreground'
+  const target = 'open-21'
+  const parts = Array.from({length: 22}, (_, index) => ({sessionId:'open-' + index, segments:[]}))
+  const bot = {id:'bot', sessionId:foreground, openParts:parts, appliedEffort:'high'}
+  const operations = []
+  const ctx = new EventEmitter()
+  const session = {id:target}
+  const rt = {
+    botOf: id => id === bot.id ? bot : undefined,
+    chatOf: () => bot.sessionId,
+    chatOwners: new Map([[foreground,bot.id], ...parts.map(part => [part.sessionId,bot.id]), ['someone-else','other']]),
+    pastOwners: new Map(),
+    async switchPart() { assert.fail('an open part does not require switching') },
+    async applyModel(subject, options) {
+      assert.equal(subject,bot)
+      assert.notEqual(options?.force,true)
+      operations.push('check model')
+      return 'openteamily/openteamily-model'
+    },
+    async selectSessionModel(id, route) {
+      assert.equal(id,target)
+      assert.deepEqual(route,{provider:'openteamily',model:'openteamily-model',reasoningEffort:'high'})
+      operations.push('select target')
+    },
+    async applyPermission(subject, id) {
+      assert.equal(subject,bot)
+      assert.equal(id,target)
+      operations.push('apply target permission')
+    },
+    async sendUser({sessionId,requestId}) {
+      assert.equal(sessionId,target)
+      operations.push('send to target')
+      ctx.emit('session/event', session, {type:'turn/start',data:{turn:1}})
+      ctx.emit('session/event', session, {type:'user/message',data:{source:{rpcId:requestId}}})
+      ctx.emit('session/event', session, {type:'assistant/message',data:{text:'selected part reply'}})
+      ctx.emit('session/event', session, {type:'turn/end',data:{turn:1}})
+    },
+    displayItems: (id, events) => {
+      assert.equal(id,target)
+      return events.filter(event => event.type==='assistant/message').map(event=>({kind:'bot',text:event.data.text}))
+    },
   }
-  return { calls, requester }
-}
-
-test('infer task runs as a DS-Bot turn with native skills and the tools MCP attached', async () => {
-  const task = { id: 'task1', kind: 'infer', prompt: 'hello', deadline: Date.now() / 1000 + 60 }
-  const access = { model_api: { base_url: 'https://api.example.test/v1', model: 'real-model', api_key: 'synthetic', source: 'user' },
-    skills: [skill('writing-helper')], connected_tools: true }
-  const fake = fakeRuntime()
-  const mgmt = fakeManagement(task, access)
-  const bridge = createBridge(fake.rt, fake.ctx, { requester: mgmt.requester, log: () => {}, port: 1 })
-  fake.bind(bridge.state)
-  assert.deepEqual(await bridge.cycle({ origin: 'http://127.0.0.1:9', token: 't', hostname: 'h' }), ['task1'])
-  const posted = mgmt.calls.find(c => c[1] === '/v1/agent/tasks/task1/result')[2]
-  assert.equal(posted.status, 'succeeded')
-  assert.equal(posted.result.text, 'reply from DS-Bot')
-  assert.equal(posted.result.engine, 'ds-bot')
-  assert.equal(posted.result.ds_bot.session_id, 'chat1')
-  assert.equal(posted.result.ds_bot.request_id, 'ot:task1')
-  assert.equal(posted.result.ds_bot.model_calls, 1)
-  assert.deepEqual(posted.result.ds_bot.skills, [skillCapabilityName('writing-helper')])
-  assert.equal(posted.result.ds_bot.tools, 1)
-  assert.ok(mgmt.calls.some(c => c[1] === '/v1/agent/tasks/task1/skills/ack'))
-  assert.deepEqual(fake.log.find(e => e[0] === 'addProvider'), ['addProvider', 'openteamily', 'http://127.0.0.1:1/v1', true])
-  assert.deepEqual(fake.log.find(e => e[0] === 'updateBot'), ['updateBot', MODEL_ID])
-  assert.ok(fake.log.some(e => e[0] === 'save' && e[1] === 'skill' && e[3] === true))
-  assert.ok(fake.log.some(e => e[0] === 'attach' && e[1] === TOOLS_CAPABILITY && e[2] === 'bot1'))
-  assert.deepEqual(fake.log.find(e => e[0] === 'sendUser'), ['sendUser', 'chat1', 'hello', 'ot:task1'])
-  assert.equal(bridge.state.active, null)
-  assert.equal(access.model_api.api_key, undefined, 'task key is dropped after the turn')
-  assert.ok(!JSON.stringify(fake.log).includes('synthetic'), 'real key never reaches DS-Bot')
+  await assert.rejects(prepareNativeChat(rt,bot.id,'someone-else'),/no longer belongs/)
+  await prepareNativeChat(rt,bot.id,target)
+  const reply = await runTurn(rt,ctx,bot.id,'one test prompt','target-request',500,[],{sessionId:target})
+  assert.deepEqual(operations,['check model','select target','apply target permission','send to target'])
+  assert.equal(bot.sessionId,foreground)
+  assert.equal(reply.text,'selected part reply')
+  assert.equal(reply.sessionId,target)
+  rt.chatOwners.set(target,'other')
+  await assert.rejects(runTurn(rt,ctx,bot.id,'one test prompt','stale-target',500,[],{sessionId:target}),/no longer active/)
+  assert.equal(operations.length,4)
 })
 
-test('a turn that never used the OpenTeamily model is reported as failed', async () => {
-  const task = { id: 'task2', kind: 'infer', prompt: 'hi', deadline: Date.now() / 1000 + 60 }
-  const fake = fakeRuntime({ useModel: false })
-  const mgmt = fakeManagement(task, { model_api: { base_url: 'https://api.example.test/v1', model: 'm', api_key: 'k' }, skills: [] })
-  const bridge = createBridge(fake.rt, fake.ctx, { requester: mgmt.requester, log: () => {}, port: 1 })
-  fake.bind(bridge.state)
-  await bridge.cycle({ origin: 'http://127.0.0.1:9', token: 't', hostname: 'h' })
-  const posted = mgmt.calls.find(c => c[1] === '/v1/agent/tasks/task2/result')[2]
-  assert.equal(posted.status, 'failed')
-  assert.match(posted.result.error, /DS-Bot turn failed/)
+test('an owned historical segment can still be opened using the native runtime', async () => {
+  const bot = {id:'bot', sessionId:'current', segments:[{sessionId:'previous'}]}
+  const rt = {
+    botOf: () => bot,
+    chatOf: () => bot.sessionId,
+    chatOwners: new Map([['current','bot']]),
+    pastOwners: new Map([['previous',{botId:'bot'}]]),
+    async switchPart(id, sessionId) {
+      assert.equal(id,'bot')
+      assert.equal(sessionId,'previous')
+      bot.sessionId = sessionId
+      rt.chatOwners.set(sessionId,id)
+      rt.pastOwners.delete(sessionId)
+    },
+    applyModel: async()=>'openteamily/openteamily-model',
+    selectSessionModel: async id=>assert.equal(id,'previous'),
+  }
+  await prepareNativeChat(rt,'bot','previous')
+  assert.equal(bot.sessionId,'previous')
 })
 
-test('tampered skill material is rejected before DS-Bot sees it', async () => {
-  const task = { id: 'task3', kind: 'infer', prompt: 'hi' }
-  const bad = { ...skill('x'), digest: '0'.repeat(64) }
-  const fake = fakeRuntime()
-  const mgmt = fakeManagement(task, { model_api: { base_url: 'https://api.example.test/v1', model: 'm', api_key: 'k' }, skills: [bad] })
-  const bridge = createBridge(fake.rt, fake.ctx, { requester: mgmt.requester, log: () => {}, port: 1 })
-  fake.bind(bridge.state)
-  await bridge.cycle({ origin: 'http://127.0.0.1:9', token: 't', hostname: 'h' })
-  const posted = mgmt.calls.find(c => c[1] === '/v1/agent/tasks/task3/result')[2]
-  assert.equal(posted.status, 'failed')
-  assert.match(posted.result.error, /skill/)
-  assert.ok(!fake.log.some(e => e[0] === 'sendUser'))
+test('native reply progress matches the admitted request, session, turn and attempt', async () => {
+  const {rt, ctx, log} = fakeRuntime()
+  const session = {id:'chat1'}
+  const earlier = {id:'chat1'}
+  const other = {id:'chat2'}
+  const agent = {id:session.id, session}
+  const progress = []
+  const phases = []
+  rt.sendUser = async request => { log.push(request) }
+  const result = runTurn(rt, ctx, 'bot1', 'read this', 'own-rpc', 1000, [{type:'file', receiptId:'file1'}], {
+    onProgress: value => progress.push(value),
+    onPhase: value => phases.push(value),
+  })
+  const event = (type, data, subject = session) => ctx.emit('session/event', subject, {type, data})
+  let revision = 0
+  const stream = (type, payload, subject = agent) => ctx.emit('agent/assistant-stream', {
+    agent: subject, frame: {type, revision: ++revision, ...payload},
+  })
+  const delta = (attemptId, text, type = 'text-delta', subject) => stream('chunk', {attemptId,chunk:{type,text}}, subject)
+  assert.deepEqual(log[0].content, [{type:'text',text:'read this'}, {type:'file',receiptId:'file1'}])
+
+  event('turn/start', {turn:5})
+  event('user/message', {source:{rpcId:'wrong-rpc'}})
+  event('user/message', {source:{rpcId:'own-rpc'}}, other)
+  stream('start', {attemptId:'before-echo',turn:5,step:1})
+  delta('before-echo', 'unrelated input')
+  event('user/message', {source:{rpcId:'own-rpc'}})
+  stream('start', {attemptId:'wrong-turn',turn:4,step:1})
+  delta('wrong-turn', 'unrelated turn')
+  rt.state.exchangeTurns = {chat1:[5]}
+  stream('start', {attemptId:'hidden',turn:5,step:1})
+  delta('hidden', 'hidden exchange text')
+  rt.state.exchangeTurns = {}
+  stream('start', {attemptId:'first',turn:5,step:1})
+  delta('first', 'unrelated session', 'text-delta', {id:other.id,session:other})
+  delta('first', 'replaced native session', 'text-delta', {id:earlier.id,session:earlier})
+  delta('first', 'private reasoning', 'reasoning-delta')
+  delta('first', 'private tool input', 'tool-call-delta')
+  assert.deepEqual(progress, [])
+  assert.deepEqual(phases, ['thinking'])
+
+  delta('first', 'draft to discard')
+  assert.deepEqual(progress, ['draft to discard'])
+  assert.deepEqual(phases, ['thinking','writing'])
+  event('assistant/attempt', {turn:5,step:1})
+  stream('end', {attemptId:'first',outcome:{kind:'committed',eventType:'assistant/attempt',seq:12}})
+  delta(undefined, 'unidentified late stream data')
+  event('llm/retry-started', {turn:5,step:1})
+  assert.deepEqual(progress, ['draft to discard', ''])
+  assert.equal(phases.at(-1), 'preparing')
+
+  stream('start', {attemptId:'retry',turn:5,step:1})
+  event('turn/start', {turn:4})
+  delta('first', 'late bytes from discarded attempt')
+  delta('retry', 'Now ')
+  delta('retry', 'visible')
+  await delay(70)
+  assert.deepEqual(progress, ['draft to discard', '', 'Now visible'])
+  event('assistant/message', {turn:5,step:1,text:'Now visible'})
+  stream('end', {attemptId:'retry',outcome:{kind:'committed',eventType:'assistant/message',seq:13}})
+  stream('start', {attemptId:'next-step',turn:5,step:2})
+  delta('next-step', 'next paragraph')
+  await delay(70)
+  assert.equal(progress.at(-1), 'Now visible\n\nnext paragraph')
+
+  event('assistant/message', {turn:4,step:1,text:'wrong turn final'})
+  event('assistant/message', {turn:5,step:2,text:'wrong session final'}, earlier)
+  event('turn/end', {turn:4})
+  event('assistant/message', {turn:5,step:2,text:'authoritative final paragraph'})
+  stream('end', {attemptId:'next-step',outcome:{kind:'committed',eventType:'assistant/message',seq:14}})
+  event('turn/end', {turn:5,turnId:'native-turn-id'})
+  assert.deepEqual(await result, {text:'Now visible\n\nauthoritative final paragraph', sessionId:'chat1', turnId:'native-turn-id'})
+  assert.equal(ctx.listenerCount('session/event'), 0)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+  assert.equal(ctx.listenerCount('agent/disposed'), 0)
 })
 
+test('native progress clears on replacement and remains bounded without changing the final reply', async () => {
+  const {rt, ctx} = fakeRuntime()
+  rt.sendUser = async () => {}
+  const progress = []
+  const reply = runTurn(rt, ctx, 'bot1', 'hello', 'request', 1000, [], {onProgress(text) {
+    progress.push(text)
+    if (text) throw new Error('A progress consumer cannot fail the turn')
+  }})
+  const start = session => {
+    ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+    ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:'request'}}})
+    const agent = {id:'chat1', session}
+    ctx.emit('agent/assistant-stream', {agent, frame:{type:'start', attemptId:'chat1:1', revision:1, turn:1, step:1}})
+    return agent
+  }
+  const chunk = (agent, text, revision = 2) => ctx.emit('agent/assistant-stream', {
+    agent, frame:{type:'chunk', attemptId:'chat1:1', revision, chunk:{type:'text-delta',text}},
+  })
+  const first = start({id:'chat1'})
+  chunk(first, 'interrupted partial')
+  assert.deepEqual(progress, ['interrupted partial'])
+  ctx.emit('agent/disposed', {agent:first})
+  assert.deepEqual(progress, ['interrupted partial', ''])
+  const newSession = {id:'chat1'}
+  const second = start(newSession)
+  chunk(first, 'late text from the old agent', 3)
+  const long = '界'.repeat(22_000)
+  chunk(second, long)
+  await delay(70)
+  assert.equal(progress.at(-1), long.slice(0,20_000))
+  ctx.emit('session/event', newSession, {type:'assistant/message', data:{turn:1,step:1,text:long}})
+  ctx.emit('session/event', newSession, {type:'turn/end', data:{turn:1}})
+  assert.equal((await reply).text, long)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+})
+
+test('native stream listeners and pending progress are removed on rejection or timeout', async () => {
+  const {rt, ctx} = fakeRuntime()
+  rt.sendUser = () => { throw new Error('send refused') }
+  const progress = []
+  const options = {onProgress(value) {
+    progress.push(value)
+    return Promise.reject(new Error('isolated progress consumer'))
+  }}
+  await assert.rejects(runTurn(rt, ctx, 'bot1', 'hello', 'request', 100, [], options), /send refused/)
+  rt.sendUser = async () => {}
+  const attempt = runTurn(rt, ctx, 'bot1', 'hello', 'request', 20, [], options)
+  const session = {id:'chat1'}
+  const agent = {id:session.id, session}
+  ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+  ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:'request'}}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'start', attemptId:'a1', revision:1, turn:1, step:1}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'chunk', attemptId:'a1', revision:2, chunk:{type:'text-delta',text:'visible'}}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'chunk', attemptId:'a1', revision:3, chunk:{type:'text-delta',text:'pending'}}})
+  await assert.rejects(attempt, /timed out/)
+  assert.equal(ctx.listenerCount('session/event'), 0)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+  assert.equal(ctx.listenerCount('agent/disposed'), 0)
+  await delay(60)
+  assert.deepEqual(progress, ['visible'])
+})
 
 test('separate conversations use separate native DS-Bot threads and reuse persisted mapping', async () => {
   const home = mkdtempSync(join(tmpdir(), 'ot-chats-'))
@@ -228,7 +424,7 @@ test('separate conversations use separate native DS-Bot threads and reuse persis
   fake.rt.applyModel = async () => {}
   fake.rt.applyPermission = async () => {}
   fake.rt.switchPart = async (_id, sid) => { bot.sessionId = sid }
-  const bridge = createBridge(fake.rt, fake.ctx, { env: { DSH_HOME: home }, port: 1 })
+  const bridge = createBridge(fake.rt, { env: { DSH_HOME: home }, port: 1 })
   fake.bind(bridge.state)
   try {
     await bridge.setup()
@@ -238,7 +434,7 @@ test('separate conversations use separate native DS-Bot threads and reuse persis
     assert.notEqual(fake.rt.chatOf('bot1'), a)
     await bridge.selectConversation('conv-a')
     assert.equal(fake.rt.chatOf('bot1'), a)
-    const restarted = createBridge(fake.rt, fake.ctx, { env: { DSH_HOME: home }, port: 1 })
+    const restarted = createBridge(fake.rt, { env: { DSH_HOME: home }, port: 1 })
     fake.bind(restarted.state)
     await restarted.setup()
     await restarted.selectConversation('conv-a')
@@ -256,4 +452,121 @@ test('B4: the account model override from @openteamily/web wins, failures fall b
   assert.equal(userModelOverride(scope), null)
   scope[MODEL_OVERRIDE] = () => null
   assert.equal(userModelOverride(scope), null)
+})
+
+test('a held native turn does not delay another Bot, and keeps its own part protected', {timeout: 2000}, async () => {
+  const {rt, ctx, log} = fakeRuntime()
+  const bridge = createBridge(rt, {port:1})
+  const started = Promise.withResolvers()
+  const slowReply = Promise.withResolvers()
+  rt.chatOf = botId => botId === 'main-bot' ? 'automation-session' : 'private-session'
+  rt.sendUser = async ({sessionId, requestId}) => {
+    log.push(requestId)
+    const session = {id:sessionId}
+    ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+    ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:requestId}}})
+    if (requestId === 'automation-run') {
+      started.resolve()
+      await slowReply.promise
+    }
+    ctx.emit('session/event', session, {type:'assistant/message', data:{text:'reply for ' + sessionId}})
+    ctx.emit('session/event', session, {type:'turn/end', data:{turn:1}})
+  }
+  const turn = (botId, requestId) => bridge.exclusive(() => runTurn(rt, ctx, botId, 'controlled input', requestId, 500), botId)
+  const automation = turn('main-bot','automation-run')
+  try {
+    await started.promise
+    const previousPart = turn('main-bot','main-bot-followup')
+    const privateChat = await turn('personal-bot','private-send')
+    assert.equal(privateChat.text,'reply for private-session')
+    assert.deepEqual(log,['automation-run','private-send'])
+    slowReply.resolve()
+    assert.equal((await automation).text,'reply for automation-session')
+    assert.equal((await previousPart).text,'reply for automation-session')
+    assert.deepEqual(log,['automation-run','private-send','main-bot-followup'])
+  } finally {
+    slowReply.resolve()
+  }
+})
+
+test('a roster-wide change fences current and later Bot work even if a turn fails', {timeout: 2000}, async () => {
+  const bridge = createBridge(fakeRuntime().rt, {port:1})
+  const running = Promise.withResolvers()
+  const turn = Promise.withResolvers()
+  const adopt = Promise.withResolvers()
+  const started = Promise.withResolvers()
+  const first = bridge.exclusive(() => { running.resolve(); return turn.promise },'main-bot')
+  await running.promise
+  const failed = assert.rejects(first, /fixture failure/)
+  const migration = bridge.exclusive(() => { started.resolve(); return adopt.promise })
+  let otherStarted = false
+  const later = bridge.exclusive(() => { otherStarted = true },'personal-bot')
+  try {
+    await delay(0)
+    assert.equal(otherStarted,false)
+    turn.reject(new Error('fixture failure'))
+    await failed
+    await started.promise
+    await delay(0)
+    assert.equal(otherStarted,false)
+    adopt.resolve()
+    await migration
+    await later
+    assert.equal(otherStarted,true)
+  } finally {
+    turn.resolve()
+    adopt.resolve()
+  }
+})
+
+test('parallel native preparations apply a changed provider capability once', async () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, {port:1})
+  fake.bind(bridge.state)
+  let model = 'text-only'
+  bridge.state.startupModel = () => ({model})
+  const updates = []
+  fake.rt.saveProviderModels = async ({models}) => { updates.push(models[0].input) }
+  await bridge.prepareModel()
+  model = 'DeepSeek-V4.1-Flash-1017'
+  await Promise.all([bridge.prepareModel(), bridge.prepareModel()])
+  assert.deepEqual(updates,[['text','image']])
+})
+
+test('isolated text-only requests stream answer text without tools, history, or reasoning', async () => {
+  const seen = []
+  const server = createBridgeServer(
+    {token:'synthetic', startupModel:() => ({model:'fixture'})},
+    {forward:async (_model, raw, response) => {
+      const request = JSON.parse(String(raw))
+      seen.push(request)
+      if (!request.stream) {
+        response.writeHead(200, {'content-type':'application/json'})
+        response.end(JSON.stringify({choices:[{message:{content:'JSON result'}}]}))
+        return
+      }
+      response.writeHead(200, {'content-type':'text/event-stream'})
+      response.write(': comment\r\ndata: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\r\n\r\n')
+      const bytes = Buffer.from('data: {"choices":[{"delta":{"content":"🌿 Plan"}}]}\r\n\r\n')
+      const pivot = bytes.indexOf(0xf0) + 2
+      response.write(bytes.subarray(0,pivot))
+      await delay(5)
+      response.write(bytes.subarray(pivot))
+      if (request.messages.at(-1).content === 'incomplete') { response.end(); return }
+      response.end('data: {"choices":[{"delta":{"content":" approved"}}]}\n\n' +
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+    }},
+  )
+  const port = await listen(server)
+  const bridge = {baseURL:'http://127.0.0.1:'+port+'/v1',state:{token:'synthetic'},async setup() {}}
+  try {
+    const snapshots = []
+    assert.equal(await textOnlyCompletion(bridge,'file excerpt',{system:'Member agent',onProgress:text=>snapshots.push(text)}),'🌿 Plan approved')
+    assert.deepEqual(snapshots,['🌿 Plan','🌿 Plan approved'])
+    assert.deepEqual(seen[0],{model:MODEL_ID,stream:true,messages:[
+      {role:'system',content:'Member agent'},{role:'user',content:'file excerpt'},
+    ]})
+    assert.equal(await textOnlyCompletion(bridge,'summary'),'JSON result')
+    await assert.rejects(textOnlyCompletion(bridge,'incomplete',{onProgress() {}}),/ended early/)
+  } finally { await close(server) }
 })

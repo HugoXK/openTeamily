@@ -184,11 +184,24 @@ export function websitePrompt(title, brief) {
 }
 
 export function saveableSocialMessage(item) {
-  return Boolean(item && !item.retracted && typeof item.body === 'string' && item.body.trim());
+  return Boolean(item && !item.retracted && !item.voice && !item.attachment && typeof item.body === 'string' && item.body.trim());
 }
 
 export function saveableAgentMessage(item) {
   return Boolean(item && item.status === 'succeeded' && typeof item.body === 'string' && item.body.trim());
+}
+
+export function artifactKindLabel(kind, mime) {
+  if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
+  const labels = {website: '网站', whiteboard: '白板', slides: '幻灯片', dashboard: '看板', spreadsheet: '电子表格'};
+  return Object.hasOwn(labels, kind) ? labels[kind] : '文档';
+}
+
+export function artifactVersionLabel(resource, mime) {
+  if (!resource?.kind) return '';
+  const kind = artifactKindLabel(resource.kind, mime);
+  return Number.isSafeInteger(resource.revision) && resource.revision > 0
+    ? `${kind} · 版本 ${resource.revision}` : kind;
 }
 
 export function socialSavePath(workspaceId, conversationId, messageId) {
@@ -205,29 +218,14 @@ export function defaultSaveTitle(body) {
 
 export function conversationChatHref(workspaceId, item) {
   if (!workspaceId || !item) return '/chat';
+  const message = item.message_id ? '&message=' + encodeURIComponent(item.message_id) : '';
   if (item.source === 'agent' && item.agent_id) {
     return '/chat#workspace=' + encodeURIComponent(workspaceId)
       + '&agent=' + encodeURIComponent(item.agent_id)
-      + '&conversation=' + encodeURIComponent(item.id);
+      + '&conversation=' + encodeURIComponent(item.id) + message;
   }
   return '/chat#workspace=' + encodeURIComponent(workspaceId)
-    + '&social=' + encodeURIComponent(item.id);
-}
-
-export function messengerHref(workspaceId, conversationId) {
-  const parts = [];
-  if (workspaceId) parts.push('workspace=' + encodeURIComponent(workspaceId));
-  if (conversationId) parts.push('conversation=' + encodeURIComponent(conversationId));
-  return parts.length ? '/messenger#' + parts.join('&') : '/messenger';
-}
-
-export function parseMessengerHash(hash) {
-  const raw = String(hash || '').replace(/^#/, '');
-  const params = new URLSearchParams(raw);
-  return {
-    workspace: params.get('workspace') || '',
-    conversation: params.get('conversation') || '',
-  };
+    + '&social=' + encodeURIComponent(item.id) + message;
 }
 
 export function describeWebsiteDispatch(result) {
