@@ -244,23 +244,58 @@ test('a selected one-off task only stages a private draft and preserves an exist
   }
 });
 
-test('a failed completion remains on step 4 and does not open chat', async () => {
+test('an unconfirmed completion stays on step 4 without provisioning or opening chat', async () => {
   const document = fakeDocument();
-  let personalReads = 0;
+  const personalRequests = [];
   const wizard = mountOnboarding(document, {navigate: () => assert.fail('navigated after failed save'),
-    send: async (_method, path) => {
+    send: async (method, path) => {
       if (path === '/v1/auth/session') return auth;
       if (path === '/v1/onboarding') return response(4);
       if (path === '/v1/onboarding/look') return {status: 503, body: {}};
-      personalReads += 1;
+      personalRequests.push(method);
       return {status: 200, body: {personal_agent: binding}};
     }});
   await wizard.ready;
   document.getElementById('onboarding-enter').handlers.click[0]();
   await flush();
   assert.equal(document.stepParts[2].hidden, false);
-  assert.equal(personalReads, 0);
-  assert.match(document.getElementById('status').textContent, /保存失败/);
+  assert.deepEqual(personalRequests, ['GET']);
+  assert.match(document.getElementById('status').textContent, /暂时无法确认/);
+});
+
+test('finishing overlaps the binding read and verifies a lost save receipt without another write', async () => {
+  for (const mode of ['look', 'skip', 'foreign', 'changed']) {
+    const document = fakeDocument();
+    const destination = [];
+    const pending = Promise.withResolvers();
+    const calls = [];
+    const skip = mode === 'skip';
+    const wizard = mountOnboarding(document, {navigate: path => destination.push(path), send: async (method, path) => {
+      calls.push([method, path]);
+      if (path === '/v1/auth/session') return auth;
+      if (path === '/v1/onboarding') return calls.filter(([, name]) => name === path).length === 1
+        ? response(skip ? 1 : 4)
+        : response(4, {
+          viewer_username: mode === 'foreign' ? 'different' : 'alice',
+          progress: {step: 4, completed: true},
+          steps: mode === 'changed' ? {...steps, look: {...look, color: '不同颜色'}} : steps,
+        });
+      if (path === '/v1/onboarding/look' || path === '/v1/onboarding/progress') return pending.promise;
+      if (path === '/v1/personal-agent') return {status: 200, body: {personal_agent: binding}};
+      throw new Error('Unexpected request ' + path);
+    }});
+    await wizard.ready;
+    document.getElementById(skip ? 'onboarding-skip' : 'onboarding-enter').handlers.click[0]();
+    const write = skip ? '/v1/onboarding/progress' : '/v1/onboarding/look';
+    assert.deepEqual(calls.slice(-2), [['POST', write], ['GET', '/v1/personal-agent']]);
+    assert.deepEqual(destination, []);
+    pending.resolve({status: 503, body: {}});
+    await flush();
+    assert.deepEqual(calls.filter(([method]) => method === 'POST'), [['POST', write]]);
+    assert.deepEqual(calls.at(-1), ['GET', '/v1/onboarding']);
+    assert.deepEqual(destination, mode === 'foreign' || mode === 'changed'
+      ? [] : ['/chat#workspace=' + workspace + '&agent=' + agent]);
+  }
 });
 
 test('automation creation is opt-in, click-only and guarded against duplicate clicks', async () => {

@@ -1,5 +1,5 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
-import { hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
+import { countMentionedGroupMembers, hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles,
   ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, unclearSocialDelivery } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
@@ -950,7 +950,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const direct = directAgentRoom(currentConversation);
     if (!currentUser || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
         (currentConversation.kind !== 'group' && !direct)) return null;
-    return {scope: sendScope(), agents: currentConversation.agent_members || [], direct};
+    return {scope:sendScope(), agents:currentConversation.agent_members || [],
+      members:currentConversation.members || [], viewerId:currentUser.id, direct};
   }, (targets, stale) => {
     groupMentions = {scope:sendScope(), targets, stale};
     renderGroupComposerRouting();
@@ -1132,6 +1133,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const everyone = conversation && hasEveryoneMention(body);
     node.hidden = !conversation || quoteBlocksSend(scope);
     if (node.hidden) return;
+    const people = countMentionedGroupMembers(body, {members:conversation.members, viewerId:currentUser?.id});
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
@@ -1149,7 +1151,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (mentions?.targets.length) {
       kind = 'targeted';
       const count = mentions.targets.length;
-      text = uiLabel(`已指定 ${count} 位智能体回复`, `${count} ${count === 1 ? 'agent' : 'agents'} selected to reply`);
+      text = people
+        ? uiLabel(`将提及 ${people} 位成员，并请 ${count} 位智能体回复`,
+          `Mention ${people} ${people === 1 ? 'member' : 'members'} and ask ${count} ${count === 1 ? 'agent' : 'agents'} to reply`)
+        : uiLabel(`已指定 ${count} 位智能体回复`, `${count} ${count === 1 ? 'agent' : 'agents'} selected to reply`);
+    } else if (people) {
+      kind = 'targeted';
+      text = uiLabel(`将提及 ${people} 位群成员`, `${people} group ${people === 1 ? 'member' : 'members'} will be mentioned`);
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);

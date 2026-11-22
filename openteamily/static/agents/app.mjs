@@ -29,6 +29,21 @@ export function searchWithCategory(search, slug) {
   return next ? '?' + next : '';
 }
 
+const directoryId = /^[0-9a-f]{32}$/;
+
+function directoryTarget(hash) {
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
+  const workspaces = params.getAll('workspace');
+  const agents = params.getAll('agent');
+  const workspace = workspaces[0] || '';
+  const agent = agents[0] || '';
+  if ((workspaces.length && (workspaces.length !== 1 || !directoryId.test(workspace))) ||
+      (agents.length && (agents.length !== 1 || !workspace || !directoryId.test(agent)))) {
+    return {invalid: true};
+  }
+  return {workspace, agent, archived: params.get('status') === 'archived'};
+}
+
 export function readAgentForm(form) {
   const data = new FormData(form);
   const quickStarts = data.get('quick_starts');
@@ -198,7 +213,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.addEventListener('popstate', () => {
       selectedCategory = categoryFromSearch(globalThis.location.search);
       renderCategoryFilter();
-      if (directoryLoaded) renderDirectory();
+      if (currentUser && workspaces.length) return restoreDirectory();
     });
   }
 
@@ -323,6 +338,64 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  function writeDirectoryTarget(agent, {push = false} = {}) {
+    const {location, history} = globalThis;
+    const workspace = workspaceId();
+    if (!location || !history || !directoryId.test(workspace) || (agent && !directoryId.test(agent))) return;
+    const params = new URLSearchParams({workspace});
+    if (agent) params.set('agent', agent);
+    if (archivedOnly) params.set('status', 'archived');
+    const hash = '#' + params;
+    if (hash === location.hash) return;
+    const url = location.pathname + location.search + hash;
+    if (push && history.pushState) history.pushState(null, '', url);
+    else history.replaceState?.(null, '', url);
+  }
+
+  async function restoreDirectory() {
+    const hash = globalThis.location?.hash;
+    const target = directoryTarget(hash);
+    const workspace = target.workspace || workspaces[0]?.id;
+    if (target.invalid || !workspaces.some(space => space.id === workspace)) {
+      workspaceLoad += 1;
+      workspaceSelect.value = '';
+      actor = null;
+      directoryLoaded = false;
+      directoryAgents = [];
+      loadedWorkspace = '';
+      hideDrawer();
+      if (openCreate) openCreate.hidden = true;
+      if (directoryStatus) directoryStatus.disabled = true;
+      fillCreatorOptions(creatorFilter, [], memberNames, document);
+      selectedCreator = '';
+      syncTeamRunLink();
+      if (teamTemplatesLoaded) renderTeamTemplates();
+      document.getElementById('role-note').textContent = '';
+      document.getElementById('agent-list').replaceChildren();
+      document.getElementById('agents-empty').hidden = true;
+      const count = document.getElementById('agents-count');
+      if (count) count.textContent = '显示 0 个智能体';
+      show('error', '无法访问链接中的工作区，请选择其他工作区。');
+      return;
+    }
+    workspaceSelect.value = workspace;
+    archivedOnly = target.archived;
+    if (directoryStatus) {
+      directoryStatus.disabled = false;
+      directoryStatus.value = archivedOnly ? 'archived' : 'active';
+    }
+    syncTeamRunLink();
+    if (!directoryLoaded || loadedWorkspace !== workspace || loadedArchived !== archivedOnly) {
+      if (!await loadWorkspace({directoryOnly: true}) || globalThis.location?.hash !== hash) return;
+    } else {
+      renderDirectory();
+    }
+    if (target.agent && target.agent !== currentAgent?.id) {
+      hideDrawer();
+      await openAgent(target.agent, {record: false});
+    } else if (!target.agent) hideDrawer();
+  }
+
   function syncTeamRunLink() {
     const link = document.getElementById('open-team-runs');
     if (!link) return;
@@ -369,16 +442,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => unavailable);
     if (seq !== sessionLoad) return;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const previous = workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
       option.value = space.id;
       option.textContent = space.name;
       workspaceSelect.append(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
     }
     syncTeamRunLink();
     if (!workspaces.length) {
@@ -396,8 +465,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show(listed.status === 200 ? '' : 'error', listed.status === 200 ? '' : '无法加载工作区。请刷新后重试。');
       return;
     }
-    if (directoryStatus) directoryStatus.disabled = false;
-    await loadWorkspace();
+    await restoreDirectory();
   }
 
   let directoryAgents = [];
@@ -520,7 +588,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const archived = archivedOnly;
     const includeWorkspace = !directoryOnly || id !== loadedWorkspace;
     hideDrawer();
-    if (includeWorkspace && openCreate) openCreate.hidden = true;
+    if (includeWorkspace) {
+      actor = null;
+      if (openCreate) openCreate.hidden = true;
+      if (teamTemplatesLoaded) renderTeamTemplates();
+    }
     if (id !== loadedWorkspace || archived !== loadedArchived) {
       directoryLoaded = false;
       directoryAgents = [];
@@ -553,6 +625,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
+      if (teamTemplatesLoaded) renderTeamTemplates();
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
     if (listed.status !== 200) {
@@ -679,20 +752,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     syncTeamRunLink();
+    if (directoryStatus) directoryStatus.disabled = false;
+    writeDirectoryTarget(null, {push: true});
     return loadWorkspace();
   });
 
-  async function openAgent(agentId) {
+  async function openAgent(agentId, {record = true} = {}) {
     const workspace = workspaceId();
     const user = currentUser?.id;
+    const hash = globalThis.location?.hash;
     const selected = ++agentSelection;
     const result = await request('GET', `/v1/workspaces/${workspace}/agents/${agentId}`).catch(() => ({status:0, body:{}}));
-    if (selected !== agentSelection || workspace !== workspaceId() || user !== currentUser?.id) return;
-    if (result.status !== 200) {
+    if (selected !== agentSelection || workspace !== workspaceId() || user !== currentUser?.id ||
+        hash !== globalThis.location?.hash) return;
+    const agent = result.body.agent;
+    if (result.status !== 200 || agent?.id !== agentId || (agent.workspace_id && agent.workspace_id !== workspace)) {
       show('error', messageFor(result.body.error, '无法打开这个智能体。'));
       return;
     }
-    fillEdit(result.body.agent);
+    fillEdit(agent);
+    if (record) writeDirectoryTarget(agent.id, {push: true});
+    show('', '');
   }
 
   document.getElementById('agent-list').addEventListener('click', event => {
@@ -732,6 +812,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.reset();
     if (await loadWorkspace({directoryOnly: true}) && result.body.agent) {
       fillEdit(result.body.agent);
+      writeDirectoryTarget(result.body.agent.id, {push: true});
       show('ok', '已创建智能体。');
     }
   });
@@ -789,6 +870,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       if (await loadWorkspace({directoryOnly: true})) {
+        writeDirectoryTarget(null);
         show('ok', archived ? '已归档，可在「已归档」中恢复。' : '已恢复，可在「可用」中打开聊天。');
         directoryStatus?.focus?.();
       }
@@ -801,7 +883,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const archiveButton = document.getElementById('archive-button');
   archiveButton.addEventListener('click', () => changeArchive(currentAgent, true, archiveButton));
 
-  document.getElementById('cancel-edit').addEventListener('click', hideDrawer);
+  document.getElementById('cancel-edit').addEventListener('click', () => {
+    hideDrawer();
+    writeDirectoryTarget(null);
+  });
   document.getElementById('cancel-create')?.addEventListener('click', () => {
     hideDrawer();
     openCreate?.focus?.();
@@ -820,6 +905,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   openCreate?.addEventListener('click', () => {
     if (!canManage(actor) || archivedOnly) return;
     hideDrawer();
+    writeDirectoryTarget(null);
     if (drawer) {
       drawer.hidden = false;
       drawer.scrollTop = 0;
@@ -829,6 +915,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   directoryStatus?.addEventListener('change', () => {
     archivedOnly = directoryStatus.value === 'archived';
+    writeDirectoryTarget(null, {push: true});
     return loadWorkspace({directoryOnly: true});
   });
   const search = document.getElementById('agent-search');

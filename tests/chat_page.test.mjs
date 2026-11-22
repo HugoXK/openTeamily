@@ -8,9 +8,23 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
+import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
 import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
+
+test('group mention feedback counts only eligible human members addressed outside literal text', () => {
+  const members = [
+    {user_id:'self', handle:'sender.home'},
+    {user_id:'one', handle:'reviewer.home'},
+    {user_id:'two', handle:'teammate.home'},
+    {user_id:'three', handle:'suspended.home', suspended:true},
+  ];
+  const draft = '＠Reviewer.home @reviewer.home @sender.home @suspended.home @reviewer.home.other\n' +
+    '```text\n@teammate.home\n``` 和 [提示 @teammate.home](/guide)';
+  assert.equal(countMentionedGroupMembers(draft, {members, viewerId:'self'}), 1);
+  assert.equal(countMentionedGroupMembers(draft, {members, viewerId:'self', direct:true}), 0);
+});
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
