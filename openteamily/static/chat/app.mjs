@@ -4239,7 +4239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return block;
   }
 
-  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false, landOnUnread = false} = {}) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false, landOnUnread = false, anchor} = {}) {
     const hidden = hiddenMessageReceipts.get(sendScope());
     if (hidden && items) items = items.filter(row => !hidden.has(row.id)).map(row =>
       hidden.has(row.reply_preview?.message_id)
