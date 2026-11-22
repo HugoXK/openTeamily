@@ -93,6 +93,61 @@ test('without a DS-Bot runtime nothing is fetched or answered', async () => {
   assert.equal(f.calls.length, 0)
 })
 
+test('the background inbox keeps one long wait, restarts it on local wake and aborts it on stop', {timeout:3000}, async t => {
+  const reads = [Promise.withResolvers(), Promise.withResolvers(), Promise.withResolvers()]
+  let pulls = 0
+  let waiting = 0
+  const bs = {
+    async get(path, {signal}) {
+      assert.equal(path, '/v1/ot/agent-inbox?managed=1&after=0&wait_ms=8000')
+      assert.equal(waiting++, 0)
+      const reply = Promise.withResolvers()
+      signal.addEventListener('abort', () => reply.reject(signal.reason), {once:true})
+      reads[pulls++].resolve({signal, close:reply.resolve})
+      try { return await reply.promise } finally { waiting-- }
+    },
+  }
+  const host = {currentRuntime: () => ({chatTurn() {}})}
+  const replier = createAgentReplier({bs, host, stateFile:join(fixture(), 'inbox.json')})
+  const stop = replier.start()
+  t.after(stop)
+  assert.equal(replier.start(), stop)
+  const first = await reads[0].promise
+  replier.wake()
+  const second = await reads[1].promise
+  assert.equal(first.signal.aborted, true)
+  second.close({cursor:0, jobs:[], items:[], wake_supported:true})
+  const third = await reads[2].promise
+  stop()
+  await delay(20)
+  assert.equal(third.signal.aborted, true)
+  assert.equal(waiting, 0)
+  assert.equal(pulls, 3)
+})
+
+test('legacy inbox responses back off while a same-runtime send can wake the worker', {timeout:3000}, async t => {
+  const secondRead = Promise.withResolvers()
+  let pulls = 0
+  const bs = {
+    async get(_path, {signal}) {
+      if (++pulls === 1) return {cursor:0, jobs:[], items:[]}
+      secondRead.resolve()
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {once:true})
+      })
+    },
+  }
+  const host = {currentRuntime: () => ({chatTurn() {}})}
+  const replier = createAgentReplier({bs, host, stateFile:join(fixture(), 'inbox.json')})
+  const stop = replier.start(1000)
+  t.after(stop)
+  await delay(25)
+  assert.equal(pulls, 1)
+  replier.wake()
+  await secondRead.promise
+  assert.equal(pulls, 2)
+})
+
 test('a managed group reply relays bounded snapshots from its owner before posting one durable reply', {timeout:3000}, async () => {
   const first = Promise.withResolvers()
   const second = Promise.withResolvers()

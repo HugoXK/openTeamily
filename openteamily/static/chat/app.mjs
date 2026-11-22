@@ -1763,12 +1763,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function renderAgentAddition(catalogue, roster, {busy = false, retry = false} = {}) {
-    const add = document.getElementById('group-agent-add');
+  function availableAgentAdditions(catalogue, roster) {
+    const joined = new Set(roster.filter(agent => agent.mine !== false).map(agent => agent.id || agent.agent_id));
+    return catalogue.filter(agent => !agent.archived && !agent.native_deleted && !joined.has(agent.id));
+  }
+
+  function renderAgentAddition(catalogue, roster, {busy = false, retry = false, placeholder = '',
+    add = document.getElementById('group-agent-add'), button = document.getElementById('group-agent-add-submit')} = {}) {
     const selected = add.value;
     add.replaceChildren();
-    const joined = new Set(roster.filter(agent => agent.mine !== false).map(agent => agent.id || agent.agent_id));
-    const available = catalogue.filter(agent => !agent.archived && !agent.native_deleted && !joined.has(agent.id));
+    const available = availableAgentAdditions(catalogue, roster);
+    if (placeholder) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = placeholder;
+      add.append(option);
+    }
     for (const agent of available) {
       const option = document.createElement('option');
       option.value = agent.id;
@@ -1776,10 +1786,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       add.append(option);
     }
     if (available.some(agent => agent.id === selected)) add.value = selected;
+    else if (placeholder) add.value = '';
     add.disabled = busy || !available.length;
-    const button = document.getElementById('group-agent-add-submit');
     button.textContent = retry ? uiLabel('重试', 'Retry') : uiLabel('添加', 'Add');
-    button.disabled = busy || (!retry && !available.length);
+    button.disabled = busy || (!retry && (!available.length || (placeholder && !add.value)));
     return available.length;
   }
 
@@ -4918,11 +4928,129 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentsTab.setAttribute('aria-selected', String(which === 'agents'));
     peopleTab.setAttribute('aria-selected', String(which === 'people'));
     document.getElementById('group-info-agents').hidden = which !== 'agents';
+    document.getElementById('group-info-add-agent').hidden = which !== 'agents';
+    document.getElementById('group-info-add-agent-feedback').hidden = which !== 'agents';
     const autoNote = document.getElementById('group-agent-auto-reply-note');
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
   }
+
+  const groupInfoAddOpener = document.getElementById('group-info-add-agent');
+  const groupInfoAddDialog = document.getElementById('group-info-add-agent-dialog');
+  const groupInfoAddSelect = document.getElementById('group-info-add-agent-select');
+  const groupInfoAddSubmit = document.getElementById('group-info-add-agent-submit');
+  const groupInfoAddStatus = document.getElementById('group-info-add-agent-status');
+  const groupInfoAddRetry = document.getElementById('group-info-add-agent-retry');
+  const groupInfoAddDirectory = document.getElementById('group-info-add-agent-directory');
+  const groupInfoAddCancel = document.getElementById('group-info-add-agent-cancel');
+  const groupInfoAddFeedback = document.getElementById('group-info-add-agent-feedback');
+  let groupInfoAdd;
+  let groupInfoFeedbackScope;
+
+  const groupInfoAddCurrent = state => Boolean(state && state === groupInfoAdd && groupInfoAddDialog.open &&
+    agentRosterCurrent(state.view) && !state.view.direct);
+
+  function renderGroupInfoAdd(state) {
+    const count = renderAgentAddition(state.catalogue || [], currentConversation.agent_members || [], {
+      busy:state.loading || state.view.busy, add:groupInfoAddSelect, button:groupInfoAddSubmit,
+      placeholder:uiLabel('选择智能体','Select an agent'),
+    });
+    const empty = state.catalogue && !count;
+    groupInfoAddSubmit.disabled ||= Boolean(state.reload);
+    groupInfoAddStatus.textContent = state.error || (state.loading ? uiLabel('正在读取工作区智能体…','Loading workspace agents…')
+      : state.view.busy ? uiLabel('正在添加智能体…','Adding agent…')
+        : empty ? uiLabel('当前工作区没有可添加的智能体。','There are no workspace agents available to add.') : '');
+    groupInfoAddStatus.dataset.kind = state.error ? 'error' : '';
+    groupInfoAddRetry.hidden = !state.reload;
+    groupInfoAddRetry.disabled = state.loading || state.view.busy;
+    groupInfoAddDirectory.hidden = !empty;
+    groupInfoAddCancel.disabled = Boolean(state.view.busy);
+  }
+
+  async function loadGroupInfoAddAgents(state) {
+    if (!groupInfoAddCurrent(state) || state.loading || state.view.busy) return;
+    state.loading = true;
+    state.error = '';
+    state.reload = false;
+    renderGroupInfoAdd(state);
+    const agents = new Map();
+    const cursors = new Set();
+    let cursor = '';
+    do {
+      const query = new URLSearchParams({limit:'100'});
+      if (cursor) query.set('cursor',cursor);
+      const result = await request('GET', `/v1/workspaces/${state.workspace}/agents?${query}`)
+        .catch(() => ({status:0,body:{}}));
+      if (!groupInfoAddCurrent(state)) return;
+      if (result.status !== 200) {
+        state.reload = true;
+        state.error = result.status === 403 ? uiLabel('你无法读取此工作区的智能体。','You cannot view agents in this workspace.')
+          : uiLabel('无法读取工作区智能体，请重试。','Could not load workspace agents. Try again.');
+        break;
+      }
+      for (const agent of result.body.items || []) agents.set(agent.id,agent);
+      cursor = result.body.cursor || '';
+      if (cursors.has(cursor)) break;
+      cursors.add(cursor);
+    } while (cursor);
+    state.loading = false;
+    if (!state.error) state.catalogue = [...agents.values()].sort((a,b)=>a.name.localeCompare(b.name));
+    renderGroupInfoAdd(state);
+  }
+
+  groupInfoAddOpener.addEventListener('click', () => {
+    const view = agentRosterView;
+    if (!agentRosterCurrent(view) || view.direct || view.busy || groupInfoAddDialog.open) return;
+    const state = groupInfoAdd = {view,workspace:workspaceId()};
+    document.getElementById('group-info-add-agent-context').textContent = conversationLabel(currentConversation,currentUser?.id);
+    groupInfoAddSelect.value = '';
+    groupInfoAddFeedback.textContent = '';
+    groupInfoAddDialog.showModal();
+    void loadGroupInfoAddAgents(state);
+  });
+  groupInfoAddSelect.addEventListener('change', () => {
+    if (!groupInfoAddCurrent(groupInfoAdd)) return;
+    if (!groupInfoAdd.reload) groupInfoAdd.error = '';
+    renderGroupInfoAdd(groupInfoAdd);
+  });
+  groupInfoAddRetry.addEventListener('click', () => void loadGroupInfoAddAgents(groupInfoAdd));
+  groupInfoAddCancel.addEventListener('click', () => groupInfoAddDialog.close());
+  groupInfoAddDialog.addEventListener('cancel', event => { if (groupInfoAdd?.view.busy) event.preventDefault(); });
+  groupInfoAddDialog.addEventListener('close', () => {
+    if (groupInfoAddDialog.open) return;
+    if (agentRosterCurrent(groupInfoAdd?.view) && !document.getElementById('group-info-panel').hidden) {
+      groupInfoAddOpener.focus({preventScroll:true});
+    }
+    groupInfoAdd = null;
+  });
+  document.getElementById('group-info-add-agent-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = groupInfoAdd;
+    if (!groupInfoAddCurrent(state) || groupInfoAddSubmit.disabled) return;
+    const selected = availableAgentAdditions(state.catalogue || [], currentConversation.agent_members || [])
+      .find(agent=>agent.id === groupInfoAddSelect.value);
+    if (!selected) { renderGroupInfoAdd(state); return; }
+    state.error = '';
+    const result = writeAgentRoster(state.view,'',{agent_ids:[selected.id]},true,(kind,text,status) => {
+      if (!groupInfoAddCurrent(state)) return;
+      if (kind === 'ok') {
+        groupInfoAddFeedback.textContent = text;
+        groupInfoAddDialog.close();
+      } else {
+        state.reload = [403,404].includes(status);
+        state.error = status === 403 ? uiLabel('群聊权限已变化。请重新打开群信息后再试。','Group permissions changed. Reopen group info and try again.')
+          : status === 404 ? uiLabel('智能体已不可用，请重新读取列表。','The agent is unavailable. Reload the list.')
+            : uiLabel('暂时无法添加智能体。请使用当前选择重试。','Could not add the agent. Try again with the current selection.');
+      }
+    });
+    renderGroupInfoAdd(state);
+    await result;
+    if (groupInfoAddCurrent(state)) {
+      renderGroupInfoAdd(state);
+      if (state.error) groupInfoAddStatus.focus({preventScroll:true});
+    }
+  });
 
   const groupInvite = document.getElementById('group-invite-dialog');
   const groupInviteQuery = document.getElementById('group-invite-query');
@@ -5108,6 +5236,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
+    const feedbackScope = group ? sendScope() : '';
+    if (feedbackScope !== groupInfoFeedbackScope) groupInfoAddFeedback.textContent = '';
+    groupInfoFeedbackScope = feedbackScope;
+    if (groupInfoAddDialog.open && (!group || !groupInfoAddCurrent(groupInfoAdd))) groupInfoAddDialog.close();
     if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
     if (groupMemoryDialog?.open && (!group || groupMemoryView?.scope !== sendScope())) groupMemoryDialog.close();
     const memoryOpen = document.getElementById('group-memory-open');
@@ -5127,7 +5259,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
     const agentList = document.getElementById('group-info-agents');
     agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
-    if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
+    if (!agentList.children.length) agentList.append(memberRow(uiLabel('还没有智能体','No agents yet'),
+      uiLabel('可以添加你的工作区智能体。','Add one of your workspace agents.'), 'empty'));
     const peopleList = document.getElementById('group-info-people');
     peopleList.replaceChildren(...(conversation.members || []).map(member => {
       const row = memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你'
@@ -7193,7 +7326,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !document.getElementById('group-management-dialog')?.open &&
+      if (event.key === 'Escape' && !groupInfoAddDialog.open && !document.getElementById('group-management-dialog')?.open &&
           !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
     });
   }
@@ -7562,7 +7695,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   agentRosterSheet.addEventListener('toggle', () => void loadDirectAgentCatalogue());
 
-  async function writeAgentRoster(view, suffix, body, adding) {
+  async function writeAgentRoster(view, suffix, body, adding, notify = (kind, text) => show(kind, text)) {
     if (!agentRosterCurrent(view) || view.busy) return false;
     const cid = currentConversation.id;
     const failure = adding ? uiLabel('无法添加智能体。', 'Could not add the agent.')
@@ -7579,7 +7712,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (result.status !== 200 && (!adding || result.status !== 201)) {
         const text = messageFor(result.body.error, failure);
         if (view.direct) view.status = text;
-        else show('error', text);
+        else notify('error', text, result.status);
         return false;
       }
       const refreshed = await openSocialConversation(cid, {acknowledge:false});
@@ -7587,7 +7720,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const text = refreshed ? (adding ? uiLabel('已添加智能体。', 'Agent added.') : uiLabel('已移除智能体。', 'Agent removed.'))
         : uiLabel('变更已保存，重新打开对话可查看最新成员。', 'Change saved. Reopen the conversation to see the current members.');
       if (view.direct) view.status = text;
-      else show('ok', text);
+      else notify('ok', text);
       return true;
     } finally {
       view.busy = false;

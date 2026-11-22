@@ -13,6 +13,7 @@ const MAX_CONTEXT_CHARS = 6000
 const REPLY_TEXT_LIMIT = 4000
 const PROGRESS_INTERVAL = 250
 const INBOX_INTERVAL = 2500
+const INBOX_WAIT_MS = 8000
 const MANAGED_RETRY_DELAY = 150
 
 export function selectGroupMemories(query, items) {
@@ -152,6 +153,7 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
     renameSync(tmp, stateFile)
   }
   let running = false
+  let worker
 
   async function changeJob(item, action, claimId) {
     try {
@@ -173,7 +175,7 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
     }
   }
 
-  async function once() {
+  async function readAndReply({ signal, wait = false } = {}) {
     if (running) return { skipped: true }
     running = true
     try {
@@ -182,13 +184,16 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       const after = readCursor()
       let inbox
       try {
-        inbox = await bs.get(`/v1/ot/agent-inbox?managed=1&after=${after}`)
+        const path = `/v1/ot/agent-inbox?managed=1&after=${after}`
+        inbox = wait ? await bs.get(path + '&wait_ms=' + INBOX_WAIT_MS, { signal }) : await bs.get(path)
       } catch (error) {
+        if (signal?.aborted) return { skipped: 'interrupted' }
         if (['social/not-configured', 'social/not-connected', 'social/unreachable', 'social/unauthorized'].includes(error?.code)) {
           return {skipped:error.code}
         }
         throw error
       }
+      if (signal?.aborted) return { skipped: 'interrupted' }
       let replied = 0
       for (const item of [...(inbox.jobs ?? []), ...(inbox.items ?? [])]) {
         const id = item.message?.id
@@ -255,16 +260,42 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
         }
       }
       if (typeof inbox.cursor === 'number' && inbox.cursor > after) writeCursor(inbox.cursor)
-      return { replied, cursor: inbox.cursor ?? after }
+      return { replied, cursor: inbox.cursor ?? after, ...(wait ? { wakeSupported: inbox.wake_supported === true } : {}) }
     } finally { running = false }
   }
 
   function start(intervalMs = INBOX_INTERVAL) {
-    const timer = setInterval(() => { once().catch((error) => log(`agent inbox: ${error?.code ?? 'error'}`)) }, intervalMs)
-    timer.unref?.()
-    return () => clearInterval(timer)
+    if (worker) return worker.stop
+    const loop = {
+      stopped: false,
+      interrupt: null,
+      stop() {
+        loop.stopped = true
+        loop.interrupt?.abort()
+        if (worker === loop) worker = null
+      },
+    }
+    worker = loop
+    void (async () => {
+      while (!loop.stopped) {
+        const request = loop.interrupt = new AbortController()
+        const result = await readAndReply({signal:request.signal, wait:true})
+          .catch(error => log(`agent inbox: ${error?.code ?? 'error'}`))
+        if (loop.stopped) break
+        if (request.signal.aborted || result?.wakeSupported) continue
+        // Older servers respond immediately, and unreachable servers need backoff.
+        const cooldown = loop.interrupt = new AbortController()
+        await delay(intervalMs, undefined, {signal:cooldown.signal, ref:false}).catch(() => {})
+      }
+      loop.interrupt = null
+    })()
+    return loop.stop
   }
-  return { once, start }
+  return {
+    once: () => readAndReply(),
+    start,
+    wake: () => worker?.interrupt?.abort(),
+  }
 }
 
 export const defaultStateFile = (host) => join(host.featureDir(), 'agent-inbox.json')

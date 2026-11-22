@@ -3625,6 +3625,74 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(
+    `#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const settingsAdd = id => el('group-info-add-agent' + (id ? `-${id}` : ''));
+  const dialog = settingsAdd('dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
+  const base = linkBase(linkTeam);
+  const groupPath = base + linkSocialPath;
+  const cataloguePath = base + '/agents?limit=100';
+  const mine = {id:'mine', name:'Already added', owner_id:alice, mine:true};
+  const peer = {id:'shared-id', name:'Teammate agent', owner_id:bob, mine:false};
+  const selected = {id:peer.id, name:'My workspace agent', owner_id:alice, mine:true};
+  const roster = [mine, peer];
+  let reads = 0;
+  let writes = 0;
+  routes.set(groupPath, () => json(200, {conversation:{id:linkSocial, kind:'group', workspace_id:linkTeam,
+    title:'Release group', members:[linkMember], agent_members:roster, group_agent_requests:true,
+    group_management:{role:'owner', revision:1}}, items:[]}));
+  routes.set(cataloguePath, () => ++reads === 1 ? json(503, {}) : json(200,
+    {items:[mine,{id:'archived',name:'Archived',archived:true}], cursor:'more'}));
+  routes.set(cataloguePath + '&cursor=more', () => json(200, {items:[selected]}));
+  routes.set(groupPath + '/agents', ({method}) => {
+    assert.equal(method, 'POST');
+    if (++writes === 1) return json(503, {});
+    roster.push(selected);
+    return json(201, {});
+  });
+  try {
+    await mount(doc, {fetcher});
+    assert.equal(reads, 0);
+    await fire(el('group-info-toggle'), 'click');
+    await fire(el('group-info-tab-people'), 'click');
+    assert.equal(settingsAdd().hidden, true);
+    await fire(el('group-info-tab-agents'), 'click');
+    assert.equal(settingsAdd().hidden, false);
+    assert.equal(reads, 0);
+    await fire(settingsAdd(), 'click');
+    await settle();
+    assert.equal(dialog.open, true);
+    assert.match(settingsAdd('status').textContent, /无法读取/);
+    await fire(settingsAdd('retry'), 'click');
+    await settle();
+    assert.deepEqual(settingsAdd('select').options.map(option => option.value), ['', selected.id]);
+    assert.equal(settingsAdd('submit').disabled, true);
+    settingsAdd('select').value = selected.id;
+    await fire(settingsAdd('select'), 'change');
+    assert.equal(settingsAdd('submit').disabled, false);
+    const submit = () => fire(settingsAdd('form'), 'submit', {preventDefault() {}});
+    await submit();
+    assert.equal(dialog.open, true);
+    assert.match(settingsAdd('status').textContent, /当前选择重试/);
+    assert.equal(settingsAdd('select').value, selected.id);
+    assert.equal(settingsAdd('submit').disabled, false);
+    await submit();
+    assert.equal(dialog.open, false);
+    assert.equal(el('group-info-panel').hidden, false);
+    assert.equal(settingsAdd().focused, true);
+    assert.match(settingsAdd('feedback').textContent, /已添加/);
+    assert.equal(el('group-info-agents').children.length, 3);
+    assert.deepEqual(calls.filter(call => call.path === groupPath + '/agents').map(call => call.body),
+      [{agent_ids:[peer.id]}, {agent_ids:[peer.id]}]);
+  } finally {
+    restore();
+  }
+});
+
 test('named team group replies explicitly pin what was previewed and keep drafts across stale versions', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);

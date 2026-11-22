@@ -22,6 +22,9 @@ import {
 } from "./group-management.js";
 
 import { GROUP_INVITES_SCHEMA, registerGroupInvites } from "./group-invites.js";
+import { agentInboxWake } from "./agent-inbox-wake.js";
+
+const AGENT_INBOX_MAX_WAIT_MS = 10_000;
 
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
@@ -847,6 +850,18 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   registerDirectAgentRevocation(ot);
   registerAgentAccess(app,ot);
   const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
+  const inboxWake = agentInboxWake();
+  app.addHook("preClose", async () => inboxWake.close());
+
+  function legacyWakeOwners(conv: any, seq: number) {
+    if (!inboxWake.hasWaiters() || conv.kind !== "group") return [];
+    return ot.all<{owner_id: string}>(`SELECT DISTINCT a.owner_id FROM ot_conversation_agents a
+      JOIN ot_conversation_members m ON m.conversation_id=a.conversation_id AND m.owner_id=a.owner_id
+      WHERE a.conversation_id=? AND (? OR (a.auto_reply=1 AND a.auto_reply_after_seq<?))
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM ot_team_members tm
+          WHERE tm.team_id=? AND tm.owner_id=a.owner_id AND tm.suspended=0))`,
+    conv.id, Number(fixedPublicThread(conv)), seq, conv.team_id, conv.team_id);
+  }
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -1226,6 +1241,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const groupRequest = agentMessageRequest(b, clientKey, replyTo, "group");
     const directRequest = agentMessageRequest(b, clientKey, replyTo, "direct");
     const studio = studioMessageRequest(b, clientKey, replyTo);
+    const wakeOwners = new Set<string>();
     const msg = ot.tx(() => {
       const direct = b.direct === true;
       const workspace = !direct && (sourceConversation || b.attachment !== undefined || studio || groupRequest)
@@ -1309,7 +1325,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         for (const agent of parsed.agents) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at,direct_grant_id)
             VALUES (?,?,?,?,?,'queued',?,?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now(), agent.direct_grant_id);
+          wakeOwners.add(agent.owner_id);
         }
+      }
+      if (!voice && !file && !groupRequest && !studio) {
+        for (const {owner_id} of legacyWakeOwners(conv, m.seq)) wakeOwners.add(owner_id);
       }
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
@@ -1317,6 +1337,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       }
       return m;
     });
+    for (const owner of wakeOwners) inboxWake.notify(owner);
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
   });
   app.post("/v1/ot/conversations/:id/forward", async (req, reply) => {
@@ -1331,6 +1352,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "请选择 1–20 条消息。");
     const ids = Array.from(new Set<string>(input.message_ids.map((id: unknown) => text(id, "message_id", {min: 1, max: 80})))).sort();
     const fingerprint = createHash("sha256").update(JSON.stringify([sourceId, targetId, workspace, ids])).digest("hex");
+    let wakeOwners: {owner_id: string}[] = [];
     const result = ot.tx(() => {
       const scoped = (id: string) => workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv
         : accountConversation(ot, id, me.ownerId);
@@ -1358,9 +1380,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           saveAttachment(ot, copied.id, me.ownerId, readAttachment(ot, source.id, original.id));
         }
       }
+      wakeOwners = legacyWakeOwners(target, target.last_seq);
       if (key) ot.run("INSERT INTO ot_forward_requests VALUES (?,?,?,?,?)", me.ownerId, key, fingerprint, target.id, originals.length);
       return {forwarded: originals.length, target_conversation_id: target.id};
     });
+    for (const {owner_id} of wakeOwners) inboxWake.notify(owner_id);
     return reply.status(201).send(result);
   });
   const listAttachments = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -1587,7 +1611,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const attempt = b.attempt;
     assert(attempt === undefined || (Number.isSafeInteger(attempt) && attempt > 0),
       400, "invalid_request", "Invalid reply job attempt");
-    return ot.tx(() => {
+    const {result, owner} = ot.tx(() => {
       const conv = b.workspace === undefined ? memberOf(ot, id, me.ownerId)
         : workspaceConversation(ot, b.workspace, id, me.ownerId).conv;
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
@@ -1604,8 +1628,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       ot.run(`UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=?,source_revision=NULL,
         progress_revision=0,claim_id=NULL WHERE id=?`, now, job.id);
       replyProgress.delete(job.id);
-      return {reply_jobs: replyJobViews(ot, original, me.ownerId)};
+      return {result: {reply_jobs: replyJobViews(ot, original, me.ownerId)}, owner: job.owner_id};
     });
+    inboxWake.notify(owner);
+    return result;
   });
 
   app.post("/v1/ot/agent-reply-jobs/:id", async (req, reply) => {
@@ -1800,12 +1826,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     return {removed:true};
   });
 
-  /** Messages the caller's agents should answer: @mentions of the agent, or any member message in a group
-   *  where the agent has auto-reply on. `after` is a global cursor (`cursor` in the answer). */
-  app.get("/v1/ot/agent-inbox", async (req) => {
-    const me = ot.me(req);
-    const after = intParam(query(req).after, "after", 0);
-    const limit = Math.max(1, intParam(query(req).limit, "limit", 20, 50));
+  function readAgentInbox(ownerId: string, after: number, limit: number, managed: boolean) {
     const rows = ot.all<any>(`WITH pending AS (
       SELECT m.* FROM ot_messages m JOIN ot_conversations room ON room.id=m.conversation_id
       WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0 AND room.kind='group'
@@ -1821,23 +1842,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     )
     SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
     FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
-    ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, me.ownerId, limit * 4, me.ownerId);
+    ORDER BY m.rowseq, a.agent_ref`, after, ownerId, ownerId, ownerId, limit * 4, ownerId);
     const roomNotes = new Map<string, {id:string;title:string;body:string}[]>();
     const memories = (cid:string) => {
       if (!roomNotes.has(cid)) {
         let list: {id:string;title:string;body:string}[] = [];
         try {
-          requireMemoryGroup(ot,cid,me.ownerId);
+          requireMemoryGroup(ot,cid,ownerId);
           list = activeMemories(ot,cid).map(({id,title,body})=>({id,title,body:body.slice(0,1500)}));
         } catch { /* Membership may have changed since the agent inbox was assembled. */ }
         roomNotes.set(cid,list);
       }
       return roomNotes.get(cid);
     };
-    const managed = query(req).managed === "1";
     const jobs = managed ? ot.all<ReplyJob & {conversation_id: string; conversation_title: string; seq: number}>(
       REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
-        AND available ORDER BY j.updated_at,j.rowid LIMIT ?`, me.ownerId, ot.now() - REPLY_JOB_TIMEOUT, Math.min(8, limit),
+        AND available ORDER BY j.updated_at,j.rowid LIMIT ?`, ownerId, ot.now() - REPLY_JOB_TIMEOUT, Math.min(8, limit),
     ).map(job => {
       if (job.direct_grant_id) {
         return {job_id:job.id, attempt:job.attempt, conversation_id:job.conversation_id,
@@ -1850,7 +1870,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         mode: "mention", ...(job.group_text_only ? {group_text_only: true} : {}),
         message: {...messageView(ot, message), ...(job.studio_document_id ? {
           studio_reference: {document_id: job.studio_document_id, revision: job.studio_revision},
-        } : {})}, context: replyContext(ot, job.conversation_id, job.seq, me.ownerId), group_memories:memories(job.conversation_id)};
+        } : {})}, context: replyContext(ot, job.conversation_id, job.seq, ownerId), group_memories:memories(job.conversation_id)};
     }) : [];
     let cursor = after;
     const items: any[] = [];
@@ -1862,11 +1882,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const conv = ot.get<any>("SELECT dm_key,title,created_by FROM ot_conversations WHERE id=?", m.conversation_id);
       if (fixedPublicThread(conv)) {
         const listing = publicListing(ot, conv);
-        if (!listing?.listed || !listing.chat_enabled || listing.owner_id !== me.ownerId
+        if (!listing?.listed || !listing.chat_enabled || listing.owner_id !== ownerId
           || listing.ref !== m.my_agent || conv.created_by !== m.author_id || m.rowseq <= listing.chat_from
           || m.created_at <= ot.now() - 180_000
           || ot.get(`SELECT 1 FROM ot_messages WHERE conversation_id=? AND reply_to=? AND author_id=? AND agent_ref=?`,
-            m.conversation_id, m.id, me.ownerId, m.my_agent)) continue;
+            m.conversation_id, m.id, ownerId, m.my_agent)) continue;
         const context = ot.all<any>(`SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id=? AND seq<=?
           AND retracted=0 AND author_id IN (?,?) ORDER BY seq DESC LIMIT 12) ORDER BY seq`,
         m.conversation_id, m.seq, conv.created_by, listing.owner_id);
@@ -1876,14 +1896,41 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         continue;
       }
       const tracked = ot.get("SELECT 1 FROM ot_agent_reply_jobs WHERE message_id=? AND owner_id=? AND agent_ref=?",
-        m.id, me.ownerId, m.my_agent);
-      if (tracked && (managed || m.author_id !== me.ownerId)) continue;
-      const mentioned = agentMentioned(mentions, {owner_id: me.ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
+        m.id, ownerId, m.my_agent);
+      if (tracked && (managed || m.author_id !== ownerId)) continue;
+      const mentioned = agentMentioned(mentions, {owner_id: ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name,
-        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq, me.ownerId), group_memories:memories(m.conversation_id) });
+        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq, ownerId), group_memories:memories(m.conversation_id) });
     }
     return managed ? { cursor, items, jobs } : { cursor, items };
+  }
+
+  /** `after` acknowledges legacy messages. Managed jobs are polled by queue state, independent of that cursor. */
+  app.get("/v1/ot/agent-inbox", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const input = query(req);
+    const after = intParam(input.after, "after", 0);
+    const limit = Math.max(1, intParam(input.limit, "limit", 20, 50));
+    const managed = input.managed === "1";
+    const wait = one(input.wait_ms, "wait_ms");
+    const waitMs = wait === undefined ? 0 : Number(wait);
+    assert(wait === undefined || (managed && /^[0-9]{1,5}$/.test(wait) && waitMs <= AGENT_INBOX_MAX_WAIT_MS),
+      400, "invalid_request", "Managed agent inbox wait_ms must be 0–10000");
+    const current = readAgentInbox(ownerId, after, limit, managed);
+    if (!waitMs) return current;
+    if (current.items.length || current.jobs?.length || current.cursor > after) {
+      return {...current, wake_supported: true};
+    }
+    // The read and waiter registration are synchronous, so a local transaction
+    // cannot commit in between. Re-read SQLite after any signal or timer.
+    const waiting = inboxWake.wait(ownerId, waitMs, reply.raw);
+    if (!waiting) return current;
+    await waiting;
+    if (reply.raw.destroyed) return current;
+    const me = ot.me(req);
+    return {...readAgentInbox(me.ownerId, after, limit, managed), wake_supported: true};
   });
   app.post("/v1/ot/conversations/:id/agent-messages", async (req, reply) => {
     const me = ot.me(req);

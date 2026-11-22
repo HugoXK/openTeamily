@@ -2079,7 +2079,16 @@ html[data-theme-resolved="dark"] #message-list li.agent{
 #group-invite-choices label:hover { background: var(--ot-surface-2); }
 #group-invite-choices input { flex: 0 0 auto; }
 #group-invite-status:empty { display: none; }
-#group-info-invite { min-height: 2.5rem; text-align: left; color: var(--ot-accent); }
+#group-info-invite, #group-info-add-agent { min-height: 2.75rem; text-align: left; color: var(--ot-accent-hover); }
+#group-info-add-agent-dialog { box-sizing: border-box; width: min(27rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); }
+#group-info-add-agent-form { display: grid; gap: .75rem; }
+#group-info-add-agent-form :is(h2, p) { margin: 0; overflow-wrap: anywhere; }
+#group-info-add-agent-form label { display: grid; gap: .35rem; min-width: 0; }
+#group-info-add-agent-select { width: 100%; min-width: 0; min-height: 2.75rem; }
+#group-info-add-agent-status:empty, #group-info-add-agent-feedback:empty { display: none; }
+#group-info-add-agent-status[data-kind="error"] { color: var(--ot-danger); }
+#group-info-add-agent-form .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .375rem; margin: 0; }
+#group-info-add-agent-form .actions button { min-height: 2.75rem; }
 
 #chat-call-incoming { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 #chat-call-incoming[hidden], #chat-call-dialog [hidden] { display: none; }
