@@ -276,6 +276,23 @@ async function main() {
       const session=await(await desktopRegistration.request.get(origin+'/v1/auth/session')).json();
       const spaces=await(await desktopRegistration.request.get(origin+'/v1/workspaces?limit=100')).json();
       record('desktop_registration_real_session',session.user?.username==='ci-new-desktop'&&spaces.items?.length===1,'Desktop settings login entry -> real form -> cookie session -> initialized personal workspace.');
+      await desktop.setViewportSize({width:1019,height:380});
+      const account = desktop.getByRole('button',{name:'账户菜单'});
+      await account.click();
+      await desktop.locator('#help-menu-button').click();
+      const accountInRail = await account.evaluate(button => {
+        const rail = button.closest('.app-rail').getBoundingClientRect();
+        const trigger = button.getBoundingClientRect();
+        const menu = document.getElementById('account-menu').getBoundingClientRect();
+        return button.querySelector('svg') && !button.textContent.trim() &&
+          trigger.left >= rail.left && trigger.right <= rail.right &&
+          trigger.bottom <= rail.bottom && rail.bottom - trigger.bottom <= 16 &&
+          menu.left >= 0 && menu.right <= innerWidth && menu.top >= 0 && menu.bottom <= innerHeight;
+      });
+      await desktop.keyboard.press('Escape');
+      record('home_short_window_account_menu',accountInRail && await desktop.locator('#account-menu').isHidden(),
+        'The account icon stays at the bottom of the rail, and the expanded Help menu fits in the viewport.');
+      await desktop.setViewportSize({width:1280,height:900});
       await desktop.goto(origin+'/agents#workspace='+spaces.items[0].id,{waitUntil:'load'});
       await desktop.locator('#open-create').click();
       await desktop.locator('#create-form input[name="name"]').fill('Desktop account persisted agent');

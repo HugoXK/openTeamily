@@ -216,7 +216,7 @@ function syncAccountSlot(doc) {
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
   const button = doc.getElementById('account-menu-button');
-  if (button) button.textContent = accountInitials(name);
+  if (button && !button.hasAttribute('data-account-icon')) button.textContent = accountInitials(name);
   for (const node of doc.querySelectorAll('.rail-signed-in')) {
     if (visible) node.removeAttribute('hidden');
     else node.setAttribute('hidden', '');
