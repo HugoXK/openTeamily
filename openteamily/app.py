@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
+from . import agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
@@ -573,11 +573,17 @@ class App:
             if method == 'POST':
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
-        if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
+        if path == '/v1/auth/runtime-readiness' and method == 'GET' and query in ('', 'include=personal-chat'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-                state = self.runtime_readiness(db, session['user_id'])
-            return 200, {'state': state, 'user_id': session['user_id']}, []
+                owner = session['user_id']
+                state = self.runtime_readiness(db, owner)
+                result = {'state': state, 'user_id': owner}
+                if query and state in ('starting', 'stopped', 'ready'):
+                    row = personal.load(db, owner)
+                    if row is not None:
+                        result['personal_chat'] = {'workspace_id': row['workspace_id'], 'agent_id': row['agent_id']}
+            return 200, result, []
         if path == '/v1/auth/runtime-start' and method == 'POST' and not query:
             return self.start_personal_runtime(env, now)
         if path == '/v1/auth/session' and method == 'GET' and not query:

@@ -7,6 +7,7 @@ import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, c
 import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening, stagePublicAgentOpening} from '../openteamily/static/shell/public-agent-link.mjs';
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
+import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
 import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
 
 const alice = 'a'.repeat(32);
@@ -512,6 +513,53 @@ async function openMessageSearch(doc, el, fetcher) {
 function chatHtml() {
   return readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
 }
+
+test('a confirmed attachment replaces its preview before the upload response arrives', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const uploads = [];
+  class Upload {
+    constructor() {
+      this.upload = {};
+      uploads.push(this);
+    }
+    open() {}
+    setRequestHeader() {}
+    send() {}
+  }
+  const revoked = [];
+  doc.defaultView = {
+    XMLHttpRequest: Upload, FormData,
+    URL: {createObjectURL: () => 'blob:video-preview', revokeObjectURL: url => revoked.push(url)},
+  };
+  const destination = {owner: alice, scope: 'group-one', path: '/messages'};
+  const receipts = [];
+  const queue = mountChatFiles(doc, {
+    context: () => destination, ownerId: () => alice, csrfToken: () => '',
+    createKey: () => 'attachment-key', sent: (to, message) => receipts.push({to, message}),
+  });
+  queue.addFiles([new File(['bytes'], 'clip.mp4', {type:'video/mp4'})]);
+  const preview = el('message-list').children[0];
+  const progress = descendants(preview).find(node => node.tagName === 'PROGRESS');
+  const status = descendants(preview).find(node => node.getAttribute('role') === 'status');
+  uploads[0].upload.onprogress({lengthComputable:true, loaded:1, total:4});
+  assert.equal(progress.hidden, false);
+  assert.equal(progress.value, 25);
+  uploads[0].upload.onload();
+  assert.equal(progress.hidden, true);
+  assert.equal(status.textContent, '附件已上传，正在确认发送…');
+
+  const message = {id:'saved-video', client_key:'attachment-key', user_id:alice, attachment:{title:'clip.mp4'}};
+  queue.confirmFromHistory('another-group', [message]);
+  queue.confirmFromHistory(destination.scope, [{...message, user_id:bob}]);
+  assert.deepEqual(el('message-list').children, [preview]);
+  queue.confirmFromHistory(destination.scope, [message]);
+  assert.equal(el('message-list').children.length, 0);
+  assert.deepEqual(revoked, ['blob:video-preview']);
+  Object.assign(uploads[0], {status:201, response:{message}});
+  uploads[0].onload();
+  await Promise.resolve();
+  assert.deepEqual(receipts, [{to:destination, message:undefined}]);
+});
 
 test('message search pages by cursor through a 加载更多 control instead of stopping at 20', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());

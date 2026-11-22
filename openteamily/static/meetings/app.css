@@ -109,10 +109,12 @@
 .action-list { display: grid; gap: 0.45rem; margin-bottom: 0.5rem; }
 .action-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(90px, 140px) auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(5rem, 8rem) minmax(8.5rem, 10rem) auto auto;
   gap: 0.4rem;
   align-items: center;
 }
+#meeting-form .action-deadline { min-width: 0; gap: .125rem; font-size: .85rem; }
+#meeting-form .action-deadline input { width: 100%; min-width: 0; box-sizing: border-box; }
 #meeting-form .action-done { flex-direction: row; align-items: center; gap: 0.25rem; white-space: nowrap; }
 .action-followup { grid-column: 1 / -1; justify-self: start; align-content: center; font-size: .85rem; }
 .action-followup[aria-disabled="true"] { color: var(--ot-muted); text-decoration: none; }
@@ -132,7 +134,8 @@
 #meeting-audio-status:empty { display: none; }
 @media (max-width: 900px) {
   .meeting-layout { grid-template-columns: 1fr; }
-  .action-row { grid-template-columns: 1fr; }
+  #meeting-form .action-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #meeting-form .action-row > .action-text { grid-column: 1 / -1; }
 }
 .attendee-matches {
   list-style: none;
@@ -288,8 +291,6 @@
   }
   #meeting-form { border: 0; box-shadow: none; margin: 0; padding: 0; }
   #meeting-form fieldset { min-width: 0; }
-  #meeting-form .action-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #meeting-form .action-row > input { grid-column: 1 / -1; }
   #meeting-form .action-done { flex-direction: row; align-items: center; }
   #meeting-form .action-row > button { justify-self: end; }
   .meeting-layout[data-view="editor"] .meeting-mobile-toolbar {

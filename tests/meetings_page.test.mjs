@@ -122,12 +122,12 @@ test('a receipt renders the shared summary and action status as read-only text',
   renderSharedMeeting(document, {
     title: '只读复盘', organizer: '分享者', revision: 2,
     started_at: 1700000000, summary: '<em>保留原文</em>',
-    transcript: 'private transcript', action_items: [{text: '核对版本', owner: '成员甲', done: true}],
+    transcript: 'private transcript', action_items: [{text: '核对版本', owner: '成员甲', due_date: '2032-02-29', done: true}],
   });
   assert.equal(element('shared-meeting-detail').hidden, false);
   assert.equal(element('shared-meeting-title').textContent, '只读复盘');
   assert.match(element('shared-meeting-meta').textContent, /组织者 分享者.*版本 2/);
   assert.equal(element('shared-meeting-summary').textContent, '<em>保留原文</em>');
   assert.deepEqual(element('shared-meeting-actions').children[0].children.map(node => [node.tag, node.textContent]),
-    [['p', '核对版本'], ['p', '负责人 成员甲 · 已完成']]);
+    [['p', '核对版本'], ['p', '负责人 成员甲 · 截止日期 2032-02-29 · 已完成']]);
 });

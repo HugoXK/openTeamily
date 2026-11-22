@@ -136,6 +136,23 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   return card;
 }
 
+export function localChatFile(document, file) {
+  const mime = fileType(file);
+  const previewable = mime?.startsWith('image/') || mime?.startsWith('video/');
+  const preview = previewable ? document.defaultView?.URL?.createObjectURL?.(file) || '' : '';
+  const card = renderChatFile(document, {title:file.name, bytes:file.size, mime, path:preview}, {pending:true});
+  return {card, preview};
+}
+
+export function chatUploadProgress(document, label) {
+  const progress = document.createElement('progress');
+  progress.className = 'chat-upload-progress';
+  progress.hidden = true;
+  progress.max = 100;
+  progress.setAttribute('aria-label', label);
+  return progress;
+}
+
 function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
   return new Promise((resolve, reject) => {
     const xhr = new view.XMLHttpRequest();
@@ -144,7 +161,7 @@ function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
     xhr.timeout = timeout;
     for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
     xhr.upload.onprogress = event => {
-      if (event.lengthComputable) onProgress(Math.min(99, Math.round(event.loaded * 100 / event.total)));
+      if (event.lengthComputable && event.total > 0) onProgress(Math.min(99, Math.round(event.loaded * 100 / event.total)));
     };
     xhr.upload.onload = () => onProgress(100);
     xhr.onload = () => resolve({status: xhr.status, body: xhr.response || {}});
@@ -213,14 +230,27 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     empty.hidden = messageList.children.length > 0;
   }
 
+  function confirmFromHistory(scope, messages) {
+    let confirmed = false;
+    for (const job of jobs) {
+      if (job.destination.scope !== scope || !messages.some(message =>
+        message.id && message.user_id === job.destination.owner && message.client_key === job.key &&
+        (message.attachment || message.retracted))) continue;
+      remove(job);
+      sent(job.destination);
+      confirmed = true;
+    }
+    if (confirmed) void drain();
+  }
+
   async function drain() {
     const waiting = [...jobs].find(job => job.phase === 'waiting');
     if (!waiting || [...jobs].some(job => job.phase === 'sending')) return;
     const job = waiting;
     job.phase = 'sending';
     job.feedback.textContent = '正在上传…';
+    job.progress.removeAttribute('value');
     job.progress.hidden = false;
-    job.progress.value = 0;
     job.actions.hidden = true;
     try {
       if (ownerId() !== job.destination.owner) {
@@ -233,7 +263,14 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
       const result = await uploadForm(view, job.destination.path, {
         Accept: 'application/json',
         'X-CSRF-Token': csrfToken(), 'Idempotency-Key': job.key,
-      }, form, percentage => { job.progress.value = percentage; });
+      }, form, percentage => {
+        if (percentage < 100) {
+          job.progress.value = percentage;
+        } else {
+          job.progress.hidden = true;
+          job.feedback.textContent = '附件已上传，正在确认发送…';
+        }
+      });
       if (!jobs.has(job)) return;
       if (![200, 201].includes(result.status) || !result.body?.message?.attachment) {
         throw new Error(errorText(result));
@@ -253,19 +290,13 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
   }
 
   function enqueue(file, destination) {
-    const mime = fileType(file);
-    const preview = mime?.startsWith('image/') || mime?.startsWith('video/') ? view.URL.createObjectURL(file) : '';
+    const {card, preview} = localChatFile(document, file);
     const node = make('li');
     node.className = 'mine';
     node.dataset.filePending = '1';
-    const card = renderChatFile(document, {title:file.name, bytes:file.size, mime, path:preview}, {pending:true});
     const feedback = make('p', '等待上传…');
     feedback.setAttribute('role', 'status');
-    const progress = make('progress');
-    progress.hidden = true;
-    progress.max = 100;
-    progress.value = 0;
-    progress.setAttribute('aria-label', '上传进度');
+    const progress = chatUploadProgress(document, '上传进度');
     const actions = make('div');
     actions.className = 'chat-file-actions';
     actions.hidden = true;
@@ -310,8 +341,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
         break;
       }
       bytes += file.size;
-      const mime = fileType(file), preview = mime?.startsWith('image/') ? view.URL.createObjectURL(file) : '';
-      const card = renderChatFile(document,{title:file.name,mime,bytes:file.size,path:preview},{pending:true});
+      const {card, preview} = localChatFile(document, file);
       const remove = make('button','×');
       remove.type = 'button';
       remove.setAttribute('aria-label','移除 '+file.name);
@@ -349,7 +379,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     input.value = '';
     addFiles(picked);
   });
-  return {render,draftFiles,clearDraft,addFiles, forget(scope) {
+  return {render,confirmFromHistory,draftFiles,clearDraft,addFiles, forget(scope) {
     clearDraft(scope);
     for (const job of jobs) if (job.destination.scope === scope) remove(job);
   }, moveDraft(from,to) {

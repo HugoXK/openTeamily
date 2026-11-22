@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS ot_automations (
  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), revision INTEGER NOT NULL CHECK(revision >= 1),
  created INTEGER NOT NULL, updated INTEGER NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
  intent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'once', agents TEXT NOT NULL DEFAULT '[]',
- compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT,
+ compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT, schedule_active_at INTEGER,
  UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
 CREATE TABLE IF NOT EXISTS ot_automation_meeting_sources (
  automation_id TEXT PRIMARY KEY REFERENCES ot_automations(id) ON DELETE CASCADE,
@@ -170,30 +170,41 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     return {id:runId, automation_id, workspace_id, status:claimed_at === null ? 'queued' : 'running'}
   }
 
-  function scheduleStatus(item, at = clock()) {
+  function eligibleSlot(schedule, at, activeAt) {
+    const due = dueAt(schedule, at)
+    if (due !== null && activeAt != null && due < activeAt &&
+      schedule.kind !== 'now' && schedule.kind !== 'once') return null
+    return due
+  }
+
+  function scheduleStatus(item, activeAt, at = clock()) {
     if (!item.enabled) return {state:'paused'}
     if (!validSchedule(item.schedule)) return null
     const schedule = normalizeSchedule(item.schedule)
     const once = schedule.kind === 'now' || schedule.kind === 'once'
-    const due = dueAt(schedule, at)
+    const due = eligibleSlot(schedule, at, activeAt)
     if (due !== null) {
       if (!existingSlot.get(item.id, due)) return {state:'due'}
       if (once) return {state:'once_triggered'}
     }
-    const next = nextScheduledSlot(schedule, at)
+    const after = once || activeAt == null ? at : Math.max(at, activeAt - 1)
+    const next = nextScheduledSlot(schedule, after)
     if (next === null) return null
     if (once && existingSlot.get(item.id, next)) return {state:'once_triggered'}
     return {state:'scheduled', at:next}
   }
 
-  function projected(item, at) {
+  function projected(item, activeAt, at) {
     const pending = activeRun(item.id)
-    return {...item, schedule_status:scheduleStatus(item, at), ...(pending ? {active_run:pending} : {})}
+    return {...item, schedule_status:scheduleStatus(item, activeAt, at), ...(pending ? {active_run:pending} : {})}
   }
 
   // This feature is loaded once in the runtime that owns the volume. A previous
   // process's claimed turn may have already made calls or changed state.
   tx(db, () => {
+    if (!all('PRAGMA table_info(ot_automations)').some(column => column.name === 'schedule_active_at')) {
+      run('ALTER TABLE ot_automations ADD COLUMN schedule_active_at INTEGER')
+    }
     if (!all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')) {
       run('ALTER TABLE ot_automation_runs ADD COLUMN claimed_at INTEGER')
       // Older pending rows combined queued and running; their delivery is uncertain.
@@ -221,7 +232,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     FROM ot_automation_meeting_sources WHERE automation_id=?`, id)
   function detail(row, at) {
     const source = meetingSourceFor(row.id)
-    return projected({ ...view(row), ...(source ? { source_meeting: {...source} } : {}) }, at)
+    return projected({ ...view(row), ...(source ? { source_meeting: {...source} } : {}) }, row.schedule_active_at, at)
   }
   function meetingReference(value) {
     const { meeting_id, revision, action_index } = value ?? {}
@@ -310,7 +321,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       : all('SELECT * FROM ot_automations WHERE enabled=1 ORDER BY id')
     const fired = []
     for (const row of rows) {
-      const due = dueAt(JSON.parse(row.schedule), now)
+      const due = eligibleSlot(JSON.parse(row.schedule), now, row.schedule_active_at)
       if (due === null) continue
       const id = tx(db, () => {
         if (hasActiveRun(row.id) || one('SELECT id FROM ot_automation_runs WHERE automation_id=? AND due_at=?', row.id, due)) return null
@@ -371,10 +382,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (one('SELECT COUNT(*) AS n FROM ot_automations WHERE workspace_id=?', workspaceId).n >= MAX_AUTOMATIONS) refuse(429, 'quota', 'Automation capacity reached')
     const id = newId()
     const now = clock()
-    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
+    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled, schedule_active_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)',
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
-      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
+      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0, enabled ? now : null)
     if (source) {
       run(`INSERT INTO ot_automation_meeting_sources (automation_id, workspace_id, meeting_id, revision, action_index, title, text, owner)
         VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, source.meeting_id, source.revision, source.action_index,
@@ -463,11 +474,16 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         const clash = one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=? AND id<>?', workspaceId, sha(next.title.toLowerCase()), row.id)
         if (clash) refuse(409, 'conflict', 'An automation with this title already exists')
       }
-      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=? WHERE id=?',
-        next.title, sha(next.title.toLowerCase()), next.prompt, JSON.stringify(next.schedule),
+      const now = clock()
+      const schedule = JSON.stringify(next.schedule)
+      // Establish eligibility only when the rule changes or resumes. A prompt
+      // edit and a DS-Bot restart must leave an eligible overdue slot intact.
+      const activeAt = next.enabled && (!current.enabled || schedule !== row.schedule) ? now : row.schedule_active_at
+      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=?, schedule_active_at=? WHERE id=?',
+        next.title, sha(next.title.toLowerCase()), next.prompt, schedule,
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
-        JSON.stringify(next.agents), compiled ? 1 : 0, clock(), row.id)
-      return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id)) }
+        JSON.stringify(next.agents), compiled ? 1 : 0, now, activeAt, row.id)
+      return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id), now) }
     })
   }
 
@@ -491,7 +507,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       else if (category && template.category !== category) continue
       if (row.meeting_id) item.source_meeting = {meeting_id:row.meeting_id, revision:row.source_revision, action_index:row.action_index,
         title:row.source_title, text:row.source_text, owner:row.source_owner}
-      items.push(projected(item, at))
+      items.push(projected(item, row.schedule_active_at, at))
     }
     return { items }
   }
@@ -518,7 +534,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
     const pending = activeRun(row.id)
     return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null,
-      has_pending: Boolean(pending), active_run: pending, schedule_status: scheduleStatus(view(row)), schedule_revision: row.revision }
+      has_pending: Boolean(pending), active_run: pending, schedule_status: scheduleStatus(view(row), row.schedule_active_at), schedule_revision: row.revision }
   }
 
   async function saveRun(payload) {

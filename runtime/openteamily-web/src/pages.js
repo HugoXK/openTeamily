@@ -97,7 +97,22 @@ export function markHtml(text, identity) {
   return /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, (head) => head + meta) : meta + text
 }
 
-export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
+function markShellAppearance(html, values) {
+  const appearance = ['light', 'dark', 'auto', 'system'].includes(values?.appearance) ? values.appearance : null
+  if (!appearance) return html
+  let attrs = ` data-shell-appearance="${appearance}"`
+  if (appearance === 'light' || appearance === 'dark') attrs += ` data-theme-resolved="${appearance}"`
+  if (values.language === 'zh-CN' || values.language === 'en') attrs += ` data-shell-language="${values.language}"`
+  if (appearance === 'auto' && values.appearance_schedule === 'custom') {
+    const time = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/
+    const start = values.appearance_start
+    const end = values.appearance_end
+    if (time.test(start ?? '') && time.test(end ?? '')) attrs += ` data-shell-start="${start}" data-shell-end="${end}"`
+  }
+  return html.replace(/<html(?=[\s>])/i, match => match + attrs)
+}
+
+export function createPageHandler({ pagesDir, identity, getSystemLanguage, getShellSettings }) {
   let root, localeModule, chatMessages, chatPackage
   const packageFor = pageRoot => chatPackage ??= loadChatPackage(pageRoot).catch(() => {
     chatPackage = undefined
@@ -145,16 +160,19 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
         const camera = audioPage && parts[0] === 'chat' ? '(self)' : '()'
         headers['permissions-policy'] = `camera=${camera}, microphone=${microphone}, geolocation=()`
         let html = await readFile(file, 'utf8')
+        const indexPage = parts.length === 2 && parts[1] === 'index.html'
+        const shell = getShellSettings && indexPage
+          ? await Promise.resolve().then(getShellSettings).catch(() => null) : null
         if (parts.length === 2 && parts[0] === 'chat' && parts[1] === 'index.html') {
           const current = await packageFor(pageRoot)
           if (current) html = html.replace(CHAT_ENTRY_RESOURCE, (literal, prefix, asset) =>
             current.assets.has(asset) ? prefix + current.base + asset + '"' : literal)
         }
-        if (getSystemLanguage && parts.length === 2 && parts[1] === 'index.html' && ['chat', 'settings'].includes(parts[0])) {
+        if ((shell || getSystemLanguage) && indexPage && ['chat', 'settings'].includes(parts[0])) {
           localeModule ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale.mjs')).href).catch(() => null)
           const renderer = await localeModule
           if (renderer) {
-            const requested = await Promise.resolve().then(getSystemLanguage).catch(() => null)
+            const requested = shell?.language ?? await Promise.resolve().then(getSystemLanguage).catch(() => null)
             let locale = renderer.systemLocale(requested)
             let pageMessages
             if (locale === 'en' && parts[0] === 'chat') {
@@ -167,6 +185,7 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
             headers['content-language'] = locale
           }
         }
+        if (shell) html = markShellAppearance(html, shell)
         return new Response(markHtml(html, identity), { status: 200, headers })
       }
       const data = await readFile(file)

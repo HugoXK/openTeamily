@@ -198,10 +198,12 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   return { body: { version: versionView(snapshot, true, usernames(req.store)) } }
 }
 
+const publishingShares = new Set()
+
 export async function shares(req, workspaceId, artifactId, shareId, revoking) {
   const row = mustLoad(req, workspaceId, artifactId)
   if (!shareId && req.method === 'GET' && !req.queryString) {
-    return { body: { items: listShares(req.store, row.id).map((item) => shareView(item, { store: req.store })) } }
+    return { body: { items: listShares(req.store, row.id).map((item) => shareView(item, { store: req.store, now: req.now })) } }
   }
   if (!shareId && req.method === 'POST' && !req.queryString) {
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
@@ -210,6 +212,7 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
     // Public /share/<token> pages are served by the dedicated Bot Social from this
     // read-only snapshot; only the token hash leaves this DS-Bot.
     const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', created.body.share.id)
+    publishingShares.add(item.id)
     try {
       const workbook = row.spreadsheet_json && decodeWorkbook(row.spreadsheet_json)
       const body = workbook ? workbookText(workbook) : String(row.body ?? '')
@@ -219,18 +222,24 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
       })
     } catch {
       revokeShare(req.store, row.id, item.id, req.now)
-      refuse(503, 'unavailable', 'Bot Social is not reachable; the share link was not created')
-    }
+      refuse(503, 'share_publish_unconfirmed', 'Public share creation could not be confirmed')
+    } finally { publishingShares.delete(item.id) }
     return created
   }
   if (shareId && revoking) {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
     await req.json()
-    const revoked = revokeShare(req.store, row.id, shareId, req.now)
-    const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', shareId)
-    if (item) await sharedBotSocial(req.host).del(`/v1/ot/public-shares/${item.token_hash}`).catch(() => {})
-    return revoked
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE artifact_id=? AND id=?', row.id, shareId)
+    if (!item) refuse(404, 'not_found', 'Share not found')
+    if (publishingShares.has(item.id)) refuse(409, 'share_publishing', 'This share is being created')
+    const desired = revokeShare(req.store, row.id, shareId, req.now)
+    if (item.revocation_confirmed_at != null) return desired
+    const result = await sharedBotSocial(req.host).del(`/v1/ot/public-shares/${item.token_hash}`).catch(() => null)
+    if (result?.revoked !== true) {
+      refuse(503, 'share_revoke_unconfirmed', 'Public share revocation could not be confirmed')
+    }
+    return revokeShare(req.store, row.id, shareId, req.now, { confirmed: true })
   }
   refuse(400, 'invalid', 'Invalid artifact request')
 }

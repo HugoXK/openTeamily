@@ -367,6 +367,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   margin: 0 0 1rem;
 }
 
+.artifact-share-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.artifact-share-once { display: grid; gap: .5rem; margin-block: 1rem; }
+#share-url { width: 100%; min-width: 0; box-sizing: border-box; }
+#share-copy-status:empty { display: none; }
+
 #share-list li,
 #version-list li {
   display: flex;

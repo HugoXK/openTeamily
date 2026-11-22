@@ -3,6 +3,24 @@ export function csrfCookie(source) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
+export const chatPathId = value => /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(value || '');
+
+export function socialMessageHref({workspace = '', conversation, message}) {
+  if ((workspace && !/^[0-9a-f]{32}$/.test(workspace)) || !chatPathId(conversation) || !chatPathId(message)) return '';
+  const params = new URLSearchParams();
+  if (workspace) params.set('workspace', workspace);
+  params.set('social', conversation);
+  params.set('message', message);
+  return '/chat#' + params;
+}
+
+export function socialMessageFromHash(hash) {
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
+  const workspace = params.get('workspace');
+  if ((params.has('workspace') && !workspace) || params.size !== (workspace ? 3 : 2)) return '';
+  return socialMessageHref({workspace: workspace || '', conversation: params.get('social'), message: params.get('message')});
+}
+
 export function canManage(actor) {
   return actor === 'owner' || actor === 'admin';
 }

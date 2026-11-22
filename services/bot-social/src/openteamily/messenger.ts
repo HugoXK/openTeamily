@@ -21,6 +21,8 @@ import {
   registerGroupManagement, type Group,
 } from "./group-management.js";
 
+import { GROUP_INVITES_SCHEMA, registerGroupInvites } from "./group-invites.js";
+
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
   conversation_id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS ot_conversations (
   group_archived_at INTEGER
 );
 ${GROUP_MANAGEMENT_SCHEMA}
+${GROUP_INVITES_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_group_requests (
   owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
@@ -513,6 +516,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   if (!conversationCols.has("account_group")) ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
   if (!conversationCols.has("activity_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN activity_revision INTEGER NOT NULL DEFAULT 0");
   registerGroupManagement(ot, conversationCols);
+  registerGroupInvites(app, ot);
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");

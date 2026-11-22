@@ -462,12 +462,27 @@
       </details>
       <details id="share-panel" class="artifact-editor-panel" hidden>
         <summary>只读分享</summary>
-        <p class="note">链接需要点下面的按钮才会生成，撤销后立即失效。不会自动发布。</p>
+        <p class="note">知道链接的人可查看创建时已保存的版本。</p>
         <p id="share-status" class="note" role="status" hidden></p>
         <ul id="share-list"></ul>
         <p id="share-empty" class="note" hidden>还没有分享链接。</p>
-        <button type="button" id="create-share">创建只读分享链接</button>
-        <p id="share-once" class="note" hidden></p>
+        <div class="artifact-share-actions">
+          <label for="share-expires">有效期</label>
+          <select id="share-expires">
+            <option value="">直到撤销</option><option value="86400">1 天</option>
+            <option value="604800">7 天</option><option value="2592000">30 天</option>
+          </select>
+          <button type="button" id="create-share">创建只读分享链接</button>
+        </div>
+        <div id="share-once" class="artifact-share-once" hidden>
+          <label for="share-url">分享链接仅在此处显示一次</label>
+          <input id="share-url" type="url" readonly autocomplete="off" spellcheck="false">
+          <div class="artifact-share-actions">
+            <button type="button" id="copy-share">复制链接</button>
+            <a id="open-share" target="_blank" rel="noopener noreferrer">打开只读页面</a>
+          </div>
+          <p id="share-copy-status" class="note" role="status"></p>
+        </div>
       </details>
       <details id="discover-panel" class="artifact-editor-panel" hidden>
         <summary>公开到发现页</summary>

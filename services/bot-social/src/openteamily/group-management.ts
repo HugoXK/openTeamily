@@ -125,18 +125,21 @@ export function changeGroup(ot: OtContext, group: Group, actor: string, change: 
       assert(change.member_id !== owner, 400,"invalid_request","Use the leave action for your own membership");
       assert(members.some(member => member.id === change.member_id), 404,"member_not_found","No such group member");
       evict(ot, group, change.member_id);
+      ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       break;
     case "transfer":
       assert(actor === owner || access.can_transfer, 403,"forbidden","Only the current group owner or an active team manager may transfer it");
       assert(change.member_id !== owner && access.active_member_ids.includes(change.member_id),
         404,"member_not_found","Select an active group member");
       ot.run("UPDATE ot_conversations SET group_owner_id=? WHERE id=?", change.member_id,group.id);
+      ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       break;
     case "leave":
       assert(!access.leave_requires_transfer, 409,"group_owner_transfer_required","请先把群主转让给其他成员。");
       if (actor === owner) {
         ot.run("UPDATE ot_conversations SET group_archived_at=? WHERE id=?",ot.now(),group.id);
         evict(ot,group);
+        ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       } else evict(ot,group,actor);
       break;
   }

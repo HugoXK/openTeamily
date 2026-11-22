@@ -41,12 +41,17 @@ export function parseAttendees(text) {
   return out;
 }
 
-export function actionToggleBody(actions, index, done, revision) {
-  const items = (actions || []).map((item, position) => ({
+function actionPayload(item, done = item.done) {
+  return {
     text: item.text,
-    done: position === index ? Boolean(done) : Boolean(item.done),
+    done: Boolean(done),
     owner: item.owner || '',
-  }));
+    ...(item.due_date ? {due_date: item.due_date} : {}),
+  };
+}
+
+export function actionToggleBody(actions, index, done, revision) {
+  const items = (actions || []).map((item, position) => actionPayload(item, position === index ? done : item.done));
   return {revision, changes: {action_items: items}};
 }
 
@@ -114,7 +119,7 @@ function meetingMatchesChanges(meeting, changes) {
   const normalizers = {
     title: value => value.trim(),
     attendees: value => value.map(name => name.trim()),
-    action_items: value => value.map(item => [item.text.trim(), (item.owner || '').trim(), Boolean(item.done)]),
+    action_items: value => value.map(item => [item.text.trim(), (item.owner || '').trim(), Boolean(item.done), item.due_date || '']),
   };
   return Object.entries(changes).every(([field, value]) => {
     const saved = meeting[field];
@@ -405,7 +410,8 @@ export function renderSharedMeeting(document, meeting) {
     text.textContent = item.text;
     const state = document.createElement('p');
     state.className = 'note';
-    state.textContent = [item.owner ? '负责人 ' + item.owner : '', item.done ? '已完成' : '待完成']
+    state.textContent = [item.owner ? '负责人 ' + item.owner : '', item.due_date && '截止日期 ' + item.due_date,
+      item.done ? '已完成' : '待完成']
       .filter(Boolean).join(' · ');
     li.append(text, state);
     list.append(li);
@@ -549,7 +555,8 @@ function mount() {
       text.textContent = item.text;
       const details = document.createElement('p');
       details.className = 'note';
-      details.textContent = `${item.meeting_title} · ${item.owner || '未分配负责人'}`;
+      details.textContent = [item.meeting_title, item.owner || '未分配负责人', item.due_date && '截止日期 ' + item.due_date]
+        .filter(Boolean).join(' · ');
       copy.append(text, details);
       const buttons = document.createElement('div');
       buttons.className = 'meeting-inbox-buttons';
@@ -723,7 +730,8 @@ function mount() {
     for (const {link, action} of actionFollowups) {
       const item = saved && current.action_items?.[action.savedIndex];
       link.hidden = !item || item.done || action.done;
-      if (link.hidden || pending || action.text !== item.text || (action.owner || '') !== (item.owner || '')) {
+      if (link.hidden || pending || action.text !== item.text || (action.owner || '') !== (item.owner || '') ||
+          (action.due_date || '') !== (item.due_date || '')) {
         link.removeAttribute('href');
         link.setAttribute('aria-disabled', 'true');
         link.title = '请先保存行动项';
@@ -933,7 +941,8 @@ function mount() {
       const items = document.getElementById('meeting-draft-items');
       items.replaceChildren(...next.action_items.map(item => {
         const row = document.createElement('li');
-        row.textContent = item.owner ? `${item.text}（${item.owner}）` : item.text;
+        const details = [item.owner, item.due_date && '截止日期 ' + item.due_date].filter(Boolean);
+        row.textContent = details.length ? `${item.text}（${details.join(' · ')}）` : item.text;
         return row;
       }));
       items.hidden = !next.action_items.length;
@@ -1047,18 +1056,26 @@ function mount() {
     const note = summary.value.trim();
     const next = note && !note.includes(draft.summary) ? note + '\n\n' + draft.summary : note || draft.summary;
     const keyOf = item => JSON.stringify([item.text.trim().toLowerCase(), (item.owner || '').trim().toLowerCase()]);
-    const seen = new Set(actions.map(keyOf));
+    const seen = new Map(actions.map(item => [keyOf(item), item]));
     const additions = [];
+    const dueUpdates = new Map();
     for (const item of draft.action_items) {
       const key = keyOf(item);
-      if (!seen.has(key)) additions.push({...item, done: false});
-      seen.add(key);
+      const existing = seen.get(key);
+      if (!existing) {
+        const addition = {...item, done: false};
+        additions.push(addition);
+        seen.set(key, addition);
+      } else if (!existing.done && !existing.due_date && item.due_date && !dueUpdates.has(existing)) {
+        dueUpdates.set(existing, item.due_date);
+      }
     }
     if (next.length > summary.maxLength || actions.length + additions.length > 50) {
       draftReviewError.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
       return;
     }
     summary.value = next;
+    for (const [item, dueDate] of dueUpdates) item.due_date = dueDate;
     actions.push(...additions);
     renderActions();
     if (sameDraftContext(savedDraftSource(), storedDraft)) {
@@ -1157,6 +1174,7 @@ function mount() {
       row.className = 'action-row';
       const text = document.createElement('input');
       text.type = 'text';
+      text.className = 'action-text';
       text.maxLength = 500;
       text.placeholder = '行动项';
       text.setAttribute('aria-label', `行动项 ${index + 1}`);
@@ -1169,6 +1187,16 @@ function mount() {
       owner.setAttribute('aria-label', `行动项 ${index + 1} 的负责人`);
       owner.value = action.owner || '';
       owner.addEventListener('input', () => { action.owner = owner.value; syncWriting(); });
+      const deadline = document.createElement('label');
+      deadline.className = 'action-deadline';
+      const date = document.createElement('input');
+      date.type = 'date';
+      date.min = '0001-01-01';
+      date.max = '9999-12-31';
+      date.setAttribute('aria-label', `行动项 ${index + 1} 的截止日期`);
+      date.value = action.due_date || '';
+      date.addEventListener('input', () => { action.due_date = date.value; syncWriting(); });
+      deadline.append(document.createTextNode('截止日期'), date);
       const done = document.createElement('label');
       done.className = 'action-done';
       const box = document.createElement('input');
@@ -1190,7 +1218,7 @@ function mount() {
       link.target = '_blank';
       link.rel = 'noopener';
       actionFollowups.push({link, action});
-      row.append(text, owner, done, remove, link);
+      row.append(text, owner, deadline, done, remove, link);
       holder.append(row);
     });
     syncWriting();
@@ -1202,7 +1230,8 @@ function mount() {
     const previous = action.done;
     action.done = done;
     const saved = current?.action_items?.[action.savedIndex];
-    if (!current?.id || !saved || (action.text || '').trim() !== saved.text || (action.owner || '').trim() !== (saved.owner || '')) {
+    if (!current?.id || !saved || (action.text || '').trim() !== saved.text ||
+        (action.owner || '').trim() !== (saved.owner || '') || (action.due_date || '') !== (saved.due_date || '')) {
       syncWriting();
       show('ok', '这条行动项的完成状态会在保存会议后生效。');
       return;
@@ -1696,7 +1725,7 @@ function mount() {
 
   function draftContents() {
     return JSON.stringify([titleInput.value, startedInput.value, attendeeInput.value, summary.value, transcript.value,
-      actions.map(({text, owner, done}) => [text, owner, done])]);
+      actions.map(({text, owner, done, due_date}) => [text, owner, done, due_date || ''])]);
   }
 
   function hasUnsavedChanges() {
@@ -1765,7 +1794,7 @@ function mount() {
       changes: {
         title, started_at: startedAt, attendees,
         summary: summary.value, transcript: transcript.value,
-        action_items: submittedActions.map(({text, owner, done}) => ({text, owner, done})),
+        action_items: submittedActions.map(action => actionPayload(action)),
         ...(!current?.id && callDraft ? {source_call_id: callDraft.id} : {}),
       },
     };

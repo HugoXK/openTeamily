@@ -26,8 +26,27 @@
 }
 
 .shared-runs-feedback,
+.shared-run-meta,
 .shared-runs-list small {
   color: var(--ot-muted);
+}
+
+.shared-run-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem;
+  margin-block: .4rem;
+}
+
+.shared-run-links .shared-runs-feedback {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.shared-run-link-fallback {
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 .shared-runs-feedback:empty {

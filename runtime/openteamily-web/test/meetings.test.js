@@ -10,6 +10,31 @@ import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
 
+test('calendar deadlines survive the saved action, list search, completion and Markdown export', async () => {
+  const bot = await boot()
+  const due_date = '2032-02-29'
+  const action = {text:'核对日程', owner:'bob', due_date}
+  const create = due_date => bot.call('meetings','POST',base(), {...body, action_items:[{...action,due_date}]},key())
+  for (const invalid of ['2031-02-29', '2032-2-29', '2032-02-29T12:00', '0000-01-01', 1961625600]) {
+    assert.equal((await create(invalid)).status, 400)
+  }
+  const saved = await create(due_date)
+  assert.equal(saved.status, 201)
+  const {meeting} = saved.body
+  const path = base(meeting.id)
+  const inbox = await bot.call('meetings','GET',base() + '?view=actions')
+  assert.equal(inbox.body.items[0].due_date,due_date)
+  const search = await bot.call('meetings','GET',base() + '?q=' + due_date)
+  assert.deepEqual(search.body.items.map(item=>item.id),[meeting.id])
+  const receipt = await bot.call('meetings','GET',path + '/action?index=0&revision=1')
+  assert.deepEqual(receipt.body.action,{...action,done:false})
+  assert.equal((await bot.call('meetings','POST',path + '/action',{index:0,revision:1})).status,200)
+  const completed = await bot.call('meetings','GET',path)
+  assert.deepEqual(completed.body.meeting.action_items,[{...action,done:true}])
+  const exported = await bot.call('meetings','GET',path + '/export')
+  assert.match(exported.text, /\[x\] 核对日程（bob · 截止日期 2032-02-29）/)
+})
+
 test('action inbox pages saved open items and completes only an exact workspace revision', async () => {
   const bot = await boot()
   const own = 'Alice'
@@ -45,7 +70,9 @@ test('action inbox pages saved open items and completes only an exact workspace 
 
 test('one scoped meeting memory keeps provenance and preserves separate edits across repeated copies', async () => {
   const bot = await bootMemory()
-  const {meeting} = (await bot.call('meetings', 'POST', base(), body, key())).body
+  const {meeting} = (await bot.call('meetings', 'POST', base(), {
+    ...body, action_items:[{...body.action_items[0], due_date:'2032-02-29'}],
+  }, key())).body
   const route = base(meeting.id) + '/memory'
   const copy = revision => bot.call('meetings', 'POST', route, {revision})
   const revise = (revision, changes) => bot.call('meetings', 'POST', base(meeting.id), {revision, changes})
@@ -56,7 +83,7 @@ test('one scoped meeting memory keeps provenance and preserves separate edits ac
   const target = '/v1/workspaces/' + WS + '/memory/' + id
   const read = async () => (await bot.call('memory', 'GET', target)).body.page
   const initial = await read()
-  assert.match(initial.body, /同步进度。[\s\S]+订会议室（bob）/)
+  assert.match(initial.body, /同步进度。[\s\S]+订会议室（bob · 截止日期 2032-02-29）/)
   assert.ok(!initial.body.includes(body.transcript))
   assert.deepEqual(initial.source, {kind:'meeting', meeting_id:meeting.id, meeting_revision:1})
   assert.equal((await bot.call('meetings', 'POST', base(meeting.id, 'b'.repeat(32)) + '/memory', {revision:1})).status, 404)

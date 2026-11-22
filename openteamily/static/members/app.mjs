@@ -1,5 +1,7 @@
 import { conversationChatHref } from '../shell/thumb.mjs';
 import { teamInviteCode, teamInviteFromHash, teamInviteHash, teamInviteUrl } from '../shell/team-invite-link.mjs';
+import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
+import {showGroupInvitation} from './group-invite.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -969,8 +971,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   async function load() {
     const seq = ++loadRead;
+    const groupInvite = groupInviteFromHash(view?.location?.hash);
     const session = await request('GET', '/v1/auth/session');
     if (seq !== loadRead) return;
+    const groupPanel = document.getElementById('group-invite-panel');
+    if (groupPanel) groupPanel.hidden = true;
+    if (groupInvite && session.status === 401) {
+      goTo('/login' + groupInviteHash(groupInvite));
+      return;
+    }
+    if (groupInvite && session.status === 200 && session.body.user) {
+      currentUser = session.body.user;
+      loginPanel.hidden = mainPanel.hidden = true;
+      show('', '');
+      return showGroupInvitation(document, {request, token: groupInvite, goTo,
+        isCurrent: () => seq === loadRead && groupInviteFromHash(view.location.hash) === groupInvite});
+    }
     if (session.status === 401) {
       currentUser = null;
       workspaces = [];
@@ -1037,7 +1053,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   });
 
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
-  view?.addEventListener?.('hashchange', () => {
+  view?.addEventListener?.('hashchange', event => {
+    if (groupInviteFromHash(view.location.hash) || (event?.oldURL && groupInviteFromHash(new URL(event.oldURL).hash))) return load();
     const requested = workspaceFromHash(view.location.hash);
     if (!currentUser || requested === null || requested === workspaceId()) return;
     if (workspaces.some(item => item.id === requested)) return selectWorkspace(requested);

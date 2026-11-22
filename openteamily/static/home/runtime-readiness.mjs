@@ -7,6 +7,7 @@ const signupSessionKey = 'ot-expected-signup-session';
 const signupLifetimeMs = 5 * 60 * 1000;
 const platformUserId = /^[0-9a-f]{32}$/;
 const accountDraftPrefix = 'openteamily.chat-drafts:';
+const coldDraftHandoffKey = 'openteamily.cold-chat-draft';
 const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
 const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
@@ -48,6 +49,31 @@ export function signupDraftScope(view, owner, now = Date.now()) {
   if (!owner || session?.id !== owner || session.chat !== '/chat' + view.location.hash) return null;
   const target = signupChatPath.exec(session.chat);
   return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
+}
+
+export function personalDraftScope(view, owner, personal) {
+  if (!validSignupUser(owner) || view.location.search) return null;
+  const target = signupChatPath.exec('/chat' + view.location.hash);
+  if (!target || target[1] !== personal?.workspace_id || target[2] !== personal.agent_id) return null;
+  return JSON.stringify([owner, target[1], 'agent', target[2], null]);
+}
+
+export function rememberColdDraftHandoff(view, scope) {
+  try {
+    const storage = view?.sessionStorage;
+    if (!storage) return false;
+    storage.setItem(coldDraftHandoffKey, scope);
+    return true;
+  } catch { return false; }
+}
+
+export function takeColdDraftHandoff(view, scope) {
+  try {
+    const storage = view?.sessionStorage;
+    if (!scope || storage?.getItem(coldDraftHandoffKey) !== scope) return null;
+    storage.removeItem(coldDraftHandoffKey);
+    return scope;
+  } catch { return null; }
 }
 
 export function chatDraftOwner(scope) {

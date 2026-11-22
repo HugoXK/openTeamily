@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
-import { confirmSignupSession, pendingSignupSession, readChatDrafts, rememberSignupSession, signupDraftScope, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
+import { confirmSignupSession, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, rememberSignupSession, signupDraftScope, takeColdDraftHandoff, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
 import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
 import { discoverIntentFromHash, discoverLoginHref } from '../openteamily/static/shell/discover-link.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
@@ -87,6 +87,52 @@ test('a first draft shares only the registered owner and exact personal chat sco
   const peerScope = JSON.stringify([bob, alice, 'agent', bob, null]);
   assert.equal(writeChatDrafts(view, alice, new Map([[scope,'第一条'], [peerScope,'different account']])), true);
   assert.deepEqual([...readChatDrafts(view, alice)], [[scope,'第一条']]);
+  assert.equal(readChatDrafts(view, bob).size, 0);
+});
+
+test('a new tab can draft only for the exact authenticated personal chat', () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {view} = homeFixture('/chat', hash);
+  const personal = {workspace_id: alice, agent_id: bob};
+  assert.equal(pendingSignupSession(view), null);
+  const scope = personalDraftScope(view, alice, personal);
+  assert.deepEqual(JSON.parse(scope), [alice, alice, 'agent', bob, null]);
+  assert.equal(rememberColdDraftHandoff(view, scope), true);
+  assert.equal(takeColdDraftHandoff(view, personalDraftScope(view, bob, personal)), null);
+  assert.equal(takeColdDraftHandoff(view, scope), scope);
+  assert.equal(takeColdDraftHandoff(view, scope), null);
+  assert.equal(personalDraftScope(view, 'bad-owner', personal), null);
+  assert.equal(personalDraftScope(view, alice, {workspace_id: alice, agent_id: alice}), null);
+  view.location.search = '?q=also-a-search';
+  assert.equal(personalDraftScope(view, alice, personal), null);
+  view.location.search = '';
+  view.location.hash = hash + '&conversation=' + bob;
+  assert.equal(personalDraftScope(view, alice, personal), null);
+});
+
+test('the startup composer drops its visible draft when another account signs in', async () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {document, read, view} = homeFixture('/chat', hash);
+  const requests = [];
+  const paths = [];
+  const draftScope = JSON.stringify([alice, alice, 'agent', bob, null]);
+  assert.equal(writeChatDrafts(view, alice, new Map([[draftScope, '只在 Alice 的草稿']])), true);
+  view.location.replace = target => paths.push(target);
+  await mountRuntimeStarting(document, {fetcher: async path => {
+    requests.push(path);
+    if (requests.length === 1) {
+      return {status: 200, json: async () => ({state: 'starting', user_id: alice, personal_chat: {workspace_id: alice, agent_id: bob}})};
+    }
+    assert.equal(read('runtime-first-message').value, '只在 Alice 的草稿');
+    assert.equal(read('runtime-draft').hidden, false);
+    assert.match(read('runtime-title').textContent, /正在启动/);
+    return {status: 200, json: async () => ({state: 'ready', user_id: bob})};
+  }});
+  assert.deepEqual(requests, ['/v1/auth/runtime-readiness?include=personal-chat', '/v1/auth/runtime-readiness']);
+  assert.deepEqual(paths, ['/login' + hash]);
+  assert.equal(read('runtime-first-message').value, '');
+  assert.equal(read('runtime-draft').hidden, true);
+  assert.deepEqual([...readChatDrafts(view, alice)], [[draftScope, '只在 Alice 的草稿']]);
   assert.equal(readChatDrafts(view, bob).size, 0);
 });
 

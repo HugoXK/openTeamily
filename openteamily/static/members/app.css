@@ -396,3 +396,20 @@ body.app-workspace #main-panel {
   background: var(--ot-accent);
   color: var(--ot-on-accent);
 }
+
+#group-invite-panel {
+  box-sizing: border-box;
+  width: min(calc(100% - 2rem), 29rem);
+  margin: clamp(1rem, 7vh, 4rem) auto 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+}
+#group-invite-panel h1 { margin: 0 0 .75rem; font-size: 1.25rem; }
+#group-invite-title { margin: 0 0 .25rem; font-weight: 650; overflow-wrap: anywhere; }
+#group-invite-title:empty { display: none; }
+#group-invite-message { margin: 0 0 1rem; color: var(--ot-muted); }
+.group-invite-actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.group-invite-actions :is(button,a) { min-height: 2.75rem; }
+.group-invite-actions a { display: inline-flex; align-items: center; }

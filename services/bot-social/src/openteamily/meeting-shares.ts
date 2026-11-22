@@ -72,10 +72,18 @@ function snapshot(input: unknown) {
   assert(new Set(recipientIds).size === recipientIds.length, 400, "invalid_request", "Select each recipient once");
   assert(Array.isArray(b.action_items) && b.action_items.length <= 50, 400, "invalid_request", "Invalid action_items");
   const actions = b.action_items.map(value => {
-    const action = object(value, ["text", "done", "owner"]);
+    const action = object(value, ["text", "done", "owner", "due_date"]);
     assert(action.done === undefined || typeof action.done === "boolean", 400, "invalid_request", "Invalid action status");
+    const due = action.due_date;
+    if (due !== undefined) {
+      assert(typeof due === "string" && /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(due),
+        400, "invalid_request", "Invalid action deadline");
+      const date = new Date(due);
+      assert(Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === due,
+        400, "invalid_request", "Invalid action deadline");
+    }
     return { text: trimmed(action.text, "action text", 1, 500), owner: trimmed(action.owner ?? "", "action owner", 0, 80),
-      done: action.done ?? false };
+      done: action.done ?? false, ...(due === undefined ? {} : { due_date: due }) };
   });
   const summary = text(b.summary, "summary", { max: 8000, multiline: true });
   assert(summary.trim() || actions.length, 400, "invalid_request", "Save a summary or an action item before sharing");

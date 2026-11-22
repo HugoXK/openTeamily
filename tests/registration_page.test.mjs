@@ -31,7 +31,7 @@ test('failure text never echoes response/exception credentials', async () => {
 });
 function elements(valid = true) {
   const ids = ['register-form', 'register-submit', 'register-status', 'register-username', 'register-password'];
-  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', disabled: false, focus() {}}]));
+  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', dataset: {}, disabled: false, focus() {}}]));
   all['register-form'].reportValidity = () => valid;
   all['register-form'].addEventListener = (_, fn) => { all.submit = fn; };
   return {all, document: {getElementById: id => all[id]}};

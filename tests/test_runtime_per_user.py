@@ -104,6 +104,15 @@ class RuntimePerUserTests(unittest.TestCase):
             self.assertEqual(alice.call('POST', start, {'instance_id': own_ids[1][1]})['status'], 400)
             self.assertEqual(alice.call('GET', status)['body']['state'], 'stopped')
             self.assertEqual(bob.call('GET', status)['body']['state'], 'stopped')
+            self.assertNotIn('personal_chat', alice.call('GET', status)['body'])
+            with store.connect() as db:
+                for client, (owner, _iid, workspace) in zip((alice, bob), own_ids):
+                    agent = db.execute('SELECT agent_id FROM personal_agents WHERE user_id=?', (owner,)).fetchone()[0]
+                    self.assertEqual(client.call('GET', status + '?include=personal-chat')['body'], {
+                        'state': 'stopped', 'user_id': owner,
+                        'personal_chat': {'workspace_id': workspace, 'agent_id': agent},
+                    })
+            self.assertEqual(Client(app).call('GET', status + '?include=personal-chat')['status'], 401)
             with ThreadPoolExecutor(max_workers=2) as pool:
                 responses = list(pool.map(lambda _: alice.call('POST', start, {}), range(2)))
             self.assertEqual(sorted(response['status'] for response in responses), [200, 202])

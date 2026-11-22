@@ -729,13 +729,15 @@ export function parseExportFormat(query) {
 
 export function opaque() { return randomBytes(32).toString('base64url') }
 
-export function shareView(row, { includeToken = false, token = null, store } = {}) {
+export function shareView(row, { includeToken = false, token = null, store, now = null } = {}) {
   const user = store ? usernames(store) : () => null
+  const revoked = Boolean(row.revoked && row.revocation_confirmed_at != null)
   const data = {
     id: row.id, artifact_id: row.artifact_id, workspace_id: row.workspace_id, prefix: row.token_prefix,
     created: row.created, created_by: row.created_by_username ?? user(row.created_by),
-    expires: row.expires, revoked: Boolean(row.revoked), scope: 'read',
+    expires: row.expires, revoked, revocation_pending: Boolean(row.revoked && !revoked), scope: 'read',
   }
+  if (now != null) data.expired = row.expires != null && row.expires <= now
   if (includeToken && token) { data.token = token; data.path = '/share/' + token }
   return data
 }
@@ -750,20 +752,26 @@ export function createShare(store, row, owner, now, expiresIn) {
     if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 2592000) refuse(400, 'invalid', 'expires_in must be 1..2592000 seconds')
     expires = now + expiresIn
   }
-  const active = store.get('SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=? AND revoked=0 AND (expires IS NULL OR expires>?)', row.id, now).n
+  const active = store.get(`SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=?
+    AND revocation_confirmed_at IS NULL AND (expires IS NULL OR expires>?)`, row.id, now).n
   if (active >= MAX_SHARES) refuse(429, 'quota', 'Share capacity reached')
   const token = opaque()
   const id = newId()
-  store.run('INSERT INTO artifact_shares VALUES(?,?,?,?,?,?,?,?,0,NULL)',
+  store.run(`INSERT INTO artifact_shares
+    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at)
+    VALUES(?,?,?,?,?,?,?,?,0,NULL)`,
     id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires)
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', id, row.id)
   return { status: 201, body: { share: shareView(item, { includeToken: true, token, store }) } }
 }
 
-export function revokeShare(store, artifactId, shareId, now) {
+export function revokeShare(store, artifactId, shareId, now, { confirmed = false } = {}) {
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', shareId, artifactId)
   if (!item) refuse(404, 'not_found', 'Share not found')
   store.run('UPDATE artifact_shares SET revoked=1, revoked_at=? WHERE id=? AND revoked=0', now, item.id)
+  if (confirmed) {
+    store.run('UPDATE artifact_shares SET revocation_confirmed_at=? WHERE id=? AND revocation_confirmed_at IS NULL', now, item.id)
+  }
   return { status: 200, body: { share: shareView(store.get('SELECT * FROM artifact_shares WHERE id=?', shareId), { store }) } }
 }
 

@@ -2,6 +2,7 @@
 // through the existing edit route, without pressing 保存.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {actionToggleBody} from '../openteamily/static/meetings/app.mjs';
 
 class FakeElement {
   constructor(tag = 'div') {
@@ -172,9 +173,20 @@ async function settle() {
 
 function checkbox(doc, index) {
   const row = doc.getElementById('action-list').children[index];
-  const label = row && row.children[2];
+  const label = row?.children.find(child => child.className === 'action-done');
   return label && label.children[0];
 }
+
+test('an inline completion carries every saved deadline and omits empty deadlines', () => {
+  const payload = actionToggleBody([
+    {text: 'A', done: false, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: '', due_date: ''},
+  ], 0, true, 3);
+  assert.deepEqual(payload.changes.action_items, [
+    {text: 'A', done: true, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: ''},
+  ]);
+});
 
 test('ticking an action item writes the meeting back without pressing 保存', async () => {
   const {doc, state, restore} = await mountPage('tick-' + Math.random());
@@ -381,7 +393,7 @@ test('native follow-up opens only saved open items and artifact save uses the st
     },
   });
   const ele = id => doc.getElementById(id);
-  const link = index => ele('action-list').children[index].children[4];
+  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-followup');
   try {
     assert.equal(link(0).href, `/automations?workspace=${WORKSPACE}&meeting=${MEETING_ID}&action=0&revision=3`);
     assert.equal(link(0).target, '_blank');

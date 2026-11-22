@@ -3,6 +3,7 @@ import {publicAgentIntentFromHash, publicAgentContinuation} from '../shell/publi
 import {publicWorkIntentFromHash} from '../shell/public-work-link.mjs';
 import {discoverIntentFromHash} from '../shell/discover-link.mjs';
 import {teamInviteFromHash, teamInviteHash} from '../shell/team-invite-link.mjs';
+import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
 import {rememberSignupSession, signupSessionError} from '../home/runtime-readiness.mjs';
 const MESSAGES = {
   registration_closed: '本实例尚未开放注册，请联系实例管理员。',
@@ -70,26 +71,30 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const password = document.getElementById('register-password');
   const hash = document.defaultView?.location?.hash;
   const work = publicWorkIntentFromHash(hash);
-  const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
+  const continuation = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
     work?.continuation || publicAgentContinuation(publicAgentIntentFromHash(hash)) || discoverIntentFromHash(hash)?.continuation;
   const login = document.querySelector?.('a[href="/login"]');
   if (login && continuation) login.href = '/login' + continuation;
-  const helpButton=document.getElementById('help-menu-button'),helpMenu=document.getElementById('help-menu');
-  helpButton?.addEventListener('click',()=>{if(helpMenu){helpMenu.hidden=!helpMenu.hidden;helpButton.setAttribute('aria-expanded',String(!helpMenu.hidden));}});
   let attempted=false;
   const policy=document.getElementById('register-policy');
   if(policy)Promise.resolve(fetcher('/v1/auth/policy',{method:'GET',credentials:'same-origin',mode:'same-origin',redirect:'error'})).then(async response=>{
     const data=await response.json();
     if(attempted)return;
     if(response.status!==200||typeof data.registration_open!=='boolean')throw new Error('policy');
-    policy.textContent = !data.registration_open ? '本实例尚未开放注册，请联系管理员。'
-      : continuation ? '注册后将打开你访问的页面。' : '注册后可进入你的私人聊天。';
-  }).catch(()=>{if(!attempted)policy.textContent='无法读取注册策略。请检查实例 HTTPS / 反向代理配置，或联系管理员。';});
+    policy.dataset.kind = data.registration_open ? '' : 'error';
+    policy.textContent = !data.registration_open ? '尚未开放注册，请联系管理员。'
+      : continuation ? '注册后将打开你访问的页面。' : '已开放注册。';
+  }).catch(()=>{
+    if (attempted) return;
+    policy.dataset.kind = 'error';
+    policy.textContent = '暂时无法读取注册状态。';
+  });
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (button.disabled || !form.reportValidity()) return;
     attempted=true;
     button.disabled = true;
+    status.dataset.kind = '';
     status.textContent = '正在创建账户…';
     const result = await registerAccount(username.value, password.value, fetcher, document.defaultView);
     password.value = '';
@@ -99,6 +104,7 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
         : result.personalChat ? '账户已创建，正在打开私人聊天…' : '账户已创建，正在打开个人工作区…';
       navigate(continuation ? '/login' + continuation : result.personalChat || '/');
     } else {
+      status.dataset.kind = 'error';
       status.textContent = result.message;
       password.focus();
     }

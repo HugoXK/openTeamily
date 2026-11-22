@@ -1,4 +1,4 @@
-import {csrfCookie, pendingSignupSession, readChatDrafts, signupDraftScope, waitForRuntime, writeChatDrafts} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, signupDraftScope, waitForRuntime, writeChatDrafts} from './runtime-readiness.mjs';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -16,6 +16,7 @@ export function mountRuntimeStarting(document, {
   let runtimeReady = false;
   let leaving = false;
   let canStart = false;
+  let checkedPersonalChat = false;
   const startupPath = view.location.pathname === '/runtime-starting';
   const returnHome = startupPath && view.location.hash === '#home=1';
   const chatTarget = !returnHome && ['/chat', '/chat/', '/messenger', '/messenger/', '/runtime-starting'].includes(view.location.pathname);
@@ -44,7 +45,8 @@ export function mountRuntimeStarting(document, {
       status.textContent = '聊天已就绪，完成当前输入后会自动打开。';
       return;
     }
-    if (!saveDraft()) {
+    const handoff = draftScope && draft.value && view.location.hash === draftHash;
+    if (!saveDraft() || (handoff && !rememberColdDraftHandoff(view, draftScope))) {
       status.textContent = '聊天已就绪。浏览器暂时无法保留草稿，请复制文本后继续。';
       continueButton.hidden = false;
       return;
@@ -82,12 +84,21 @@ export function mountRuntimeStarting(document, {
     const expectedUser = pendingSignupSession(view);
     const csrf = csrfCookie(document.cookie);
     const check = () => waitForRuntime(async () => {
-      const reply = await read('/v1/auth/runtime-readiness');
-      if (!draftScope && draftPanel && draft && reply.status === 200 && reply.body?.user_id === expectedUser) {
-        const scope = signupDraftScope(view, expectedUser);
+      const include = chatTarget && !expectedUser && !checkedPersonalChat && !view.location.search && view.location.hash
+        ? '?include=personal-chat' : '';
+      const reply = await read('/v1/auth/runtime-readiness' + include);
+      const owner = reply.body?.user_id;
+      if (reply.status !== 200 || (expectedUser && owner !== expectedUser)) return reply;
+      if (draftOwner && owner !== draftOwner) return {status: 401};
+      if (include && ['starting', 'stopped', 'ready'].includes(reply.body?.state)) checkedPersonalChat = true;
+      if (reply.body?.state === 'starting' && title.textContent !== '正在启动你的专属智能体') {
+        title.textContent = '正在启动你的专属智能体';
+      }
+      if (!draftScope && chatTarget && draftPanel && draft) {
+        const scope = expectedUser ? signupDraftScope(view, owner) : personalDraftScope(view, owner, reply.body?.personal_chat);
         if (scope) {
           draftScope = scope;
-          draftOwner = expectedUser;
+          draftOwner = owner;
           draftHash = view.location.hash;
           draft.value = readChatDrafts(view, draftOwner).get(scope) ?? '';
           draftPanel.hidden = false;
@@ -113,6 +124,10 @@ export function mountRuntimeStarting(document, {
       } else state = 'unavailable';
     }
     if (state === 'signed-out' || state === 'signup-mismatch') {
+      if (draftScope) {
+        draft.value = '';
+        draftPanel.hidden = true;
+      }
       // The login page confirms the same-tab signup and presents its manual login form on a mismatch.
       view.location.replace('/login' + (view.location.hash || ''));
       return;

@@ -769,6 +769,7 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 .catalog-dialog :is(input, select) { width: 100%; box-sizing: border-box; font-size: 1rem; }
 .catalog-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 #catalog-remix-summary, #catalog-remix-description { color: var(--ot-muted); }
+#catalog-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 #catalog-remix-submit { background: var(--ot-accent); color: var(--ot-on-accent); }
 #catalog-remix-status:empty { display: none; }
 #catalog-category-options { display: flex; flex-wrap: wrap; gap: .375rem; margin: .75rem 0 1rem; }
@@ -999,6 +1000,14 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
   clip-path: inset(50%);
   white-space: nowrap;
 }
+.feed-controls {
+  position: sticky;
+  z-index: 2;
+  inset-block-start: 0;
+  background: var(--ot-surface);
+  padding-block: .125rem;
+}
+#main:has(#feed-panel:not([hidden])) { scroll-padding-block-start: 6rem; }
 .feed-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1068,6 +1077,24 @@ body.app-workspace > .app-rail > #login-panel.discover-guest-signin {
 }
 .feed-filters button, .catalog-filters button { height: 2.125rem; padding-inline: .65rem; }
 .feed-filters button[aria-current="true"], .catalog-filters [aria-pressed="true"] { padding-inline: .65rem; }
+.feed-filters button[aria-description][aria-current="true"] {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+}
+.feed-filters button[aria-description][aria-current="true"]::after {
+  content: "";
+  width: .875rem;
+  height: .875rem;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.5 6a5.7 5.7 0 0 0-9.7-2L2 6m0 0V2m0 4h4m-3.5 4a5.7 5.7 0 0 0 9.7 2l1.8-2m0 0v4m0-4h-4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .feed-filters[data-refreshing="true"] button[aria-current="true"]::after {
+    animation: feed-refresh .8s linear infinite;
+  }
+  @keyframes feed-refresh { to { transform: rotate(1turn); } }
+}
 .feed-filters #feed-creator-filter {
   background: var(--ot-accent-soft);
   color: var(--ot-accent-hover);
@@ -1081,6 +1108,20 @@ html[data-theme-resolved="dark"] :is(.feed-toolbar, .feed-filters) {
 }
 
 .feed-grid { align-items: stretch; gap: 1rem; }
+.feed-activity-empty[data-initial-loading="true"] .feed-grid::before,
+.feed-activity-empty[data-initial-loading="true"] .feed-grid::after {
+  content: "";
+  display: block;
+  min-height: 9rem;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--ot-line);
+  border-radius: .875rem;
+  background:
+    linear-gradient(var(--ot-bg-accent), var(--ot-bg-accent)) top / 100% 62% no-repeat,
+    linear-gradient(var(--ot-bg-accent), var(--ot-bg-accent)) 9% 76% / 78% .625rem no-repeat,
+    linear-gradient(var(--ot-bg-accent), var(--ot-bg-accent)) 5% 88% / 45% .5rem no-repeat,
+    var(--ot-surface);
+}
 .feed-grid > article { border-radius: .875rem; }
 .feed-card {
   flex: 1;
@@ -1209,8 +1250,17 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
 
 @media (max-width: 45rem) {
   body.app-workspace:not(.chat-open) > main > #main-panel { padding-top: .875rem; }
+  body.app-workspace:not(.chat-open) > main > #main-panel.discover-feed-mode { padding-top: .375rem; }
+  #main:has(#feed-panel:not([hidden])) { scroll-padding-block-start: 9rem; }
+  .feed-controls { margin-inline: -.375rem; padding-inline: .375rem; }
   #discover-tabs { margin-bottom: .5rem; }
   .feed-toolbar { grid-template-columns: minmax(0, 1fr); grid-template-areas: "sections" "search"; gap: .375rem; }
+  .feed-sections #discover-tabs a:not(#catalog-tab-feed) {
+    min-height: 2.75rem;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+  }
   #feed-search { height: 2.625rem; max-width: none; }
   #feed-clear { flex-basis: 2.375rem; height: 2.375rem; margin-right: .125rem; }
   .feed-filters { margin-bottom: .5rem; }
