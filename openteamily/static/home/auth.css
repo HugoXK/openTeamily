@@ -3,7 +3,7 @@
 }
 
 .auth-page,
-body.home-page:has(#main-panel[hidden]) {
+body.home-page:not(.home-signed-in):has(#main-panel[hidden]) {
   display: flex;
   flex-direction: column;
   height: auto;
@@ -13,12 +13,12 @@ body.home-page:has(#main-panel[hidden]) {
   background: var(--ot-surface-2);
 }
 
-.home-page:has(#main-panel[hidden]) > .app-rail {
+.home-page:not(.home-signed-in):has(#main-panel[hidden]) > .app-rail {
   display: none;
 }
 
 .auth-page > .auth-header,
-.home-page:has(#main-panel[hidden]) > .auth-header {
+.home-page:not(.home-signed-in):has(#main-panel[hidden]) > .auth-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -52,7 +52,7 @@ body.home-page:has(#main-panel[hidden]) {
   color: var(--ot-on-accent);
 }
 
-body.home-page:has(#main-panel[hidden]) > #main {
+body.home-page:not(.home-signed-in):has(#main-panel[hidden]) > #main {
   display: grid;
   flex: 1;
   align-items: center;
@@ -66,7 +66,7 @@ body.home-page:has(#main-panel[hidden]) > #main {
   background: transparent;
 }
 
-body.home-page:has(#main-panel[hidden]) > #status:not(:empty) {
+body.home-page:not(.home-signed-in):has(#main-panel[hidden]) > #status:not(:empty) {
   box-sizing: border-box;
   width: min(26rem, calc(100% - 2rem));
   margin: 1rem auto 0;

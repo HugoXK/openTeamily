@@ -345,6 +345,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
+        document.body?.classList.remove('home-signed-in');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
         const hash = view.location?.pathname === '/login' ? view.location.hash : '';
@@ -415,6 +416,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         return;
       }
       currentUser = session.body.user;
+      document.body?.classList.add('home-signed-in');
       loginPanel.hidden = true;
       personal = await initializePersonalAgent();
       if (!personal) return;
