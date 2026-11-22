@@ -10,6 +10,39 @@ import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
 
+test('action inbox pages saved open items and completes only an exact workspace revision', async () => {
+  const bot = await boot()
+  const own = 'Alice'
+  const {meeting} = (await bot.call('meetings','POST',base(),{...body,started_at:100,
+    action_items:[{text:'open own',owner:own},{text:'open other',owner:'bob'},{text:'closed item',done:true}]},key())).body
+  const other = 'b'.repeat(32)
+  await bot.call('meetings','POST',base('',other),{...body,title:'Other meeting',action_items:[{text:'other workspace only'}]},key())
+  const list = base()+'?view=actions&limit=1'
+  const first = await bot.call('meetings','GET',list)
+  assert.equal(first.status,200)
+  assert.equal(first.body.items[0].text,'open own')
+  assert.ok(first.body.cursor)
+  assert.equal(first.body.items[0].summary,undefined)
+  assert.equal(first.body.items[0].transcript,undefined)
+  const second = await bot.call('meetings','GET',list+'&cursor='+encodeURIComponent(first.body.cursor))
+  assert.equal(second.body.items[0].text,'open other')
+  assert.equal(second.body.cursor,null)
+  assert.equal((await bot.call('meetings','GET',list+'&cursor=wrong')).status,400)
+  const exact = base(meeting.id)+'/action'
+  const wrong = await bot.call('meetings','POST',base(meeting.id,other)+'/action',{index:0,revision:1})
+  assert.equal(wrong.status,404)
+  const complete = await bot.call('meetings','POST',exact,{index:0,revision:1})
+  assert.equal(complete.status,200)
+  assert.deepEqual(complete.body.action,{index:0,done:true})
+  assert.equal((await bot.call('meetings','POST',exact,{index:1,revision:1})).status,409)
+  const saved = (await bot.call('meetings','GET',base(meeting.id))).body.meeting
+  assert.equal(saved.summary,body.summary)
+  assert.deepEqual(saved.action_items.map(item=>item.done),[true,false,true])
+  const remaining = (await bot.call('meetings','GET',list)).body
+  assert.equal(remaining.items[0].text,'open other')
+  assert.notEqual(remaining.activity_version,first.body.activity_version)
+})
+
 test('one scoped meeting memory keeps provenance and preserves separate edits across repeated copies', async () => {
   const bot = await bootMemory()
   const {meeting} = (await bot.call('meetings', 'POST', base(), body, key())).body
@@ -275,7 +308,7 @@ test('saved meeting actions and Space copies validate scope and revision without
   })
   assert.equal((await call('GET', path + '/action?index=1&revision=1')).status, 404)
   assert.equal((await call('GET', path + '/action?index=0&revision=1&revision=2')).status, 400)
-  assert.equal((await call('POST', path + '/action', {})).status, 405)
+  assert.equal((await call('POST', path + '/action', {})).status, 400)
   assert.equal((await call('GET', base(meeting.id,'b'.repeat(32)) + '/action?index=0&revision=1')).status, 404)
   assert.equal((await call('POST', base(meeting.id,'b'.repeat(32)) + '/artifact', {revision:1})).status, 404)
   assert.equal((await call('POST', path + '/artifact', {revision:2})).status, 409)

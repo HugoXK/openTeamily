@@ -459,6 +459,11 @@
           <label for="discover-slug">公开短地址</label>
           <input type="text" id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin" placeholder="my-work" aria-describedby="discover-slug-hint">
           <p id="discover-slug-hint" class="note">3–30 个小写字母、数字或连字符，以字母或数字开头和结尾。</p>
+          <label id="discover-editable-remix-field" hidden>
+            <input type="checkbox" id="discover-editable-remix" aria-describedby="discover-editable-remix-note">
+            允许复制可编辑版本
+          </label>
+          <p id="discover-editable-remix-note" class="note" hidden>开启后，其他用户可将当前保存版本的完整内容复制到自己的资料空间。</p>
           <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
         </div>

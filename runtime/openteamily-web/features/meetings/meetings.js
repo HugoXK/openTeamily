@@ -168,12 +168,63 @@ function meetingPage(req, workspaceId) {
     cursor: page.length > limit ? page[limit - 1].id : null, ...activity } }
 }
 
+function meetingActionPage(req, workspaceId) {
+  const names = ['view', 'limit', 'cursor', 'mine']
+  const limit = Number(req.query.get('limit') ?? 20)
+  const cursor = req.query.get('cursor') ?? ''
+  const mine = req.query.has('mine')
+  const anchor = /^(0|[1-9][0-9]{0,9})\.([0-9a-f]{32})\.(0|[1-9][0-9]?)$/.exec(cursor)
+  if ([...req.query.keys()].some(key => !names.includes(key) || req.query.getAll(key).length !== 1) ||
+      !/^\d{1,2}$/.test(req.query.get('limit') ?? '20') || limit < 1 || limit > 50 ||
+      (cursor && (!anchor || !validStartedAt(Number(anchor[1])) || Number(anchor[3]) >= LIMITS.ACTIONS_MAX)) ||
+      (mine && (req.query.get('mine') !== '1' || !req.ownerUsername))) {
+    refuse(400, 'invalid', '无效的行动项筛选条件。')
+  }
+  const filters = ['m.workspace_id=?', "COALESCE(json_extract(a.value,'$.done'),0)=0"]
+  const params = [workspaceId]
+  if (mine) {
+    filters.push("lower(json_extract(a.value,'$.owner'))=lower(?)")
+    params.push(req.ownerUsername)
+  }
+  if (anchor) {
+    const [, started, id, index] = anchor
+    filters.push('(m.started_at<? OR (m.started_at=? AND (m.id>? OR (m.id=? AND CAST(a.key AS INTEGER)>?))))')
+    params.push(Number(started), Number(started), id, id, Number(index))
+  }
+  const rows = req.store.all(`SELECT m.id AS meeting_id,m.title AS meeting_title,m.started_at,m.revision,
+    CAST(a.key AS INTEGER) AS action_index,json_extract(a.value,'$.text') AS text,COALESCE(json_extract(a.value,'$.owner'),'') AS owner
+    FROM meetings m CROSS JOIN json_each(m.action_items) AS a WHERE ${filters.join(' AND ')}
+    ORDER BY m.started_at DESC,m.id,action_index LIMIT ?`, ...params, limit + 1)
+  const last = rows[limit - 1]
+  const activity = digest(JSON.stringify(req.store.all('SELECT id,revision FROM meetings WHERE workspace_id=? ORDER BY id', workspaceId)))
+  return {body:{workspace_id:workspaceId,viewer_username:req.ownerUsername,items:rows.slice(0, limit), activity_version:activity,
+    cursor:rows.length > limit ? `${last.started_at}.${last.meeting_id}.${last.action_index}` : null}}
+}
+
 function savedSnapshot(req, workspaceId, meetingId, revision) {
   const row = req.store.get(`SELECT id,workspace_id,title,started_at,summary,action_items,revision
     FROM meetings WHERE workspace_id=? AND id=?`, workspaceId, meetingId)
   if (!row) refuse(404, 'not_found', '找不到会议记录。')
   if (revision !== row.revision) refuse(409, 'conflict', '会议已更新，请重新打开最新版本。')
   return row
+}
+
+async function completeSavedAction(req, workspaceId, meetingId) {
+  if (req.query.size) refuse(405, 'method', 'Only GET is supported for a saved action reference')
+  const {index, revision} = requireBodyKeys(await req.json(1024), ['index', 'revision'])
+  if (!Number.isInteger(index) || index < 0 || index >= LIMITS.ACTIONS_MAX || !Number.isSafeInteger(revision) || revision < 1) {
+    refuse(400, 'invalid', '请选择已保存的行动项。')
+  }
+  return req.store.transaction(store => {
+    const row = savedSnapshot(req, workspaceId, meetingId, revision)
+    const actions = parse(row.action_items)
+    if (!actions[index]) refuse(404, 'not_found', '找不到这条行动项。')
+    if (actions[index].done) refuse(409, 'conflict', '这条行动项已完成。')
+    actions[index].done = true
+    store.run('UPDATE meetings SET action_items=?,revision=?,updated=?,updated_by=? WHERE workspace_id=? AND id=?',
+      JSON.stringify(actions), revision + 1, req.now, req.owner, workspaceId, meetingId)
+    return {body:{meeting:{id:meetingId, workspace_id:workspaceId, revision:revision + 1}, action:{index, done:true}, viewer_username:req.ownerUsername}}
+  })
 }
 
 function readSavedAction(req, workspaceId, meetingId) {
@@ -316,7 +367,7 @@ async function update(req, row) {
 
 async function dispatch(req, workspaceId, meetingId, removing) {
   if (!meetingId && !removing) {
-    if (req.method === 'GET') return meetingPage(req, workspaceId)
+    if (req.method === 'GET') return req.query.get('view') === 'actions' ? meetingActionPage(req, workspaceId) : meetingPage(req, workspaceId)
     if (req.method === 'POST' && !req.queryString) return create(req, workspaceId)
     refuse(400, 'invalid', 'Invalid meeting request')
   }
@@ -373,7 +424,8 @@ export const spec = {
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/transcribe$/, handle: transcribe },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/export$/, handle: exportMeeting },
-    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: readSavedAction },
+    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: (req, ...ids) =>
+      req.method === 'POST' ? completeSavedAction(req, ...ids) : readSavedAction(req, ...ids) },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/artifact$/, handle: saveMeetingArtifact },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/memory$/, handle: saveMeetingMemory },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings(?:\/([0-9a-f]{32})(?:\/(remove))?)?$/, handle: dispatch },

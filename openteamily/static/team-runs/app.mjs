@@ -5,6 +5,7 @@ import {createTeamRunShares} from './shares.mjs';
 const ID = /^[a-f0-9]{32}$/;
 const SHARED_ID = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const LIMITS = {minimum: 2, maximum: 8, title: 80, goal: 2000, instruction: 1000, attempts: 3};
+const REUSABLE = new Set(['succeeded', 'failed', 'cancelled']);
 const STATUS = {
   waiting: '等待前序步骤', queued: '已排队', running: '运行中', succeeded: '已完成',
   failed: '失败', blocked: '前序步骤未完成', cancelled: '已取消',
@@ -47,6 +48,24 @@ export function teamRunPayload(draft, agents) {
   return {title, goal, steps};
 }
 
+export function teamRunDraftFromHistory(run, nextKey) {
+  if (!REUSABLE.has(run?.status) || typeof run.title !== 'string' || !run.title.trim() ||
+      typeof run.goal !== 'string' || !run.goal.trim() || run.goal.length > LIMITS.goal || !Array.isArray(run.steps) ||
+      run.steps.length < LIMITS.minimum || run.steps.length > LIMITS.maximum) return null;
+  const suffix = '（副本）';
+  const prefix = run.title.trim().slice(0, LIMITS.title - suffix.length).replace(/[\uD800-\uDBFF]$/u, '').trimEnd();
+  const steps = [];
+  for (const [position, source] of run.steps.entries()) {
+    if (source?.position !== position || !ID.test(source.agent_id || '') || typeof source.instruction !== 'string' ||
+        !source.instruction.trim() || source.instruction.length > LIMITS.instruction || !Array.isArray(source.depends_on) ||
+        source.depends_on.some(index => !Number.isInteger(index) || index < 0 || index >= position) ||
+        new Set(source.depends_on).size !== source.depends_on.length) return null;
+    steps.push({key:nextKey(), agent:source.agent_id, instruction:source.instruction,
+      dependencies:new Set(source.depends_on.map(index => steps[index].key))});
+  }
+  return {title:prefix + suffix, goal:run.goal, steps, sourceRun:run.id};
+}
+
 export function removeDraftStep(steps, key) {
   if (steps.length <= LIMITS.minimum) return steps;
   const remaining = steps.filter(step => step.key !== key);
@@ -84,6 +103,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const listView = node('team-run-list-panels');
   const cancel = node('team-run-cancel');
   const remove = node('team-run-remove');
+  const reuse = node('team-run-reuse');
   const confirm = node('team-run-confirm');
   const title = node('team-run-title');
   const goal = node('team-run-goal');
@@ -146,7 +166,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   }
 
   function hideQuestion(refocus = false) {
-    const trigger = question === 'cancel' ? cancel : remove;
+    const trigger = question === 'cancel' ? cancel : question === 'reuse' ? reuse : remove;
     question = '';
     confirm.hidden = true;
     if (refocus && !trigger.hidden) trigger.focus();
@@ -161,7 +181,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     tasks = [];
     lastList = lastSteps = '';
     newRun.disabled = true;
-    cancel.hidden = remove.hidden = true;
+    cancel.hidden = remove.hidden = reuse.hidden = true;
     hideQuestion();
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
@@ -264,10 +284,12 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return {title: '', goal: '', steps: [blankStep(), blankStep()]};
   }
 
+  const missingDraftAgent = () => currentDraft.steps.some(step => step.agent && !agents.some(agent => agent.id === step.agent));
+
   function editorControls() {
     const attempt = creates.get(workspace);
     node('team-run-fields').disabled = Boolean(attempt);
-    start.disabled = Boolean(attempt?.sending || (!attempt && !agents.length));
+    start.disabled = Boolean(attempt?.sending || (!attempt && (!agents.length || missingDraftAgent())));
     start.textContent = attempt?.sending ? '正在启动…' : attempt ? '确认并重试' : '开始运行';
     node('team-run-add-step').disabled = currentDraft.steps.length >= LIMITS.maximum;
   }
@@ -296,7 +318,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         select.append(unavailable);
       }
       select.value = item.agent;
-      select.addEventListener('change', () => { item.agent = select.value; });
+      select.addEventListener('change', () => {
+        item.agent = select.value;
+        if (agents.length) showAgentAvailability();
+        editorControls();
+      });
       agentLabel.append(select);
       const instructionLabel = make('label', '任务指令');
       const instruction = make('textarea');
@@ -338,7 +364,18 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       container.append(group);
       if (focusKey === item.key) select.focus();
     }
+    if (agents.length) showAgentAvailability();
     editorControls();
+  }
+
+  function showAgentAvailability(loaded = true) {
+    if (!loaded) {
+      show('team-run-agent-status', '无法读取智能体。点击刷新重试。', 'error');
+    } else if (!agents.length) {
+      show('team-run-agent-status', '当前工作区没有可用智能体。请先到智能体页面创建或恢复，再返回刷新。');
+    } else {
+      show('team-run-agent-status', missingDraftAgent() ? '有步骤的原智能体不可用，请选择可用智能体。' : '');
+    }
   }
 
   async function loadAgents() {
@@ -347,11 +384,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const result = await request('GET', `/v1/workspaces/${workspace}/agents?limit=100`);
     if (!active(target) || read !== reads) return;
     const ok = result.status === 200 && Array.isArray(result.body.items);
-    agents = ok ? result.body.items.filter(agent => ID.test(agent?.id || '') && !agent.archived &&
+    agents = ok ? result.body.items.filter(agent => ID.test(agent?.id || '') && !agent.archived && !agent.native_deleted &&
       (!agent.workspace_id || agent.workspace_id === workspace)) : [];
-    show('team-run-agent-status', agents.length ? '' : ok
-      ? '当前工作区没有可用智能体。请先到智能体页面创建或恢复，再返回刷新。'
-      : '无法读取智能体。点击刷新重试。', agents.length || ok ? '' : 'error');
+    if (!agents.length) showAgentAvailability(ok);
     renderDraft();
   }
 
@@ -363,6 +398,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     currentDraft = drafts.get(workspace);
     title.value = currentDraft.title;
     goal.value = currentDraft.goal;
+    node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : '新建任务';
     agents = [];
     renderDraft();
     if (creates.has(workspace)) show('team-run-start-status', '暂时无法确认任务是否已创建。重试会核对原请求。', 'error');
@@ -479,8 +515,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     show('team-run-progress', `${STATUS[run.status] || '状态未知'} · ${counts.succeeded ?? 0}/${counts.total ?? run.steps.length} 步完成`);
     cancel.hidden = run.status !== 'running';
     remove.hidden = run.status === 'running';
-    cancel.disabled = remove.disabled = Boolean(doing);
-    if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden)) {
+    reuse.hidden = !REUSABLE.has(run.status);
+    cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
+    if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
       const refocus = confirm.contains(document.activeElement);
       hideQuestion();
       if (refocus) node('team-run-heading').focus({preventScroll: true});
@@ -516,7 +553,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-results').replaceChildren();
-    cancel.hidden = remove.hidden = true;
+    cancel.hidden = remove.hidden = reuse.hidden = true;
     show('status', '');
     if (initial) renderDetail(initial);
     else show('team-run-progress', '正在读取步骤…');
@@ -562,10 +599,32 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   function ask(action) {
     question = action;
     const cancelling = action === 'cancel';
-    node('team-run-confirm-label').textContent = cancelling ? '取消后会停止安排后续步骤，已完成的结果会保留。' : '删除这条任务记录？';
-    node('team-run-confirm-action').textContent = cancelling ? '确认取消' : '确认删除';
+    node('team-run-confirm-label').textContent = cancelling ? '取消后会停止安排后续步骤，已完成的结果会保留。'
+      : action === 'reuse' ? '复用会替换本工作区未保存的任务草稿。' : '删除这条任务记录？';
+    node('team-run-confirm-action').textContent = cancelling ? '确认取消' : action === 'reuse' ? '替换草稿' : '确认删除';
     confirm.hidden = false;
     node('team-run-keep').focus();
+  }
+
+  function reuseRun({replace = false} = {}) {
+    if (screen !== 'detail' || doing || !matchesRun(current, workspace, detailId) || !REUSABLE.has(current.status)) return;
+    if (creates.has(workspace)) {
+      show('team-run-status', '请先打开草稿并确认上次启动结果，再复用任务。', 'error');
+      return;
+    }
+    const previous = drafts.get(workspace);
+    if (!replace && previous && (previous.title || previous.goal || previous.steps.length !== LIMITS.minimum ||
+        previous.steps.some(step => step.agent || step.instruction || step.dependencies.size))) {
+      ask('reuse');
+      return;
+    }
+    const draft = teamRunDraftFromHistory(current, () => ++serial);
+    if (!draft) {
+      show('team-run-status', '这条记录没有完整的步骤定义，无法复用。', 'error');
+      return;
+    }
+    drafts.set(workspace, draft);
+    return showEditor();
   }
 
   function choose(target, address = false) {
@@ -678,8 +737,12 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   for (const back of document.querySelectorAll('[data-back-to-team-runs]')) back.addEventListener('click', () => showList({focus: true}));
   cancel.addEventListener('click', () => ask('cancel'));
   remove.addEventListener('click', () => ask('remove'));
+  reuse.addEventListener('click', () => reuseRun());
   node('team-run-keep').addEventListener('click', () => hideQuestion(true));
-  node('team-run-confirm-action').addEventListener('click', () => { if (question) void mutate(question); });
+  node('team-run-confirm-action').addEventListener('click', () => {
+    if (question === 'reuse') return reuseRun({replace:true});
+    if (question) void mutate(question);
+  });
   confirm.addEventListener('keydown', event => { if (event.key === 'Escape') hideQuestion(true); });
   node('logout-form').addEventListener('submit', async event => {
     event.preventDefault();

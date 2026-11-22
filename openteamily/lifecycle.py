@@ -16,6 +16,7 @@ KEY = re.compile(r'[A-Za-z0-9_-]{16,64}')
 ACTIONS = frozenset(('create', 'start', 'stop', 'restart'))
 UNSUPPORTED = frozenset(('backup', 'restore', 'upgrade', 'reclaim', 'purge'))
 ERRORS = {'runtime_failure': 'Runtime operation failed', 'interrupted': 'Manager lease expired; operator recovery required'}
+GATEWAY_REFRESH_SECONDS = 15
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runtime_schema (version INTEGER PRIMARY KEY CHECK(version=1));
 INSERT OR IGNORE INTO runtime_schema VALUES(1);
@@ -391,6 +392,21 @@ class Lifecycle:
                     if len(rows) > limit:
                         break
             items = [{**self.snapshot(r), 'provisioning': 'auto' if r['id'] in auto_set else 'operator'} for r in rows[:limit]]
+            if manager.backend_mode == 'compose':
+                running = [item['id'] for item in items
+                           if item['converged'] and item['observed'] == 'running' and item['health'] == 'healthy']
+                recent = set()
+                if running and db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
+                    # Successful stop/restart observations invalidate the previous process route.
+                    # Give the poller only a freshness hint, never credentials or addresses.
+                    placeholders = ','.join('?' for _ in running)
+                    now = int(self.clock())
+                    recent = {row['instance_id'] for row in db.execute(
+                        f'SELECT instance_id FROM dsbot_upstreams WHERE instance_id IN ({placeholders}) AND updated>? AND updated<=?',
+                        (*running, now - GATEWAY_REFRESH_SECONDS, now),
+                    )}
+                for item in items:
+                    item['gateway_route_fresh'] = item['id'] in recent
             return {'items': items, 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
     def claim(self, manager, iid):

@@ -350,6 +350,13 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   max-width: 100%;
 }
 #discover-form #discover-slug-hint { flex-basis: 100%; margin: -.375rem 0 0; font-size: .8125rem; }
+#discover-editable-remix-field:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-basis: 100%;
+  gap: .5rem;
+}
+#discover-editable-remix-note { flex-basis: 100%; margin: -.375rem 0 0; }
 #discover-public-link { display: inline-block; margin: .25rem 0 .625rem; text-underline-offset: .2em; }
 
 #share-list,

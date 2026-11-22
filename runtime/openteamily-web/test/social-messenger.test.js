@@ -99,7 +99,7 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   const final = Promise.withResolvers()
   const posts = []
   const job = {job_id:'otj_live',attempt:2,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
-    mode:'mention',message:{id:'otm_source',revision:3}}
+    mode:'mention',message:{id:'otm_source',revision:3},quoted_message:{author:'Ignored',text:'Unvalidated quote from inbox'}}
   const bs = {
     async get(path) {
       assert.equal(path,'/v1/ot/agent-inbox?managed=1&after=0')
@@ -107,6 +107,7 @@ test('a managed group reply relays bounded snapshots from its owner before posti
     },
     async post(path, body) {
       posts.push({path,body})
+      if (body.action === 'start') return {ok:true,quoted_message:{author:'Cam',text:'Old decision with a "quoted phrase"'}}
       if (path.endsWith('/progress')) {
         if (body.revision === 1) first.resolve()
         else second.resolve()
@@ -121,6 +122,8 @@ test('a managed group reply relays bounded snapshots from its owner before posti
       assert.equal(payload.key,'social:otc_group')
       assert.equal(payload.agent_id,'helper')
       assert.equal(payload.request_id,'ots:otj_live:2')
+      assert.ok(payload.text.includes(JSON.stringify({author:'Cam',text:'Old decision with a "quoted phrase"'})))
+      assert.ok(!payload.text.includes('Unvalidated quote from inbox'))
       publish = payload.onProgress
       publish('First visible')
       publish('Superseded')

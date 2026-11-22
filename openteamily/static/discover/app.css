@@ -290,6 +290,11 @@ a.catalog-create[hidden] { display: none; }
 }
 .work-share-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 .work-share-dialog button { min-height: 2.625rem; }
+.work-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; align-items: center; }
+.work-remix-dialog :is(button, a) { min-height: 2.625rem; }
+.work-remix-dialog a:not([hidden]) { display: inline-flex; align-items: center; padding-inline: .75rem; }
+#work-remix-source { overflow-wrap: anywhere; }
+#work-remix-name-field[hidden] { display: none; }
 @media (max-width: 43.75rem) {
   .work-detail-view { gap: .625rem; }
   .work-detail-toolbar, .work-detail-navigation, .work-detail-actions { gap: .375rem; }

@@ -1,7 +1,7 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
-import { renderThumb, thumbModel } from '../shell/thumb.mjs';
+import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -590,14 +590,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
     'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
-    'like', 'collect', 'follow', 'comments', 'share', 'previous', 'next',
+    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
     .map(name => [name, document.getElementById('work-share-' + name)]));
+  const workRemix = Object.fromEntries(['dialog','form','source','name','name-field','status','close','refresh','submit','open']
+    .map(name => [name,document.getElementById('work-remix-'+name)]));
   const detailPanel = document.getElementById('work-detail');
   const initialView = document.getElementById('main');
   const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
   let activeWork;
+  let activeRemix;
   let feedReturn;
 
   const workComments = mountWorkComments(document, {
@@ -646,6 +649,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
+    closeWorkRemix();
     activeWork = null;
     setWorkView(false);
     restoreFeedPosition(restore && feedReturn ? feedReturn : {scroll: 0});
@@ -688,6 +692,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
+    closeWorkRemix();
     const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading'};
     activeWork = entry;
     setWorkView(true);
@@ -809,6 +814,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
+    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage || entry.item?.remix_available !== true;
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
@@ -818,6 +824,102 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
       }
     }
+  }
+
+  function closeWorkRemix() {
+    activeRemix?.read?.abort();
+    activeRemix = null;
+    if (workRemix.dialog?.open) workRemix.dialog.close();
+  }
+
+  function sameWorkRemix(state) {
+    return state === activeRemix && state.viewer === currentUser && activeWorkEntry(state.entry) && workRemix.dialog.open;
+  }
+
+  async function readWorkRemix(state) {
+    state.template = null;
+    state.read?.abort();
+    const controller = new AbortController();
+    state.read = controller;
+    workRemix.submit.disabled = true;
+    workRemix.refresh.hidden = true;
+    workRemix.status.textContent = '正在读取公开版本…';
+    const result = await request('GET',state.path,undefined,{},controller.signal).catch(() => ({status:0}));
+    if (!sameWorkRemix(state) || state.read !== controller) return;
+    const template = result.body?.template;
+    if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
+        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(template.revision || '')) {
+      workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
+      workRemix.refresh.hidden = result.status === 404;
+      return;
+    }
+    const previous = state.suggestion;
+    state.suggestion = template.title.slice(0,75).replace(/[\uD800-\uDBFF]$/,'').trimEnd() + ' · 副本';
+    if (!workRemix.name.value || workRemix.name.value === previous) workRemix.name.value = state.suggestion;
+    const size = template.kind === 'media' ? mediaFileSize(template.media?.bytes) : '';
+    workRemix.source.textContent = `「${template.title}」${size ? '（' + size + '）' : ''}将保存到你的个人资料空间。`;
+    state.template = template;
+    workRemix.submit.disabled = false;
+    workRemix.status.textContent = '';
+  }
+
+  function openWorkRemix() {
+    const entry = activeWork;
+    if (!nativeCatalog || !entry?.ready || entry.viewer !== currentUser || !entry.viewer || entry.item?.remix_available !== true ||
+        !workRemix.dialog || workRemix.dialog.open) return;
+    const state = {entry,viewer:entry.viewer,path:`/v1/discover/works/${entry.slug}/remix`,keys:new Map()};
+    activeRemix = state;
+    workRemix.source.textContent = '';
+    workRemix.name.value = '';
+    workRemix.name.disabled = false;
+    workRemix['name-field'].hidden = false;
+    workRemix.open.hidden = true;
+    workRemix.open.removeAttribute('href');
+    workRemix.close.disabled = workRemix.submit.hidden = false;
+    workRemix.close.textContent = '取消';
+    workRemix.submit.textContent = '创建副本';
+    workRemix.dialog.showModal();
+    void readWorkRemix(state);
+  }
+
+  async function submitWorkRemix(event) {
+    event.preventDefault();
+    const state = activeRemix;
+    const title = workRemix.name.value.trim();
+    if (!state || !sameWorkRemix(state) || !state.template || state.pending || !title) return;
+    const {revision} = state.template;
+    const stamp = JSON.stringify([revision,title]);
+    const key = state.keys.get(stamp) || reuseKey();
+    state.keys.set(stamp,key);
+    state.pending = true;
+    workRemix.submit.disabled = workRemix.close.disabled = workRemix.name.disabled = true;
+    workRemix.status.textContent = '正在创建副本…';
+    const result = await request('POST',state.path,{title,revision},{'Idempotency-Key':key},AbortSignal.timeout(12000))
+      .catch(() => ({status:0}));
+    if (!sameWorkRemix(state)) return;
+    state.pending = false;
+    workRemix.close.disabled = workRemix.name.disabled = false;
+    const artifact = result.body?.artifact;
+    if ([200,201].includes(result.status) && matchesNativeViewer(result.body?.viewer_username,state.viewer)
+        && /^[a-f0-9]{32}$/.test(artifact?.workspace_id || '') && /^[a-f0-9]{32}$/.test(artifact?.id || '')
+        && artifact.kind === state.template.kind) {
+      state.template = null;
+      workRemix['name-field'].hidden = workRemix.submit.hidden = true;
+      workRemix.open.href = spaceHref(artifact.workspace_id,artifact.id);
+      workRemix.open.hidden = false;
+      workRemix.close.textContent = '完成';
+      workRemix.status.textContent = '已保存到个人资料空间。';
+      workRemix.open.focus();
+      return;
+    }
+    const unavailable = result.status === 404 || result.body?.error?.code === 'listing_changed';
+    workRemix.status.textContent = result.status === 404 ? '这个作品已下架或没有可复制的公开版本。'
+      : messageFor(result.body?.error,'暂时无法确认是否已创建副本，可以重试。');
+    workRemix.submit.disabled = unavailable;
+    workRemix.refresh.hidden = result.body?.error?.code !== 'listing_changed';
+    if (unavailable) state.template = null;
+    if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
 
   async function updateWorkEngagement(action, flag) {
@@ -900,6 +1002,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (activeWork?.ready && activeWorkEntry(activeWork)) return workComments.open(activeWork.item, detail.comments);
   });
   detail.share.addEventListener('click', openWorkShare);
+  detail.remix?.addEventListener('click',openWorkRemix);
+  workRemix.form?.addEventListener('submit',submitWorkRemix);
+  workRemix.close?.addEventListener('click',closeWorkRemix);
+  workRemix.refresh?.addEventListener('click',() => activeRemix && readWorkRemix(activeRemix));
+  workRemix.dialog?.addEventListener('cancel',event => {
+    event.preventDefault();
+    if (!activeRemix?.pending) closeWorkRemix();
+  });
   for (const [action, flag] of engagement) {
     detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
   }
@@ -1950,6 +2060,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     feedPositions.clear();
     feedReturn = null;
     workComments.setActor('');
+    closeWorkRemix();
     syncCatalogActions();
     if (remixDialog.open) remixDialog.close();
     remix = null;

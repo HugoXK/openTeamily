@@ -7,8 +7,177 @@ import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
 import { createDispatch } from '../src/dispatch.js'
+import { boot } from './helpers.js'
+import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
+
+test('editable publishing and remix copy only the selected canonical saved work', async () => {
+  const author = await boot()
+  const reader = await boot()
+  const authorSpace = 'd'.repeat(32)
+  const readerSpace = 'e'.repeat(32)
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:authorSpace})
+  reader.features.table['agents/personal-binding'] = async () => ({workspace_id:readerSpace})
+  const original = {schema:'openteamily.slides.v1',slides:[{title:'Discussion',bullets:['Visible point']}]}
+  const local = `/v1/workspaces/${authorSpace}/artifacts`
+  const recorded = await author.call('artifacts','POST',local,{title:'Workshop',kind:'slides',
+    slides:{...original,slides:[{...original.slides[0],speaker_notes:'private note'}]},
+    source:{kind:'agent_task',id:'c'.repeat(32),task_kind:'private-origin'}},'private-slide-origin')
+  assert.equal(recorded.status,201,JSON.stringify(recorded.body))
+  const sourceId = recorded.body.artifact.id
+  assert.equal(recorded.body.artifact.source.task_kind,'private-origin')
+  const publish = `${local}/${sourceId}/discover`
+  const slug = 'workshop-release'
+  const revision = 'c'.repeat(64)
+  let relayPut
+  let available = true
+  setSharedBotSocial({request:async (method,path,payload) => {
+    if (path.startsWith('/v1/ot/teams/by-workspace/')) throw Object.assign(new Error('Not a member'),{status:404})
+    if (path === '/v1/ot/listings/mine') return {listings:[]}
+    if (method === 'PUT') {
+      assert.equal(path,'/v1/ot/listings')
+      relayPut = payload
+      return {slug,listed:true,editable_remix:!!payload.editable_snapshot}
+    }
+    assert.equal(path,`/v1/ot/discover/${slug}/remix?revision=${revision}`)
+    if (!available) throw Object.assign(new Error('Withdrawn'),{status:404})
+    return {template:{kind:'slides',title:'Workshop',revision},source:{kind:'slides',slides:relayPut.editable_snapshot}}
+  }})
+  const opts = {slug,allow_editable_remix:true,revision:1,editable_snapshot:{private:'untrusted request body'}}
+  const originalBinding = author.features.table['agents/personal-binding']
+  author.features.table['agents/personal-binding'] = async () => ({workspace_id:'f'.repeat(32)})
+  assert.equal((await author.call('discover','POST',publish,opts)).status,409)
+  assert.equal(relayPut,undefined)
+  author.features.table['agents/personal-binding'] = originalBinding
+  assert.equal((await author.call('discover','POST',publish,{...opts,revision:2})).body.error.code,'artifact_changed')
+  assert.equal((await author.call('discover','POST',publish,{slug})).status,201)
+  assert.equal(relayPut.editable_snapshot,undefined)
+  assert.equal((await author.call('discover','POST',publish,opts)).body.discover.editable_remix,true)
+  assert.deepEqual(relayPut.editable_snapshot,original)
+  assert.doesNotMatch(JSON.stringify(relayPut),/private note|private-origin|untrusted request body/)
+  await author.call('artifacts','POST',local+'/'+sourceId,{revision:1,changes:{slides:{...original,slides:[{title:'Private new work',bullets:[]}]}}})
+  const remix = '/v1/discover/works/'+slug+'/remix'
+  const input = {revision,title:'My own workshop'}
+  const receipt = 'editable-remix-receipt'
+  const copied = await reader.call('discover','POST',remix,input,receipt)
+  assert.equal(copied.status,201,JSON.stringify(copied.body))
+  const copyPath = `/v1/workspaces/${readerSpace}/artifacts/${copied.body.artifact.id}`
+  const owned = (await reader.call('artifacts','GET',copyPath)).body.artifact
+  assert.deepEqual(owned.slides,original)
+  assert.equal(owned.source,undefined)
+  assert.equal((await author.call('artifacts','GET',copyPath)).status,404)
+  available = false
+  assert.equal((await reader.call('discover','POST',remix,input,receipt)).status,200)
+  assert.equal((await reader.call('discover','POST',remix,{...input,title:'Second copy'},'second-remix-receipt')).status,404)
+})
+
+test('private Space media remix imports exact bytes, revalidates signatures and retains committed receipts', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = '7'.repeat(64)
+  const wav = Buffer.alloc(3*1024*1024 + 44,0x80)
+  Buffer.from('RIFF').copy(wav)
+  wav.writeUInt32LE(wav.length-8,4)
+  Buffer.from('WAVEfmt ').copy(wav,8)
+  wav.writeUInt32LE(16,16)
+  wav.writeUInt16LE(1,20)
+  wav.writeUInt16LE(1,22)
+  wav.writeUInt32LE(22050,24)
+  wav.writeUInt32LE(22050,28)
+  wav.writeUInt16LE(1,32)
+  wav.writeUInt16LE(8,34)
+  Buffer.from('data').copy(wav,36)
+  wav.writeUInt32LE(wav.length-44,40)
+  const model = triangleGlb()
+  const media = (mime, filename, bytes) => ({kind:'media',mime,filename,bytes:bytes.length,data:bytes.toString('base64')})
+  let source = media('audio/wav','三兆字节.wav',wav)
+  const template = {kind:'media',title:'Public media',revision}
+  let withdrawn = false
+  let reads = 0
+  setSharedBotSocial({request:async () => {
+    reads++
+    if (withdrawn) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,source}
+  }})
+  const path = '/v1/discover/works/public-media/remix'
+  const call = (title,key) => bot.call('discover','POST',path,{title,revision},key)
+  const catalog = `/v1/workspaces/${workspace}/artifacts`
+  const first = await call('我的音频','media-remix-large')
+  assert.equal(first.status,201,JSON.stringify(first.body))
+  const audio = first.body.artifact
+  assert.equal(audio.kind,'media')
+  const file = catalog+'/'+audio.id+'/file'
+  const original = await bot.call('artifacts','GET',file)
+  assert.deepEqual(Buffer.from(original.download.data,'base64'),wav)
+  assert.equal((await other.call('artifacts','GET',file)).status,404)
+  const manual = await bot.call('artifacts','POST',catalog,{_multipart:true,fields:{title:'上传时仍限两兆字节'},
+    files:{file:{filename:source.filename,data:source.data}}},'oversize-upload-test')
+  assert.equal(manual.status,413)
+  assert.equal((await call('我的音频','media-remix-other-key')).body.error.code,'title_conflict')
+  assert.equal(reads,1)
+  source = {...source,mime:'image/png'}
+  assert.equal((await call('错误的类型','media-remix-mismatch')).status,400)
+  source = media('model/gltf-binary','外部模型.glb',triangleGlb({
+    customize(model) { model.buffers[0].uri = 'https://example.test/payload.bin' },
+  }))
+  assert.equal((await call('带外部地址的模型','media-remix-external')).status,400)
+  source = media('model/gltf-binary','三角模型.glb',model)
+  const glb = await call('我的模型','media-remix-glb-file')
+  assert.equal(glb.status,201,JSON.stringify(glb.body))
+  const saved = await bot.call('artifacts','GET',catalog+'/'+glb.body.artifact.id+'/file')
+  assert.equal(saved.download.content_type,'model/gltf-binary')
+  assert.deepEqual(Buffer.from(saved.download.data,'base64'),model)
+  withdrawn = true
+  assert.deepEqual((await call('我的音频','media-remix-large')).body,first.body)
+  assert.equal((await call('撤回后新副本','media-remix-closed')).status,404)
+})
+
+test('public work remix writes only verified publications to the viewer’s personal Space', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = 'b'.repeat(64)
+  const source = {kind:'document',body:'Published notes'}
+  const template = {revision,title:'Original',kind:source.kind}
+  let closed = false
+  let reads = 0
+  setSharedBotSocial({request:async (method,path) => {
+    assert.equal(method,'GET')
+    reads++
+    assert.match(path,/^\/v1\/ot\/discover\/public-notes\/remix(?:\?revision=b{64})?$/)
+    if (closed) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,...(path.includes('?') ? {source} : {})}
+  }})
+  const target = '/v1/discover/works/public-notes/remix'
+  const forged = await bot.endpoint('artifacts/remixPublicWork',{workspace_id:workspace,slug:'public-notes',revision,
+    title:'Forged source',source,idempotency_key:'fake-copy-assertion'})
+  assert.equal(forged.ok,false)
+  assert.deepEqual((await bot.call('discover','GET',target)).body,{template})
+  const input = {title:'Public notes copy',revision}
+  const key = 'work-remix-example'
+  assert.equal((await bot.call('discover','POST',target,{...input,workspace_id:'c'.repeat(32)},key)).status,400)
+  assert.equal((await bot.call('discover','POST',target,{...input,source:{...source,body:'Forged'}},key)).status,400)
+  const created = await bot.call('discover','POST',target,input,key)
+  assert.equal(created.status,201,JSON.stringify(created.body))
+  const copy = created.body.artifact
+  assert.equal(copy.workspace_id,workspace)
+  assert.equal(copy.body,undefined)
+  const detail = `/v1/workspaces/${workspace}/artifacts/${copy.id}`
+  const artifact = (await bot.call('artifacts','GET',detail)).body.artifact
+  assert.deepEqual([artifact.body,artifact.source,artifact.revision],[source.body,undefined,1])
+  assert.equal((await other.call('artifacts','GET',detail)).status,404)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'Different'},key)).status,409)
+  assert.equal(reads,2)
+  closed = true
+  assert.deepEqual(await bot.call('discover','POST',target,input,key),{status:200,body:created.body})
+  assert.equal(reads,2)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'New copy'},'another-remix-key')).status,404)
+  assert.equal(reads,3)
+})
 
 test('profile social sends only actor-scoped queries and explicit follow requests', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-profile-social-'))

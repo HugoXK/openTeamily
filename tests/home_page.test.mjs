@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
-import { confirmSignupSession, pendingSignupSession, rememberSignupSession, takeSignupSession, waitForRuntime } from '../openteamily/static/home/runtime-readiness.mjs';
+import { confirmSignupSession, pendingSignupSession, readChatDrafts, rememberSignupSession, signupDraftScope, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
 import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
 
@@ -71,6 +71,23 @@ function homeFixture(pathname = '/', hash = '') {
   };
   return {document, view, read, register};
 }
+
+test('a first draft shares only the registered owner and exact personal chat scope', () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {view} = homeFixture('/chat', hash);
+  const now = Date.now();
+  assert.equal(rememberSignupSession(view, alice, now, '/chat' + hash), true);
+  const scope = signupDraftScope(view, alice, now);
+  assert.deepEqual(JSON.parse(scope), [alice, alice, 'agent', bob, null]);
+  assert.equal(signupDraftScope(view, bob, now), null);
+  assert.equal(signupDraftScope(view, alice, now + 301_000), null);
+  view.location.hash = hash + '&conversation=' + bob;
+  assert.equal(signupDraftScope(view, alice, now), null);
+  const peerScope = JSON.stringify([bob, alice, 'agent', bob, null]);
+  assert.equal(writeChatDrafts(view, alice, new Map([[scope,'第一条'], [peerScope,'different account']])), true);
+  assert.deepEqual([...readChatDrafts(view, alice)], [[scope,'第一条']]);
+  assert.equal(readChatDrafts(view, bob).size, 0);
+});
 
 test('a cold route sends an unexpected signup session to manual login without starting the wrong runtime', async () => {
   const hash = '#team-invite=validSyntheticInvite';

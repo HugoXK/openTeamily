@@ -54,6 +54,62 @@ test("DMs only between teammates; one DM per pair; unread and read cursors", asy
   assert.equal((await B.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages.find((message: any) => message.id === m1.id).retracted, true);
 });
 
+test("batch hide is atomic, exact-room scoped and safely replays only for the acting member", async () => {
+  const owner = await home(S.base, "hide-owner");
+  const reader = await home(S.base, "hide-reader");
+  const outsider = await home(S.base, "hide-outsider");
+  const team = await teamOf(owner, reader);
+  const {workspaces} = await owner.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Exact team group", team_id: team.id, members: [reader.handle]});
+  const other = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Other team group", team_id: team.id, members: [reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}/messages`;
+  const own = await owner.ok("POST", room, {body: "Owner message"});
+  const received = await reader.ok("POST", room, {body: "Reader message"});
+  const elsewhere = await owner.ok("POST", `/v1/ot/conversations/${other.id}/messages`, {body: "Different conversation"});
+  const ids = [own.id, received.id];
+  const data = {workspace, message_ids: ids};
+  const hide = room + "/hide";
+  assert.equal((await outsider.call("POST", hide, data)).status, 404);
+  assert.equal((await owner.call("POST", hide, {message_ids: ids, direct: true})).status, 404);
+  assert.equal((await owner.call("POST", hide, {workspace, message_ids: [own.id, own.id]})).status, 400);
+  assert.equal((await owner.call("POST", hide, {workspace, message_ids: [own.id, elsewhere.id]})).status, 404);
+  const history = async (viewer: typeof owner) => (await viewer.ok("GET", room)).messages.map((message: any) => message.id);
+  assert.deepEqual(await history(owner), ids);
+  assert.deepEqual(await owner.ok("POST", hide, data), {hidden_message_ids: ids});
+  assert.deepEqual(await owner.ok("POST", hide, data), {hidden_message_ids: ids});
+  assert.deepEqual(await history(owner), []);
+  assert.deepEqual(await history(reader), ids);
+  assert.equal((await owner.ok("GET", `/v1/ot/conversations/${other.id}/messages`)).messages[0].id, elsewhere.id);
+});
+
+test("an unread entry starts at the first visible unacknowledged sequence and pages forward without marking it read", async () => {
+  const sender = await home(S.base, "unread-sender");
+  const reader = await home(S.base, "unread-reader");
+  const unrelated = await home(S.base, "unread-outsider");
+  const contact = await sender.ok("POST", "/v1/ot/contacts", {handle: reader.handle});
+  await reader.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
+  const group = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
+    title: "Continue reading", members: [reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}`;
+  const sent = [];
+  for (let index = 0; index < 15; index++) sent.push(await sender.ok("POST", room + "/messages", {body: `Message ${index}`}));
+  await reader.ok("POST", room + "/read", {seq: sent[2].seq});
+  await reader.ok("POST", `/v1/ot/messages/${sent[3].id}/hide`, {conversation_id: group.id});
+  const unread = room + "/messages?unread=1&limit=5";
+  const entry = await reader.ok("GET", unread);
+  assert.deepEqual(entry.first_unread, {id: sent[4].id, seq: sent[4].seq});
+  assert.equal(entry.read_seq, sent[2].seq);
+  assert.equal(entry.has_newer, true);
+  assert.deepEqual(entry.messages.map((row: any) => row.id), [sent[1].id, sent[2].id, sent[4].id, sent[5].id, sent[6].id]);
+  const newer = await reader.ok("GET", `${room}/messages?after=${sent[6].seq}&limit=5`);
+  assert.deepEqual(newer.messages.map((row: any) => row.id), sent.slice(7, 12).map(row => row.id));
+  assert.equal((await reader.ok("GET", room)).read_seq, sent[2].seq);
+  assert.equal((await sender.ok("GET", unread)).first_unread, null);
+  assert.equal((await unrelated.call("GET", unread)).status, 404);
+  assert.equal((await reader.call("GET", `${unread}&after=${sent[6].seq}`)).status, 400);
+});
+
 test("groups: members, mentions notify, creator removes, members leave", async () => {
   const A = await home(S.base, "ga");
   const B = await home(S.base, "gb");
@@ -805,6 +861,39 @@ test("editing or retracting an originating message invalidates managed reply pro
   await sender.ok("DELETE", sourceRoute);
   assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
   assert.equal((await worker.call("POST", progress, {attempt: 2, revision: 2, text: "Late"})).status, 409);
+});
+
+test("a group reply claim returns an older exact quote only while its agent owner can read it", async () => {
+  const [worker, sender] = await Promise.all([home(S.base, "quote-worker"), home(S.base, "quote-sender")]);
+  const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
+  await sender.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
+  const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
+    title: "Read the quote", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+  const room = `/v1/ot/conversations/${group.id}/messages`;
+  const oldText = "Earlier exact decision: keep the launch on Friday.";
+  const original = await sender.ok("POST", room, {body: oldText});
+  for (let i = 0; i < 13; i++) await sender.ok("POST", room, {body: `Later message ${i}`});
+  const request = async (id: string) => sender.ok("POST", room, {body: "@helper review", reply_to: id});
+  const target = await request(original.id);
+  const job = (await worker.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.find((row: any) => row.message.id === target.id);
+  assert.ok(job);
+  assert.equal(job.context.some((row: any) => row.id === original.id), false);
+  assert.equal(job.quoted_message, undefined);
+  const claimPath = `/v1/ot/agent-reply-jobs/${job.job_id}`;
+  const claim = {action: "start", attempt: 1, claim_id: "0a4e44a7-9c24-4b66-a637-9bdacb2b85ec"};
+  assert.equal((await sender.call("POST", claimPath, claim)).status, 404);
+  assert.deepEqual((await worker.ok("POST", claimPath, claim)).quoted_message,
+    {author: (await sender.ok("GET", "/v1/ot/me")).display_name, text: oldText});
+  await worker.ok("POST", `/v1/ot/messages/${original.id}/hide`, {conversation_id: group.id});
+  assert.deepEqual(await worker.ok("POST", claimPath, claim), {ok: true});
+
+  const retractable = await sender.ok("POST", room, {body: "Do not read the retracted sentence"});
+  const beforeRetraction = await request(retractable.id);
+  await sender.ok("DELETE", `/v1/ot/messages/${retractable.id}`);
+  assert.deepEqual(await worker.ok("POST", `/v1/ot/agent-reply-jobs/${beforeRetraction.reply_jobs[0].id}`, claim), {ok: true});
+  const other = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true, title: "Other group", members: [worker.handle]});
+  const unrelated = await sender.ok("POST", `/v1/ot/conversations/${other.id}/messages`, {body: "Other group text"});
+  assert.equal((await sender.call("POST", room, {body: "@helper review", reply_to: unrelated.id})).status, 409);
 });
 
 test("attachment search is newest-first, case-insensitive and scoped to readable files", async () => {

@@ -6,31 +6,80 @@ export function csrfCookie(source) {
 const signupSessionKey = 'ot-expected-signup-session';
 const signupLifetimeMs = 5 * 60 * 1000;
 const platformUserId = /^[0-9a-f]{32}$/;
+const accountDraftPrefix = 'openteamily.chat-drafts:';
+const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
+const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
-export function rememberSignupSession(view, id, now = Date.now()) {
+export function rememberSignupSession(view, id, now = Date.now(), chat = '') {
   if (!validSignupUser(id)) return false;
   try {
     if (!view?.sessionStorage) return false;
-    view.sessionStorage.setItem(signupSessionKey, JSON.stringify({id, expires: now + signupLifetimeMs}));
+    view.sessionStorage.setItem(signupSessionKey, JSON.stringify({
+      id, expires: now + signupLifetimeMs, ...(signupChatPath.test(chat) ? {chat} : {}),
+    }));
     return true;
   } catch {
     return false;
   }
 }
 
-export function pendingSignupSession(view, now = Date.now(), {consume = false} = {}) {
+function signupSession(view, now, consume = false) {
   try {
     const stored = view?.sessionStorage?.getItem(signupSessionKey);
     if (!stored) return null;
     if (consume) view.sessionStorage.removeItem(signupSessionKey);
-    const {id, expires} = JSON.parse(stored);
+    const value = JSON.parse(stored);
+    const {id, expires} = value;
     return validSignupUser(id)
-      && Number.isFinite(expires) && expires > now && expires <= now + signupLifetimeMs ? id : null;
+      && Number.isFinite(expires) && expires > now && expires <= now + signupLifetimeMs ? value : null;
   } catch {
     return null;
   }
+}
+
+export function pendingSignupSession(view, now = Date.now(), {consume = false} = {}) {
+  return signupSession(view, now, consume)?.id ?? null;
+}
+
+export function signupDraftScope(view, owner, now = Date.now()) {
+  const session = signupSession(view, now);
+  if (!owner || session?.id !== owner || session.chat !== '/chat' + view.location.hash) return null;
+  const target = signupChatPath.exec(session.chat);
+  return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
+}
+
+export function chatDraftOwner(scope) {
+  try {
+    const [owner, workspace, kind, agent, conversation] = JSON.parse(scope);
+    if (typeof owner !== 'string' || !owner || typeof workspace !== 'string' || !workspace) return null;
+    if (kind === 'agent' && typeof agent === 'string' && agent) return owner;
+    if (kind === 'social' && typeof conversation === 'string' && conversation) return owner;
+  } catch {}
+  return null;
+}
+
+export function readChatDrafts(view, owner) {
+  const drafts = new Map();
+  try {
+    const stored = JSON.parse(view?.sessionStorage?.getItem(accountDraftPrefix + owner) || '{}');
+    for (const [scope, value] of Object.entries(stored || {})) {
+      if (chatDraftOwner(scope) === owner && typeof value === 'string' && value.length > 0 && value.length <= messageLimit) drafts.set(scope, value);
+    }
+  } catch {}
+  return drafts;
+}
+
+export function writeChatDrafts(view, owner, drafts) {
+  try {
+    const storage = view?.sessionStorage;
+    if (!storage) return false;
+    const name = accountDraftPrefix + owner;
+    if (drafts.size) storage.setItem(name, JSON.stringify(Object.fromEntries(drafts)));
+    else storage.removeItem(name);
+    return true;
+  } catch { return false; }
 }
 
 export function takeSignupSession(view, now = Date.now()) {

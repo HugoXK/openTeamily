@@ -9,7 +9,7 @@ import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, signupSessionError } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, signupDraftScope, signupSessionError } from '../home/runtime-readiness.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -531,9 +531,9 @@ export function reactionToggle(reactions, emoji) {
   return {emoji, active: !(current && current.mine)};
 }
 
-export function forwardTargets(conversations, currentId) {
+export function forwardTargets(conversations, currentId, userId) {
   return (conversations || []).filter(item => item.id !== currentId && !item.public_agent && item.direct?.open !== false)
-    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
+    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + conversationLabel(item, userId)}));
 }
 
 export function forwardCountLabel(count) {
@@ -870,8 +870,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     },
   };
   const agentMentions = mountAgentMentions(document, () => {
-    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
-    return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
+    if (!currentUser || currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent ||
+        currentConversation.direct?.open === false) return null;
+    return {scope: sendScope(), agents: currentConversation.agent_members || []};
   });
   function voiceContext() {
     if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -1037,11 +1038,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
   }
 
-  function composeReply(item, author) {
-    if (currentSource !== 'social' || item.retracted) return;
+  function composerReply(item, author) {
     const excerpt = String(item.body || item.attachment?.title || (item.voice ? '语音消息' : '消息'))
       .replace(/\s+/g, ' ').trim().slice(0, 120);
-    replyDrafts.set(sendScope(), {message_id: item.id, author, excerpt, available: true});
+    return {message_id: item.id, author, excerpt, available: true};
+  }
+
+  function composeReply(item, author) {
+    if (currentSource !== 'social' || item.retracted) return;
+    replyDrafts.set(sendScope(), composerReply(item, author));
     renderReplyDraft();
     document.getElementById('chat-body').focus();
   }
@@ -1234,6 +1239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    agentMentions.refresh();
     syncStickers();
     syncPrivateThreadControls();
     syncMemoryRecall(scope);
@@ -1345,6 +1351,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
     groupManagementReceipts.clear();
+    hiddenMessageReceipts.clear();
+    if (hideDialog?.open) hideDialog.close();
     closePrivateThreadDialogs();
     resetStickerSurface();
   }
@@ -1837,7 +1845,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, transition};
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
     if (sessionTransition !== transition) return false;
@@ -2398,26 +2406,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let selecting = false;
+  let selectionEpoch = 0;
+  let selectionScope = '';
   let forwardBusy = false;
   let forwardAttempt = null;
   const selectedMessages = new Set();
+  const hideDialog = document.getElementById('message-selection-hide-dialog');
+  const hideConfirm = document.getElementById('message-selection-hide-confirm');
+  const hideStatus = document.getElementById('message-selection-hide-status');
+  const hidingMessages = new Set();
+  const hiddenMessageReceipts = new Map();
+  let hideTarget = null;
   let pinnedIds = new Set();
+
+  const selectedSocialIds = () => selectionScope === sendScope() ? [...selectedMessages] : [];
 
   function syncForwardBar() {
     const bar = document.getElementById('forward-bar');
     if (!bar) return;
+    if (selecting && selectionScope !== sendScope()) {
+      selecting = false;
+      selectedMessages.clear();
+    }
     bar.hidden = !selecting;
-    document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
+    const count = selectedMessages.size;
+    document.getElementById('forward-count').textContent = uiLabel(forwardCountLabel(count), `${count} selected`);
     const target = document.getElementById('forward-target');
-    document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    const hiding = hidingMessages.has(sendScope());
+    document.getElementById('forward-submit').disabled = forwardBusy || hiding || !(count && target.value);
+    const remove = document.getElementById('selection-hide');
+    if (remove) {
+      remove.hidden = !servedByDsbot;
+      remove.disabled = !count || hiding || forwardBusy;
+    }
+    if (hideDialog?.open && (!selecting || hideTarget?.scope !== sendScope())) hideDialog.close();
     const capture = document.getElementById('selection-group-capture');
     if (capture) {
       capture.hidden = !servedByDsbot || currentSource !== 'social' || currentConversation?.kind !== 'group' || Boolean(currentConversation.public_agent);
-      capture.disabled = !selectedMessages.size;
+      capture.disabled = !count || hiding;
     }
     for (const id of ['selection-memory', 'selection-meeting']) {
       const action = document.getElementById(id);
-      if (action) action.disabled = !selectedMessages.size;
+      if (action) action.disabled = !count || hiding;
     }
     const toggle = document.getElementById('multi-select-toggle');
     if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
@@ -2426,21 +2456,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function fillForwardTargets() {
     const target = document.getElementById('forward-target');
     if (!target) return;
-    const options = forwardTargets(socialConversations, currentConversation && currentConversation.id);
-    target.replaceChildren(...options.map(item => {
+    const options = forwardTargets(socialConversations, currentConversation?.id, currentUser?.id);
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.disabled = true;
+    prompt.textContent = options.length ? uiLabel('选择会话', 'Choose a conversation') : uiLabel('暂无可用会话', 'No available conversations');
+    target.replaceChildren(prompt, ...options.map(item => {
       const option = document.createElement('option'); option.value = item.id; option.textContent = item.label; return option;
     }));
+    target.disabled = !options.length;
+    target.value = '';
   }
 
-  function setSelecting(on) {
+  function setSelecting(on, messageId) {
+    const anchor = currentSource === 'social' && currentConversation ? chatHistoryAnchor(undefined, messageId) : null;
     selecting = on;
+    selectionScope = on ? sendScope() : '';
+    selectionEpoch += 1;
     selectedMessages.clear();
+    if (on && messageId) selectedMessages.add(messageId);
+    const more = document.getElementById('message-selection-more');
+    if (more) more.open = false;
     if (on) fillForwardTargets();
     syncForwardBar();
-    if (currentConversation && currentSource === 'social') renderSocialMessages(lastSocialItems);
+    if (anchor) renderSocialMessages(lastSocialItems, {anchor});
+    if (on && messageId) {
+      const row = [...document.getElementById('message-list').children].find(item => item.dataset.messageId === messageId);
+      row?.querySelector('.message-tools input')?.focus({preventScroll: true});
+    }
   }
 
   function renderPinned(list) {
+    const hidden = hiddenMessageReceipts.get(sendScope());
+    if (hidden) list = list?.filter(item => !hidden.has(item.message_id));
     pinnedIds = new Set((list || []).map(item => item.message_id));
     const section = document.getElementById('pinned-messages');
     const holder = document.getElementById('pinned-message-list');
@@ -2459,7 +2507,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  function messageTools(item) {
+  function rememberHiddenMessages(scope, ids) {
+    const hidden = hiddenMessageReceipts.get(scope) || new Set();
+    for (const id of ids) hidden.add(id);
+    hiddenMessageReceipts.set(scope, hidden);
+  }
+
+  function forgetSocialMessages(ids, exitSelection = false) {
+    const removed = new Set(ids);
+    const anchor = chatHistoryAnchor(removed);
+    if (exitSelection) {
+      selecting = false;
+      selectionEpoch += 1;
+      selectedMessages.clear();
+    } else for (const id of ids) selectedMessages.delete(id);
+    syncForwardBar();
+    const scope = sendScope(), reply = replyDrafts.get(scope);
+    if (removed.has(reply?.message_id)) consumeReplyDraft(scope, reply);
+    const pins = document.getElementById('pinned-message-list');
+    for (const row of [...pins.children]) if (removed.has(row.dataset.pinnedMessage)) row.remove();
+    for (const id of ids) pinnedIds.delete(id);
+    document.getElementById('pinned-messages').hidden = !pinnedIds.size;
+    renderSocialMessages(lastSocialItems, {anchor});
+  }
+
+  function messageTools(item, row) {
     const tools = document.createElement('span');
     tools.className = 'message-tools';
     if (selecting) {
@@ -2467,16 +2539,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = selectedMessages.has(item.id);
-      box.setAttribute('aria-label', '选择这条消息');
+      box.setAttribute('aria-label', uiLabel('选择这条消息', 'Select this message'));
+      row.classList.add('message-selectable');
+      row.dataset.messageSelected = String(box.checked);
+      row.addEventListener('click', event => {
+        if (!event.target.closest('button, a, input, label, audio, video')) box.click();
+      });
       box.addEventListener('change', () => {
         if (box.checked && selectedMessages.size >= 20) {
           box.checked = false;
-          show('error', '一次最多转发 20 条消息。');
+          show('error', uiLabel('一次最多选择 20 条消息。', 'Select up to 20 messages.'));
         } else if (box.checked) {
           selectedMessages.add(item.id);
         } else {
           selectedMessages.delete(item.id);
         }
+        row.dataset.messageSelected = String(box.checked);
         syncForwardBar();
       });
       label.append(box, document.createTextNode('选择'));
@@ -2565,7 +2643,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
     const scroller = document.getElementById('message-scroller');
-    messageMenuTarget = {item, li, mine, scrollTop: scroller?.scrollTop};
+    messageMenuTarget = {item, li, mine, scope: sendScope(), scrollTop: scroller?.scrollTop};
     const reactions = document.getElementById('message-menu-reactions');
     reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
       const button = document.createElement('button');
@@ -2580,6 +2658,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="reply"]').hidden = currentConversation?.public_agent?.open === false
       || currentConversation?.direct?.open === false;
+    const askGroup = menu.querySelector('[data-menu="ask-group"]');
+    if (askGroup) askGroup.hidden = item.retracted || !agentMentions.canPick();
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
@@ -2604,7 +2684,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageMenu.addEventListener('click', async event => {
       const button = event.target.closest('button');
       if (!button || button.disabled || !messageMenuTarget) return;
-      const {item, li} = messageMenuTarget;
+      const {item, li, scope} = messageMenuTarget;
       const action = button.dataset.menu;
       closeMessageMenu();
       if (button.dataset.emoji) {
@@ -2613,6 +2693,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else if (action === 'reply') {
         const author = li.querySelector('.role')?.textContent || '成员';
         composeReply(item, author);
+      } else if (action === 'ask-group' && scope === sendScope()) {
+        const reply = composerReply(item, li.querySelector('.role')?.textContent || uiLabel('成员', 'Member'));
+        agentMentions.openPicker({reply, onApply: () => {
+          replyDrafts.set(scope, reply);
+          renderReplyDraft();
+        }});
       } else if (action === 'translate' || action === 'ask') {
         messageUtilities.open(item, action);
       } else if (action === 'save') {
@@ -2624,8 +2710,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
         catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
       } else if (action === 'forward' || action === 'select') {
-        setSelecting(true);
-        if (action === 'forward') { selectedMessages.add(item.id); syncForwardBar(); renderSocialMessages(lastSocialItems); }
+        if (scope === sendScope()) setSelecting(true, item.id);
       } else if (action === 'pin') {
         const pinButton = li.querySelector('.message-tools button');
         if (pinButton) pinButton.click();
@@ -2635,24 +2720,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
       } else if (action === 'delete') {
-        const wid = workspaceId(), cid = currentConversation.id;
+        if (scope !== sendScope() || !currentConversation) return;
+        const cid = currentConversation.id;
         const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`)
           .catch(() => ({status: 0, body: {}}));
-        if (wid !== workspaceId() || currentSource !== 'social' || currentConversation?.id !== cid) return;
         if (result.status !== 204) {
-          show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
+          if (scope === sendScope()) show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
           return;
         }
-        socialOpen++;
-        const visible = lastSocialItems.filter(row => row.id !== item.id).map(row =>
-          row.reply_preview?.message_id === item.id
-            ? {...row, reply_preview: {message_id: item.id, available: false}}
-            : row);
-        renderSocialMessages(visible, {refresh:true});
-        const pin = document.querySelector?.(`#pinned-message-list [data-pinned-message="${item.id}"]`);
-        pin?.remove();
-        pinnedIds.delete(item.id);
-        if (!pinnedIds.size) document.getElementById('pinned-messages').hidden = true;
+        rememberHiddenMessages(scope, [item.id]);
+        if (scope !== sendScope()) return;
+        forgetSocialMessages([item.id]);
         show('ok', '已从你的会话删除。', {announceOnly:true});
         void loadSessions();
       }
@@ -2757,13 +2835,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupReplyViews = new Map();
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
+  const newerMessages = document.getElementById('chat-load-newer');
+  const markThreadRead = document.getElementById('chat-mark-thread-read');
+  const unreadActions = document.getElementById('chat-unread-actions');
+  const unreadNotice = document.getElementById('chat-unread-status');
   const historyNotice = document.getElementById('chat-history-status');
+  let unreadScrollTimer;
 
   function setSocialHistory(state) {
+    clearTimeout(unreadScrollTimer);
     socialHistory = state;
     if (!state || state.readingHistory) stopGroupReplyProgress();
     if (!state) groupReplyViews.clear();
     if (historyNotice) historyNotice.textContent = '';
+    if (unreadNotice) unreadNotice.textContent = '';
     updateHistoryControls();
   }
 
@@ -2792,6 +2877,83 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       latestMessages.hidden = !state?.readingHistory;
       latestMessages.disabled = Boolean(state?.restoring);
     }
+    const unread = currentSource === 'social' ? state?.unread : null;
+    if (newerMessages) {
+      newerMessages.hidden = !unread?.after;
+      newerMessages.disabled = Boolean(state?.loading);
+    }
+    if (markThreadRead) {
+      markThreadRead.hidden = !unread || unread.committed >= unread.latest;
+      markThreadRead.disabled = Boolean(unread?.saving);
+    }
+    if (unreadActions) unreadActions.hidden = !unread || (newerMessages.hidden && markThreadRead.hidden);
+  }
+
+  function visibleUnreadView(state) {
+    return state && state === socialHistory && currentSource === 'social' && state.owner === currentUser?.id &&
+      state.wid === workspaceId() && state.cid === currentConversation?.id && viewingSocialMessages() &&
+      document.visibilityState !== 'hidden' && !sessionTransition?.pending;
+  }
+
+  function scheduleUnreadRead() {
+    const state = socialHistory;
+    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleUnreadView(state)) return;
+    clearTimeout(unreadScrollTimer);
+    unreadScrollTimer = setTimeout(() => readVisibleUnread(state), 160);
+  }
+
+  function readVisibleUnread(state) {
+    if (!visibleUnreadView(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
+    const unread = state.unread;
+    const scroller = document.getElementById('message-scroller');
+    const bounds = scroller.getBoundingClientRect();
+    for (const row of document.getElementById('message-list').children) {
+      const seq = Number(row.dataset.messageSeq);
+      if (!seq || seq <= unread.committed) continue;
+      const rect = row.getBoundingClientRect();
+      if (rect.top >= bounds.bottom) break;
+      const visible = Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top);
+      if (visible > 0 && visible >= Math.min(rect.height / 2, 96)) unread.seen.add(seq);
+    }
+    let through = unread.committed;
+    for (const message of lastSocialItems) {
+      if (message.seq <= through) continue;
+      if (!unread.seen.has(message.seq)) break;
+      through = message.seq;
+    }
+    if (through > unread.committed) void commitUnread(state, through);
+  }
+
+  async function commitUnread(state, seq, explicit = false) {
+    const unread = state?.unread;
+    if (!visibleUnreadView(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
+    const latestOnRead = unread.latest;
+    unread.saving = true;
+    updateHistoryControls();
+    try {
+      const result = await request('POST', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/read`,
+        {seq}, undefined, AbortSignal.timeout(8000));
+      if (state !== socialHistory || state.owner !== currentUser?.id || state.wid !== workspaceId() ||
+          state.cid !== currentConversation?.id) return;
+      if (result.status !== 200 || !Number.isSafeInteger(result.body.unread_count) || result.body.unread_count < 0) throw new Error('read');
+      unread.committed = seq;
+      for (const seen of unread.seen) if (seen <= seq) unread.seen.delete(seen);
+      applyOpenedRead('social', currentConversation, result.body.unread_count, null, latestOnRead);
+      if (!unread.after && seq >= unread.latest) {
+        state.readingHistory = false;
+        syncGroupReplyProgress();
+        scheduleSocialPoll(currentConversation);
+      }
+      renderSessions();
+      if (explicit && historyNotice) historyNotice.textContent = uiLabel('已标为已读。', 'Marked as read.');
+      scheduleUnreadRead();
+    } catch {
+      if (state === socialHistory && explicit && unreadNotice) unreadNotice.textContent =
+        uiLabel('未能标为已读，请重试。', 'Could not mark as read. Try again.');
+    } finally {
+      unread.saving = false;
+      if (state === socialHistory) updateHistoryControls();
+    }
   }
 
   async function historyPage(state, query) {
@@ -2813,11 +2975,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result;
   }
 
-  function privateHistoryAnchor() {
+  function chatHistoryAnchor(excluded, preferredId) {
     const scroller = document.getElementById('message-scroller');
     const top = scroller.getBoundingClientRect().top;
-    const message = Array.from(document.getElementById('message-list').children).find(node =>
-      node.dataset.messageId && node.getBoundingClientRect().bottom >= top);
+    const rows = Array.from(document.getElementById('message-list').children);
+    const preferred = preferredId && rows.find(node => node.dataset.messageId === preferredId);
+    const message = preferred || rows.find(node => node.dataset.messageId && !excluded?.has(node.dataset.messageId)
+      && node.getBoundingClientRect().bottom >= top);
     return {top: scroller.scrollTop, follow: false, id: message?.dataset.messageId,
       offset: message?.getBoundingClientRect().top};
   }
@@ -2861,7 +3025,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (result.status !== 200) throw new Error('History unavailable');
       const existing = new Set((privateChat ? lastAgentItems : lastSocialItems).map(item => item.id));
       const older = (result.body.items || []).filter(item => !existing.has(item.id));
-      const anchor = privateChat && older.length ? privateHistoryAnchor() : null;
+      const anchor = privateChat && older.length ? chatHistoryAnchor() : null;
       state.cursor = result.body.cursor ?? null;
       state.readingHistory = true;
       const notice = older.length
@@ -2885,9 +3049,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
     }
   });
+  function openSocialLatest() {
+    const unread = socialHistory?.unread;
+    const preserveUnread = Boolean(unread && unread.committed < unread.latest);
+    return openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+  }
+
   latestMessages?.addEventListener('click', () => {
-    if (currentSource === 'social' && currentConversation) openSocialConversation(currentConversation.id);
+    if (currentSource === 'social' && currentConversation) openSocialLatest();
     else if (currentSource === 'agent' && privateHistory) void restorePrivateLatest(privateHistory);
+  });
+  markThreadRead?.addEventListener('click', () => {
+    const state = socialHistory;
+    if (unreadNotice) unreadNotice.textContent = '';
+    if (state?.unread) void commitUnread(state, state.unread.latest, true);
+  });
+  document.getElementById('message-scroller')?.addEventListener('scroll', scheduleUnreadRead, {passive: true});
+  newerMessages?.addEventListener('click', async () => {
+    const state = socialHistory;
+    const unread = state?.unread;
+    if (!visibleUnreadView(state) || !unread?.after || state.loading) return;
+    state.loading = true;
+    updateHistoryControls();
+    if (unreadNotice) unreadNotice.textContent = '';
+    try {
+      const result = await historyPage(state, new URLSearchParams({after: unread.after, limit: HISTORY_PAGE_SIZE, scope:'workspace'}));
+      if (!result) return;
+      if (result.status !== 200 || !Array.isArray(result.body.items)) throw new Error('history');
+      const items = result.body.items.filter(message => Number.isSafeInteger(message.seq) && message.seq > unread.after);
+      if (result.body.has_newer && !items.length) throw new Error('history cursor');
+      const anchor = chatHistoryAnchor();
+      if (Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
+      unread.after = result.body.has_newer ? items.at(-1).seq : null;
+      if (items.length) renderSocialMessages([...lastSocialItems, ...items], {anchor});
+    } catch {
+      if (state === socialHistory && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
+    } finally {
+      state.loading = false;
+      if (state === socialHistory) {
+        updateHistoryControls();
+        scheduleUnreadRead();
+      }
+    }
   });
 
   let lastSocialItems = [];
@@ -3202,7 +3405,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return block;
   }
 
-  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false, anchor} = {}) {
+    const hidden = hiddenMessageReceipts.get(sendScope());
+    if (hidden && items) items = items.filter(row => !hidden.has(row.id)).map(row =>
+      hidden.has(row.reply_preview?.message_id)
+        ? {...row, reply_preview: {message_id: row.reply_preview.message_id, available: false}} : row);
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
       ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
@@ -3227,10 +3434,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
     const pendingKeys = pendingMessageKeys();
+    const unread = socialHistory?.unread;
+    let needsDivider = Boolean(unread?.firstId);
     for (const item of items || []) {
       if (pendingKeys.has(item.client_key)) continue;
+      if (needsDivider && item.seq >= unread.firstSeq) {
+        const divider = document.createElement('li');
+        divider.className = 'chat-unread-divider';
+        divider.id = 'chat-first-unread';
+        divider.textContent = uiLabel('未读消息', 'Unread messages');
+        list.append(divider);
+        needsDivider = false;
+      }
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
+      if (Number.isSafeInteger(item.seq)) li.dataset.messageSeq = String(item.seq);
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
@@ -3354,9 +3572,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(reply);
       }
       if (item.role === 'agent' && !currentConversation?.public_agent && saveableSocialMessage(item)) li.append(saveMessageButton(item));
-      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item));
-      if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
-      if (item.role !== 'agent' && !item.retracted) {
+      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item, li));
+      if (!selecting && item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
+      if (!selecting && item.role !== 'agent' && !item.retracted) {
         const more = document.createElement('button');
         more.type = 'button'; more.className = 'message-more'; more.textContent = '⋯';
         more.setAttribute('aria-label', '消息操作'); more.setAttribute('aria-haspopup', 'menu');
@@ -3381,7 +3599,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPendingSend();
     syncGroupReplyProgress();
     attachmentSender?.render();
-    if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
+    if (anchor) {
+      scroller.scrollTop = anchor.top;
+      const anchored = [...list.children].find(row => anchor.id && row.dataset.messageId === anchor.id);
+      if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
+    } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
     return false;
   }
@@ -3615,7 +3837,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function readingSocialContext() {
     const scroller = document.getElementById('message-scroller');
+    const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
+      || (unread && unread.committed < unread.latest)
       || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
@@ -3663,7 +3887,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
-    if (currentSource === 'social' && currentConversation) await openSocialConversation(currentConversation.id);
+    if (currentSource === 'social' && currentConversation) await openSocialLatest();
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   let membersStatus = '', artifactsStatus = '';
@@ -4350,7 +4574,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return stillOpen();
   }
 
-  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent, link, transition} = {}) {
+  async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
+    refresh = false, publicStartCurrent, link, transition} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -4364,7 +4589,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
-    const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
+    const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
+    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
+    const result = await request('GET', path).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -4410,7 +4637,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
-    setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    const shown = result.body.items || [];
+    const lastSeq = shown.at(-1)?.seq;
+    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const first = snapshot?.first;
+    const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
+      Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
+      ? {firstId:first.id, firstSeq:first.seq, committed:snapshot.read_seq, latest:snapshot.last_seq,
+        after:snapshot.has_newer ? lastSeq : null, seen:new Set()}
+      : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
+        ? {committed:0, latest:lastSeq, seen:new Set()} : null;
+    setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
+      readingHistory: Boolean(unread?.firstId), unread});
+    if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
     voiceRecorder.refresh();
@@ -4437,10 +4676,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items, {refresh});
     renderGroupReplyAction(result.body.agent_replies || []);
+    if (unread?.firstId) {
+      const divider = document.getElementById('chat-first-unread');
+      const scroller = document.getElementById('message-scroller');
+      if (divider?.getBoundingClientRect && scroller.getBoundingClientRect) {
+        scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+      }
+      // The rendered conversation becomes interactive after the sidebar transition clears.
+      setTimeout(scheduleUnreadRead, 0);
+    }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    const shown = result.body.items || [];
-    if (acknowledge && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -4584,6 +4831,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
     }
+    if (document.visibilityState === 'visible') scheduleUnreadRead();
     syncGroupReplyProgress();
     if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
       || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
@@ -5092,7 +5340,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, link})
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
       : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
@@ -5192,7 +5440,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
-    const unconfirmedSignup = !confirmSignupSession(document.defaultView ?? globalThis, session);
+    const view = document.defaultView ?? globalThis;
+    const firstDraft = servedByDsbot && signupDraftScope(view, session.body?.user?.id);
+    const unconfirmedSignup = !confirmSignupSession(view, session);
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
@@ -5208,6 +5458,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      agentMentions.clear();
       clearComposerDrafts();
       renderReplyDraft();
       currentConversation = null;
@@ -5239,6 +5490,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      agentMentions.clear();
       clearComposerDrafts();
       renderReplyDraft();
     }
@@ -5338,6 +5590,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const openStartingAgent = async () => {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) {
+        if (firstDraft && start.workspace === personalWorkspace && workspaceId() === personalWorkspace && start.agent === personalAgentId) {
+          publicDraft.move(firstDraft, JSON.stringify([owner.id, personalWorkspace, 'agent', personalAgentId, first.id]));
+        }
         const startupSnapshot = openLocal ? ownedStartingTranscript(local, start.agent, first.id) : undefined;
         await openAgentConversation(start.agent, first.id, {startupSnapshot});
       }
@@ -5371,7 +5626,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') {
-        if (!await openSocialConversation(first.id)) return;
+        if (!await openSocialConversation(first.id, {startUnread: first.unread_count > 0 && first.kind !== 'public'})) return;
       } else {
         const startupSnapshot = firstSnapshot?.row.id === first.id && firstSnapshot.row.agent_id === first.agent_id
           ? firstSnapshot.read : undefined;
@@ -5531,15 +5786,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const multiToggle = document.getElementById('multi-select-toggle');
   if (multiToggle) multiToggle.addEventListener('click', () => setSelecting(!selecting));
   const forwardCancel = document.getElementById('forward-cancel');
-  if (forwardCancel) forwardCancel.addEventListener('click', () => setSelecting(false));
+  if (forwardCancel) forwardCancel.addEventListener('click', () => {
+    setSelecting(false);
+    (narrowScreen() ? document.getElementById('chat-more') : multiToggle)?.focus({preventScroll: true});
+  });
+  document.getElementById('message-selection-more')?.addEventListener('click', event => {
+    if (event.target.closest('button')) event.currentTarget.open = false;
+  });
+  const hideCancel = document.getElementById('message-selection-hide-cancel');
+  document.getElementById('selection-hide')?.addEventListener('click', () => {
+    const scope = sendScope(), ids = selectedSocialIds();
+    if (!servedByDsbot || !selecting || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
+        !ids.length || hidingMessages.has(scope) || forwardBusy || hideDialog.open) return;
+    hideTarget = {scope, ids, epoch: selectionEpoch, path: `${socialBase()}/${currentConversation.id}/messages/hide`};
+    document.getElementById('message-selection-hide-heading').textContent =
+      uiLabel(`从我的记录移除 ${ids.length} 条消息`, `Remove ${ids.length} ${ids.length === 1 ? 'message' : 'messages'} from my history`);
+    hideStatus.textContent = '';
+    hideConfirm.disabled = false;
+    hideDialog.showModal();
+    hideCancel.focus();
+  });
+  hideCancel?.addEventListener('click', () => hideDialog.close());
+  hideDialog?.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+  hideDialog?.addEventListener('close', () => { if (!hideDialog.open) hideTarget = null; });
+  document.getElementById('message-selection-hide-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = hideTarget;
+    if (!target || !hideDialog.open || hideConfirm.disabled || target.scope !== sendScope() || !selecting ||
+        target.epoch !== selectionEpoch || hidingMessages.has(target.scope)) return;
+    hidingMessages.add(target.scope);
+    syncForwardBar();
+    hideConfirm.disabled = true;
+    hideStatus.textContent = uiLabel('正在移除…', 'Removing messages…');
+    let result;
+    try { result = await request('POST', target.path, {message_ids: target.ids}, undefined, AbortSignal.timeout(10000)); }
+    catch {} finally {
+      hidingMessages.delete(target.scope);
+      syncForwardBar();
+    }
+    const sameView = hideDialog.open && hideTarget === target;
+    const hidden = result?.body?.hidden_message_ids;
+    if (result?.status !== 200 || !Array.isArray(hidden) || hidden.length !== target.ids.length || target.ids.some(id => !hidden.includes(id))) {
+      if (sameView && target.scope === sendScope()) {
+        hideStatus.textContent = result?.status === 404 ? uiLabel('所选消息有变化，请关闭后重新选择。', 'Your selection changed. Close this dialog and select again.')
+          : uiLabel('暂时无法确认移除结果，可以重试。', 'Could not confirm the removal. You can try again.');
+        hideConfirm.disabled = result?.status === 404;
+      }
+      return;
+    }
+    rememberHiddenMessages(target.scope, target.ids);
+    if (target.scope !== sendScope()) return;
+    if (sameView) hideDialog.close();
+    forgetSocialMessages(target.ids, target.epoch === selectionEpoch);
+    show('ok', uiLabel(`已从你的记录移除 ${target.ids.length} 条消息。`, `Removed ${target.ids.length} from your history.`), {announceOnly:true});
+    if (sameView && !sessionTransition?.pending) document.getElementById('chat-title')?.focus({preventScroll:true});
+    void loadSessions();
+  });
   const forwardTarget = document.getElementById('forward-target');
   if (forwardTarget) forwardTarget.addEventListener('change', syncForwardBar);
   const forwardSubmit = document.getElementById('forward-submit');
   if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
     const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
-    const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
-    if (!cid || !target || !ids.length || forwardBusy) return;
+    const ids = selectedSocialIds();
     const scope = sendScope();
+    if (!cid || !target || !ids.length || forwardBusy || hidingMessages.has(scope)) return;
+    const epoch = selectionEpoch;
     const signature = JSON.stringify([scope, target, ids]);
     if (forwardAttempt?.signature !== signature) forwardAttempt = {signature, key:idempotencyKey('forward-')};
     forwardBusy = true;
@@ -5553,7 +5864,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       forwardAttempt = null;
       if (scope === sendScope()) {
-        setSelecting(false);
+        if (epoch === selectionEpoch) setSelecting(false);
         show('ok', `已转发 ${result.body.forwarded ?? ids.length} 条消息。`);
         await loadSessions();
       }
@@ -5730,7 +6041,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             setPrivateHistory({...window, jumping: null});
             renderAgentMessages(result.body.items, {followLatest: false});
           } else {
-            setSocialHistory(window);
+            const unread = state.unread;
+            const retained = unread && unread.committed < unread.latest
+              ? {committed: unread.committed, latest: unread.latest, seen: new Set()} : null;
+            setSocialHistory({...window, unread: retained});
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();
@@ -6194,8 +6508,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
     const {source, agent, conversation: cid} = button.dataset;
-    const title = sessions.find(item => item.id === cid && item.source === source)?.title || uiLabel('会话', 'conversation');
-    await openSessionTarget({source, agent, cid, title});
+    const session = sessions.find(item => item.id === cid && item.source === source);
+    const title = session?.title || uiLabel('会话', 'conversation');
+    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {

@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS ot_automations (
  intent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'once', agents TEXT NOT NULL DEFAULT '[]',
  compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT,
  UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_meeting_sources (
+ automation_id TEXT PRIMARY KEY REFERENCES ot_automations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL,
+ title TEXT NOT NULL, text TEXT NOT NULL, owner TEXT NOT NULL,
+ UNIQUE(workspace_id, meeting_id, revision, action_index));
 CREATE TABLE IF NOT EXISTS ot_automation_runs (
  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
@@ -147,7 +152,7 @@ export function runView(row) {
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact, readMeetingAction }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -200,6 +205,27 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const row = one('SELECT * FROM ot_automations WHERE id=? AND workspace_id=?', id, workspaceId)
     if (!row) refuse(404, 'not_found', 'Automation not found')
     return row
+  }
+  const meetingSourceFor = (id) => one(`SELECT meeting_id, revision, action_index, title, text, owner
+    FROM ot_automation_meeting_sources WHERE automation_id=?`, id)
+  function detail(row, at) {
+    const source = meetingSourceFor(row.id)
+    return projected({ ...view(row), ...(source ? { source_meeting: {...source} } : {}) }, at)
+  }
+  function meetingReference(value) {
+    const { meeting_id, revision, action_index } = value ?? {}
+    if (typeof meeting_id !== 'string' || !HEX32.test(meeting_id) || !Number.isSafeInteger(revision) || revision < 1
+      || !Number.isInteger(action_index) || action_index < 0 || action_index >= 50) {
+      refuse(400, 'invalid', '请选择已保存的行动项。')
+    }
+    return { meeting_id, revision, action_index }
+  }
+  function existingFollowup(workspaceId, { meeting_id, revision, action_index }) {
+    const row = one(`SELECT ot_automations.* FROM ot_automation_meeting_sources source
+      JOIN ot_automations ON ot_automations.id=source.automation_id AND ot_automations.workspace_id=source.workspace_id
+      WHERE source.workspace_id=? AND source.meeting_id=? AND source.revision=? AND source.action_index=?`,
+    workspaceId, meeting_id, revision, action_index)
+    return row ? detail(row) : null
   }
   const loadRun = (row, runId) => {
     const item = typeof runId === 'string' && HEX32.test(runId)
@@ -297,7 +323,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
   function stop() { if (timer) clearInterval(timer); timer = null }
 
-  function createInTransaction(payload) {
+  function createInTransaction(payload, source) {
     const workspaceId = workspaceOf(payload)
     const { title, template_id: templateId, schedule, participants: names } = payload
     const intent = payload.intent ?? ''
@@ -320,13 +346,13 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
     const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
-      ...(payload.enabled === undefined ? {} : { enabled }) }))
+      ...(payload.enabled === undefined ? {} : { enabled }), ...(source ? { source_meeting: meetingReference(source) } : {}) }))
     const keyHash = sha(key)
     const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (existing) {
-      const replay = existing.template_id === REMINDER && templateId === REMINDER
+      const replay = !source && !meetingSourceFor(existing.id) && existing.template_id === REMINDER && templateId === REMINDER
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, automation: projected(view(existing)) }
+      return { status: 200, automation: detail(existing) }
     }
     if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
       refuse(409, 'conflict', 'An automation with this title already exists')
@@ -338,7 +364,33 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
       intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
-    return { status: 201, automation: projected(view(one('SELECT * FROM ot_automations WHERE id=?', id)), now) }
+    if (source) {
+      run(`INSERT INTO ot_automation_meeting_sources (automation_id, workspace_id, meeting_id, revision, action_index, title, text, owner)
+        VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, source.meeting_id, source.revision, source.action_index,
+      source.title, source.text, source.owner)
+    }
+    return { status: 201, automation: detail(one('SELECT * FROM ot_automations WHERE id=?', id), now) }
+  }
+
+  async function createMeetingFollowup(payload) {
+    const workspaceId = workspaceOf(payload)
+    const ref = meetingReference(payload.source_meeting)
+    if (!IDEM.test(String(payload.idempotency_key ?? ''))) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const prior = existingFollowup(workspaceId, ref)
+    if (prior) return {status: 200, automation: prior}
+    const result = await readMeetingAction?.(workspaceId, ref)
+    return tx(db, () => {
+      const existing = existingFollowup(workspaceId, ref)
+      if (existing) return {status: 200, automation: existing}
+      const {meeting, action} = result?.body ?? {}
+      if ([403, 404, 409].includes(result?.status)) refuse(result.status, 'meeting_source_unavailable', '行动项已更新、已完成或不可访问。请返回会议重新选择。')
+      if (result?.status !== 200 || meeting?.id !== ref.meeting_id || meeting.workspace_id !== workspaceId || meeting.revision !== ref.revision
+        || typeof meeting.title !== 'string' || !meeting.title.trim() || action?.done !== false || typeof action.text !== 'string' || !action.text.trim()) {
+        refuse(503, 'meeting_source_unavailable', '暂时无法读取会议行动项，请重试。')
+      }
+      const source = { ...ref, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : '' }
+      return createInTransaction({ ...payload, enabled: false }, source)
+    })
   }
 
   function createOnboarding(payload) {
@@ -404,7 +456,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         next.title, sha(next.title.toLowerCase()), next.prompt, JSON.stringify(next.schedule),
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
         JSON.stringify(next.agents), compiled ? 1 : 0, clock(), row.id)
-      return { automation: projected(view(one('SELECT * FROM ot_automations WHERE id=?', row.id))) }
+      return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id)) }
     })
   }
 
@@ -417,12 +469,17 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const me = String(payload.username ?? '').toLowerCase()
     const items = []
     const at = clock()
-    for (const row of all('SELECT * FROM ot_automations WHERE workspace_id=? ORDER BY id', workspaceId)) {
+    for (const row of all(`SELECT automation.*, source.meeting_id, source.revision AS source_revision,
+      source.action_index, source.title AS source_title, source.text AS source_text, source.owner AS source_owner
+      FROM ot_automations automation LEFT JOIN ot_automation_meeting_sources source ON source.automation_id=automation.id
+      WHERE automation.workspace_id=? ORDER BY automation.id`, workspaceId)) {
       const item = view(row)
       if (needle && !item.title.toLowerCase().includes(needle) && !item.prompt.toLowerCase().includes(needle)) continue
       const template = TEMPLATES[item.template_id] ?? TEMPLATES.custom
       if (category === 'mine') { if (!item.participants.some((p) => p.username.toLowerCase() === me)) continue }
       else if (category && template.category !== category) continue
+      if (row.meeting_id) item.source_meeting = {meeting_id:row.meeting_id, revision:row.source_revision, action_index:row.action_index,
+        title:row.source_title, text:row.source_text, owner:row.source_owner}
       items.push(projected(item, at))
     }
     return { items }
@@ -550,8 +607,9 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const endpoints = {
     'automations/templates': () => ({ items: Object.values(TEMPLATES).map((t) => ({ ...t })) }),
     'automations/list': list,
-    'automations/get': (p) => ({ automation: projected(view(load(workspaceOf(p), p?.id))) }),
-    'automations/create': (p) => tx(db, () => createInTransaction(p)),
+    'automations/get': (p) => ({ automation: detail(load(workspaceOf(p), p?.id)) }),
+    'automations/meetingFollowup': (p) => ({ automation: existingFollowup(workspaceOf(p), meetingReference(p)) }),
+    'automations/create': (p) => p && Object.hasOwn(p, 'source_meeting') ? createMeetingFollowup(p) : tx(db, () => createInTransaction(p)),
     'automations/createOnboarding': createOnboarding,
     'automations/update': update,
     'automations/remove': (p) => {
@@ -584,7 +642,10 @@ export default async function automations(host) {
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
     personalBinding: () => host.call('agents/personal-binding', {}),
-    saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload) })
+    saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
+    readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
+      method: 'GET', path: `/v1/workspaces/${workspace}/meetings/${meeting_id}/action?index=${action_index}&revision=${revision}`,
+    }) })
   const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.

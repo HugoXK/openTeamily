@@ -3,11 +3,11 @@
 // page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
-import { GLB_MIME } from '../../lib/glb.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
-  TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
+  emptyBoard, emptyDashboard, emptySlides, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
+  SLIDES_SCHEMA, TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
 import {
@@ -296,7 +296,7 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false, receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
@@ -328,7 +328,7 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   if (dashboard) payload.dashboard = dashboard
   if (spreadsheet) payload.spreadsheet = spreadsheet
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
     const source = input.source
     const already = existingSource(store, workspaceId, source)
@@ -366,6 +366,47 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
     void featureDir
     return saved(store, workspaceId, id, 201)
   })
+}
+
+export function remixPublicWork(ctx, {workspace_id:workspace,slug,revision,title,idempotency_key:key,source} = {}) {
+  if (typeof workspace !== 'string' || !HEX32.test(workspace) || typeof slug !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) || typeof revision !== 'string' || !/^[0-9a-f]{64}$/.test(revision)
+      || !validTitle(title) || /[\x00-\x1f\x7f]/.test(title) || typeof key !== 'string' || !KEY.test(key)) {
+    refuse(400,'invalid','请填写副本名称并选择公开作品的版本。')
+  }
+  const trimmed = title.trim()
+  const receiptHash = digest(stableJson({public_work:slug,revision,title:trimmed}))
+  const prior = ctx.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',workspace,digest('artifact:' + key))
+  if (prior) {
+    if (prior.request_hash !== receiptHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
+    return {status:200,body:{artifact:view(load(ctx.store,workspace,prior.id))}}
+  }
+  if (ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?',workspace,titleHash(trimmed))) {
+    refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+  }
+  if (!source) return null
+  if (source.kind === 'media') {
+    const {mime, filename, bytes} = source
+    const maximum = mime === GLB_MIME ? MAX_GLB_BYTES : MAX_MEDIA_OBJECT_BYTES
+    if (!MEDIA_MIMES.has(mime) || typeof filename !== 'string' || !filename.trim() ||
+        !Number.isSafeInteger(bytes) || bytes < 12 || bytes > maximum || typeof source.data !== 'string' ||
+        source.data.length !== Math.ceil(bytes / 3) * 4) refuse(400,'invalid','这个公开文件的格式或大小不受支持。')
+    const data = Buffer.from(source.data,'base64')
+    if (data.length !== bytes || data.toString('base64') !== source.data || sniffMime(data) !== mime) {
+      refuse(400,'invalid','这个公开文件的内容与文件类型不符。')
+    }
+    return createMedia(ctx,workspace,{title:trimmed,mime,filename,data,key},{receiptHash})
+  }
+  if (source.kind === 'slides' || source.kind === 'whiteboard') {
+    const input = source.kind === 'slides' && source.slides?.schema === SLIDES_SCHEMA ? {slides:source.slides}
+      : source.kind === 'whiteboard' && source.board?.schema === 'openteamily.whiteboard.v1' ? {board:source.board} : null
+    if (!input) refuse(400,'invalid','这个公开版本没有可复制的作品内容。')
+    return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,...input},key,{receiptHash})
+  }
+  if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
+    refuse(400,'invalid','该公开版本无法复制。')
+  }
+  return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,body:source.body},key,{receiptHash})
 }
 
 export function duplicateArtifact({store, owner, featureDir}, workspaceId, {artifact_id: sourceId, revision, title}, key) {
@@ -420,7 +461,7 @@ export function duplicateArtifact({store, owner, featureDir}, workspaceId, {arti
   })
 }
 
-export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }) {
+export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }, {receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   if (!validTitle(title)) refuse(400, 'invalid', 'Provide a document title and body')
@@ -435,7 +476,7 @@ export function createMedia(ctx, workspaceId, { title, data, filename, mime, key
   const sha = createHash('sha256').update(data).digest('hex')
   const payload = { title: trimmed, kind: 'media', sha256: sha, mime: used, filename: name }
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {

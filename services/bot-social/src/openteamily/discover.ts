@@ -6,11 +6,12 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
+import { CHAT_FILE_BODY_LIMIT, CHAT_FILE_MAX_BYTES, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
 import { WORK_SEARCH_SCHEMA, publicWorkText, registerWorkSearch, saveWorkSearch, workBodyCondition, workSearchMatch, workSearchQuery } from "./discover-work-search.js";
 import { PUBLIC_MEDIA_SCHEMA, decodePublishedMedia, downloadName, isMediaWork, publishedMediaView, savePublishedMedia, sendPublishedMedia } from "./discover-media.js";
+import { EDITABLE_WORK_SCHEMA, editableRelease, editableWorkKind, hasEditableRelease } from "./discover-editable.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
   snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
   chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  publication_revision INTEGER NOT NULL DEFAULT 1,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS ot_listing_models (
 );
 CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
 ${PUBLIC_MEDIA_SCHEMA}
+${EDITABLE_WORK_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_listing_sites (
   listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
   html TEXT NOT NULL
@@ -58,6 +61,8 @@ const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agen
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
 const WORK_PREVIEW_MAX = 2_000;
+const REMIX_BODY_LIMIT = 8_000;
+const REMIX_REVISION = /^[0-9a-f]{64}$/;
 const MODEL_MIME = "model/gltf-binary";
 const MAX_SITE_BYTES = 32 * 1024;
 const SITE_POLICY = [
@@ -339,6 +344,39 @@ function listedBySlug(ot: OtContext, slug: string) {
   return l;
 }
 
+function publicRemixSource(ot: OtContext, listing: {id: string; work_kind: string | null}) {
+  const kind = listing.work_kind;
+  const content = kind === "website"
+    ? ot.get<{body: string}>("SELECT html AS body FROM ot_listing_sites WHERE listing_id=? AND length(html)<=?", listing.id, REMIX_BODY_LIMIT)
+    : kind === "document"
+      ? ot.get<{body: string}>("SELECT snapshot AS body FROM ot_listings WHERE id=? AND length(snapshot)<=?", listing.id, REMIX_BODY_LIMIT)
+      : undefined;
+  if (!content?.body?.trim() || content.body.length > REMIX_BODY_LIMIT || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content.body)
+      || (kind !== "document" && kind !== "website")) return null;
+  if (kind === "document" && /^[{\[]/.test(content.body.trimStart())) {
+    try {
+      const decoded = JSON.parse(content.body);
+      if (decoded && typeof decoded === "object") return null;
+    } catch { /* A document may begin with literal punctuation. */ }
+  }
+  return {kind,body:content.body};
+}
+
+const remixBytes = (bytes: unknown) => typeof bytes === "number" && Number.isSafeInteger(bytes) &&
+  bytes >= 12 && bytes <= CHAT_FILE_MAX_BYTES;
+
+function publicRemixFile(ot: OtContext, work: {id: string; slug: string; title: string; work_kind: string | null; listed: number}) {
+  if (work.work_kind === "model3d") {
+    const model = ot.get<{bytes: number}>("SELECT length(content) AS bytes FROM ot_listing_models WHERE listing_id=?", work.id);
+    if (!model || !remixBytes(model.bytes)) return null;
+    return {table:"ot_listing_models",mime:MODEL_MIME,filename:work.title.replace(/[\x00-\x1f\x7f/\\]/g,"_")+".glb",bytes:model.bytes};
+  }
+  const advertised = publishedMediaView(ot,work);
+  if (!advertised.file_available || !remixBytes(advertised.file_bytes)) return null;
+  const row = ot.get<{filename: string}>("SELECT filename FROM ot_listing_media WHERE listing_id=?",work.id);
+  return row ? {table:"ot_listing_media",mime:advertised.file_mime,filename:row.filename,bytes:advertised.file_bytes} : null;
+}
+
 type FeedScope = { where: string; args: unknown[] };
 type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
@@ -584,6 +622,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+  if (!columns.has("publication_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 1");
   const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
@@ -608,6 +647,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
     const media = decodePublishedMedia(workKind, b);
     if (media && workKind === "media") workKind = media.mime.split("/")[0];
+    const editable = editableRelease(workKind,b.editable_snapshot);
     const site = b.site_html;
     if (site !== undefined) {
       assert(workKind === "website" && typeof site === "string" && site.trim().length > 0,
@@ -633,7 +673,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const id = existing?.id ?? newId("otl");
     ot.tx(() => {
       if (existing) {
-        ot.run("UPDATE ot_listings SET slug = ?, title = ?, summary = ?, category = ?, work_kind = ?, snapshot = ?, listed = 1, chat_enabled = ?, chat_from = ?, updated_at = ? WHERE id = ?", slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
+        ot.run(`UPDATE ot_listings SET slug=?, title=?, summary=?, category=?, work_kind=?, snapshot=?, listed=1,
+          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1 WHERE id=?`,
+        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
         ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
@@ -655,6 +697,12 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       }
       if (media) savePublishedMedia(ot, id, me.ownerId, media);
       else if (existing && isMediaWork(existing.work_kind)) ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
+      if (editable) {
+        ot.run(`INSERT INTO ot_listing_editable(listing_id,kind,content) VALUES(?,?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET kind=excluded.kind,content=excluded.content`,id,editable.kind,editable.content);
+      } else if (existing && editableWorkKind(existing.work_kind)) {
+        ot.run("DELETE FROM ot_listing_editable WHERE listing_id=?",id);
+      }
       if (site !== undefined) {
         ot.run(`INSERT INTO ot_listing_sites (listing_id, html) VALUES (?,?)
           ON CONFLICT(listing_id) DO UPDATE SET html=excluded.html`, id, site);
@@ -671,7 +719,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
       }
     });
-    return listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true);
+    return {...listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true),
+      ...(editable ? {editable_remix:true} : {})};
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
@@ -682,14 +731,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_editable WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_discover_work_search WHERE listing_id = ?", id);
     });
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
     const me = ot.me(req);
-    const rows = ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId);
-    return { listings: rows.map((l) => ({ ...listingView(ot, l, me.ownerId), ref: l.ref })) };
+    const rows = ot.all<any>(`SELECT l.*,e.listing_id IS NOT NULL AS editable
+      FROM ot_listings l LEFT JOIN ot_listing_editable e ON e.listing_id=l.id AND e.kind=l.work_kind
+      WHERE l.owner_id=? ORDER BY l.updated_at DESC`, me.ownerId);
+    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
+      ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
@@ -737,7 +790,14 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
     assert(work, 404, "listing_not_found", "no such work");
     reply.header("Cache-Control", "no-store");
-    const detail = {work: listingView(ot, work, me.ownerId), previous: null, next: null};
+    const view = listingView(ot, work, me.ownerId);
+    const remixable = editableWorkKind(work.work_kind) ? hasEditableRelease(ot,work)
+      : view.file_available ? remixBytes(view.file_bytes)
+      : work.work_kind === "model3d" ? Boolean(publicRemixFile(ot,work)) : Boolean(publicRemixSource(ot,work));
+    const detail = {
+      work: {...view, ...(remixable ? {remix_available:true} : {})},
+      previous: null, next: null,
+    };
     if (scope.sort === "popular") {
       const ids = rankedWorkIds(ot, scope);
       const position = ids.indexOf(work.id);
@@ -750,6 +810,50 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
     return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
+  });
+  app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
+    ot.me(req);
+    reply.header("Cache-Control", "no-store");
+    const q = query(req);
+    assert(Object.keys(q).every(key => key === "revision") &&
+      (q.revision === undefined || (typeof q.revision === "string" && REMIX_REVISION.test(q.revision))),
+    400,"invalid_request","Invalid work copy revision");
+    return ot.tx(() => {
+      const work = listedBySlug(ot, params(req).slug);
+      assert(work.kind === "work",404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      if (editableWorkKind(work.work_kind)) {
+        const kind = work.work_kind;
+        assert(hasEditableRelease(ot,work),404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,kind]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind,revision};
+        if (!q.revision) return {template};
+        const release = ot.get<{content: string}>("SELECT content FROM ot_listing_editable WHERE listing_id=? AND kind=?",work.id,kind);
+        assert(release,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind,[kind === "slides" ? "slides" : "board"]:JSON.parse(release.content)}};
+      }
+      const file = publicRemixFile(ot,work);
+      if (file) {
+        const {table,mime,filename,bytes} = file;
+        // Publishing updates the listing revision and its file in one transaction.
+        // Only a confirmed copy reads the BLOB.
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,mime,filename,bytes]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind:"media",revision,media:{mime,filename,bytes}};
+        if (!q.revision) return {template};
+        const stored = ot.get<{content: Buffer}>(`SELECT content FROM ${table} WHERE listing_id=?`,work.id);
+        assert(stored?.content.length === bytes,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind:"media",mime,filename,bytes,data:stored.content.toString("base64")}};
+      }
+      const source = publicRemixSource(ot,work);
+      assert(source,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      const revision = hashCode(JSON.stringify([work.id,work.slug,work.updated_at,work.title,source]));
+      assert(q.revision === undefined || q.revision === revision,
+        409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+      return {template:{title:work.title,kind:source.kind,revision},...(q.revision ? {source} : {})};
+    });
   });
   app.get("/v1/ot/discover/:slug", async (req) => {
     const me = ot.me(req);

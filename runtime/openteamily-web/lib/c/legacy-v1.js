@@ -6,6 +6,7 @@
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
 import {structuredArtifactText} from '../../features/artifacts/catalog-search.js'
+import {normalizeBoard,normalizeSlides} from '../../features/artifacts/structured.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -191,6 +192,7 @@ function workItem(row) {
     ...(match ? {match} : {}),
     ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
     ...(fileAvailable ? {file_available: true, file_mime: row.file_mime, file_bytes: row.file_bytes} : {}),
+    ...(row.remix_available === true ? {remix_available: true} : {}),
   }
 }
 
@@ -240,6 +242,8 @@ function rethrow(error) {
     member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
+    listing_changed: 'listing_changed',
+    title_conflict: 'title_conflict',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
     comment_not_found: 'not_found',
@@ -774,19 +778,25 @@ function messengerRoutes(host, wakeReplies) {
     },
     {
       method: 'GET', path: onePath,
-      async handle({ match }) {
+      async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({limit: 100, pins: 1}))
+          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
+            workspace_id: unread && !scope.personal ? match[1] : undefined,
+          }))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
+              has_newer:page.has_newer === true}} : {}),
           }]
         })
       },
@@ -843,11 +853,12 @@ function messengerRoutes(host, wakeReplies) {
           const q = parseQuery(query)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
             workspace_id: !scope.personal && q.get('scope') === 'workspace' ? match[1] : undefined,
-            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
+            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), after: q.get('after'), around: q.get('around'), q: q.get('q'),
           }))
           return [200, {
             items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
             cursor: page.next_before ?? null, has_newer: page.has_newer === true,
+            ...(q.has('after') ? {last_seq:page.last_seq} : {}),
           }]
         })
       },
@@ -1128,6 +1139,19 @@ function messengerExtraRoutes(host, wakeReplies) {
       },
     },
     {
+      method: 'POST', path: re('\\/messages\\/hide'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const {personal} = await messengerScope(host, bs, match[1])
+          const data = await bs.post(conv(match[2]) + '/messages/hide', {
+            message_ids: body?.message_ids, ...(personal ? {direct:true} : {workspace:match[1]}),
+          })
+          return [200, data]
+        })
+      },
+    },
+    {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/(edit|retract)'),
       async handle({ match, body }) {
         return wrap(async () => {
@@ -1323,7 +1347,8 @@ function discoverRoutes(host) {
     return [200, {items, cursor: next ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
-  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
+  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
       method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
@@ -1373,6 +1398,14 @@ function discoverRoutes(host) {
           const got = await host.call('artifacts/v1', { method: 'GET', path: `/v1/workspaces/${match[1]}/artifacts/${match[2]}` })
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
+          const editable = body?.allow_editable_remix
+          if (editable !== undefined && typeof editable !== 'boolean') {
+            throw new Fault(400,'invalid','请选择是否允许复制可编辑作品。')
+          }
+          if ((editable === true || body?.revision !== undefined) &&
+              (!Number.isSafeInteger(body?.revision) || body.revision !== artifact.revision)) {
+            throw new Fault(409,'artifact_changed','已保存的作品版本已更新，请重新打开后再发布。')
+          }
           const prior = await workListing(bs, match[2])
           const mime = artifact.kind === 'media' ? artifact.media?.mime : undefined
           const mediaKind = mime === GLB_MIME ? 'model3d' : DISCOVER_MEDIA_KINDS.get(mime)
@@ -1380,6 +1413,14 @@ function discoverRoutes(host) {
             throw new Fault(400, 'attachment_type_blocked', '这个文件格式无法公开发布。')
           }
           const kind = mediaKind || artifact.kind
+          let editableSnapshot
+          if (editable) {
+            if (kind !== 'slides' && kind !== 'whiteboard') throw new Fault(400,'invalid','该作品类型无法发布可编辑版本。')
+            const binding = await host.call('agents/personal-binding',{})
+            if (binding?.workspace_id !== match[1]) await teamFor(bs,match[1],'Workspace',env)
+            editableSnapshot = kind === 'slides' ? normalizeSlides(artifact.slides) : normalizeBoard(artifact.board)
+            if (!editableSnapshot) throw new Fault(400,'invalid','这个作品没有可发布的保存版本。')
+          }
           const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
           const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
           let file = {}
@@ -1399,6 +1440,7 @@ function discoverRoutes(host) {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
+            ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
             ...file,
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
@@ -1486,6 +1528,43 @@ function discoverRoutes(host) {
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null
           return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'GET', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query }, call) {
+        return wrap(async () => {
+          if (query) throw new Fault(400,'invalid','无效的作品复制请求。')
+          const {template} = await client(host).get(`/v1/ot/discover/${match[1]}/remix`)
+          return [200,{template,...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query, body, idempotency_key: key }, call) {
+        return wrap(async () => {
+          if (query || !body || Object.keys(body).length !== 2 || !Object.hasOwn(body,'title') ||
+              typeof body.revision !== 'string' || !/^[0-9a-f]{64}$/.test(body.revision) ||
+              typeof key !== 'string' || !COMMENT_KEY.test(key)) {
+            throw new Fault(400,'invalid','无效的作品复制请求。')
+          }
+          const binding = await host.call('agents/personal-binding', {})
+          if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409,'no_personal_workspace','请先打开个人工作区。')
+          const slug = match[1]
+          const payload = {slug,workspace_id:binding.workspace_id,revision:body.revision,title:body.title,idempotency_key:key}
+          const previous = await host.call('artifacts/remixPublicWork',payload)
+          const project = ({status,body:{artifact}}) => [status,{
+            artifact:{id:artifact.id,workspace_id:artifact.workspace_id,kind:artifact.kind,title:artifact.title,revision:artifact.revision},
+            ...platformViewer(call),
+          }]
+          if (previous) return project(previous)
+          const snapshot = await client(host).get(`/v1/ot/discover/${slug}/remix` + qs({revision:body.revision}))
+          if (!snapshot.source || snapshot.template?.revision !== body.revision || snapshot.template.kind !== snapshot.source.kind) {
+            throw new Fault(409,'listing_changed','这个公开版本已不可用，请重新查看。')
+          }
+          return project(await host.call('artifacts/remixPublicWork',{...payload,source:snapshot.source}))
         })
       },
     },

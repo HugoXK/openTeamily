@@ -24,12 +24,20 @@ export function apply(ctx, config = {}) {
   const dataDir = config.dataDir ?? process.env.DSH_HOME ?? '/data'
   const identity = loadIdentity({ env: process.env, dataDir })
   const pagesDir = config.pagesDir ?? join(HERE, 'pages')
-  const features = loadFeatures({ dir: config.featuresDir ?? join(HERE, 'features'), identity, dataDir })
+  const pageSettings = Promise.withResolvers()
+  const features = loadFeatures({
+    dir: config.featuresDir ?? join(HERE, 'features'), identity, dataDir,
+    onRegistered(name, table) {
+      if (name === 'settings') pageSettings.resolve(table['settings/get'])
+    },
+  })
+  // Even images without the settings feature can serve the default-language document.
+  void features.then(({table}) => pageSettings.resolve(table['settings/get']), () => pageSettings.resolve(undefined))
   const page = createPageHandler({
     pagesDir, identity,
     async getSystemLanguage() {
-      const { table } = await features
-      const result = await table['settings/get']?.()
+      const read = await pageSettings.promise
+      const result = await read?.()
       return result?.settings?.values?.language
     },
   })

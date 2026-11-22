@@ -42,6 +42,7 @@ def poll_once(args):
     require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
     cfg = registry.config
     client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
+    gateway = cfg.get('dsbot_gateway') is not None
     results = []
     def priority(item):
         if item['converged'] or item['blocked']:
@@ -60,17 +61,27 @@ def poll_once(args):
                     results.append({'status': 'skipped', 'instance_id': iid, 'reason': 'instance_not_registered'})
                     continue
                 registry.adopt(iid, item)
-            registry.entry(iid, item)
-            engine = ComposeEngine(registry, Runner(registry, enabled=True))
-            result = ManagerWorker(client, registry, engine).run_once(iid)
+            engine = None
+            if item['converged'] or item['blocked']:
+                # A newer intent arriving during this pass is picked up on the next listing.
+                result = {'status': 'no_claim', 'instance_id': iid}
+            else:
+                registry.entry(iid, item)
+                engine = ComposeEngine(registry, Runner(registry, enabled=True))
+                result = ManagerWorker(client, registry, engine).run_once(iid)
             results.append(result)
-            if registry.config.get('dsbot_gateway') is not None and result.get('status') in ('observed', 'no_claim'):
+            if gateway and result.get('status') in ('observed', 'no_claim'):
                 # Route the owner's browser to this DS-Bot (platform gateway). A refusal
                 # here never changes the job receipt above.
                 if (result.get('observed', item['observed']) != 'running'
                         or (result['status'] == 'no_claim' and not item['converged'])):
                     results.append({'status': 'not_running', 'instance_id': iid})
                     continue
+                if result['status'] == 'no_claim' and item.get('gateway_route_fresh') is True and not args.import_legacy:
+                    continue
+                if engine is None:
+                    registry.entry(iid, item)
+                    engine = ComposeEngine(registry, Runner(registry, enabled=True))
                 try:
                     results.append(dsbot_route.publish(engine, client, iid))
                 except ManagerError as error:
