@@ -1185,9 +1185,10 @@ test('feed covers load from the public work preview path, never for images or od
 
 
 async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{id:'space-1',name:'我的工作区'}],
-  signedIn = true, preview, submit} = {}) {
+  signedIn = true, preview, submit, language = 'zh-CN'} = {}) {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
+  doc.documentElement = {lang: language};
   const calls = [];
   const response = (status, body) => ({status, json:async()=>body});
   const fetcher = async (path, options) => {
@@ -1196,7 +1197,8 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
     if (path === '/v1/workspaces?limit=100') return response(workspaceStatus, {items:workspaces});
     if (path === '/v1/discover/agents/weekly-digest/remix' && options.method === 'GET') {
       if (preview) return preview();
-      return response(200, {template:{revision:'public-revision',name:'竞品周报助手',summary:'每周竞品摘要',instructions:'公开指令'}});
+      return response(200, {template:{revision:'public-revision',name:'竞品周报助手',summary:'每周竞品摘要',instructions:'公开指令',
+        quick_starts:['汇总本周的竞品变化。', '列出三个值得关注的信号。']}});
     }
     if (options.method === 'POST' && submit) return submit();
     if (options.method === 'POST') return response(status, status === 201
@@ -1211,10 +1213,14 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
   return {calls, el, use, navigation};
 }
 
-test('copy previews the released instructions before creating a real agent', async () => {
+test('copy previews the released instructions and quick starts before creating a real agent', async () => {
   const {calls, el, use, navigation} = await setupRemix();
   await use.handlers.click();
   assert.equal(el('catalog-remix-prompt').textContent,'公开指令');
+  assert.equal(el('catalog-remix-quick-starts').hidden,false);
+  assert.equal(el('catalog-remix-quick-starts-heading').textContent,'将复制的快捷开场');
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children.map(item=>item.textContent),
+    ['汇总本周的竞品变化。', '列出三个值得关注的信号。']);
   assert.equal(calls.filter(([,method])=>method==='POST').length,0);
   el('catalog-remix-workspace').value='space-1';
   await el('catalog-remix-form').handlers.submit({preventDefault() {}});
@@ -1237,10 +1243,11 @@ test('copy presents a duplicate name error in the preview dialog', async () => {
 
 test('copy retains the draft name through a slow preview and a stale release', async () => {
   const firstPreview = Promise.withResolvers();
-  const template = {revision:'initial-revision',name:'原发布名称',summary:'每周竞品摘要',instructions:'旧指令'};
+  const template = {revision:'initial-revision',name:'原发布名称',summary:'每周竞品摘要',instructions:'旧指令',quick_starts:['旧开场']};
   let reads = 0;
   const {calls, el, use} = await setupRemix({
-    preview: () => ++reads === 1 ? firstPreview.promise : commentResponse({template:{...template,revision:'new-revision',instructions:'新指令'}}),
+    preview: () => ++reads === 1 ? firstPreview.promise
+      : commentResponse({template:{...template,revision:'new-revision',instructions:'新指令',quick_starts:['新开场']}}),
     submit: () => commentResponse({error:{code:'listing_changed'}},409),
   });
   const opening = use.handlers.click();
@@ -1248,19 +1255,41 @@ test('copy retains the draft name through a slow preview and a stale release', a
   firstPreview.resolve(commentResponse({template}));
   await opening;
   assert.equal(el('catalog-remix-name').value,'我的名称');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'旧开场');
   el('catalog-remix-workspace').value = 'space-1';
   await el('catalog-remix-form').handlers.submit({preventDefault() {}});
   assert.equal(el('catalog-remix-dialog').open,true);
   assert.equal(el('catalog-remix-refresh').hidden,false);
   assert.equal(el('catalog-remix-submit').disabled,true);
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
   await el('catalog-remix-refresh').handlers.click();
   assert.equal(el('catalog-remix-name').value,'我的名称');
   assert.equal(el('catalog-remix-prompt').textContent,'新指令');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'新开场');
   assert.equal(el('catalog-remix-submit').disabled,false);
   await el('catalog-remix-form').handlers.submit({preventDefault() {}});
   const [first,last] = calls.filter(([,method])=>method==='POST').map(([, ,options])=>options);
   assert.notEqual(first.headers['Idempotency-Key'],last.headers['Idempotency-Key']);
   assert.equal(JSON.parse(last.body).revision,'new-revision');
+});
+
+test('copy localizes quick starts and clears them when the next release omits them', async () => {
+  let reads = 0;
+  const {el, use} = await setupRemix({language:'en-US', preview: () => commentResponse({template:{
+    name:'Writer',summary:'A summary',instructions:'',revision:'release-' + reads,
+    quick_starts: reads++ === 0 ? ['Plan the release <this week>'] : [],
+  }})});
+  await use.handlers.click();
+  assert.equal(el('catalog-remix-quick-starts-heading').textContent,'Quick starts included in the copy');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'Plan the release <this week>');
+  assert.equal(el('catalog-remix-description').textContent,
+    'You can add your own instructions after creating the copy. Configure tools separately in the new copy.');
+  el('catalog-remix-cancel').handlers.click();
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
+  await use.handlers.click();
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
 });
 
 test('copy reuses the request key after an ambiguous response for the same submission', async () => {

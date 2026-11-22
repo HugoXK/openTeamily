@@ -1762,6 +1762,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const remixSubmit = document.getElementById('catalog-remix-submit');
   const remixRefresh = document.getElementById('catalog-remix-refresh');
   const remixCancel = document.getElementById('catalog-remix-cancel');
+  const remixLabel = (zh, en) => document.documentElement?.lang?.startsWith('en') ? en : zh;
 
   function currentRemix(entry) {
     return remix === entry && entry.viewer === currentUser && remixDialog.open;
@@ -1770,6 +1771,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   function closeAgentRemix() {
     remix?.read?.abort();
     remix = null;
+    renderAgentRemixContent();
     if (remixDialog.open) remixDialog.close();
   }
 
@@ -1799,16 +1801,38 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
+  function renderAgentRemixContent(template) {
+    const instructions = document.getElementById('catalog-remix-instructions');
+    const prompt = template?.instructions || '';
+    document.getElementById('catalog-remix-prompt').textContent = prompt;
+    instructions.hidden = !prompt;
+    instructions.open = false;
+    const quickStarts = Array.isArray(template?.quick_starts)
+      ? template.quick_starts.filter(start => typeof start === 'string' && start.trim()) : [];
+    const quickStartsList = document.getElementById('catalog-remix-quick-starts-list');
+    quickStartsList.replaceChildren(...quickStarts.map(text => {
+      const line = document.createElement('li');
+      line.setAttribute('dir', 'auto');
+      line.textContent = text;
+      return line;
+    }));
+    document.getElementById('catalog-remix-quick-starts').hidden = !quickStarts.length;
+    document.getElementById('catalog-remix-quick-starts-heading').textContent =
+      remixLabel('将复制的快捷开场', 'Quick starts included in the copy');
+    const description = document.getElementById('catalog-remix-description');
+    if (!template) { description.textContent = ''; return; }
+    const instructionsNote = prompt ? remixLabel('副本包含发布的指令，可在自己的工作区修改。',
+      'The copy includes the published instructions. You can edit them in your workspace.')
+      : remixLabel('创建后可补充自己的指令。', 'You can add your own instructions after creating the copy.');
+    description.textContent = instructionsNote + remixLabel('工具可在新副本中另行配置。', ' Configure tools separately in the new copy.');
+  }
+
   async function readAgentRemix(entry) {
     entry.template = null;
     entry.read?.abort();
     const controller = new AbortController();
     entry.read = controller;
-    const instructions = document.getElementById('catalog-remix-instructions');
-    instructions.hidden = true;
-    instructions.open = false;
-    const description = document.getElementById('catalog-remix-description');
-    description.textContent = '';
+    renderAgentRemixContent();
     remixRefresh.hidden = true;
     remixStatus.textContent = '正在读取发布内容…';
     updateRemixControls();
@@ -1826,11 +1850,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     entry.suggestion = template.name;
     entry.template = template;
     document.getElementById('catalog-remix-summary').textContent = template.summary;
-    document.getElementById('catalog-remix-prompt').textContent = template.instructions;
-    instructions.hidden = !template.instructions;
-    description.textContent = template.instructions
-      ? '副本包含发布的指令，可在自己的工作区修改。'
-      : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
+    renderAgentRemixContent(template);
     remixStatus.textContent = '';
     syncRemixWorkspaces();
   }
@@ -1875,12 +1895,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const error = result.body?.error;
     if (error?.code === 'listing_changed') {
       entry.template = null;
+      renderAgentRemixContent();
       remixRefresh.textContent = '查看新版本';
       remixRefresh.hidden = false;
       remixStatus.textContent = '发布内容已更新，请先查看新版本。';
       remixRefresh.focus();
     } else {
-      if (result.status === 404) entry.template = null;
+      if (result.status === 404) {
+        entry.template = null;
+        renderAgentRemixContent();
+      }
       const fallback = '暂时无法确认是否已创建副本，可以重试。';
       remixStatus.textContent = result.status >= 500 ? fallback : messageFor(error, fallback);
     }

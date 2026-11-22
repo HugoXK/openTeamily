@@ -1408,25 +1408,32 @@ function messengerExtraRoutes(host, wakeReplies) {
   ]
 }
 
-function remixInstructions(row) {
-  if (!row?.snapshot) return ''
+function agentPublication(row) {
   try {
-    const data = JSON.parse(row.snapshot)
-    const instructions = data?.instructions
-    return data?.version === 1 && typeof instructions === 'string' && instructions.length <= agentLimits.instructions
-      ? instructions : ''
-  } catch { return '' }
-}
-
-function publishesQuickStarts(row) {
-  try { return Array.isArray(JSON.parse(row?.snapshot || 'null')?.quick_starts) } catch { return false }
+    const data = JSON.parse(row?.snapshot ?? 'null')
+    if (data?.version === 1) {
+      const instructions = typeof data.instructions === 'string' && data.instructions.length <= agentLimits.instructions
+        ? data.instructions : ''
+      const sharesQuickStarts = Array.isArray(data.quick_starts)
+      const quickStarts = sharesQuickStarts ? data.quick_starts.slice(0, agentLimits.quickStarts).flatMap(value => {
+        if (typeof value !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) return []
+        const text = value.replace(/\s+/g, ' ').trim()
+        return text && text.length <= agentLimits.quickStart ? [text] : []
+      }) : []
+      return { instructions, quickStarts, sharesQuickStarts }
+    }
+  } catch { /* Older or malformed snapshots may lack an agent publication. */ }
+  return { instructions: '', quickStarts: [], sharesQuickStarts: false }
 }
 
 function remixTemplate(row) {
+  const { instructions, quickStarts } = agentPublication(row)
   const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
-    instructions: remixInstructions(row) }
-  const revision = createHash('sha256').update(JSON.stringify([row.id, template])).digest('hex')
-  return { ...template, revision }
+    instructions }
+  // Keep previous no-starter revisions valid. A copy containing starters must be previewed again.
+  const release = quickStarts.length ? { ...template, quick_starts: quickStarts } : template
+  const revision = createHash('sha256').update(JSON.stringify([row.id, release])).digest('hex')
+  return { ...template, quick_starts: quickStarts, revision }
 }
 
 function workCommentItem(row) {
@@ -1635,9 +1642,10 @@ function discoverRoutes(host) {
           const binding = await host.call('agents/personal-binding', {})
           if (binding?.workspace_id !== workspaceId) await teamFor(bs, workspaceId, 'Workspace', env)
           try {
-            const created = await host.call('agents/create', {
+            const created = await host.call('agents/createRemix', {
               workspace_id: workspaceId, idempotency_key, name: body?.name ?? template.name,
               summary: template.summary, category: template.category, instructions: template.instructions,
+              quick_starts: template.quick_starts,
             })
             return [created.status, { agent: { id: created.agent.id, name: created.agent.name, workspace_id: workspaceId } }]
           } catch (error) {
@@ -1766,9 +1774,10 @@ function discoverRoutes(host) {
           const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
+          const publication = agentPublication(listing)
           return [200, { discover: listing?.listed
-            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)),
-              publish_quick_starts: publishesQuickStarts(listing), updated: unix(row.updated_at) }
+            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(publication.instructions),
+              publish_quick_starts: publication.sharesQuickStarts, updated: unix(row.updated_at) }
             : { listed: false } }]
         })
       },

@@ -771,6 +771,9 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 .catalog-dialog :is(input, select) { width: 100%; box-sizing: border-box; font-size: 1rem; }
 .catalog-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 #catalog-remix-summary, #catalog-remix-description { color: var(--ot-muted); }
+#catalog-remix-quick-starts h3 { margin: .75rem 0 .375rem; font-size: .875rem; }
+#catalog-remix-quick-starts-list { margin: 0 0 .75rem; padding-inline-start: 1.125rem; overflow-wrap: anywhere; }
+#catalog-remix-quick-starts-list li + li { margin-block-start: .25rem; }
 #catalog-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 #catalog-remix-submit { background: var(--ot-accent); color: var(--ot-on-accent); }
 #catalog-remix-status:empty { display: none; }

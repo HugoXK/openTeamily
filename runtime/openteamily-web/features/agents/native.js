@@ -74,8 +74,9 @@ export function nativeAgents({ host, db }) {
       bot = await rt.createBot({ name: nativeName(rt, row), instructions: row.instructions, role: row.summary.slice(0, 24), pickModel: true })
       // Importing/creating an object is not permission to send a greeting.
       delete bot.kickoff
-      bot.model = rt.botOf(await s.mainBot())?.model
-      bot.capabilities = [...(rt.botOf(await s.mainBot())?.capabilities || [])]
+      const main = rt.botOf(await s.mainBot())
+      bot.model = main?.model
+      bot.capabilities = row.inherit_capabilities === 0 ? [] : [...(main?.capabilities || [])]
       bot.openteamily = { agent_id: row.id, workspace_id: row.workspace_id, summary: row.summary, category: row.category, quick_starts: JSON.parse(row.quick_starts) }
       if (row.archived) bot.hidden = true
       await rt.save()
