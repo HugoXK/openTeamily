@@ -148,6 +148,15 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
     assert(r.changes === 1, 404, "share_not_found", "no such share of yours");
     return { revoked: true };
   });
+  app.get("/v1/ot/public-shares/:hash", async (req, reply) => {
+    const me = ot.me(req);
+    const hash = String(params(req).hash);
+    assert(HASH.test(hash) && ot.get(`SELECT 1 FROM ot_public_shares
+      WHERE token_hash=? AND owner_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?)`,
+      hash, me.ownerId, ot.now()), 404, "share_not_found", "share is unavailable");
+    reply.header("Cache-Control", "private, no-store");
+    return { active: true };
+  });
   app.post("/v1/ot/public-shares/resolve", async (req, reply) => {
     ot.me(req);
     const row = visibleShare(body(req).token);

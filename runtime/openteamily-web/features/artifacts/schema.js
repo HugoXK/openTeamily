@@ -104,6 +104,12 @@ ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
 CREATE INDEX IF NOT EXISTS artifact_chat_sources_conversation ON artifact_chat_sources(workspace_id, agent_id, conversation_id);
 `, `
 ALTER TABLE artifact_shares ADD COLUMN source_revision INTEGER;
+`, `
+CREATE TABLE artifact_share_keys (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  secret TEXT NOT NULL
+);
+ALTER TABLE artifact_shares ADD COLUMN recovery_version INTEGER NOT NULL DEFAULT 0;
 `]
 
 export const IMPORT_TABLES = {

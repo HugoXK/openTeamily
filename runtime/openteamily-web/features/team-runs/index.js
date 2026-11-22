@@ -20,6 +20,9 @@ export const LIMITS = { title: 80, goal: 2000, instruction: 1000, dependencyBudg
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const PREVIEW_MAX = 20_000
+const RESULT_STATUS = {
+  succeeded: '已完成', failed: '失败', blocked: '前序步骤未完成', cancelled: '已取消',
+}
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -64,6 +67,27 @@ export function stepPrompt(run, step, steps, sharedResults) {
   return lines.join('\n')
 }
 
+function fencedText(value) {
+  let length = 3
+  for (const match of value.matchAll(/~+/g)) length = Math.max(length, match[0].length + 1)
+  const fence = '~'.repeat(length)
+  return [fence, value, fence].join('\n')
+}
+
+function runMarkdown(row, steps) {
+  const sections = ['# 团队任务结果', fencedText(row.title),
+    '状态：' + RESULT_STATUS[row.status], '## 任务目标', fencedText(row.goal)]
+  for (const step of steps) {
+    const depends = JSON.parse(step.depends)
+    sections.push(`## 第 ${step.position + 1} 步`, '状态：' + RESULT_STATUS[step.status],
+      '智能体', fencedText(step.agent_name))
+    if (depends.length) sections.push('前序步骤：' + depends.map(index => index + 1).join('、'))
+    sections.push('步骤指令', fencedText(step.instruction))
+    if (step.status === 'succeeded') sections.push('结果', fencedText(step.output))
+  }
+  return sections.join('\n\n') + '\n'
+}
+
 function teamRunsV1(endpoints, log) {
   const base = '/v1/workspaces/([0-9a-f]{32})/team-runs'
   const detail = base + '/([0-9a-f]{32})'
@@ -93,6 +117,10 @@ function teamRunsV1(endpoints, log) {
     route(detail, async (req, workspace_id, id) => {
       only(req, 'GET')
       return {body: await endpoints.get({workspace_id, id})}
+    }),
+    route(detail + '/export', async (req, workspace_id, id) => {
+      only(req, 'GET')
+      return endpoints.export({workspace_id, id})
     }),
     route(detail + '/(cancel|remove)', async (req, workspace_id, id, action) => {
       only(req, 'POST')
@@ -303,6 +331,15 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       return { items: rows.map(row => view(row, false)) }
     },
     get: async (p) => withSavedWorks({run: view(loadRun(await workspace(p), p.id))}),
+    async export(p) {
+      const row = loadRun(await workspace(p), p.id)
+      const list = steps(row.id)
+      if (row.status === 'running' || !list.some(step => step.status === 'succeeded' && step.output.trim())) {
+        fail('conflict', '任务结束后才能导出已完成的结果。', 409)
+      }
+      return {raw:runMarkdown(row, list), filename:`team-run-${row.id}.md`,
+        headers:{'content-type':'text/markdown; charset=utf-8'}}
+    },
     async create(p) {
       const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)

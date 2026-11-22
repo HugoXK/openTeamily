@@ -183,6 +183,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const cancel = node('team-run-cancel');
   const remove = node('team-run-remove');
   const reuse = node('team-run-reuse');
+  const exportRun = node('team-run-export');
   const confirm = node('team-run-confirm');
   const title = node('team-run-title');
   const goal = node('team-run-goal');
@@ -276,12 +277,20 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     shares.selectWorkspace(screen && !personalSpaces.has(workspace) ? spaces.find(item => item.id === workspace) : null);
   }
 
+  function syncExport(run) {
+    if (!exportRun) return;
+    exportRun.hidden = !REUSABLE.has(run?.status) || !run.steps.some(step => step.status === 'succeeded' && step.output?.trim());
+    if (exportRun.hidden) exportRun.removeAttribute('href');
+    else exportRun.href = pathFor() + '/' + run.id + '/export';
+  }
+
   function clearInaccessibleRunData() {
     current = null;
     tasks = [];
     lastList = lastSteps = '';
     newRun.disabled = true;
     cancel.hidden = remove.hidden = reuse.hidden = true;
+    syncExport();
     hideQuestion();
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
@@ -688,6 +697,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     cancel.hidden = run.status !== 'running';
     remove.hidden = run.status === 'running';
     reuse.hidden = !REUSABLE.has(run.status);
+    syncExport(run);
     node('team-run-open-source').hidden = !readSource(run.source);
     cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
     if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
@@ -728,6 +738,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
     cancel.hidden = remove.hidden = reuse.hidden = true;
+    syncExport();
     show('status', '');
     if (initial) renderDetail(initial);
     else show('team-run-progress', '正在读取步骤…');

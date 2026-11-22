@@ -196,6 +196,8 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/slides/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/link`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/link/extra`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
 });
@@ -254,6 +256,7 @@ test('collaboration pages use the owner runtime for private runs and Bot Social 
   const share = base + '/shared-runs/otsr_' + '1'.repeat(26);
   for (const [path, feature] of [
     [base + '/team-runs', 'team-runs'], [run + '/steps/0/artifact', 'team-runs'],
+    [run + '/export', 'team-runs'],
     [run + '/steps/7/retry', 'team-runs'], [run + '/share', 'shares'], [share + '/revoke', 'shares'],
   ]) {
     assert.deepEqual(movedTarget(path, origin), {feature, path});

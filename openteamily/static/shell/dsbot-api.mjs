@@ -17,7 +17,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/overview$/, 'overview'],
   [/^\/v1\/team-templates$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|remove|steps\/[0-7]\/(?:retry|artifact)))?)?$/, 'team-runs'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|remove|export|steps\/[0-7]\/(?:retry|artifact)))?)?$/, 'team-runs'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/(?:team-runs\/[0-9a-f]{32}\/share|shared-runs(?:\/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:\/revoke)?)?)$/, 'shares'],
   [/^\/v1\/contacts(?:\/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$/, 'social'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
@@ -39,7 +39,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/studio\/documents(?:\/[0-9a-f]{32}(?:\/(?:remove|restore|live|versions(?:\/[1-9][0-9]{0,15})?))?)?$/, 'studio'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)\/draft)$/, 'artifacts'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/(?:revoke|link))?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
   // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],

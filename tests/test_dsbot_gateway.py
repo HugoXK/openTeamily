@@ -205,6 +205,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites/{aid}'), 'websites')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d/{aid}'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/link'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/link/extra'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/attachments'), 'agents')
@@ -245,6 +247,7 @@ class GatewayTest(unittest.TestCase):
         shared = f'/v1/workspaces/{workspace}/shared-runs'
         for path, feature in (
             (base, 'team-runs'),
+            (f'{base}/{run}/export', 'team-runs'),
             (f'{base}/{run}/steps/7/retry', 'team-runs'),
             (f'{base}/{run}/steps/1/artifact', 'team-runs'),
             (f'{base}/{run}/share', 'shares'),
@@ -341,7 +344,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
         self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$ { return 418; }', conf)
-        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
+        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$ { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)

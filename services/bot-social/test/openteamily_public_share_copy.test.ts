@@ -14,7 +14,11 @@ test("a known text share can be copied while active, with no source identity in 
   const published = {token_hash:hash,ref:"private-artifact-id",title:"Shared text",kind:"document",
     body:"<script>literally shared text</script>",expires_at:now + 5000};
   const path = "/v1/ot/public-shares";
+  const statusPath = path + "/" + hash;
   await owner.ok("PUT",path,published);
+  assert.deepEqual(await owner.ok("GET",statusPath),{active:true});
+  assert.equal((await reader.call("GET",statusPath)).status,404);
+  assert.equal((await fetch(server.base + statusPath)).status,401);
   const read = () => fetch(server.base + "/share/" + token);
   const resolve = () => reader.call("POST",path + "/resolve",{token});
   const initial = await read();
@@ -36,8 +40,10 @@ test("a known text share can be copied while active, with no source identity in 
   now = published.expires_at;
   assert.equal((await read()).status,404);
   assert.equal((await resolve()).status,404);
+  assert.equal((await owner.call("GET",statusPath)).status,404);
   now -= 1000;
   await owner.ok("DELETE",path + "/" + hash);
   assert.equal((await read()).status,404);
   assert.equal((await resolve()).status,404);
+  assert.equal((await owner.call("GET",statusPath)).status,404);
 });

@@ -81,6 +81,7 @@ function fixture(hash = '', storage = new Map()) {
     }
     get childElementCount() { return this.children.length; }
     addEventListener(type, handler) { this.events[type] = handler; }
+    removeAttribute(name) { delete this[name]; }
     append(...items) { this.children.push(...items); }
     replaceChildren(...items) { this.children = items; }
     focus() { document.activeElement = this; }
@@ -223,6 +224,7 @@ test('transient read errors keep visible results, but permission loss clears tas
   await mountTeamRuns(document, async path => baseRead(path) || ok(status === 200 ? {run: finished} : {}, status));
   assert.equal(node('team-run-results').children.length, 2);
   assert.equal(node('team-run-remove').hidden, false);
+  assert.equal(node('team-run-export').href, BASE + '/' + RUN + '/export');
   status = 503;
   await node('team-runs-refresh').events.click();
   assert.equal(node('team-run-results').children.length, 2);
@@ -231,6 +233,8 @@ test('transient read errors keep visible results, but permission loss clears tas
   assert.equal(node('team-run-results').children.length, 0);
   assert.equal(node('team-run-goal-detail').textContent, '');
   assert.equal(node('team-run-remove').hidden, true);
+  assert.equal(node('team-run-export').hidden, true);
+  assert.equal(node('team-run-export').href, undefined);
   assert.equal(node('team-runs-new').disabled, true);
   assert.match(node('team-run-status').textContent, /没有权限/);
 });
