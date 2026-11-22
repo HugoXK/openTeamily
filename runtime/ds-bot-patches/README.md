@@ -19,3 +19,10 @@ Relocates the native group-settings hook that landed in the vendor tree in #524:
 - `GroupSettingsForm` shows a "Shared human participants" field when `room.openteamily.conversation_id` is set.
 - Host `update-room` forwards `remoteParticipants` to the OpenTeamily overlay in `runtime/openteamily-web/lib/c/native-groups.js`.
 - The generated `client.js` bundle gets the same form change (no comment-path rebuild noise).
+
+## 0002-filter-native-capabilities.patch
+
+Relocates the native capability-filter hook that landed in the vendor tree in `ba4ebb76` (skill consent):
+
+- Host `reconcileAgent` lets `rt.config.filterNativeCapabilities(bot, names, library())` narrow the capabilities mounted on a Bot.
+- The OpenTeamily plugin uses this to enforce native skill consent; without the hook the filter never runs.

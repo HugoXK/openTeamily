@@ -13,6 +13,7 @@ const FILES = [
   'client.js',
   'src/client/group-settings.js',
   'src/host/channel.js',
+  'src/host/capabilities.js',
 ]
 
 function stageVendorCopy() {
@@ -29,7 +30,7 @@ test('there is at least one ordered patch', () => {
   assert.ok(listPatches(here).length >= 1)
 })
 
-test('patches apply to the pinned vendor tree and restore the #524 hook', () => {
+test('patches apply to the pinned vendor tree and restore the OpenTeamily hooks', () => {
   const dir = stageVendorCopy()
   try {
     applyPatches({ root: dir, check: true })
@@ -43,6 +44,9 @@ test('patches apply to the pinned vendor tree and restore the #524 hook', () => 
     assert.match(channel, /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)
     assert.match(client, /room2\.openteamily\?\.conversation_id/)
     assert.match(client, /Shared human participants/)
+    const capabilities = readFileSync(join(dir, 'src/host/capabilities.js'), 'utf8')
+    assert.match(capabilities, /filterNativeCapabilities/)
+    assert.match(capabilities, /rt\.config\?\.filterNativeCapabilities/)
     assert.throws(() => applyPatches({ root: dir }), /git apply failed/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
