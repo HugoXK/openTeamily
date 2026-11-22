@@ -248,6 +248,60 @@ test('meeting sharing sends only the saved revision and selected account, then c
   assert.equal(control('close').focused, true);
 });
 
+test('an unconfirmed meeting share keeps its exact retry key through reload until acknowledged', async () => {
+  const owner = 'a'.repeat(32);
+  const workspace = 'b'.repeat(32);
+  const meeting = {id:'c'.repeat(32), title:'Private meeting title', revision:3, transcript:'Private transcript'};
+  const receipts = [];
+  const storage = new Map();
+  let keyCount = 0;
+  async function confirm({actor=owner, scope=workspace, revision=3, group='otc_a', to='otf_a', acknowledged=false}={}) {
+    const document = meetingDocument();
+    document.defaultView = {sessionStorage:{
+      getItem: key => storage.get(key),
+      setItem: (key, value) => { storage.set(key, value); },
+      removeItem: key => { storage.delete(key); },
+    }};
+    const get = name => document.getElementById('meeting-share-' + name);
+    get('dialog').showModal = () => { get('dialog').open = true; };
+    mountMeetingShares(document, {
+      context: () => ({owner:actor, workspace:scope, meeting:{...meeting, revision}}),
+      key: () => 'meeting-share-' + String(++keyCount).padStart(16, '0'),
+      async request(method, path, body, headers) {
+        if (method === 'POST') {
+          receipts.push(headers['Idempotency-Key']);
+          return acknowledged ? {status:200,body:{meeting:{...meeting,id:'d'.repeat(32)}}} : {status:503,body:{}};
+        }
+        const items = path.includes('/social/conversations') ? [{id:'otc_a',kind:'group'},{id:'otc_b',kind:'group'}]
+          : path.includes('/share-recipients') ? [{id:'otf_a',name:'Recipient name'},{id:'otf_b',name:'Other person'}] : [];
+        return {status:200,body:{items}};
+      },
+    });
+    const before = receipts.length;
+    await document.getElementById('share-meeting').fire('click');
+    get('conversation').value = group;
+    await get('conversation').fire('change');
+    const recipient = get('recipient-items').children.map(label=>label.children[0]).find(box=>box.value===to);
+    recipient.checked = true;
+    recipient.fire('change');
+    assert.equal(receipts.length,before,'reopening and reselecting never send');
+    await get('form').fire('submit');
+    return receipts.at(-1);
+  }
+  const first = await confirm();
+  const stored = [...storage.values()].join('');
+  assert.match(stored,new RegExp(first));
+  assert.doesNotMatch(stored,/Private meeting title|Private transcript|Recipient name|Other person/);
+  assert.notEqual(await confirm({actor:'e'.repeat(32),acknowledged:true}),first);
+  assert.notEqual(await confirm({scope:'f'.repeat(32),acknowledged:true}),first);
+  assert.notEqual(await confirm({revision:4,acknowledged:true}),first);
+  assert.notEqual(await confirm({group:'otc_b',acknowledged:true}),first);
+  assert.notEqual(await confirm({to:'otf_b',acknowledged:true}),first);
+  assert.equal(await confirm({acknowledged:true}),first);
+  assert.equal(storage.size,0);
+  assert.notEqual(await confirm(),first,'a later deliberate share receives a new key');
+});
+
 test('a receipt renders the shared summary and action status as read-only text', () => {
   const document = meetingDocument();
   const element = id => document.getElementById(id);

@@ -665,19 +665,6 @@ function conversationAgents(ot: OtContext, conversationId: string) {
 }
 
 const MAX_INFERRED_AGENTS = 20;
-const GROUP_BOT = "(?:智能体|机器人|助手)(?:们)?";
-const BOT_REPLY = "(?:回复|答复|回答|回应|说|给|分享|提供|帮|看看|检查|来|发表|列出|整理)";
-const ALL_BOTS = new RegExp(
-  `^(?:(?:请|麻烦|能不能)\\s*)?(?:(?:让|叫|请)\\s*)?(?:` +
-  `(?:所有|全体|全部|每个|每位)\\s*${GROUP_BOT}\\s*(?:都|一起|分别|各自)?\\s*(?:能|可以)?\\s*${BOT_REPLY}|` +
-  `${GROUP_BOT}\\s*(?:都|全部|分别|各自|逐一)\\s*(?:能|可以)?\\s*${BOT_REPLY})`);
-const BOT_REQUEST_START = /^(?:请|麻烦|能不能|让|叫)/u;
-const BOT_REQUEST_END = /(?:回复|答复|回答|回应)(?:我(?:一下)?|一下|这(?:条|个)(?:消息|问题)?)?[\s。！？!?]*$/u;
-const ALL_BOTS_EN = /^(?:please\s+)?(?:ask|have|let|please)\s+(?:all|every)\s+(?:the\s+)?(?:agents?|bots?|assistants?)\s+(?:reply|respond|answer|share|give|check|review|help)\b/i;
-const SOLO_PLURAL = /^(?:请|麻烦)?\s*(?:(?:你们|大家|各位)\s*(?:好|都|一起|分别|各自|说|回|能|可以|觉得|怎么看|有|给|来|帮|辛苦|先)|(?:都|分别|各自|每个都)\s*(?:回复|回答|答复|回我|说|帮|给|来|讲))/;
-const SOLO_PLURAL_EN = /^(?:(?:hi|hello)\s+(?:all|everyone)|(?:everyone|all of you),?\s+(?:please\s+)?(?:reply|respond|answer|share|help))\b/i;
-const SOLO_ALL_REQUEST = /^(?:请|麻烦)?\s*(?:(?:你们|大家|各位)\s*)?(?:都|一起|分别|各自|每个都)\s*(?:回复|回答|答复|回应|回我|说|帮|给|来|讲)/u;
-const SOLO_ALL_REQUEST_EN = /^(?:everyone|all of you),?\s+(?:please\s+)?(?:reply|respond|answer|share|help)\b/i;
 const TYPED_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@][\p{L}\p{N}_]/u;
 const ALL_PEOPLE_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@](?:all|所有人)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/iu;
 const ALL_AGENT_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@]所有智能体(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/u;
@@ -707,27 +694,20 @@ function groupAgentRouting(ot: OtContext, conv: Group, viewer: string, agents: C
   return {mode: "personal" as const, default: agents.some(agent => agent.auto_reply) ? "auto" as const : "all" as const, ...access};
 }
 
-function inferredAgents(ot: OtContext, conv: Group, viewer: string, agents: ConversationAgent[], message: string,
-  quote: ReturnType<typeof replyOriginal>, policy: ReturnType<typeof readGroupReplyPolicy>) {
+function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typeof replyOriginal>,
+  policy: ReturnType<typeof readGroupReplyPolicy>) {
   if (!agents.length) return {agents, discretionary: false};
   if (quote?.author_kind === "agent") {
     return {agents: agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref), discretionary: false};
-  }
-  const command = message.trim().normalize("NFKC");
-  if (ALL_BOTS_EN.test(command) || (ALL_BOTS.test(command) && (BOT_REQUEST_START.test(command) || BOT_REQUEST_END.test(command)))) {
-    return {agents: agents.slice(0, MAX_INFERRED_AGENTS), discretionary: false};
-  }
-  const shared = groupHasOtherMember(ot, conv, viewer);
-  if (policy.mode === "everyone" || (!shared && (SOLO_ALL_REQUEST.test(command) || SOLO_ALL_REQUEST_EN.test(command)))) {
-    return {agents: agents.slice(0, MAX_INFERRED_AGENTS), discretionary: false};
   }
   if (policy.mode === "lead") {
     const lead = selectedLead(policy, agents);
     return {agents: lead ? [lead] : [], discretionary: true};
   }
-  if (shared) return {agents: [], discretionary: false};
-  const plural = SOLO_PLURAL.test(command) || SOLO_PLURAL_EN.test(command);
-  return {agents: !agents.some(agent => agent.auto_reply) || plural ? agents.slice(0, MAX_INFERRED_AGENTS) : [], discretionary: true};
+  // Keep the existing opt-in auto inbox and its rate limit. With no opt-ins,
+  // the DS-Bot workers decide whether the ordinary message warrants a reply.
+  if (policy.mode === "default" && agents.some(agent => agent.auto_reply)) return undefined;
+  return {agents: agents.slice(0, MAX_INFERRED_AGENTS), discretionary: true};
 }
 
 function explicitAgentKey(target: any) {
@@ -1432,9 +1412,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const allPeople = ordinaryAgentGroup(conv) && !sourceConversation && ALL_PEOPLE_ADDRESS.test(bodyText);
       const policy = readGroupReplyPolicy(conv);
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(bodyText));
-      const inferred = canQueueGroup && !studio && !addressed && !explicitlyAll
-        ? inferredAgents(ot, conv, me.ownerId, roster, bodyText, quote, policy) : undefined;
-      const targets = explicitlyAll ? roster.slice(0, MAX_INFERRED_AGENTS) : inferred?.agents ?? parsed.agents;
+      const unaddressed = canQueueGroup && !studio && !addressed && !explicitlyAll
+        ? unaddressedGroupTurn(roster, quote, policy) : undefined;
+      const targets = explicitlyAll ? roster.slice(0, MAX_INFERRED_AGENTS) : unaddressed?.agents ?? parsed.agents;
       const suppressed = canQueueGroup && targets.length === 0 && (policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
@@ -1461,7 +1441,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         for (const agent of targets) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at,direct_grant_id,discretionary)
             VALUES (?,?,?,?,?,'queued',?,?,?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now(), agent.direct_grant_id,
-          Number(inferred?.discretionary === true));
+          Number(unaddressed?.discretionary === true));
           wakeOwners.add(agent.owner_id);
         }
       }

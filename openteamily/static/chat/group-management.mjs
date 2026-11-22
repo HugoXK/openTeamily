@@ -128,8 +128,8 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     }[mode];
     const description = {
       rename: '',
-      reply_policy: text('选择普通群消息的回复规则。使用 @ 或引用智能体消息，可以直接指定回复对象。',
-        'Choose how agents reply to ordinary messages. Use @ or quote an agent’s message to ask it directly.'),
+      reply_policy: text('选择哪些智能体来判断是否回复普通群消息。用 @ 指定智能体，或用 @所有人请求全部智能体回复。',
+        'Choose which agents decide whether to reply to ordinary messages. Use @ to ask one agent or @all to ask every agent.'),
       member: '',
       remove: text(`将 ${memberName} 移出群聊？群消息及对方的工作区成员身份会保留。`,
         `Remove ${memberName} from this group? Group messages and their workspace membership will remain.`),

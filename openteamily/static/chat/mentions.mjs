@@ -151,6 +151,18 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     return group;
   }
 
+  function insertEveryone(start, end) {
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    if (hasEveryoneMention(before + after)) {
+      input.value = before + after;
+      return start;
+    }
+    const prefix = withoutGroupAllMention(before) + everyoneToken();
+    input.value = prefix + withoutGroupAllMention(after);
+    return prefix.length;
+  }
+
   function choose(agent) {
     const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
@@ -163,12 +175,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     const after = input.value.slice(input.selectionStart);
     let caret = query.start;
     if (agent === EVERYONE) {
-      if (hasEveryoneMention(before + after)) input.value = before + after;
-      else {
-        const prefix = withoutGroupAllMention(before) + everyoneToken();
-        input.value = prefix + withoutGroupAllMention(after);
-        caret = prefix.length;
-      }
+      caret = insertEveryone(query.start, input.selectionStart);
       selected.clear();
     } else {
       input.value = group.direct ? before + after : withoutGroupAllMention(before + after);
@@ -193,7 +200,8 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     if (event?.isComposing) return;
     const group = refresh();
     if (groupAllMention !== Boolean(group && !group.direct && hasGroupAllMention(input.value))) renderSelected();
-    const query = activeMentionQuery(input.value, input.selectionStart);
+    const query = input.selectionStart === input.selectionEnd || input.selectionEnd == null
+      ? activeMentionQuery(input.value, input.selectionStart) : null;
     if (!group || !query) { close(); return; }
     const needle = query.query.toLowerCase();
     const matches = !groupAllMention && selected.size >= mentionsLimit(group) ? [] : group.agents.filter(agent =>
@@ -220,6 +228,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
 
   input.addEventListener('input', suggest);
   input.addEventListener('compositionend', suggest);
+  input.addEventListener('click', () => { if (!list.hidden) suggest(); });
   input.addEventListener('blur', close);
 
   function setPickerCount() {
@@ -283,8 +292,11 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
     if (group.direct && !roster.size) return false;
     const everyone = !group.direct && hasEveryoneMention(input.value);
+    const draft = input.value;
+    const caret = input.selectionStart;
+    const bareMention = caret === input.selectionEnd && activeMentionQuery(draft, caret)?.query === '' ? caret : null;
     picking = {scope:group.scope, roster, choices:new Set(groupAllMention ? [] : [...selected.keys()].filter(key => roster.has(key))),
-      everyone, direct:group.direct, limit:mentionsLimit(group), reply, onApply};
+      everyone, direct:group.direct, limit:mentionsLimit(group), reply, onApply, draft, bareMention};
     pickerNode('title').textContent = group.direct ? text('请智能体回复', 'Ask agents to reply') : text('选择提及对象', 'Choose mentions');
     pickerNode('help').textContent = group.direct ? text('选中的智能体会在你发送消息后回复。', 'Selected agents reply after you send the message.')
       : text('选择智能体或所有人，确认后把提及加到草稿。', 'Choose agents or everyone to add a mention to your draft.');
@@ -335,7 +347,11 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     }
     const before = input.value;
     if (!group.direct) {
-      if (view.everyone && !hasEveryoneMention(before)) input.value = everyoneToken() + withoutGroupAllMention(before);
+      if (view.everyone && !hasEveryoneMention(before)) {
+        const caret = before === view.draft && view.bareMention !== null
+          ? insertEveryone(view.bareMention - 1, view.bareMention) : insertEveryone(0, 0);
+        input.setSelectionRange?.(caret, caret);
+      }
       if (!view.everyone && (choices.length || hasEveryoneMention(before))) input.value = withoutGroupAllMention(before);
     }
     remember();
@@ -388,12 +404,16 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       return true;
     },
     keydown(event) {
-      if (event.isComposing || list.hidden || !options.length) return false;
-      const keys = ['Escape', 'ArrowDown', 'ArrowUp', 'Enter', 'Tab'];
+      if (event.isComposing || event.keyCode === 229 || list.hidden || !options.length) return false;
+      if (['Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+        close();
+        return false;
+      }
+      const keys = ['Escape', 'ArrowDown', 'ArrowUp', 'Enter'];
       if (!keys.includes(event.key) || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
       event.preventDefault();
       if (event.key === 'Escape') close();
-      else if (event.key === 'Enter' || event.key === 'Tab') choose(options[active]);
+      else if (event.key === 'Enter') choose(options[active]);
       else {
         active = (active + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
         highlight();

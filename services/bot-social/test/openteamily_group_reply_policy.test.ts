@@ -80,7 +80,13 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
 
   const everyone = (await change(owner, {revision:revision + 1,mode:"everyone"})).data.conversation;
   assert.deepEqual(everyone.group_agent_routing.policy,{mode:"everyone"});
-  assert.equal(targets(await send(owner,"这是今天的发布计划")).length,4);
+  const everyoneMessage = await send(owner,"这是今天的发布计划");
+  assert.equal(targets(everyoneMessage).length,4);
+  for (const actor of [owner, teammate]) {
+    const jobs = (await actor.ok("GET", queue)).jobs.filter((job: any) => job.message.id === everyoneMessage.id);
+    assert.equal(jobs.length, 2);
+    assert.ok(jobs.every((job: any) => job.discretionary));
+  }
   assert.deepEqual(targets(await send(owner,"再解释一项", {reply_to:reply.id})),[[teammateId,"shared"]]);
   const last = (await change(owner,{revision:everyone.group_management.revision,mode:"lead",lead:selected})).data.conversation;
   assert.deepEqual(last.group_agent_routing.policy,{mode:"lead",lead:selected});

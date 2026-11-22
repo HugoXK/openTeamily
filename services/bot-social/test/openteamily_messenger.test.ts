@@ -440,13 +440,14 @@ test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto 
   const g = await B.ok("POST", "/v1/ot/conversations", { kind: "group", title: "Agents", members: [A.handle] });
   await A.ok("PUT", `/v1/ot/conversations/${g.id}/agents/helper`, { name: "Helper", auto_reply: false });
   assert.equal((await B.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: "spoof" })).status, 404, "only the agent's owner posts as it");
-  await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
+  const ordinary = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
   const request = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "@helper summarize please" });
   assert.deepEqual((await A.ok("GET", "/v1/ot/agent-inbox")).items, [], "a teammate mention never runs on a legacy worker");
   let inbox = await A.ok("GET", "/v1/ot/agent-inbox?managed=1");
-  assert.equal(inbox.jobs.length, 1);
-  assert.equal(inbox.jobs[0].mode, "mention");
-  assert.equal(inbox.jobs[0].context.length, 2);
+  assert.deepEqual(inbox.jobs.map((item: any) => [item.message.id, item.mode, item.discretionary === true, item.group_text_only]), [
+    [ordinary.id, "mention", true, true], [request.id, "mention", false, true],
+  ]);
+  assert.equal(inbox.jobs.find((item: any) => item.message.id === request.id).context.length, 2);
   assert.equal((await B.ok("GET", "/v1/ot/agent-inbox")).items.length, 0, "B owns no agent");
   const claim = teammateClaim(request.revision);
   const jobId = request.reply_jobs[0].id;
@@ -1000,11 +1001,12 @@ test("a group reply claim returns an older exact quote only while its agent owne
   const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
   await sender.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
   const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
-    title: "Read the quote", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+    title: "Read the quote", members: [sender.handle]});
   const room = `/v1/ot/conversations/${group.id}/messages`;
   const oldText = "Earlier exact decision: keep the launch on Friday.";
   const original = await sender.ok("POST", room, {body: oldText});
   for (let i = 0; i < 13; i++) await sender.ok("POST", room, {body: `Later message ${i}`});
+  await worker.ok("PUT", `/v1/ot/conversations/${group.id}/agents/helper`, {name: "Helper"});
   const request = async (id: string) => sender.ok("POST", room, {body: "@helper review", reply_to: id});
   const target = await request(original.id);
   const job = (await worker.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.find((row: any) => row.message.id === target.id);

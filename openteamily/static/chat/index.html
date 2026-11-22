@@ -197,7 +197,7 @@
             <span data-ui-text="chat.group.agent_team">AI 智能体团队</span>
           </button>
         </div>
-        <p id="compose-team-note" class="note" hidden data-ui-text="chat.group.team_template_info">选择一个团队模板：会在当前工作区新建（同名则复用）三个智能体，并和你一起组成群组。智能体只在你明确请求时回复；需要所有者或管理员权限。</p>
+        <p id="compose-team-note" class="note" hidden data-ui-text="chat.group.team_template_info">使用当前工作区的三个智能体组成群组，同名智能体会复用。普通消息由智能体判断是否回复，也可以用 @ 指定智能体。仅所有者或管理员可以创建。</p>
         <fieldset id="compose-team-templates" hidden>
           <legend data-ui-text="chat.group.team_templates">团队模板</legend>
           <div id="team-template-choices" class="member-choices"></div>
@@ -341,7 +341,7 @@
           <label><span data-ui-text="chat.group.reply_policy">谁来回复</span>
             <select id="group-management-reply-mode">
               <option value="default" data-ui-text="chat.group.reply_default">跟随群组默认</option>
-              <option value="everyone" data-ui-text="chat.group.reply_everyone">全员回复</option>
+              <option value="everyone" data-ui-text="chat.group.reply_everyone">由所有群内智能体判断</option>
               <option value="lead" data-ui-text="chat.group.reply_lead">指定智能体优先</option>
             </select>
           </label>
@@ -764,7 +764,7 @@
         <div id="chat-empty" class="note">
           <p class="empty-generic" data-ui-text="chat.messages.empty_select">选择左侧的对话，或从这里开始。</p>
           <p class="empty-agent" data-ui-text="chat.messages.empty_start">发送第一条消息，开始新对话。</p>
-          <p class="empty-group"><strong data-ui-text="chat.group.empty_title">开始群聊</strong><span data-ui-text="chat.group.empty_help">发送第一条消息。你也可以用 @ 指定智能体回复。</span></p>
+          <p class="empty-group"><strong data-ui-text="chat.group.empty_title">开始群聊</strong><span data-ui-text="chat.group.empty_help">发送第一条消息。用 @ 指定智能体，或用 @所有人提及群内成员。</span></p>
           <p class="empty-next">
             <a href="/agents" data-ui-text="chat.agents.browse">浏览智能体</a>
             <a href="/guide" data-ui-text="chat.nav.open_guide">查看功能指引</a>

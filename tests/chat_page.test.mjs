@@ -209,7 +209,7 @@ test('group picker distinguishes stored agents and people; contact picker omits 
     kind: 'group', member_ids: [bob], agent_ids: ['helper'],
   });
   assert.equal(groupAgentSummary({agent_members: []}), '');
-  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。可明确请求一次回复'));
+  assert.match(groupAgentSummary({agent_members: [{name: 'Helper'}]}), /Helper。用 @ 指定智能体/);
 });
 
 import {groupReplyStatus} from '../openteamily/static/chat/app.mjs';
@@ -4117,6 +4117,20 @@ test('group chat keeps roster tools near the header and shows the authority for 
     assert.match(el('group-composer-routing-text').textContent, /设计助理.*引用/);
     const composer = el('chat-body');
     composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    const suggestions = el('chat-agent-mention-options');
+    composer.value = '@';
+    composer.setSelectionRange(1, 1);
+    await fire(composer,'input');
+    assert.equal(suggestions.hidden,false);
+    await fire(composer,'keydown',{key:'Tab',preventDefault() {assert.fail('Tab must allow focus to move');}});
+    assert.equal(suggestions.hidden,true);
+    assert.equal(composer.value,'@');
+    await fire(composer,'input');
+    await fire(composer,'keydown',{key:'Enter',keyCode:229,preventDefault() {assert.fail('IME must keep Enter');}});
+    assert.equal(suggestions.hidden,false);
+    assert.equal(composer.value,'@');
+    await fire(composer,'keydown',{key:'Home',preventDefault() {assert.fail('Home must allow the caret to move');}});
+    assert.equal(suggestions.hidden,true);
     composer.value = '@产品';
     composer.setSelectionRange(3, 3);
     await fire(composer, 'input');
@@ -4135,7 +4149,7 @@ test('group chat keeps roster tools near the header and shows the authority for 
     await fire(composer,'input');
     const all = el('chat-agent-mention-options').children.find(option => Object.hasOwn(option.dataset,'mentionEveryone'));
     assert.ok(all);
-    await fire(all,'click');
+    await fire(composer,'keydown',{key:'Enter',preventDefault() {}});
     assert.equal(composer.value, '请 @所有人 核对这个设计');
     assert.equal(el('chat-agent-mentions').hidden, true);
     assert.match(el('group-composer-routing-text').textContent, /将提及所有人/);
@@ -4166,7 +4180,9 @@ test('a human-only group can select Everyone in the picker without sending or lo
     const launcher = el('chat-agent-picker-open');
     assert.equal(launcher.hidden, false);
     const composer = el('chat-body');
-    composer.value = '请确认明天的时间';
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    composer.value = '请确认明天的时间 @';
+    composer.setSelectionRange(composer.value.length,composer.value.length);
     await fire(composer,'input');
     await fire(launcher,'click');
     assert.equal(picker.open,true);
@@ -4178,7 +4194,8 @@ test('a human-only group can select Everyone in the picker without sending or lo
     await fire(checkbox,'change');
     await fire(el('chat-agent-picker-form'),'submit',{preventDefault() {}});
     assert.equal(picker.open,false);
-    assert.equal(composer.value,'@所有人 请确认明天的时间');
+    assert.equal(composer.value,'请确认明天的时间 @所有人 ');
+    assert.equal(composer.selectionStart,composer.value.length);
     t.mock.timers.tick(250);
     assert.ok([...saved.values()].some(value => value.includes(composer.value)));
     assert.equal(calls.some(call => call.method === 'POST' && call.path === path + '/messages'), false);

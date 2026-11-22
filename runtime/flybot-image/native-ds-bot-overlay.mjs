@@ -11,15 +11,15 @@ const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
     'cf6f9ddbf898ded9429c6895c43eea8175c9b57e2777f4800c8c4f89acd97035',
-    'bd9f7d037dc46b9b1925994e9e38fe01117784f3b75ceab9aa67d4bec3d66313',
+    '0464e85840683419267bc1364ba173bab8335d2efb089bbb13c9addf915b73c3',
   ],
   'src/client/group-settings.js': [
     '4f4aa19f4972f734c6fe8d71553a6c17386d9418bd84e56106ed4e48b9b7fdca',
-    'bd0c0d833731c1a43a5d6413faf9201d10125188813a0fb571a791670157ab5a',
+    'c82b98bc4fb886e99c052eea2070fb20b210892b6f7e4246c19bc59e9cd2f51a',
   ],
   'src/client/i18n.js': [
     '1124fb90ac4409c3bfff7f092800e98aa5590437c5372d3823a446ee427a2506',
-    '96ddb0204decb6c4272029a5cf8a85cd7bf3d4b9c017b90fcab7691fbcd93aa6',
+    '47a2eafcad30ba5d9db2ebcf99703dbea6a53b5f802fe157ebc4b3985ee4c371',
   ],
   'src/client/new-chat.js': [
     '1086a6d2a199959cb73f088f8c19492dd2ad654425eb324688a0ae8b6c2d5176',

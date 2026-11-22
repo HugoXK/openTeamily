@@ -388,7 +388,7 @@ export function groupInfoCounts(conversation) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
+    + '。用 @ 指定智能体，或用 @所有人请群内智能体回复。' : '';
 }
 
 function activeGroupAgent(conversation, target) {
@@ -1157,8 +1157,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         text = uiLabel('优先智能体不可用 · 可用 @ 指定回复对象', 'Preferred agent unavailable · Use @ to pick who replies');
       }
     } else if (!agents.length) text = uiLabel('用 @所有人提及群内所有成员', 'Use @all to mention everyone in the group');
-    else if (auto) text = uiLabel('按自动回复设置运行 · 可用 @所有人', 'Group auto-reply settings apply · Use @all to ask all agents');
-    else text = uiLabel('由智能体按内容决定是否回复 · 可用 @所有人', 'Agents decide whether to reply · Use @all to ask them all');
+    else if (auto) text = uiLabel('开启自动回复的智能体判断是否回复 · 可用 @所有人',
+      'Agents with auto-reply enabled decide whether to reply · Use @all to ask all agents');
+    else text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
     const label = document.getElementById('group-composer-routing-text');
     if (label.textContent !== text) label.textContent = text;
     node.dataset.kind = kind;
@@ -1424,7 +1425,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function makeSendJob(queue, message, files, reply, sticker) {
-    const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+    const firstText = servedByDsbot && !queue.social && !queue.conversationId &&
+      !queue.jobs.length && !files.length && !reply && !sticker;
+    const key = firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
@@ -5251,7 +5254,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
       document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
     if (section.hidden) return;
-    if (policy?.mode === 'everyone') summary.textContent = uiLabel('全员回复', 'All agents reply');
+    if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
     else if (policy?.mode === 'lead') {
       const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
       if (lead) {
@@ -5259,7 +5262,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
       } else summary.textContent = uiLabel('优先智能体不可用。普通消息暂不触发回复。',
         'Preferred agent unavailable. Ordinary messages currently do not trigger replies.');
-    } else summary.textContent = uiLabel('跟随群组默认', 'Uses the group default');
+    } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
+      summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
+        'Group default · Agents with auto-reply enabled decide');
+    } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
   }
 
   function setGroupInfoTab(which) {
@@ -8387,6 +8393,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
         };
         try {
+          const nativePrivate = servedByDsbot && !queue.social;
+          let initialResult;
           if (job.preferences) {
             feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
             await job.preferences.promise;
@@ -8398,12 +8406,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback('正在创建对话…');
             const body = {title: '新对话'};
             if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
-            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
-            const conversation = created.body.conversation;
-            if (![200, 201].includes(created.status) || !conversation?.id) {
-              throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
+            const firstText = nativePrivate && job.key === queue.createKey && !job.files.length && !job.reply && !job.sticker;
+            if (firstText) body.first_message = messagePayload(job.message.body, job.message.chat_language);
+            const create = () => request('POST', queue.base, body, {'Idempotency-Key': queue.createKey},
+              firstText ? AbortSignal.timeout(15000) : undefined);
+            const post = () => create().catch(() => ({status: 0, body: {}}));
+            let created = firstText ? await post() : await create();
+            const active = () => pendingSends.get(queue.scope) === queue && queue.owner === currentUser?.id;
+            if (!active()) return;
+            if (firstText && (!created.status || created.status === 408 || created.status >= 500)) {
+              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+              // The same create key also identifies the first message.
+              created = await post();
+              if (!active()) return;
             }
-            if (pendingSends.get(queue.scope) !== queue) return;
+            const conversation = created.body.conversation;
+            const firstPair = conversation?.id && privateReplyPair(created.body, {...queue,conversationId:conversation.id}, job.key);
+            if (![200, 201, 202].includes(created.status) || !conversation?.id ||
+                (firstText && (!firstPair || conversation.workspace_id !== queue.wid || conversation.agent_id !== queue.agentId))) {
+              throw new Error(messageFor(created.body.error, firstText ? '未能确认发送结果，请重试。' : '创建对话失败，请重试。'));
+            }
+            if (firstText) initialResult = created;
             const previous = queue.scope;
             const visible = isCurrent();
             queue.conversationId = conversation.id;
@@ -8432,46 +8455,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             progress.removeAttribute('value');
           }
           feedback(progress ? uiLabel('正在上传附件…', 'Uploading attachments…') : queue.social ? '正在发送…' : '正在等待智能体回复…');
-          let result;
+          let result = initialResult;
           let anchor;
-          const nativePrivate = servedByDsbot && !queue.social;
-          const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
-          const receipt = nativePrivate ? Promise.withResolvers() : null;
-          job.acceptReceipt = receipt?.resolve;
-          try {
-            const response = progress
-              ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                  if (percent < 100) {
-                    progress.value = percent;
-                  } else {
-                    progress.hidden = true;
-                    feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
-                    beginReply();
-                  }
-                }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
-            if (!progress) beginReply();
-            result = receipt
-              ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
-              : await response;
-            if (nativePrivate && uncertainPrivateWrite(result)) {
-              if (progress) progress.hidden = true;
-              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
-              const pair = await confirmPostedSend(queue, job);
-              if (pair) result = {status: 200, body: pair};
-            }
-          } finally {
-            if (progress) progress.hidden = true;
-            job.acceptReceipt = null;
-            if (queue.replying === job) {
-              if (isCurrent()) {
-                const scroller = document.getElementById('message-scroller');
-                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
-                if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+          if (!result) {
+            const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
+            const receipt = nativePrivate ? Promise.withResolvers() : null;
+            job.acceptReceipt = receipt?.resolve;
+            try {
+              const response = progress
+                ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+                  {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                    if (percent < 100) {
+                      progress.value = percent;
+                    } else {
+                      progress.hidden = true;
+                      feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
+                      beginReply();
+                    }
+                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+              if (!progress) beginReply();
+              result = receipt
+                ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
+                : await response;
+              if (nativePrivate && uncertainPrivateWrite(result)) {
+                if (progress) progress.hidden = true;
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const pair = await confirmPostedSend(queue, job);
+                if (pair) result = {status: 200, body: pair};
               }
-              queue.replying = null;
-              job.replyView?.bubble.remove();
-              job.replyView = null;
+            } finally {
+              if (progress) progress.hidden = true;
+              job.acceptReceipt = null;
+              if (queue.replying === job) {
+                if (isCurrent()) {
+                  const scroller = document.getElementById('message-scroller');
+                  anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
+                  if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+                }
+                queue.replying = null;
+                job.replyView?.bubble.remove();
+                job.replyView = null;
+              }
             }
           }
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);

@@ -553,6 +553,71 @@ test('private text accepts stable receipts before generation and keeps turn orde
   assert.equal((await finishedB.json()).reply.body,'second reply')
 })
 
+test('a new native chat accepts the first message and replays its receipt with one create key', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const started = Promise.withResolvers()
+  const finish = Promise.withResolvers()
+  const turns = []
+  const history = []
+  runtime.rt.eventsBackwards = async function * () { yield * history }
+  runtime.nativeTurn = async (bot, sessionId, prompt, requestId) => {
+    turns.push({bot,sessionId,prompt,requestId})
+    started.resolve()
+    await finish.promise
+    history.push(
+      {type:'user/message',seq:1,time:1000,data:{source:{rpcId:requestId},content:[{type:'text',text:prompt}]}},
+      {type:'assistant/message',seq:2,time:1001,data:{message:{content:[{type:'text',text:'One reply'}]}}},
+    )
+    return {text:'One reply',sessionId,turnId:1}
+  }
+  const host = {runtime:async () => runtime, currentRuntime:() => runtime, call:async () => null}
+  const {endpoints:e} = createAgents({db,host})
+  const {agent} = await e.create({workspace_id:workspace,name:'First message',idempotency_key:'first-text-agent-key'})
+  const path = `${root}/${agent.id}/conversations`
+  const request = legacyRequest(e)
+  const key = 'first-message-create-key'
+  const opening = {title:'First text',memory_scope:'off',first_message:{body:'First question',chat_language:'en'}}
+  const send = (body = opening) => request(path,jsonPost(key,body))
+  const invalid = await send({...opening,first_message:{body:' ',attachments:[]}})
+  assert.equal(invalid.status,400)
+  const missingKey = await request(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(opening)})
+  assert.equal(missingKey.status,400)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get().count,0)
+
+  const first = await send()
+  assert.equal(first.status,202)
+  const received = await first.json()
+  await started.promise
+  const active = await send()
+  assert.equal(active.status,202)
+  assert.deepEqual(await active.json(),received)
+  assert.equal((await send({...opening,first_message:{body:'A different question'}})).status,409)
+  assert.equal(received.conversation.memory_scope,'off')
+  assert.equal(received.message.body,'First question')
+  assert.equal(received.conversation.id,received.message.conversation_id)
+  assert.equal(received.message.client_key,key)
+  assert.equal(received.reply.status,'running')
+  assert.equal(received.reply.client_key,key)
+  assert.equal(turns.length,1)
+  assert.equal(turns[0].sessionId,received.conversation.native_session_id)
+
+  finish.resolve()
+  const settled = await request(path+'/'+received.conversation.id+'/messages',jsonPost(key,{body:'First question',chat_language:'en'}))
+  const completed = await settled.json()
+  assert.equal(completed.reply.body,'One reply')
+  const replay = await send()
+  assert.equal(replay.status,201,await replay.clone().text())
+  const {conversation,...replayedPair} = await replay.json()
+  assert.equal(conversation.id,received.conversation.id)
+  assert.equal(conversation.native_session_id,received.conversation.native_session_id)
+  assert.deepEqual(replayedPair,completed)
+  assert.equal(turns.length,1)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get().count,1)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_messages').get().count,2)
+})
+
 test('private text replies retry the same durable pair, fence stale attempts and expose the exact receipt', {timeout:3000}, async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())

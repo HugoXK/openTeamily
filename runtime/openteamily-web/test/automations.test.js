@@ -153,6 +153,66 @@ test('next recurring slot follows local weekdays, month lengths and DST', () => 
   assert.equal(nextScheduledSlot(monthly, seconds('2027-03-31T01:00:00Z')), seconds('2027-05-31T01:00:00Z'))
 })
 
+test('DST resolves gaps by their actual duration and repeated wall times to the first occurrence', () => {
+  const seconds = iso => Date.parse(iso) / 1000
+  const daily = {kind:'daily', time:'02:30', time_zone:'Europe/Berlin'}
+  const spring = seconds('2027-03-28T01:30:00Z')
+  assert.equal(nextScheduledSlot(daily, seconds('2027-03-28T00:00:00Z')), spring)
+  assert.equal(dueAt(daily, spring-1), null)
+  assert.equal(dueAt(daily, spring), spring)
+  assert.equal(nextScheduledSlot(daily, spring), seconds('2027-03-29T00:30:00Z'))
+  const fall = seconds('2027-10-31T00:30:00Z')
+  assert.equal(nextScheduledSlot(daily, fall-1), fall)
+  assert.equal(dueAt(daily, fall+3600), fall)
+  assert.equal(nextScheduledSlot(daily, fall), seconds('2027-11-01T01:30:00Z'))
+  const halfHour = {kind:'once', date:'2027-10-03', time:'02:15', time_zone:'Australia/Lord_Howe'}
+  assert.equal(nextScheduledSlot(halfHour, seconds('2027-10-02T00:00:00Z')), seconds('2027-10-02T15:45:00Z'))
+})
+
+test('a corrected clock transition cannot rerun an existing local slot, and paused previews never run', async () => {
+  const seconds = iso => Date.parse(iso) / 1000
+  const start = seconds('2027-03-27T12:00:00Z')
+  const {e, feature, clock, calls} = fixture(undefined, start)
+  const common = {workspace_id:W, template_id:'custom', prompt:'Confirm once', participants:['alice']}
+  const schedule = {kind:'once', date:'2027-03-28', time:'02:30', time_zone:'Europe/Berlin'}
+  const create = (title, key, timing, enabled) => e['automations/create']({...common, title, idempotency_key:key,
+    schedule:timing, enabled}).automation
+  const daily = create('例行摘要', 'clock-change-daily', {kind:'daily',time:schedule.time,time_zone:schedule.time_zone}, true)
+  const paused = create('暂停预览', 'clock-change-paused', schedule, false)
+  const migrated = create('已在原时刻运行的计划', 'clock-change-migrated', schedule, true)
+  const shifted = seconds('2027-03-28T01:30:00Z')
+  const early = seconds('2027-03-28T00:30:00Z')
+  const get = id => e['automations/get']({workspace_id:W,id}).automation.schedule_status
+  assert.deepEqual(get(paused.id), {state:'paused',at:shifted,clock_change:'forward'})
+  const inject = feature.db.prepare(`INSERT INTO ot_automation_runs
+    (id,automation_id,workspace_id,due_at,started,finished,status,dispatch)
+    VALUES(?,?,?,?,?,?,'succeeded','{}')`)
+  inject.run('f'.repeat(32), migrated.id, W, early, early, early+1)
+  clock.now = early+1
+  assert.deepEqual(get(migrated.id), {state:'once_triggered'})
+  assert.deepEqual(get(daily.id), {state:'scheduled',at:shifted,clock_change:'forward'})
+  assert.deepEqual(feature.tick(), [])
+  clock.now = shifted
+  assert.deepEqual(feature.tick().map(run => run.automation_id), [daily.id])
+  await Promise.all(feature.inflight.values())
+  assert.equal(calls.length, 1)
+  clock.now += 3600
+  assert.deepEqual(feature.tick(), [])
+  assert.deepEqual(get(daily.id), {state:'scheduled',at:seconds('2027-03-29T00:30:00Z')})
+  assert.deepEqual(get(paused.id), {state:'paused'})
+  assert.equal(e['automations/runs']({workspace_id:W,id:paused.id}).items.length,0)
+
+  clock.now = seconds('2027-10-30T12:00:00Z')
+  const lateFold = create('按旧时刻已完成', 'clock-change-late-fold', {kind:'once',date:'2027-10-31',
+    time:schedule.time,time_zone:schedule.time_zone}, true)
+  const later = seconds('2027-10-31T01:30:00Z')
+  inject.run('e'.repeat(32), lateFold.id, W, later, later, later+1)
+  clock.now = later+1
+  assert.deepEqual(get(lateFold.id), {state:'once_triggered'})
+  assert.ok(!feature.tick().some(run => run.automation_id===lateFold.id))
+  await Promise.all(feature.inflight.values())
+})
+
 test('scheduler projections distinguish one-time trigger, pause, and the next slot after execution', async () => {
   const at = Date.parse('2027-02-26T09:00:00Z') / 1000
   const {e, feature, clock} = fixture(undefined, at)

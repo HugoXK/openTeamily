@@ -15,7 +15,7 @@ const input = (text, source = {kind:'user',rpcId:'native-request'}) => ({type:'u
 const output = text => ({type:'assistant/message',surfaceOp:'append',data:{message:{source:{kind:'model'},content:
   typeof text === 'string' ? [{type:'text',text}] : text}}})
 
-function fixture(t) {
+function fixture(t, {recovery = false} = {}) {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
   const bus = new EventEmitter()
@@ -23,12 +23,20 @@ function fixture(t) {
     other:{id:'other',sessionId:'outside',openteamily:{agent_id:foreignAgent,workspace_id:foreignWorkspace}},
     nativeOnly:{id:'nativeOnly',sessionId:'unmapped'}}
   const rt = {chatOwners:new Map([['part-1','local'],['outside','other'],['unmapped','nativeOnly']]), pastOwners:new Map(),botOf:id=>bots[id]}
+  const sessions = new Map()
+  rt.resolveAgent = async () => assert.fail('History recovery must not start a native agent')
   let flushes = 0, blocked = null
   const ctx = {on:bus.on.bind(bus),sessions:{async flush() {flushes++; if (blocked) await blocked}}}
-  const service = {rt,ctx,nativeTurn:() => assert.fail('committed native events must never rerun a model')}
+  let lookups = 0
+  if (recovery) ctx.sessions.get = id => {
+    lookups++
+    return sessions.get(id)
+  }
+  const service = {rt,ctx,nativeTurn:() => assert.fail('committed native events must never rerun a model'),
+    prepareMappedChat:() => assert.fail('history must not change the chosen model')}
   const host = {currentRuntime:() => service,runtime:async () => service,call:async () => null}
   const {endpoints,attachHistory} = createAgents({db,host})
-  async function seed() {
+  async function seed({listen = true} = {}) {
     await endpoints.import({agents:[{id:agentId,workspace_id:workspace,name:'Linked Bot'},
       {id:foreignAgent,workspace_id:foreignWorkspace,name:'Other linked Bot'}]})
     const mapObject = db.prepare('INSERT INTO native_agent_objects VALUES(?,?,?)')
@@ -39,12 +47,15 @@ function fixture(t) {
       mapObject.run(agent,bot,bots[bot].openteamily.agent_id === agentId ? 'Linked Bot' : 'Other linked Bot')
       mapSession.run(`agent:${agent}:${cid}`,agent,sid)
     }
-    attachHistory(service)
+    if (listen) attachHistory(service)
   }
   function session(id) {
     const events = []
-    const native = {id,eventAt:seq=>events[seq]}
-    return {turn(content, {end = {},time = 1_800_000_000_000} = {}) {
+    const native = {id,get seq() { return events.length },eventAt:seq=>events[seq]}
+    sessions.set(id,native)
+    return {native, filler(count) {
+      for (let i = 0; i < count; i++) events.push({type:'session/title',seq:events.length})
+    },turn(content, {end = {},time = 1_800_000_000_000} = {}) {
       const turn = events.length + 1
       const frames = [{type:'turn/start',data:{}},...content,{type:'turn/end',data:{reason:{kind:'completed'},...end}}]
       let last
@@ -56,7 +67,8 @@ function fixture(t) {
       return () => bus.emit('session/event',native,last)
     }}
   }
-  return {db,rt,bots,endpoints,seed,session,flushes:() => flushes,block:promise=>{blocked=promise}}
+  return {ctx,db,rt,bots,endpoints,seed,session,attach:() => attachHistory(service),
+    lookups:() => lookups,flushes:() => flushes,block:promise=>{blocked=promise}}
 }
 
 test('a committed native conversation appears in the exact existing Web history and deduplicates a replay', async t => {
@@ -142,4 +154,124 @@ test('an owned moved part continues the same Web conversation and replays the ex
   assert.equal(conversation.id,conversationId)
   assert.deepEqual(items.map(item=>item.text),['Before native part rollover','Final before rollover','Native continuation','New continuation answer'])
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM agent_conversations WHERE agent_id=?').get(agentId).n,1)
+})
+
+test('opening the exact private chat recovers its own resumed native turns without copying a fork seed', async t => {
+  const f = fixture(t,{recovery:true})
+  await f.seed({listen:false})
+  const source = f.session('part-1')
+  source.turn([input('Inherited private input'),output('Inherited reply')])
+  source.native.inheritedEventCount = source.native.seq
+  source.turn([input('Earlier committed native input',{kind:'user',rpcId:'persisted-native'}),output('Earlier committed native reply')])
+  source.turn([input('Already rendered Web input',{kind:'user',rpcId:'ot-agent:rendered'}),output('Already rendered Web reply')])
+  source.turn([input('Imported input',{kind:'user',imported:true}),output('Imported reply')])
+  source.native.firstLiveSeq = source.native.seq
+  f.db.prepare('INSERT INTO agent_messages VALUES (?,?,?,?,?,?,?)')
+    .run('9'.repeat(32),conversationId,'assistant','Existing later Web reply','succeeded',1_800_000_001,'{}')
+  f.attach()
+  const path = `/v1/workspaces/${workspace}/agents/${agentId}/conversations/${conversationId}`
+  const get = query => f.endpoints.v1({method:'GET',path:path+query})
+  assert.equal((await get('?limit=50&snapshot=1')).body.items.length,1)
+  assert.equal((await get(`?limit=10&around=${'9'.repeat(32)}`)).body.items.length,1)
+  assert.equal(f.lookups(),0)
+  const {body} = await get('?limit=50')
+  assert.deepEqual(body.items.map(row=>row.body),['Earlier committed native input','Earlier committed native reply','Existing later Web reply'])
+  assert.equal(body.conversation.native_session_id,'part-1')
+  assert.equal(f.db.prepare('SELECT next_seq FROM native_agent_history_checkpoints').get().next_seq,source.native.seq)
+  assert.equal(f.flushes(),1)
+  assert.deepEqual((await get('?limit=50')).body.items.map(row=>row.id),body.items.map(row=>row.id))
+  assert.equal(f.flushes(),1)
+  assert.deepEqual(f.db.prepare('SELECT role,status,created FROM agent_messages WHERE conversation_id=? ORDER BY created,rowid').all(conversationId)
+    .map(row=>[row.role,row.status,row.created]), [['user','sent',1_800_000_000],['assistant','succeeded',1_800_000_000],['assistant','succeeded',1_800_000_001]])
+})
+
+test('history recovery flushes before cursor commit and shares bounded work with concurrent opens and the live relay', async t => {
+  const f = fixture(t,{recovery:true})
+  await f.seed({listen:false})
+  const native = f.session('part-1')
+  native.filler(2046)
+  native.turn([input('Exact request crossing the checkpoint',{kind:'user',rpcId:'durable-crossing'}),output('Durable answer')])
+  native.native.firstLiveSeq = native.native.seq
+  const blocked = Promise.withResolvers()
+  f.block(blocked.promise)
+  const first = f.endpoints.openConversation(args)
+  const concurrent = f.endpoints.openConversation(args)
+  while (!f.flushes()) await tick()
+  assert.equal(f.lookups(),1)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_history_checkpoints').get().n,0)
+  blocked.reject(new Error('simulated durability failure'))
+  await Promise.all([first,concurrent])
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_history_checkpoints').get().n,0)
+  f.block(null)
+  assert.equal((await f.endpoints.openConversation(args)).items.length,0)
+  assert.equal(f.db.prepare('SELECT next_seq FROM native_agent_history_checkpoints').get().next_seq,2048)
+  f.attach()
+  native.turn([input('A live native request',{kind:'user',rpcId:'new-native'}),output('Live answer')],{time:1_800_000_002_000})
+  const reopened = await f.endpoints.openConversation(args)
+  assert.deepEqual(reopened.items.map(row=>row.text),['Exact request crossing the checkpoint','Durable answer','A live native request','Live answer'])
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_events').get().n,4)
+  assert.equal(f.db.prepare('SELECT next_seq FROM native_agent_history_checkpoints').get().next_seq,native.native.seq)
+})
+
+test('recovery refuses an archived conversation and keeps history on the same thread across a native rollover', async t => {
+  const f = fixture(t,{recovery:true})
+  await f.seed({listen:false})
+  const first = f.session('part-1')
+  first.turn([input('Saved owned part'),output('Saved owned answer')])
+  const second = f.session('part-2')
+  second.turn([input('Saved rollover input',{kind:'user',rpcId:'each-request-once'}),output('Saved rollover answer')],{time:1_800_000_001_000})
+  f.bots.local.segments = [{sessionId:'part-1'}]
+  f.bots.local.sessionId = 'part-2'
+  f.rt.chatOwners.delete('part-1')
+  f.rt.pastOwners.set('part-1',{botId:'local'})
+  f.rt.chatOwners.set('part-2','local')
+  const blocked = Promise.withResolvers()
+  f.block(blocked.promise)
+  const pending = f.endpoints.openConversation(args)
+  while (!f.flushes()) await tick()
+  await f.endpoints.organizeConversation({...args,action:'archive'})
+  blocked.resolve()
+  assert.deepEqual((await pending).items,[])
+  assert.equal(f.lookups(),1)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_history_checkpoints').get().n,0)
+  f.block(null)
+  await f.endpoints.organizeConversation({...args,action:'restore'})
+  assert.deepEqual((await f.endpoints.openConversation(args)).items.map(item=>item.text),
+    ['Saved owned part','Saved owned answer','Saved rollover input','Saved rollover answer'])
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_history_checkpoints').get().n,2)
+})
+
+test('cold history uses only the exact stored part and avoids reading it again at the known persisted cursor', async t => {
+  const f = fixture(t,{recovery:true})
+  await f.seed({listen:false})
+  const source = f.session('part-1')
+  source.turn([input('Recovered cold input'),output('Recovered cold reply')])
+  const calls = []
+  const storageIdentity = Symbol('fixture session backend')
+  f.ctx.sessions.get = () => undefined
+  f.ctx.get = name => name === 'sessionPersistence' ? {
+    identity:storageIdentity,
+    async stat(id,{signal}) {
+      assert.equal(id,'part-1')
+      assert.ok(signal instanceof AbortSignal)
+      calls.push('stat')
+      return {header:{id},revision:'known fixture revision'}
+    },
+    async open(id,access) {
+      assert.equal(id,'part-1')
+      assert.equal(access,'read')
+      calls.push('open')
+      return {id,inheritedEventCount:0,async read(offset,limit) {
+        calls.push('read')
+        assert.equal(offset,0)
+        assert.equal(limit,2048)
+        return {events:Array.from({length:source.native.seq},(_, index) => source.native.eventAt(index))}
+      },async close() {calls.push('close')}}
+    },
+  } : undefined
+  const {items} = await f.endpoints.openConversation(args)
+  assert.deepEqual(items.map(row=>row.text),['Recovered cold input','Recovered cold reply'])
+  assert.deepEqual((await f.endpoints.openConversation(args)).items.map(row=>row.id),items.map(row=>row.id))
+  assert.deepEqual(calls,['stat','open','read','close','stat'])
+  assert.equal(f.flushes(),0)
 })
