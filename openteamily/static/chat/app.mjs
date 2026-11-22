@@ -966,6 +966,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const {wid, cid, scope} = destination;
       const draftScope = sendScope();
       const reply = replyDrafts.get(draftScope);
+      if (reply?.available === false) throw new Error(uiLabel('请先确认或取消引用。', 'Check or remove the quote before sending.'));
       const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
         {voice, ...(reply ? {reply_to: reply.message_id} : {})}, {'Idempotency-Key': key});
       if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
@@ -1111,6 +1112,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const replyPanel = document.getElementById('chat-reply-preview');
   const replyDraftTitle = document.getElementById('chat-reply-author');
   const replyDraftBody = document.getElementById('chat-reply-excerpt');
+  const replyDraftRetry = document.getElementById('chat-reply-retry');
+  const replyDraftKey = scope => 'openteamily.chat-quote:' + scope;
+  const quoteBlocksSend = scope => replyDrafts.get(scope)?.available === false;
   document.getElementById('chat-body').addEventListener('input', renderGroupComposerRouting);
 
   function renderGroupComposerRouting() {
@@ -1124,7 +1128,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const policy = routing?.policy;
     const body = document.getElementById('chat-body').value;
     const everyone = conversation && hasEveryoneMention(body);
-    node.hidden = !conversation;
+    node.hidden = !conversation || quoteBlocksSend(scope);
     if (node.hidden) return;
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
@@ -1167,13 +1171,74 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderReplyDraft() {
     if (!replyPanel) return;
-    const reply = currentSource === 'social' && replyDrafts.get(sendScope());
+    const scope = sendScope();
+    const reply = currentSource === 'social' && replyDrafts.get(scope);
     replyPanel.hidden = !reply;
-    const title = reply ? '回复 ' + reply.author : '';
-    const excerpt = reply ? reply.excerpt : '';
+    const state = reply?.state || '';
+    const title = !reply ? '' : state ? uiLabel('回复引用', 'Reply quote') : uiLabel('回复 ' + reply.author, 'Reply to ' + reply.author);
+    const excerpt = state === 'checking' ? uiLabel('正在核对原消息…', 'Checking the original message…')
+      : state === 'retry' ? uiLabel('无法核对原消息，请重试或取消引用。', 'Couldn’t check the original message. Retry or remove the quote.')
+        : state === 'missing' ? uiLabel('原消息已不可用，请取消引用。', 'The original message is unavailable. Remove the quote to send.')
+          : reply?.excerpt || '';
     if (replyDraftTitle.textContent !== title) replyDraftTitle.textContent = title;
     if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
+    if (replyDraftRetry) replyDraftRetry.hidden = state !== 'retry';
+    const changed = (replyPanel.dataset.state || '') !== state;
+    replyPanel.dataset.state = state;
+    syncComposerSend(scope);
+    if (changed) syncPlusState();
     renderGroupComposerRouting();
+  }
+
+  function setReplyDraft(scope, reply) {
+    if (reply) replyDrafts.set(scope, reply);
+    else replyDrafts.delete(scope);
+    try {
+      const storage = document.defaultView?.sessionStorage;
+      if (reply) storage?.setItem(replyDraftKey(scope), reply.message_id);
+      else storage?.removeItem(replyDraftKey(scope));
+    } catch {}
+    if (sendScope() === scope) renderReplyDraft();
+  }
+
+  async function restoreReplyDraft(items, {allowLookup = true, retry = false} = {}) {
+    if (currentSource !== 'social' || !currentUser || !currentConversation?.id) return;
+    const scope = sendScope();
+    const current = replyDrafts.get(scope);
+    let id = current?.message_id;
+    if (!id) {
+      try { id = document.defaultView?.sessionStorage?.getItem(replyDraftKey(scope)); } catch {}
+    }
+    if (!chatPathId(id)) return;
+    const cid = currentConversation.id;
+    const wid = workspaceId();
+    const matching = item => item.id === id && (!item.conversation_id || item.conversation_id === cid)
+      && (!item.workspace_id || item.workspace_id === wid);
+    const pending = {message_id:id, available:false, state:'checking'};
+    const apply = item => setReplyDraft(scope, item && !item.retracted
+      ? composerReply(item, socialMessageAuthor(item)) : {...pending, state:'missing'});
+    const visible = items.find(matching);
+    if (visible) {
+      if (!current?.available || visible.retracted) apply(visible);
+      return;
+    }
+    if (!allowLookup || current?.available || (!retry && current?.state === 'missing')) return;
+    setReplyDraft(scope, pending);
+    const query = new URLSearchParams({around:id, limit:'1'});
+    const result = await request('GET', `${socialBase()}/${cid}/messages?${query}`, undefined, undefined, AbortSignal.timeout(4500))
+      .catch(() => ({status:0}));
+    if (sendScope() !== scope || replyDrafts.get(scope) !== pending) return;
+    if (result.status === 200 || [403,404,410].includes(result.status)) {
+      const items = result.status === 200 && Array.isArray(result.body?.items) ? result.body.items : [];
+      apply(items.find(matching));
+    } else setReplyDraft(scope, {...pending, state:'retry'});
+  }
+
+  function socialMessageAuthor(item, people = currentConversation?.members || members) {
+    if (item.role === 'agent') return item.reply_job_id ? groupReplyAuthor(item)
+      : (item.agent_name || uiLabel('智能体', 'Agent')) + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot');
+    if (item.user_id === currentUser?.id) return uiLabel('我', 'Me');
+    return people.find(entry => entry.user_id === item.user_id)?.username || uiLabel('成员', 'Member');
   }
 
   function composerReply(item, author) {
@@ -1186,15 +1251,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function composeReply(item, author) {
     if (currentSource !== 'social' || item.retracted) return;
-    replyDrafts.set(sendScope(), composerReply(item, author));
-    renderReplyDraft();
+    setReplyDraft(sendScope(), composerReply(item, author));
     document.getElementById('chat-body').focus();
   }
 
   function consumeReplyDraft(scope, reply) {
     if (reply && replyDrafts.get(scope) === reply) {
-      replyDrafts.delete(scope);
-      if (sendScope() === scope) renderReplyDraft();
+      setReplyDraft(scope, null);
     }
   }
 
@@ -1202,6 +1265,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     consumeReplyDraft(sendScope(), replyDrafts.get(sendScope()));
     document.getElementById('chat-body').focus();
   });
+  replyDraftRetry?.addEventListener('click', () => void restoreReplyDraft(lastSocialItems, {retry:true}));
 
   function quoteBlock(reply, interactive = false) {
     const canJump = interactive && reply.available;
@@ -1239,6 +1303,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Boolean(sessionTransition?.pending) || (currentSource === 'social'
       ? currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false
       : Boolean(currentAgent?.archived || currentAgent?.native_deleted || currentConversation?.archived || currentConversation?.open === false));
+  }
+
+  function syncComposerSend(scope = sendScope()) {
+    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope) || quoteBlocksSend(scope);
   }
 
   function stickerContext() {
@@ -1378,7 +1446,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const closed = sendClosed();
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
-    document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncComposerSend(scope);
     syncPrivateReplyStop();
     agentMentions.refresh();
     syncStickers();
@@ -3242,7 +3310,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else for (const id of ids) selectedMessages.delete(id);
     syncForwardBar();
     const scope = sendScope(), reply = replyDrafts.get(scope);
-    if (removed.has(reply?.message_id)) consumeReplyDraft(scope, reply);
+    if (removed.has(reply?.message_id)) setReplyDraft(scope, {message_id:reply.message_id, state:'missing', available:false});
     const pins = document.getElementById('pinned-message-list');
     for (const row of [...pins.children]) if (removed.has(row.dataset.pinnedMessage)) row.remove();
     for (const id of ids) pinnedIds.delete(id);
@@ -3445,10 +3513,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         composeReply(item, author);
       } else if (action === 'ask-group' && scope === sendScope()) {
         const reply = composerReply(item, li.querySelector('.role')?.textContent || uiLabel('成员', 'Member'));
-        agentMentions.openPicker({reply, onApply: () => {
-          replyDrafts.set(scope, reply);
-          renderReplyDraft();
-        }});
+        agentMentions.openPicker({reply, onApply: () => setReplyDraft(scope, reply)});
       } else if (action === 'translate' || action === 'ask') {
         messageUtilities.open(item, action);
       } else if (action === 'save') {
@@ -4522,10 +4587,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
-      const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = groupReplyID ? groupReplyAuthor(item)
-        : item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
-        : (mine ? uiLabel('我', 'Me') : ((member && member.username) || uiLabel('成员', 'Member')));
+      role.textContent = socialMessageAuthor(item, people);
       const body = document.createElement('div');
       body.className = 'body';
       if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
@@ -5208,7 +5270,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         for (const job of pending.jobs.slice()) removeSendJob(pending,job);
         pendingSends.delete(exactScope);
       }
-      replyDrafts.delete(exactScope);
+      setReplyDraft(exactScope, null);
       publicDraft.forget(exactScope);
       agentMentions.forget(exactScope);
       attachmentSender?.forget?.(exactScope);
@@ -5983,9 +6045,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = updated;
     if (privateHistory) setPrivateHistory(null);
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
+    const shown = result.body.items || [];
+    void restoreReplyDraft(shown, {allowLookup:!refresh});
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
-    const shown = result.body.items || [];
     const lastSeq = shown.at(-1)?.seq;
     const snapshot = unreadEntry ? result.body.unread_window : null;
     const first = snapshot?.first;
@@ -7914,6 +7977,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
       const wid = workspaceId(), cid = currentConversation.id;
       const scope = sendScope();
+      if (quoteBlocksSend(scope)) return null;
       return {scope, owner:currentUser.id, reply:replyDrafts.get(scope), path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
     ownerId: () => currentUser?.id,
@@ -8381,7 +8445,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
     if (!field.value.trim() && !files.length) return;
-    if (sendClosed() || memoryWrites.has(scope)) return;
+    if (sendClosed() || memoryWrites.has(scope) || quoteBlocksSend(scope)) return;
     if (social ? !currentConversation : !currentAgent) {
       show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
@@ -8402,7 +8466,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function sendSticker(sticker, target) {
     const active = stickerContext();
-    if (!active || target?.scope !== active.scope || target.owner !== active.owner ||
+    if (!active || quoteBlocksSend(active.scope) || target?.scope !== active.scope || target.owner !== active.owner ||
         !PRIVATE_THREAD_ID.test(sticker?.id ?? '') || sticker.path !== `/v1/stickers/${sticker.id}/file`) return false;
     const social = currentSource === 'social';
     const reply = social ? replyDrafts.get(active.scope) : undefined;
@@ -8595,8 +8659,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                   agentMentions.restoreDirect(job.message.agent_mentions)) {
                 input.value = job.message.body;
                 publicDraft.persist();
-                if (job.reply) replyDrafts.set(queue.scope, job.reply);
-                renderReplyDraft();
+                if (job.reply) setReplyDraft(queue.scope, job.reply);
                 removeSendJob(queue, job);
                 show('error', uiLabel('部分智能体已不可用。消息已恢复到输入框。',
                   'Some agents are unavailable. Your message is back in the composer.'));
@@ -8850,7 +8913,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
     }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && (shareable || agent);
+    const available = servedByDsbot && (shareable || agent) && !quoteBlocksSend(sendScope());
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;

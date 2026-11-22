@@ -9,7 +9,10 @@ const UPDATE_INTERVAL = 4000;
 const WATCH_INTERVAL = 200;
 const WATCH_BACKOFF = 20000;
 const PRESENCE_INTERVAL = 6500;
+const DRAFT_LIFETIME = 12 * 60 * 60 * 1000;
 const displayedBody = body => body.replace(/\r\n?/g, '\n');
+const validDraftText = value => typeof value?.title === 'string' && value.title.length <= 120 &&
+  typeof value.body === 'string' && value.body.length <= 60000;
 
 function setEditorValue(input, value) {
   const previous = input.value;
@@ -29,7 +32,7 @@ function setEditorValue(input, value) {
   input.scrollTop = scrollTop;
 }
 
-export function mountSharedStudio(document, {request, onClose}) {
+export function mountSharedStudio(document, {request, onClose, onCatalog, onDocument}) {
   const get = id => document.getElementById('studio-' + id);
   const button = get('open');
   const dialog = get('dialog');
@@ -71,6 +74,41 @@ export function mountSharedStudio(document, {request, onClose}) {
   const isDirty = state => !form.hidden && (state?.base
     ? !sameContent(content(), state.base)
     : Boolean(titleInput.value.trim() || bodyInput.value));
+
+  const draftKey = id => 'openteamily.studio-draft:' + JSON.stringify([scope.account, scope.id, id]);
+  function discardDraft(state) {
+    if (!state?.draftKey) return;
+    view.clearTimeout(state.draftTimer);
+    try { view.sessionStorage.removeItem(state.draftKey); } catch {}
+  }
+
+  function readDraft(state) {
+    try {
+      const draft = JSON.parse(view.sessionStorage.getItem(state.draftKey) || 'null');
+      if (!draft) return null;
+      const validBase = state.mode === 'new' ? draft.base === null :
+        validDraftText(draft.base) && Number.isSafeInteger(draft.base.revision) && draft.base.revision > 0;
+      if (validBase && Number.isFinite(draft.expires) && draft.expires > Date.now() && validDraftText(draft.fields) &&
+          (!draft.attempt || (state.mode === 'new' && validDraftText(draft.attempt) &&
+            /^[0-9a-f-]{36}$/.test(draft.attempt.client_key || '')))) return draft;
+      discardDraft(state);
+    } catch { discardDraft(state); }
+    return null;
+  }
+
+  function rememberDraft(state) {
+    if (!state?.draftKey || !isCurrent(state) || form.hidden) return;
+    view.clearTimeout(state.draftTimer);
+    if (state.unavailable || (!isDirty(state) && !state.attempt)) return discardDraft(state);
+    const fields = content();
+    if (!validDraftText(fields)) return;
+    const base = state.base && {revision:state.base.revision, title:state.base.title, body:state.base.body};
+    try {
+      view.sessionStorage.setItem(state.draftKey, JSON.stringify({
+        expires:Date.now() + DRAFT_LIFETIME, fields, base, attempt:state.base ? null : state.attempt,
+      }));
+    } catch {}
+  }
   const canDiscuss = state => state?.base && !state.busy && !state.remote && !state.blocked &&
     !state.unavailable && !isDirty(state);
   const discussion = mountStudioDiscussion(document, {
@@ -147,6 +185,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     const previous = screen;
     screen = null;
     stopWatch(previous);
+    view.clearTimeout(previous?.draftTimer);
     previous?.controller.abort();
     refreshPresence(previous);
     titleInput.value = bodyInput.value = get('link').value = '';
@@ -155,11 +194,12 @@ export function mountSharedStudio(document, {request, onClose}) {
     list.replaceChildren();
   }
 
-  function newScreen(mode) {
+  function newScreen(mode, id) {
     stopScreen();
     screen = {
       path: '/v1/workspaces/' + scope.id + '/studio/documents',
       mode, controller: new AbortController(),
+      draftKey:mode === 'catalog' ? null : draftKey(id || 'new'),
       base: null, remote: null, attempt: null, busy: false, blocked: false, unavailable: false, composing: false,
     };
     catalog.hidden = mode !== 'catalog';
@@ -192,6 +232,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     compare.open = false;
     clearComparison();
     controls(state);
+    rememberDraft(state);
   }
 
   function responseDocument(result, id) {
@@ -203,6 +244,7 @@ export function mountSharedStudio(document, {request, onClose}) {
 
   function unavailable(state) {
     state.unavailable = true;
+    discardDraft(state);
     state.remote = state.deferred = null;
     stopWatch(state);
     refreshPresence(state);
@@ -345,7 +387,7 @@ export function mountSharedStudio(document, {request, onClose}) {
 
   async function openDocument(id, revision) {
     if (!ID.test(id || '')) return;
-    const state = newScreen('edit');
+    const state = newScreen('edit', id);
     show('正在打开团队文档…');
     const result = await send('GET', documentPath(state, id), undefined, state.controller.signal);
     if (!isCurrent(state)) return;
@@ -353,11 +395,19 @@ export function mountSharedStudio(document, {request, onClose}) {
     if (!item) {
       const failure = result.status === 403 || result.status === 404
         ? '团队文档不存在，或你没有访问权限。' : '暂时无法打开团队文档。';
+      if ([401,403,404,410].includes(result.status)) discardDraft(state);
       await loadCatalog(failure);
       return;
     }
     show();
-    showForm(state, item);
+    const restored = readDraft(state);
+    if (restored && restored.base.revision <= item.revision && !sameContent(restored.fields, item)) {
+      const storedBase = restored.base.revision < item.revision ? {...item, ...restored.base} : item;
+      showForm(state, storedBase, restored.fields);
+      show('已恢复本标签页的未保存草稿。');
+      if (item.revision > storedBase.revision) applyRemote(state, item);
+    } else showForm(state, item);
+    onDocument?.(scope.id, item.id, revision);
     refreshPresence(state);
     queueUpdate(state);
     if (revision) history.showVersion(revision);
@@ -366,6 +416,7 @@ export function mountSharedStudio(document, {request, onClose}) {
 
   async function loadCatalog(failure = '') {
     const state = newScreen('catalog');
+    add.textContent = readDraft({mode:'new',draftKey:draftKey('new')}) ? '继续新建团队文档' : '新建团队文档';
     const refresh = get('refresh');
     refresh.disabled = true;
     show('正在读取团队文档…');
@@ -407,6 +458,7 @@ export function mountSharedStudio(document, {request, onClose}) {
 
   function close() {
     if (!mayLeave()) return;
+    discardDraft(screen);
     stopScreen();
     dialog.close();
     onClose?.();
@@ -421,17 +473,25 @@ export function mountSharedStudio(document, {request, onClose}) {
   });
   get('back').addEventListener('click', () => {
     if (!mayLeave()) return;
+    discardDraft(screen);
+    onCatalog?.();
     void loadCatalog();
     add.focus();
   });
   add.addEventListener('click', () => {
     const state = newScreen('new');
-    showForm(state, null);
+    const restored = readDraft(state);
+    state.attempt = restored?.attempt || null;
+    showForm(state, null, restored?.fields);
+    if (restored) show('已恢复本标签页的未保存草稿。');
     titleInput.focus();
   });
   get('refresh').addEventListener('click', () => void loadCatalog());
   form.addEventListener('input', () => {
     if (!screen) return;
+    const state = screen;
+    view.clearTimeout(state.draftTimer);
+    state.draftTimer = view.setTimeout(() => rememberDraft(state), 150);
     if (compare.open) updateLocalComparison(screen);
     controls(screen);
     refreshPresence(screen);
@@ -466,6 +526,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     const creating = !state.base;
     const payload = creating ? (state.attempt ??= {...draft, client_key: view.crypto.randomUUID()})
       : {...draft, revision: state.base.revision};
+    rememberDraft(state);
     state.busy = true;
     stopWatch(state);
     controls(state);
@@ -476,6 +537,13 @@ export function mountSharedStudio(document, {request, onClose}) {
     const item = responseDocument(result, state.base?.id);
     if (item) {
       const retainedDraft = creating && !sameContent(draft, payload);
+      if (creating) {
+        discardDraft(state);
+        state.draftKey = draftKey(item.id);
+        state.mode = 'edit';
+        state.attempt = null;
+        onDocument?.(scope.id, item.id);
+      }
       showForm(state, item, retainedDraft ? draft : item);
       get('heading').textContent = '团队文档';
       show(retainedDraft ? '文档已创建，后续修改仍待保存。' : '已保存。', 'success');
@@ -486,7 +554,10 @@ export function mountSharedStudio(document, {request, onClose}) {
     } else if (!creating && [401, 403, 404].includes(result.status)) {
       unavailable(state);
     } else {
-      if (creating && [400, 401, 403, 404, 422].includes(result.status)) state.attempt = null;
+      if (creating && [400, 401, 403, 404, 422].includes(result.status)) {
+        state.attempt = null;
+        rememberDraft(state);
+      }
       const error = result.body?.error?.code;
       show(error === 'document_deleted' ? '之前创建的团队文档已被删除。请返回列表重新新建。'
         : error === 'idempotency_conflict' ? '无法确认文档是否已经创建。请返回列表查看。'
@@ -526,6 +597,8 @@ export function mountSharedStudio(document, {request, onClose}) {
     if (!isCurrent(state)) return;
     state.busy = false;
     if (result.status === 200 || result.status === 204) {
+      discardDraft(state);
+      onCatalog?.();
       await loadCatalog();
       return;
     }
@@ -558,12 +631,16 @@ export function mountSharedStudio(document, {request, onClose}) {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') stopWatch(screen);
+    if (document.visibilityState === 'hidden') {
+      rememberDraft(screen);
+      stopWatch(screen);
+    }
     else if (screen?.base) void checkUpdates(screen);
     refreshPresence(screen);
   });
   view.addEventListener('beforeunload', event => {
     if (!dialog.open || (!screen?.busy && !isDirty(screen))) return;
+    rememberDraft(screen);
     event.preventDefault();
     event.returnValue = '';
   });
@@ -573,6 +650,7 @@ export function mountSharedStudio(document, {request, onClose}) {
       const next = account && ID.test(team?.id || '') && team.kind === 'team' &&
         ROLES.has(team.role) ? {id: team.id, name: team.name, account} : null;
       if (dialog.open && (next?.id !== scope?.id || next?.account !== scope?.account)) {
+        rememberDraft(screen);
         stopScreen();
         dialog.close();
         onClose?.();

@@ -3765,6 +3765,54 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('a reloaded quote keeps its text scoped and ignores a late lookup after changing workspaces', async () => {
+  const initial = `#workspace=${linkTeam}&social=${linkSocial}`;
+  const fixture = linkedChatFixture(initial);
+  const {doc, el, routes, calls, restore} = fixture;
+  const {view, saved} = publicOpeningView();
+  doc.defaultView = view;
+  const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
+  const quoteKey = 'openteamily.chat-quote:' + scope;
+  const draft = '引用旧消息的草稿';
+  saved.set(quoteKey,linkSocialOlder);
+  saved.set('openteamily.chat-drafts:' + alice,JSON.stringify({[scope]:draft}));
+  const pending = Promise.withResolvers();
+  const path = linkBase(linkTeam) + linkSocialPath + '/messages';
+  const older = {id:linkSocialOlder, conversation_id:linkSocial, workspace_id:linkTeam,
+    user_id:bob, body:'核对过的原消息', seq:2, created:2};
+  let reads = 0;
+  routes.set(`${path}?around=${linkSocialOlder}&limit=1`, () => ++reads === 1 ? pending.promise : json(404, {}));
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    assert.equal(el('chat-body').value,draft);
+    assert.equal(el('chat-body').disabled,false);
+    assert.equal(el('chat-send').disabled,true);
+    assert.equal(el('chat-reply-preview').dataset.state,'checking');
+    await fire(el('chat-form'),'submit',{preventDefault() {}});
+    assert.equal(calls.some(call => call.method === 'POST' && call.path === path),false);
+
+    await fixture.navigate(`#workspace=${linkWork}&social=${linkSocial}`);
+    pending.resolve(json(200,{items:[older]}));
+    await settle();
+    assert.equal(el('chat-reply-preview').hidden,true);
+    assert.equal(el('chat-body').value,'');
+    await fixture.navigate(initial);
+    await settle();
+    assert.equal(reads,2);
+    assert.equal(el('chat-body').value,draft);
+    assert.equal(el('chat-reply-preview').dataset.state,'missing');
+    assert.equal(el('chat-send').disabled,true);
+    await fire(el('chat-reply-cancel'),'click');
+    assert.equal(el('chat-reply-preview').hidden,true);
+    assert.equal(el('chat-body').value,draft);
+    assert.equal(el('chat-send').disabled,false);
+    assert.equal(saved.has(quoteKey),false);
+  } finally {
+    pending.resolve(json(503,{}));
+    restore();
+  }
+});
+
 test('a meeting discussion draft unlocks thread controls only after its exact first message is saved', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
   const {doc, el, routes, calls, restore} = fixture;

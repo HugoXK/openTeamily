@@ -2919,6 +2919,9 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 .composer-reply[hidden] { display: none; }
 .composer-reply-copy { display: grid; gap: .15rem; min-width: 0; }
 .composer-reply-copy :is(strong,span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-reply[data-state]:not([data-state=""]) #chat-reply-excerpt { white-space: normal; overflow-wrap: anywhere; }
+.composer-reply-actions { display: flex; flex: 0 0 auto; align-items: center; gap: .3rem; }
+#chat-reply-retry { min-height: 2.25rem; padding-inline: .5rem; }
 #chat-reply-cancel {
   flex: 0 0 auto;
   width: 2.25rem;

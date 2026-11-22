@@ -21,7 +21,9 @@ function fixture(t, turn = async () => ({text: 'private-result-marker'})) {
     idempotency_key: 'auto-create-' + title.replaceAll(' ', '-'), ...extra})
   const list = (workspace_id = PERSONAL, options = {}, call = OWNER) => feature.ops.notifications({workspace_id, ...options}, call)
   const read = (workspace_id, selection, call = OWNER) => feature.ops.readNotifications({workspace_id, ...selection}, call)
-  const settled = () => Promise.all(feature.inflight.values())
+  const settled = async () => {
+    while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  }
   return {feature, active, time, create, list, read, settled}
 }
 

@@ -196,11 +196,12 @@ export function runView(row) {
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
+export function createAutomations({ db, turn, runtimeReady = () => true, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
   readMeetingAction, readMemoryAction, studioRequest, requireWorkspace, readSavedWorks }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
+  let stopped = false
 
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
@@ -276,6 +277,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   })
   const activeRunFor = db.prepare(`SELECT id, automation_id, workspace_id, claimed_at FROM ot_automation_runs
     WHERE automation_id=? AND status='queued' ORDER BY started DESC, id DESC LIMIT 1`)
+  db.exec(`CREATE INDEX IF NOT EXISTS ot_automation_unclaimed_work ON ot_automation_runs(started)
+    WHERE status='queued' AND claimed_at IS NULL`)
+  const nextQueuedRun = db.prepare(`SELECT id FROM ot_automation_runs WHERE status='queued' AND claimed_at IS NULL
+    ORDER BY started,rowid LIMIT 1`)
 
   const workspaceOf = (payload) => {
     const id = payload?.workspace_id
@@ -462,9 +467,20 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         finish(runId, 'failed', code, { result: { error: message } })
         log(`openteamily-web: automation run ${runId} failed (${code})`)
       }
-    }).finally(() => inflight.delete(runId))
+    }).finally(() => {
+      inflight.delete(runId)
+      drain()
+    })
     inflight.set(runId, job)
     return job
+  }
+
+  function drain() {
+    // All automation turns share the owner's native Bot. A turn waiting behind
+    // another one remains cancellable and safe to resume after a process exit.
+    if (stopped || inflight.size || !runtimeReady()) return
+    const queued = nextQueuedRun.get()
+    if (queued) void execute(queued.id)
   }
 
   function insertRun(row, due, attemptOf = null) {
@@ -480,6 +496,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   // Evaluate every enabled automation (optionally one workspace) and fire due slots.
   function tick(workspaceId = null) {
+    if (!runtimeReady()) return []
     const now = clock()
     const rows = workspaceId
       ? all('SELECT * FROM ot_automations WHERE enabled=1 AND workspace_id=? ORDER BY id', workspaceId)
@@ -493,22 +510,22 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         return insertRun(row, due.at)
       })
       if (!id) continue
-      void execute(id)
-      fired.push(runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)))
+      fired.push(id)
     }
-    return fired
+    drain()
+    return fired.map(id => runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)))
   }
 
   function start() {
     if (timer) return
-    for (const { id } of all("SELECT id FROM ot_automation_runs WHERE status='queued' AND claimed_at IS NULL ORDER BY started,id")) void execute(id)
+    stopped = false
     try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
     timer = setInterval(() => {
       try { tick() } catch (error) { log('openteamily-web: automation tick failed: ' + (error?.message ?? 'error')) }
     }, tickMs)
     timer.unref?.()
   }
-  function stop() { if (timer) clearInterval(timer); timer = null }
+  function stop() { stopped = true; if (timer) clearInterval(timer); timer = null }
 
   function createInTransaction(payload, source) {
     const workspaceId = workspaceOf(payload)
@@ -598,7 +615,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return createMeetingFollowup(payload)
     }
     const result = tx(db, () => createInTransaction(payload))
-    if (result.sample_run) void execute(result.sample_run.id)
+    if (result.sample_run) drain()
     return result
   }
 
@@ -896,7 +913,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { status: 202, id }
     })
     if (outcome.run) return outcome
-    void execute(outcome.id)
+    drain()
     return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)) }
   }
 
@@ -926,7 +943,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { status: 201, id }
     })
     if (outcome.run) return outcome
-    void execute(outcome.id)
+    drain()
     return { status: 201, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', outcome.id)), retried: runView(item) }
   }
 
@@ -996,13 +1013,14 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   endpoints['automations/v1'] = ops.v1
   endpoints['automations/import-runs'] = ops.importRuns
   const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(ops, bundle) : ops.import(bundle))
-  return { db, endpoints, ops, migrate, tick, start, stop, execute, inflight }
+  return { db, endpoints, ops, migrate, tick, start, stop, inflight }
 }
 
 export default async function automations(host) {
   const { openDatabase } = await import('../../src/store.js')
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
+    runtimeReady: () => typeof host.currentRuntime?.()?.chatTurn === 'function',
     personalBinding: () => host.call('agents/personal-binding', {}),
     requireWorkspace: workspace => requireMemoryWorkspace(host, workspace),
     saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
@@ -1016,9 +1034,8 @@ export default async function automations(host) {
     }),
   })
   const imported = await importPending({ host, db, migrate: feature.migrate })
-  // The clock starts once this user's DS-Bot is attached, so no slot fires into a
-  // runtime that is still booting.
-  if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
+  // The clock can check during startup. Only a ready local DS-Bot can claim work.
+  if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') feature.start()
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) {
     if (!['createOnboarding', 'memoryFollowup'].includes(name)) ops[name] = async (payload) => handler(payload ?? {})

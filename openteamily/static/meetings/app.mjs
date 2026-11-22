@@ -3,7 +3,7 @@ import {mountMeetingDiscussion} from './discussion.mjs';
 import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
-import {takeCallAudio} from '../shell/call-audio-handoff.mjs';
+import {previewCallAudio} from '../shell/call-audio-handoff.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -1039,9 +1039,9 @@ function mount() {
     destination.button.addEventListener('click', () => copySavedNotes(destination));
   }
 
-  function rewriteLocation(params) {
+  function rewriteLocation(params, workspace = workspaceId()) {
     if (globalThis.history?.replaceState && globalThis.location) {
-      globalThis.history.replaceState(null, '', '#' + new URLSearchParams({workspace: workspaceId(), ...params}));
+      globalThis.history.replaceState(null, '', '#' + new URLSearchParams(workspace ? {workspace, ...params} : params));
     }
   }
 
@@ -1612,7 +1612,8 @@ function mount() {
     callSource.hidden = !callDraft && !isMeetingCallId(current?.source_call_id);
     sharing.sync();
     renderList();
-    rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id} : {new: '1'});
+    rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id} : {new: '1'},
+      callDraft?.linkWorkspace ?? workspaceId());
   }
 
   function fill(meeting, source = null, draftJob = undefined) {
@@ -1869,7 +1870,7 @@ function mount() {
     if (meeting) {
       if (!await openMeeting(meeting.id, {status: 200, body: {meeting, viewer_username: owner}})) return;
     } else {
-      fill(null, source);
+      fill(null, {...source,linkWorkspace:linkedWorkspace});
       document.getElementById('main').scrollTop = 0;
       callSource.focus({preventScroll: true});
       show('ok', '已填入通话信息。上传录音或粘贴转写后，可生成纪要。');
@@ -1877,9 +1878,9 @@ function mount() {
     if (viewerId !== account || workspaceId() !== workspace || (current?.source_call_id || callDraft?.id) !== id) return;
     const editor = scope();
     try {
-      const clip = await takeCallAudio({owner:account, workspace:linkedWorkspace, call:id}, document.defaultView);
+      const clip = await previewCallAudio({owner:account, workspace:linkedWorkspace, call:id}, document.defaultView);
       if (clip && active(editor) && viewerId === account && audio.acceptCallRecording(clip)) {
-        show('ok', '已带入本次通话录音。可先试听，再开始转写。');
+        show('ok', '已带入本次通话录音。录音暂存在本机，可先试听，再开始转写。');
       }
     } catch {
       if (active(editor) && viewerId === account) show('error', '暂时无法读取本机录音。刷新后可重试。');

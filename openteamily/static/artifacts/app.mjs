@@ -1,7 +1,7 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
-import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
+import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
 import { mountSharedStudio } from './shared-studio.mjs';
 import { mountStudioCopy } from './studio-copy.mjs';
 import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
@@ -674,6 +674,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   const studio = mountSharedStudio(document, {
     request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+    onDocument(workspace, id, revision) {
+      const href = studioDocumentHref(workspace, id, revision);
+      if (href) writeSpaceAddress(href);
+    },
+    onCatalog() {
+      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    },
     onClose() {
       if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },

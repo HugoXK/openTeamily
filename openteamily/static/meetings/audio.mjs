@@ -60,24 +60,26 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
   if (!panel) return {reset() {}, hasPendingWork: () => false, acceptCallRecording: () => false};
   let input = null, used = false, url = '', phase = '', ready = false, checking = false, asking = false;
   let progress = null, capture = null, captureTimer, pollTimer, operation = null, scope = 0;
+  let discardCallRecording = null, discarding = false;
 
   function hasPendingWork() {
-    return Boolean(capture || asking || operation || (input && !used));
+    return Boolean(capture || asking || operation || discarding ||
+      (input && !used && (!discardCallRecording || progress?.next)));
   }
 
   function refreshButtons() {
     prepare.hidden = !['unprepared', 'failed', 'cancelled'].includes(phase);
     prepare.disabled = checking;
-    const busy = Boolean(capture || operation || asking);
-    record.disabled = busy || !globalThis.navigator?.mediaDevices?.getUserMedia || !globalThis.MediaRecorder;
+    const busy = Boolean(capture || operation || asking || discarding);
+    record.disabled = busy || Boolean(discardCallRecording) || !globalThis.navigator?.mediaDevices?.getUserMedia || !globalThis.MediaRecorder;
     stop.hidden = !capture;
-    file.disabled = busy;
+    file.disabled = busy || Boolean(discardCallRecording);
     const finished = Boolean(progress?.total && progress.next === progress.total);
     start.disabled = !input || used || (!ready && !finished) || busy;
     start.textContent = used ? '开始转写' : finished ? '加入正文' : progress?.next ? '继续转写' : '开始转写';
     addPartial.hidden = !progress || used || finished || progress.added === progress.notes.length;
     addPartial.disabled = busy;
-    discard.disabled = !input && !operation;
+    discard.disabled = discarding || (!input && !operation);
     discard.textContent = operation ? '取消转写' : '移除音频';
   }
 
@@ -86,9 +88,10 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     onPendingChange();
   }
 
-  function audioInput(blob) {
+  function audioInput(blob, discardRecording = null) {
     if (url) URL.revokeObjectURL(url);
     input = blob;
+    discardCallRecording = discardRecording;
     used = false;
     progress = blob ? {samples: null, total: 0, next: 0, notes: [], added: 0} : null;
     url = blob ? URL.createObjectURL(blob) : '';
@@ -99,9 +102,9 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     syncAudio();
   }
 
-  function acceptCallRecording(blob) {
-    if (input || capture || operation || asking || !validCallAudio(blob)) return false;
-    audioInput(blob);
+  function acceptCallRecording({blob, discard:remove} = {}) {
+    if (input || capture || operation || asking || !validCallAudio(blob) || typeof remove !== 'function') return false;
+    audioInput(blob, remove);
     panel.open = true;
     status.textContent = '已带入通话录音。试听后可开始转写。';
     return true;
@@ -122,7 +125,8 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
       if (operation || capture) return;
       const progress = result.body.progress;
       if (ready) {
-        if (!progress?.next && !used) status.textContent = input ? '音频已选好，试听后可以开始转写。' : '';
+        if (!progress?.next && !used) status.textContent = discardCallRecording ? '录音暂存在本机，试听后可以开始转写。'
+          : input ? '音频已选好，试听后可以开始转写。' : '';
       }
       else if (phase === 'unavailable') status.textContent = '当前 DS-Bot 尚未启用本地语音识别。';
       else if (phase === 'failed') status.textContent = '语音识别准备失败，请重试。';
@@ -155,6 +159,7 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     operation = null;
     phase = '';
     ready = checking = asking = false;
+    discarding = false;
     audioInput(null);
     status.textContent = '';
     panel.open = false;
@@ -216,14 +221,31 @@ export function mountMeetingAudio(document, {request, base, transcript, onPendin
     }
   });
   stop.addEventListener('click', stopCapture);
-  discard.addEventListener('click', () => {
+  discard.addEventListener('click', async () => {
     if (operation) {
       operation.abort();
       status.textContent = progress?.next ? `已取消转写。已保留 ${progress.next} / ${progress.total} 段，可以继续。` : '已取消转写。';
-    } else {
-      audioInput(null);
-      status.textContent = '';
+      return;
     }
+    const epoch = scope;
+    if (discardCallRecording) {
+      discarding = true;
+      syncAudio();
+      try {
+        await discardCallRecording();
+      } catch {
+        if (epoch === scope) status.textContent = '暂时无法删除本机录音，请重试。';
+        return;
+      } finally {
+        if (epoch === scope) {
+          discarding = false;
+          syncAudio();
+        }
+      }
+    }
+    if (epoch !== scope) return;
+    audioInput(null);
+    status.textContent = '';
   });
 
   function addRecognized(state) {

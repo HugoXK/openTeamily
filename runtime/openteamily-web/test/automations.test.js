@@ -778,12 +778,88 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
     .map(row => [row.run_id, row.status]), [[claimedId, 'interrupted'], [queuedId, 'succeeded']])
 })
 
+test('an automation queued behind an active native run survives a process interruption', async t => {
+  const {e, feature, dbPath, clock} = fixture(() => new Promise(() => {}))
+  const draft = {workspace_id:W, template_id:'custom', prompt:'Respond once', participants:['alice'],
+    schedule:{kind:'now',time_zone:'UTC'}}
+  const create = (title, key) => e['automations/create']({...draft,title,idempotency_key:key}).automation
+  const first = create('Executing before restart','in-flight-automation')
+  const next = create('Waiting before restart','unstarted-automation')
+  const run = (id,key) => e['automations/runNow']({workspace_id:W,id,idempotency_key:key}).run
+  const running = run(first.id,'first-fixture-run-0001')
+  const waiting = run(next.id,'waiting-fixture-run-01')
+  assert.equal(running.status,'running')
+  assert.equal(waiting.status,'queued')
+  assert.deepEqual([...feature.inflight.keys()],[running.id])
+  await flush()
+  feature.stop()
+  feature.db.close()
+
+  let runtimeReady = false
+  const calls = []
+  clock.now += 30
+  const restored = createAutomations({db:new DatabaseSync(dbPath),clock:()=>clock.now,runtimeReady:()=>runtimeReady,
+    turn:async args => {calls.push(args);return {text:'Recovered the unstarted run'}}})
+  t.after(() => {restored.stop();restored.db.close()})
+  restored.start()
+  assert.equal(restored.inflight.size,0)
+  const scope = {workspace_id:W,id:next.id,run_id:waiting.id}
+  assert.equal(restored.ops.run(scope).run.status,'queued')
+  assert.equal(restored.ops.run({workspace_id:W,id:first.id,run_id:running.id}).run.error_code,'interrupted')
+  assert.equal(restored.ops.runNow({workspace_id:W,id:next.id,idempotency_key:'waiting-fixture-run-01'}).run.id,waiting.id)
+
+  runtimeReady = true
+  restored.tick()
+  await Promise.all(restored.inflight.values())
+  assert.deepEqual(calls.map(({requestId})=>requestId),[`ot-automation:${waiting.id}`])
+  assert.equal(restored.ops.run(scope).run.status,'succeeded')
+})
+
+test('a cold clock leaves due slots and manual runs unclaimed until a native runtime is available', async t => {
+  const at = zonedEpoch('UTC', 2027, 1, 4, 8, 55)
+  let time = at, runtimeReady = false
+  const calls = []
+  const feature = createAutomations({db:new DatabaseSync(':memory:'),clock:()=>time,runtimeReady:()=>runtimeReady,
+    turn:async input => {calls.push(input);return {text:'Private native result'}}})
+  t.after(() => {feature.stop();feature.db.close()})
+  const draft = {workspace_id:W,template_id:'custom',prompt:'Run my own automation',participants:['alice'],
+    schedule:{kind:'daily',time:'09:00',time_zone:'UTC'}}
+  const create = (title, enabled, key) => feature.ops.create({...draft,title,enabled,idempotency_key:key}).automation
+  const daily = create('Start when ready',true,'cold-daily-automation')
+  const manual = create('Explicit manual job',false,'cold-manual-automation')
+  const cancelled = create('Cancel while cold',false,'cold-cancel-automation')
+  const runNow = (id, key) => feature.ops.runNow({workspace_id:W,id,idempotency_key:key}).run
+  time += 86400 + 600
+  const waiting = runNow(manual.id,'waiting-on-native-run')
+  const removing = runNow(cancelled.id,'cancel-while-cold-run')
+  feature.start()
+  assert.equal(waiting.status,'queued')
+  assert.equal(removing.status,'queued')
+  assert.deepEqual(feature.ops.runs({workspace_id:W,id:daily.id}).items,[])
+  assert.equal(feature.ops.cancel({workspace_id:W,id:cancelled.id,run_id:removing.id}).run.status,'cancelled')
+  assert.deepEqual(calls,[])
+
+  runtimeReady = true
+  const [scheduled] = feature.tick()
+  assert.equal(scheduled.due_at,zonedEpoch('UTC',2027,1,5,9,0))
+  assert.equal(scheduled.status,'queued')
+  assert.equal(feature.tick().length,0)
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.deepEqual(calls.map(({requestId,skillScope})=>[requestId,skillScope]),[
+    [`ot-automation:${waiting.id}`,`automation:${W}:${manual.id}`],
+    [`ot-automation:${scheduled.id}`,`automation:${W}:${daily.id}`],
+  ])
+  assert.equal(feature.tick().length,0)
+  assert.equal(feature.ops.runs({workspace_id:W,id:daily.id}).items[0].status,'succeeded')
+})
+
 test('older pending native rows have unknown delivery and become interrupted after migration', t => {
   const {e, feature, dbPath, clock} = fixture()
   const {automation} = e['automations/create']({workspace_id: W, title: 'Previous owner runtime', template_id: 'custom',
     prompt: 'Check once', participants: ['alice'], schedule: {kind: 'now', time_zone: 'UTC'}, idempotency_key: 'r'.repeat(16)})
   const id = 'f'.repeat(32)
-  feature.db.exec('DROP TRIGGER ot_automation_notice_on_finish; ALTER TABLE ot_automation_runs DROP COLUMN claimed_at')
+  feature.db.exec(`DROP TRIGGER ot_automation_notice_on_finish; DROP INDEX ot_automation_unclaimed_work;
+    ALTER TABLE ot_automation_runs DROP COLUMN claimed_at`)
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()

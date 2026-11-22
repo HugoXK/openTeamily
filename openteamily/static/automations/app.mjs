@@ -69,6 +69,7 @@ export function runStatusLabel(run) {
   if (run.status === 'cancelled') return '已取消';
   if (run.status === 'timeout') return '已超时';
   if (run.status === 'skipped') return '已跳过';
+  if (run.status === 'failed' && run.error_code === 'interrupted') return '运行中断';
   if (run.status === 'failed') return '失败';
   return run.status || '';
 }
