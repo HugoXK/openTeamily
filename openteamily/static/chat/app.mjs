@@ -1072,7 +1072,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncMemoryRecall(scope = sendScope()) {
     if (!memoryRecall) return;
-    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
+    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent) && !currentConversation?.deferred;
     memoryRecall.hidden = !visible;
     if (!visible) return;
     memoryRecall.value = memoryWrites.get(scope) ?? recallMode(scope);
@@ -1408,7 +1408,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentSource === 'agent' && currentAgent) {
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
-      const label = pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
+      const label = pending ? uiLabel('正在回复…', 'Replying…') : currentConversation?.deferred
+        ? uiLabel('草稿 · 发送首条消息后保存对话', 'Draft · Send the first message to save this chat')
+        : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
       setChatSubtitle(currentConversation?.title_edited ? `${currentAgent.name} · ${pending ? label : 'DS-Bot'}` : label, pending);
     }
     const empty = document.getElementById('chat-empty');
@@ -2131,7 +2133,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function currentPrivateThread() {
     const wid = workspaceId(), aid = currentAgent?.id, cid = currentConversation?.id;
     if (!currentThreadWorkspace() || currentSource !== 'agent' || !PRIVATE_THREAD_ID.test(aid || '') ||
-        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.workspace_id !== wid || currentConversation.agent_id !== aid ||
+        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.deferred || currentConversation.workspace_id !== wid ||
+        currentConversation.agent_id !== aid ||
         typeof currentConversation.archived !== 'boolean') return null;
     return {owner: currentUser.id, wid, aid, cid, agent: currentAgent, conversation: currentConversation};
   }
@@ -2608,7 +2611,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncCaptureButton() {
     if (!captureButton) return;
-    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation
+    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation || currentConversation.deferred
       || !lastAgentItems.some(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id));
   }
 
@@ -5040,10 +5043,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!artifactsStatus) artifacts = result.body.items || [];
       if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
     });
-    // Group conversations can wait on Bot Social. An owned local directory
-    // can already paint and open an explicitly selected private agent.
+    function applyReceipt(source, directory) {
+      const receipt = link?.readReceipt;
+      if (receipt?.source !== source) return;
+      const row = directory.find(item => item.id === receipt.id);
+      const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
+        ? row.last_seq <= receipt.seq
+        : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
+      if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
+    }
+    let privateReady = false, socialReady = false;
     const readPinReceipt = pinReceipt;
-    const socialRequest = read('/social/conversations?limit=100');
+    const socialRequest = read('/social/conversations?limit=100').then(social => {
+      if (!current()) return social;
+      socialReady = true;
+      socialConversations = social.status === 200
+        ? (social.body.items || []).map(row => mergeGroupRead(
+          mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
+        : [];
+      applyReceipt('social', socialConversations);
+      if (!privateReady && socialConversations.length) {
+        sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], socialConversations, user.id)]);
+        renderSessions();
+        if (currentSource === 'social') syncConversationPin(currentConversation);
+        if (['all', 'groups'].includes(searchTab)) refreshDirectorySearch();
+      }
+      return social;
+    });
     const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
       : await read('/agents?limit=100&include=conversations');
     if (!current()) return;
@@ -5060,16 +5086,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? (response.body.items || []).map(row => ({...row, agent_id: agent.id})) : []);
       partial ||= results.some(({response}) => response.status !== 200);
     }
+    privateReady = true;
     agents = nextAgents;
-    function applyReceipt(source, directory) {
-      const receipt = link?.readReceipt;
-      if (receipt?.source !== source) return;
-      const row = directory.find(item => item.id === receipt.id);
-      const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
-        ? row.last_seq <= receipt.seq
-        : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
-      if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
-    }
     const agentById = new Map(agents.map(agent => [agent.id, agent]));
     const privateRows = () => {
       const included = new Set(rows.map(row => row.id));
@@ -5087,22 +5105,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return currentRow.archived === true ? [] : [{...currentRow, agent}];
       });
     };
-    const localRows = isLocalPersonal ? privateRows() : [];
-    if (localRows.length) {
-      applyReceipt('agent', localRows);
-      sessions = mergeSessions(localRows, socialConversations, user.id);
-      renderSessions();
+    const listedPrivate = !socialReady || onPrivate ? privateRows() : [];
+    if (listedPrivate.length) {
+      applyReceipt('agent', listedPrivate);
+      sessions = mergeSessions(listedPrivate, socialConversations, user.id);
+      if (!socialReady) renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(localRows.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null);
     }
     const social = await socialRequest;
     if (!current()) return;
     partial ||= social.status !== 200;
-    socialConversations = social.status === 200
-      ? (social.body.items || []).map(row => mergeGroupRead(
-        mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
-      : [];
     applyReceipt('social', socialConversations);
     const finalPrivateRows = privateRows();
     applyReceipt('agent', finalPrivateRows);
@@ -6793,6 +6807,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || items.find(space => space.id === personal) || items[0])?.id || '';
   }
 
+  function setPersonalChat(personal) {
+    personalWorkspaceId = personal?.workspace?.id || '';
+    personalAgentId = personal?.agent?.id || '';
+    personalLook = personal ? chatSettings?.look || personal.look || null : null;
+  }
+
   function loadChatSettings(owner) {
     if (chatSettings?.owner === owner) return;
     sendShortcut = 'enter';
@@ -6916,20 +6936,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!sessions.length) setSessionsStatus('正在加载对话…');
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
     const sharedRequest = servedByDsbot ? listWorkspaces() : null;
-    const local = ownedChatStartup(await localRequest, owner);
+    const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
+    const scopedSocial = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && chatPathId(start.social);
+    // An authenticated workspace list can verify a shared chat before the private agent metadata arrives.
+    const {local, shared, personalSpace} = scopedSocial ? await Promise.any([
+      localReady.then(local => local ? {local} : Promise.reject()),
+      sharedRequest.then(shared => {
+        const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
+        const personalSpace = items.find(space => space.kind === 'personal');
+        return personalSpace && items.some(space => space.id === start.workspace && ['team', 'workspace'].includes(space.kind))
+          ? {shared, personalSpace} : Promise.reject();
+      }),
+    ]).catch(() => ({})) : {local: await localReady};
     if (!bootCurrent()) return;
 
+    const readPersonal = async () => {
+      const result = await read('/v1/personal-agent');
+      return result.status === 200 ? result.body.personal_agent : null;
+    };
     const openLocal = local && (!start.workspace || start.workspace === local.space.id);
     let personalEntity = local ? {workspace: local.space, agent: {id: local.agentId}} : null;
     let listed;
-    if (openLocal) {
+    if (shared) {
+      listed = shared;
+      personalEntity = {workspace: personalSpace};
+      void localReady.then(async local => {
+        if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname) return;
+        const personal = local ? {workspace: local.space, agent: {id: local.agentId}} : await readPersonal();
+        if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname ||
+            personal?.workspace?.id !== personalSpace.id || !personal.agent?.id) return;
+        setPersonalChat(personal);
+        if (workspaceId() === personalWorkspaceId) {
+          renderSessions();
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId && !currentConversation) {
+            applyChatIdentity(document, currentAgent.name, null, personalLook);
+          }
+        }
+      });
+    } else if (openLocal) {
       listed = {status: 200, body: {items: [local.space]}};
     } else if (local) {
       listed = await sharedRequest;
     } else {
       if (servedByDsbot) {
-        const personal = await read('/v1/personal-agent');
-        personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+        personalEntity = await readPersonal();
         if (personalEntity?.agent?.id && personalEntity.workspace?.id) {
           listed = await sharedRequest;
           if (listed.status !== 200 || !listed.body?.items?.some(space => space.id === personalEntity.workspace.id)) listed = null;
@@ -6945,9 +6995,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!bootCurrent()) return;
     const personalWorkspace = personalEntity?.workspace?.id || '';
-    personalWorkspaceId = personalWorkspace;
-    personalAgentId = personalEntity?.agent?.id || '';
-    personalLook = personalEntity ? chatSettings?.look || personalEntity.look || null : null;
+    setPersonalChat(personalEntity);
     if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
       setSessionsStatus('无法加载工作区，请重试。');
       if (publicIntent && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === publicAgentContinuation(publicIntent)) {
@@ -8527,6 +8575,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               : code === 'conversation_archived' ? uiLabel('对话已归档，恢复后可以重试。', 'Conversation archived. Restore it to retry.')
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
+          }
+          if (nativePrivate && isCurrent() && currentConversation?.deferred && privateReplyPair(result.body, queue, job.key)) {
+            // The first message and reply are committed with the discussion.
+            delete currentConversation.deferred;
           }
           const finish = (restored = false) => {
             if (!queue.jobs.includes(job)) return;

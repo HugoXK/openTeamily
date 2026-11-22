@@ -1517,14 +1517,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderNextRun(nextRun, unchanged ? current : null);
   }
 
-  async function openLinkedAutomation(target, loadSeq) {
-    const seq = ++editorRequest;
-    show('', '正在打开自动化…');
+  function readLinkedAutomation(target) {
     const path = runPath(target);
-    const [result, exact] = await Promise.all([
-      request('GET', path).catch(() => ({status: 0, body: {}})),
+    return Promise.all([
+      runRequestWithTimeout('GET', path),
       target.run ? runRequestWithTimeout('GET', `${path}/runs/${target.run}`) : null,
     ]);
+  }
+
+  async function openLinkedAutomation(target, loadSeq, reading) {
+    const seq = ++editorRequest;
+    show('', '正在打开自动化…');
+    const [result, exact] = await (reading || readLinkedAutomation(target));
     if (seq !== editorRequest || loadSeq !== loadRequest || workspaceId() !== target.workspace || !form.hidden) return;
     const item = result.body.automation;
     if (result.status === 200 && item?.id === target.automation && item.workspace_id === target.workspace) {
@@ -1781,6 +1785,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     const catalog = wantedTemplate ? loadTemplates(seq) : null;
+    const linked = native && target?.automation ? readLinkedAutomation(target) : null;
     const personalRequest = initialCatalogue?.then(result => ownedPersonalCatalogue(result, session.body.user));
     let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
     if (target?.workspace && !space.body?.items?.some(item => item.id === target.workspace) && supplemental) {
@@ -1815,7 +1820,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (target?.workspace && items.some(item => item.id === target.workspace)) {
       workspaceSelect.value = target.workspace;
       const opening = target.memoryAction ? openMemoryActionDraft(target, seq)
-        : target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq);
+        : target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq, linked);
       const selected = editorRequest;
       if (await opening || seq !== loadRequest || selected !== editorRequest || !form.hidden) return;
     } else if (target) {

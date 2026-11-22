@@ -381,6 +381,58 @@ test('an explicit template link opens its draft while the shared directory is st
   }
 });
 
+test('a native result link reads the item early and opens only once its workspace is available', async t => {
+  const {doc, elements} = fakeDocument();
+  const previous = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previous; });
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  doc.getElementById('run-panel').scrollIntoView = () => {};
+  doc.getElementById('editor-form').hidden = true;
+  const workspace = projectedWorkspace, automation = projectedAutomation, run = 'd'.repeat(32);
+  doc.defaultView = {location:{search:`?workspace=${workspace}&automation=${automation}&run=${run}`}};
+  const session = Promise.withResolvers();
+  const personal = Promise.withResolvers();
+  const teams = Promise.withResolvers();
+  const detailPath = `/v1/workspaces/${workspace}/automations/${automation}`;
+  const exactPath = `${detailPath}/runs/${run}`;
+  const item = {id:automation, workspace_id:workspace, title:'通知里的自动化', enabled:false, schedule:{kind:'now'}};
+  const result = {id:run, workspace_id:workspace, automation_id:automation, status:'succeeded', result:{text:'已打开确切结果'}};
+  const calls = [];
+  const mounted = mount(doc, {fetcher: async (path, {method}) => {
+    calls.push([method, path]);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/workspaces?scope=personal') return personal.promise;
+    if (path === '/v1/workspaces?limit=100') return teams.promise;
+    if (path === detailPath) return respond({automation:item});
+    if (path === exactPath) return respond({run:result});
+    if (path === `${detailPath}/runs?limit=20`) return respond({items:[result]});
+    throw new Error('unexpected ' + path);
+  }});
+  try {
+    await flush();
+    assert.deepEqual(calls, [['GET','/v1/auth/session']]);
+    session.resolve(respond({user:{id:projectedOwner, username:'alice'}}));
+    await flush();
+    assert.ok(calls.some(([,path]) => path === exactPath));
+    assert.equal(elements.get('editor-form').hidden, true);
+    assert.doesNotMatch(elements.get('run-list')?.textContent || '', /已打开确切结果/);
+    personal.resolve(respond({items:[projectedPersonal]}));
+    await mounted;
+    await flush();
+    assert.equal(elements.get('editor-heading').textContent, item.title);
+    assert.match(elements.get('run-list').textContent, /已打开确切结果/);
+    assert.equal(calls.filter(([,path]) => path === detailPath).length, 1);
+    assert.equal(calls.filter(([,path]) => path === exactPath).length, 1);
+    assert.ok(calls.every(([method]) => method === 'GET'));
+  } finally {
+    session.resolve(respond({user:{id:projectedOwner, username:'alice'}}));
+    personal.resolve(respond({items:[projectedPersonal]}));
+    teams.resolve(respond({items:[projectedPersonal]}));
+    await mounted;
+  }
+});
+
 test('an exact onboarding link opens before unrelated loads and an explicit paused run shows its result', async () => {
   const {doc, elements} = fakeDocument();
   const workspace = 'a'.repeat(32);

@@ -40,6 +40,11 @@ CREATE INDEX IF NOT EXISTS agents_workspace_order ON agents(workspace_id, id);
 CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS agent_conversations_by_agent ON agent_conversations(agent_id, updated DESC, id);
+CREATE TABLE IF NOT EXISTS agent_meeting_discussions (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  source_workspace_id TEXT NOT NULL, share_id TEXT NOT NULL, source_revision INTEGER NOT NULL,
+  created INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS agent_meeting_discussion_expiry ON agent_meeting_discussions(expires);
 CREATE TABLE IF NOT EXISTS agent_conversation_memory (
   conversation_id TEXT PRIMARY KEY REFERENCES agent_conversations(id) ON DELETE CASCADE,
   enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
@@ -122,10 +127,52 @@ export function createAgents({ db, host }) {
     if (!row) fail('not-found', 'Agent not found', 404)
     return row
   }
+  const activeConversation = (agent,id) => typeof id === 'string' && ID.test(id)
+    ? one('SELECT * FROM agent_conversations WHERE id=? AND agent_id=?',id,agent.id) : undefined
   const conversation = (agent, id) => {
-    const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agent_conversations WHERE id=? AND agent_id=?', id, agent.id) : undefined
+    const row = activeConversation(agent,id)
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
+  }
+  function personalDiscussionBinding(agent) {
+    const binding = one(`SELECT binding.agent_id FROM native_personal_binding binding
+      JOIN agents a ON a.id=binding.agent_id AND a.workspace_id=binding.workspace_id
+      WHERE binding.singleton=1 AND binding.agent_id=? AND binding.workspace_id=? AND a.archived=0`,agent.id,agent.workspace_id)
+    if (!binding) fail('not-found', '个人智能体已无法打开此讨论草稿。', 404)
+  }
+  async function conversationOrDiscussion(agent,id) {
+    const active = activeConversation(agent,id)
+    if (active) return active
+    const draft = typeof id === 'string' && ID.test(id)
+      ? one('SELECT * FROM agent_meeting_discussions WHERE id=? AND agent_id=? AND expires>?',id,agent.id,now()) : undefined
+    if (!draft) fail('not-found', 'Conversation not found', 404)
+    personalDiscussionBinding(agent)
+    let title
+    try {
+      const source = await host.call('meetings/discussionSource',{
+        workspace_id:draft.source_workspace_id,share_id:draft.share_id,revision:draft.source_revision,
+      })
+      title = source?.title
+    } catch (error) {
+      const committed = activeConversation(agent,id)
+      if (committed) return committed
+      throw error
+    }
+    const committed = activeConversation(agent,id)
+    if (committed) return committed
+    personalDiscussionBinding(agent)
+    if (typeof title !== 'string' || !title) fail('discussion_unavailable', '暂时无法核对共享纪要。', 503)
+    if (draft.expires <= now()) fail('not-found', '讨论草稿已过期，请从共享纪要重新打开。', 404)
+    return {...draft,title,updated:draft.created,archived_at:null,deferred:true,...memorySetting('off')}
+  }
+  function commitMeetingDiscussion(agent,draft) {
+    if (!draft.deferred || activeConversation(agent,draft.id)) return
+    personalDiscussionBinding(agent)
+    if (draft.expires <= now()) fail('not-found', '讨论草稿已过期，请从共享纪要重新打开。', 404)
+    run('INSERT INTO agent_conversations(id,agent_id,title,created,updated) VALUES(?,?,?,?,?)',
+      draft.id,agent.id,draft.title,draft.created,now())
+    setMemoryMode(draft.id,'off')
+    run('DELETE FROM agent_meeting_discussions WHERE id=? AND agent_id=?',draft.id,agent.id)
   }
   const requireOpenConversation = (agent, id) => {
     if (conversation(agent, id).archived_at !== null) fail('conversation_archived', '请恢复此对话后再发送消息。', 409)
@@ -469,7 +516,7 @@ export function createAgents({ db, host }) {
     const previous = replay()
     if (previous) return previous
     if (reference) {
-      requireOpenConversation(agent, convo.id)
+      if (!convo.deferred) requireOpenConversation(agent, convo.id)
       const snapshot = stickerId ? await host.call('stickers/attachment', {id:stickerId})
         : await host.call('artifacts/chatAttachment', {workspace_id:agent.workspace_id,...reference})
       const concurrent = replay()
@@ -479,10 +526,16 @@ export function createAgents({ db, host }) {
         text ||= snapshot.body
         if (typeof snapshot.context_excerpt === 'string') savedExcerpt = snapshot.context_excerpt.slice(0, 12_000).toWellFormed()
       }
+      if (convo.deferred) {
+        convo = await conversationOrDiscussion(agent,convo.id)
+        const concurrent = replay()
+        if (concurrent) return concurrent
+      }
     }
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
     try {
+      commitMeetingDiscussion(agent,convo)
       requireOpenConversation(agent, convo.id)
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify(userMeta))
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(),
@@ -777,6 +830,26 @@ export function createAgents({ db, host }) {
       const memory = memorySetting(await conversationMemoryMode(row, agent))
       return { status: 201, conversation: { ...conversation(agent, id), ...mapping, ...memory } }
     },
+    async prepareMeetingDiscussion(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const source = p.source
+      const {idempotency_key:key} = p
+      if (![source?.workspace_id,source?.share_id].every(id => typeof id === 'string' && ID.test(id)) ||
+          !Number.isSafeInteger(source?.revision) || source.revision < 1 ||
+          typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Invalid meeting discussion request', 400)
+      const binding = one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1')
+      if (!binding) fail('not-found', '找不到个人智能体。', 404)
+      const agent = load(binding.workspace_id,binding.agent_id)
+      personalDiscussionBinding(agent)
+      const id = sha(JSON.stringify(['meeting-discussion',agent.id,source.workspace_id,source.share_id,source.revision,key])).slice(0,32)
+      const stamp = now()
+      if (!activeConversation(agent,id)) {
+        run('DELETE FROM agent_meeting_discussions WHERE expires<=?',stamp)
+        run('INSERT OR IGNORE INTO agent_meeting_discussions VALUES(?,?,?,?,?,?,?)',
+          id,agent.id,source.workspace_id,source.share_id,source.revision,stamp,stamp+86400)
+      }
+      return {id,workspace_id:agent.workspace_id,agent_id:agent.id}
+    },
     async organizeConversation(p) {
       const agent = load(ws(p), p.id)
       const row = conversation(agent, p.conversation_id)
@@ -803,7 +876,6 @@ export function createAgents({ db, host }) {
     },
     async openConversation(p) {
       const agent = load(ws(p), p.id)
-      const row = conversation(agent, p.conversation_id)
       const history = p.history
       if (history !== undefined) {
         if (!history || !Number.isInteger(history.limit) || history.limit < 1 || history.limit > 100 ||
@@ -814,6 +886,10 @@ export function createAgents({ db, host }) {
       const snapshot = p.snapshot === true
       if (snapshot && (!history || history.limit > 50 || history.before !== undefined || history.around !== undefined)) {
         fail('invalid', 'A snapshot requires a recent window of at most 50 messages', 400)
+      }
+      const row = activeConversation(agent,p.conversation_id) ?? await conversationOrDiscussion(agent,p.conversation_id)
+      if (row.deferred) {
+        return {agent:view(agent),conversation:row,items:[],cursor:null,has_newer:false}
       }
       const key = `agent:${agent.id}:${row.id}`
       // A candidate can lose to a pinned or newer Social thread at startup.
@@ -937,7 +1013,7 @@ export function createAgents({ db, host }) {
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {
       const agent = load(ws(p), p.id)
-      const convo = conversation(agent, p.conversation_id)
+      const convo = activeConversation(agent,p.conversation_id) ?? await conversationOrDiscussion(agent,p.conversation_id)
       const text = typeof p.text === 'string' ? p.text.trim() : ''
       if (p.sticker_id !== undefined) {
         if (typeof p.sticker_id !== 'string' || !ID.test(p.sticker_id) || p.artifact_id !== undefined ||
@@ -979,6 +1055,7 @@ export function createAgents({ db, host }) {
       }
       db.exec('BEGIN')
       try {
+        commitMeetingDiscussion(agent,convo)
         requireOpenConversation(agent, convo.id)
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({...userMeta,nativePending:true}))
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'running', now(), JSON.stringify({...replyMeta,nativePending:true}))
@@ -1247,6 +1324,7 @@ export default async function agents(host) {
     return endpoints.replyStream(payload, call.request)
   }
   wrapped.startupEntry = endpoints.startupEntry
+  wrapped.prepareMeetingDiscussion = endpoints.prepareMeetingDiscussion
   wrapped.createRemix = endpoints.createRemix
   wrapped.actionSource = endpoints.actionSource
   wrapped.templateRoles = endpoints.templateRoles

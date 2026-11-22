@@ -25,6 +25,7 @@ const chatAgent = (agent) => publicAgent(agent.archived || agent.native_deleted 
 const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
   archived: row.archived_at != null, archived_at: row.archived_at ?? null, title_edited: row.initial_title != null,
+  ...(row.deferred ? {deferred:true} : {}),
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
 const publicFile = ({title,mime,bytes,resource,sticker}, index, workspaceId, agentId, conversationId, messageId) => ({

@@ -123,3 +123,43 @@ test('native DS-Bot agents decide whether to join an ordinary conversation in or
   assert.deepEqual(events, ['/v1/ot/agent-reply-jobs/product','delivered','/v1/ot/agent-reply-jobs/engineering','pass'])
   assert.deepEqual(posted,['I suggest validating the timeline with the customer.'])
 })
+
+test('explicit group mentions keep native silence out of progress and history', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'openteamily-mentioned-pass-'))
+  t.after(() => rm(root, {recursive:true, force:true}))
+  const source = {id:'original', revision:1, body:'@所有人 请给个意见'}
+  const jobs = ['local', 'teammate'].map(agent => ({
+    job_id:agent, attempt:1, conversation_id:'room', mode:'mention',
+    agent_ref:agent, agent_name:agent, message:source, context:[source],
+    ...(agent === 'teammate' ? {group_text_only:true} : {}),
+  }))
+  const passed = [], posted = []
+  const bs = {
+    async get() { return {cursor:1, jobs} },
+    async post(path, value) {
+      if (value.action === 'start') return path.endsWith('/teammate') ? {group_text_only:true} : {}
+      if (value.action === 'pass') passed.push(path)
+      else if (path.endsWith('/agent-messages')) posted.push(value.body)
+      else assert.fail('A native pass marker must not be sent as progress')
+      return {ok:true}
+    },
+  }
+  const worker = createAgentReplier({bs, stateFile:join(root, 'inbox.json'), host:{
+    currentRuntime:() => ({chatTurn() {}}),
+    async call(endpoint, request) {
+      assert.match(request.text, /directly requested your reply/)
+      if (request.agent_id === 'local') {
+        assert.equal(endpoint, 'agents/groupTurn')
+        return {text:'I have one suggestion.'}
+      }
+      assert.equal(endpoint, 'agents/groupTextTurn')
+      assert.equal(request.includePersona, false)
+      request.onProgress('[P')
+      request.onProgress('[PASS]')
+      return {text:'[PASS]'}
+    },
+  }})
+  assert.deepEqual(await worker.once(), {replied:1, cursor:1})
+  assert.deepEqual(passed, ['/v1/ot/agent-reply-jobs/teammate'])
+  assert.deepEqual(posted, ['I have one suggestion.'])
+})

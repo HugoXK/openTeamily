@@ -5,7 +5,7 @@ import {
   CONTROL, HEX32, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson, validLongText,
 } from '../../featurekit/http.js'
 import {speechStatus, transcribe} from './speech.js'
-import {shareRoutes} from './shares.js'
+import {receivedDiscussionSource, shareRoutes} from './shares.js'
 import {callSource} from './call-source.js'
 
 export const LIMITS = {
@@ -563,10 +563,15 @@ export const spec = {
     CREATE INDEX IF NOT EXISTS meeting_draft_queue ON meeting_draft_jobs(state, created, id);
     CREATE TRIGGER IF NOT EXISTS meeting_draft_revision_changed AFTER UPDATE OF revision ON meetings
       WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`],
-  endpoints({store}) {
+  endpoints({store, host}) {
     store.run(`UPDATE meeting_draft_jobs SET state='failed',error='DS-Bot 已重启。请重新生成纪要。'
       WHERE state IN ('queued','running')`)
-    return {}
+    return {
+      async discussionSource(payload, call) {
+        if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+        return receivedDiscussionSource({host},payload)
+      },
+    }
   },
   importTables: { meetings: COLUMNS },
   routes: [

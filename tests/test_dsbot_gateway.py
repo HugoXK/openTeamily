@@ -178,6 +178,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live'), 'studio')
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live/anything'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/action'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/discussion'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
         work = '/v1/discover/works/work-demo'

@@ -1,6 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
@@ -148,10 +149,24 @@ test("ordinary agents can remain silent using a scoped claim and see only visibl
   assert.equal((await owner.call("POST", path(third), {action: "pass", attempt: 1, claim_id: claimThird.claim_id})).status, 409);
 
   const required = await send("@所有人 都回复我一下");
-  const only = required.reply_jobs[0];
-  const oldStart = {...start(only, required.revision), accept_discretionary_reply: undefined};
-  assert.deepEqual(await owner.ok("POST", path(only), oldStart), {ok: true});
-  assert.equal((await owner.call("POST", path(only), {action: "pass", attempt: 1, claim_id: oldStart.claim_id})).status, 409);
+  const [quiet, responding] = required.reply_jobs;
+  const oldStart = {...start(quiet, required.revision), accept_discretionary_reply: undefined};
+  assert.deepEqual(await owner.ok("POST", path(quiet), oldStart), {ok: true});
+  const quietCompletion = {action:"pass", attempt:1, claim_id:oldStart.claim_id};
+  assert.equal((await owner.call("POST", path(quiet), {...quietCompletion, claim_id:randomUUID()})).status, 409);
+  assert.deepEqual(await owner.ok("POST", path(quiet), quietCompletion), {ok:true});
+  assert.deepEqual(await owner.ok("POST", path(quiet), quietCompletion), {ok:true});
+  assert.equal((await owner.call("POST", path(quiet) + "/progress", {
+    attempt:1, claim_id:oldStart.claim_id, revision:1, text:"Late draft",
+  })).status, 409);
+  assert.equal((await owner.call("POST", room + "/agent-messages", {
+    agent_ref:quiet.agent_id, reply_to:required.id, body:"Late reply", mode:"mention",
+    job_id:quiet.id, attempt:1, claim_id:oldStart.claim_id,
+  })).status, 409);
+  const response = await answer(owner, room, required, responding);
+  const afterExplicit = (await owner.ok("GET", room + "/messages")).messages;
+  assert.deepEqual(afterExplicit.filter((row: any) => row.reply_to === required.id).map((row: any) => row.id), [response.id]);
+  assert.equal(afterExplicit.find((row: any) => row.id === required.id).reply_jobs[0].status, "passed");
 });
 
 test("shared group workers judge ordinary text while explicit mentions preserve their audience and isolation", async () => {
@@ -204,6 +219,91 @@ test("shared group workers judge ordinary text while explicit mentions preserve 
   const quoted = await author.ok("POST", room + "/messages", {body: "能举个例子吗？", reply_to: reply.id});
   assert.deepEqual(targets(quoted), [engineer.agent_ref]);
   assert.equal(quoted.reply_jobs[0].agent_owner_id, colleagueId);
+});
+
+test("an active owner gets a bounded head start on shared ordinary text while explicit jobs remain available", async () => {
+  const [author, colleague, outsider] = await Promise.all([
+    home(service.base, "round-author"), home(service.base, "round-peer"), home(service.base, "round-outsider"),
+  ]);
+  const team = await author.ok("POST", "/v1/ot/teams", {name: "Shared discussion rounds"});
+  const {code} = await author.ok("POST", `/v1/ot/teams/${team.id}/invites`, {});
+  await colleague.ok("POST", "/v1/ot/invites/accept", {code});
+  const group = await author.ok("POST", "/v1/ot/conversations", {
+    kind: "group", team_id: team.id, title: "Group round", members: [colleague.handle], agents: [lead],
+  });
+  const room = roomPath(group);
+  const peerSeat = `${room}/agents/${engineer.agent_ref}`;
+  await colleague.ok("PUT", peerSeat, {name: engineer.name});
+  const outsiderGroup = await outsider.ok("POST", "/v1/ot/conversations", {
+    kind: "group", account_group: true, title: "Unrelated group", agents: [reviewer],
+  });
+
+  const send = (body: string) => author.ok("POST", room + "/messages", {body});
+  const job = (message: {reply_jobs: Job[]}, agent: typeof lead) => message.reply_jobs.find(row => row.agent_id === agent.agent_ref)!;
+  const jobRoute = (row: Job) => "/v1/ot/agent-reply-jobs/" + row.id;
+  const start = (message: {revision: number}) => ({action: "start", attempt: 1, claim_id: randomUUID(),
+    source_revision: message.revision, accept_group_text_turn: true, accept_discretionary_reply: true});
+  const pass = (claim: ReturnType<typeof start>) => ({action: "pass", attempt: claim.attempt, claim_id: claim.claim_id});
+  const turn = await send("Which part of the launch plan still needs review?");
+  const first = job(turn,engineer), second = job(turn,lead);
+  const firstClaim = start(turn), secondClaim = start(turn);
+  assert.ok((await colleague.ok("GET",queue)).jobs.some((entry: any) => entry.job_id === first.id));
+  assert.ok((await author.ok("GET",queue)).jobs.some((entry: any) => entry.job_id === second.id));
+  // The second roster entry is online first; the unclaimed first entry never holds the round.
+  assert.deepEqual(await colleague.ok("POST",jobRoute(first),firstClaim),
+    {ok:true, group_text_only:true, discretionary:true, prior_replies:[]});
+  const raced = await author.call("POST",jobRoute(second),secondClaim);
+  assert.equal(raced.status,409);
+  assert.equal(raced.data.error.code,"reply_job_unavailable");
+  const stored = service.platform.db.prepare<[string], {status: string}>("SELECT status FROM ot_agent_reply_jobs WHERE id=?");
+  assert.equal(stored.get(second.id)?.status,"queued");
+  assert.ok(!(await author.ok("GET",queue)).jobs.some((entry: any) => entry.job_id === second.id));
+
+  const direct = await send("@all Please check the date separately");
+  const left = job(direct,lead), right = job(direct,engineer);
+  assert.ok((await author.ok("GET",queue)).jobs.some((entry: any) => entry.job_id === left.id && !entry.discretionary));
+  const leftClaim = start(direct), rightClaim = start(direct);
+  await Promise.all([author.ok("POST",jobRoute(left),leftClaim),colleague.ok("POST",jobRoute(right),rightClaim)]);
+  await Promise.all([author.ok("POST",jobRoute(left),pass(leftClaim)),colleague.ok("POST",jobRoute(right),pass(rightClaim))]);
+
+  const followup = await send("Review the documentation in a separate round");
+  const authorFollowup = job(followup,lead), peerFollowup = job(followup,engineer);
+  const eachClaim = start(followup);
+  await author.ok("POST",jobRoute(authorFollowup),eachClaim);
+  await author.ok("POST",jobRoute(authorFollowup),pass(eachClaim));
+  const otherClaim = start(followup);
+  await colleague.ok("POST",jobRoute(peerFollowup),otherClaim);
+  await colleague.ok("POST",jobRoute(peerFollowup),pass(otherClaim));
+
+  const idle = await author.ok("GET",queue);
+  const waiter = author.ok("GET",`${queue}&after=${idle.cursor}&wait_ms=8000`);
+  let outsiderWoke = false;
+  const outsiderWaiter = outsider.ok("GET",`${queue}&wait_ms=8000`).then(result => {outsiderWoke = true; return result;});
+  await delay(25);
+  const replyText = "The deployment calendar still needs a second reviewer.";
+  await colleague.ok("POST",room + "/agent-messages", {agent_ref:first.agent_id, mode:"mention", body:replyText, reply_to:turn.id,
+    job_id:first.id, attempt:1, claim_id:firstClaim.claim_id});
+  assert.ok((await waiter).jobs.some((entry: any) => entry.job_id === second.id));
+  assert.deepEqual(await author.ok("POST",jobRoute(second),secondClaim),
+    {ok:true, discretionary:true, prior_replies:[{name:engineer.name,text:replyText}]});
+  await author.ok("POST",jobRoute(second),pass(secondClaim));
+  assert.equal(outsiderWoke,false);
+  const unrelated = await outsider.ok("POST",roomPath(outsiderGroup) + "/messages", {body:"Check a separate project"});
+  assert.ok((await outsiderWaiter).jobs.some((entry: any) => entry.message.id === unrelated.id));
+
+  const abandoned = await send("Does this handoff need more information?");
+  const active = job(abandoned,engineer), waiting = job(abandoned,lead);
+  const activeClaim = start(abandoned), waitingClaim = start(abandoned);
+  await colleague.ok("POST",jobRoute(active),activeClaim);
+  const held = await author.ok("GET",queue);
+  assert.ok(!held.jobs.some((entry: any) => entry.job_id === waiting.id));
+  const waitedSince = Date.now();
+  const bounded = await author.ok("GET",`${queue}&after=${held.cursor}&wait_ms=8000`);
+  assert.ok(bounded.jobs.some((entry: any) => entry.job_id === waiting.id), "An unfinished remote turn must not stall the next owner");
+  assert.ok(Date.now() - waitedSince < 6000, "Wake at the head-start deadline, before the ordinary long poll expires");
+  assert.deepEqual(await author.ok("POST",jobRoute(waiting),waitingClaim),{ok:true,discretionary:true,prior_replies:[]});
+  await author.ok("POST",jobRoute(waiting),pass(waitingClaim));
+  await colleague.ok("POST",jobRoute(active),pass(activeClaim));
 });
 
 test("ordinary group judgment is bounded when a group has a large agent roster", async () => {
