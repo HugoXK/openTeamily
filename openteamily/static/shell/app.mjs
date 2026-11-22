@@ -180,12 +180,6 @@ export function accountNameFromLabel(text, dataset) {
   return raw.replace(/^(已登录为|已登录)\s*[:：]?\s*/, '');
 }
 
-export function accountInitials(name) {
-  const letters = String(name || '').replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '');
-  return letters ? letters.slice(0, 2).toUpperCase() : '账户';
-}
-
-
 function signedInPanel(doc) {
   return doc.getElementById('settings-panel') || doc.getElementById('main-panel');
 }
@@ -215,8 +209,6 @@ function syncAccountSlot(doc) {
   }
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
-  const button = doc.getElementById('account-menu-button');
-  if (button && !button.hasAttribute('data-account-icon')) button.textContent = accountInitials(name);
   for (const node of doc.querySelectorAll('.rail-signed-in')) {
     if (visible) node.removeAttribute('hidden');
     else node.setAttribute('hidden', '');
@@ -301,6 +293,10 @@ function bindAccountMenu(doc) {
   const menu = doc.getElementById('account-menu');
   if (!button || !menu || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
+  if (!button.hasAttribute('data-account-icon')) {
+    button.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg>';
+    button.setAttribute('data-account-icon', '');
+  }
   const items = () => [...menu.querySelectorAll('a[href], button:not(:disabled)')]
     .filter(item => item.getClientRects().length > 0);
   const openMenu = () => {
@@ -435,10 +431,14 @@ function arrangeRail(doc) {
   if (!account || rail.querySelector(':scope > .rail-actions')) return;
   const actions = doc.createElement('div');
   actions.className = 'rail-actions';
+  const appearance = rail.querySelector(':scope > #appearance-toggle');
+  const profile = rail.querySelector(':scope > a.rail-signed-in[href="/profile"]');
+  profile?.remove();
   for (const child of [...rail.children]) {
-    if (child !== account && !child.classList.contains('brand-mark')) actions.append(child);
+    if (!child.matches('.brand-mark, .rail-spacer') && child !== account && child !== appearance) actions.append(child);
   }
-  rail.insertBefore(actions, account);
+  rail.querySelector(':scope > .rail-spacer')?.remove();
+  rail.insertBefore(actions, appearance || account);
 }
 
 function enhanceChrome() {
@@ -492,7 +492,12 @@ export function startShell(doc = document, options = {}) {
     enhanceChrome();
     const guest = signedInPanel(doc)?.hasAttribute('data-guest-access') && !csrfCookie(doc.cookie);
     const apply = values => {
-      if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
+      const language = values.language || doc.documentElement.lang;
+      updateMobileNavigationLanguage(doc, language);
+      const account = doc.getElementById('account-menu-button');
+      const accountLabel = language === 'en' ? 'Account menu' : '账户菜单';
+      account?.setAttribute('aria-label', accountLabel);
+      account?.setAttribute('title', accountLabel);
       applyResolvedTheme(doc, values, options.now, options.media);
       syncAppearanceButton(doc, values, options.now, options.media);
     };

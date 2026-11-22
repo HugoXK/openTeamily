@@ -615,11 +615,13 @@ async function main() {
       const onboardingHref = await page.locator('#account-menu a[href="/onboarding"]').getAttribute('href');
       const channelsHref = await page.locator('#account-menu a[href="/settings/channels"]').getAttribute('href');
       const connectorsHref = await page.locator('#account-menu a[href="/settings/connectors"]').getAttribute('href');
-      const initials = String(ready.username || '').slice(0, 2).toUpperCase();
-      const settingsButton = (await visibleText(page.locator('#account-menu-button'))).trim();
+      const settingsButton = await page.locator('#account-menu-button').evaluate(button =>
+        button.textContent.trim() === '' && !!button.querySelector('svg') &&
+        button.getBoundingClientRect().right <= button.closest('.app-rail').getBoundingClientRect().right);
+      const settingsProfileLinks = await page.locator('.app-rail a[href="/profile"]').count();
       record(
         'account_menu',
-        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && menuText.includes('Agent 渠道') && menuText.includes('应用连接器') && settingsHref === '/settings' && onboardingHref === '/onboarding' && channelsHref === '/settings/channels' && connectorsHref === '/settings/connectors' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && menuText.includes('Agent 渠道') && menuText.includes('应用连接器') && settingsHref === '/settings' && onboardingHref === '/onboarding' && channelsHref === '/settings/channels' && connectorsHref === '/settings/connectors' && settingsButton && settingsProfileLinks === 1 && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
         `button=${settingsButton}; ${menuText || 'account menu empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
@@ -1816,14 +1818,14 @@ async function main() {
     await page.locator('#actions-panel').waitFor({ state: 'visible', timeout: 15000 });
     await waitForLocatorText(page, '#action-list', ready.action_title);
     try {
-      const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       await page.locator('#account-menu-button').click();
       await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
-      const memoryButton = (await visibleText(page.locator('#account-menu-button'))).trim();
+      const memoryButton = await page.locator('#account-menu-button').evaluate(button =>
+        button.textContent.trim() === '' && !!button.querySelector('svg'));
       const identity = (await visibleText(page.locator('#account-identity'))).trim();
       record(
         'memory_account_button',
-        memoryButton === initials && identity === ready.username && !identity.includes('已登录'),
+        memoryButton && identity === ready.username && !identity.includes('已登录'),
         `button=${memoryButton}; identity=${identity}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '24-memory-account.png')));
