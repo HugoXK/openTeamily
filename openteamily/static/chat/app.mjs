@@ -3763,18 +3763,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     updateLatestMessageControl();
     const unread = currentSource === 'social' ? state?.unread : null;
+    const canLoadNewer = currentSource === 'social' && Boolean(state?.after || unread?.after);
+    const canMarkRead = Boolean(unread && unread.committed < unread.latest);
     if (newerMessages) {
-      newerMessages.hidden = !unread?.after;
-      newerMessages.disabled = Boolean(state?.loading);
+      newerMessages.hidden = !canLoadNewer;
+      newerMessages.disabled = Boolean(state?.loading || state?.restoring);
     }
     if (markThreadRead) {
-      markThreadRead.hidden = !unread || unread.committed >= unread.latest;
+      markThreadRead.hidden = !canMarkRead;
       markThreadRead.disabled = Boolean(unread?.saving);
     }
-    if (unreadActions) unreadActions.hidden = !unread || (newerMessages.hidden && markThreadRead.hidden);
+    if (unreadActions) unreadActions.hidden = !canLoadNewer && !canMarkRead && !unreadNotice?.textContent;
   }
 
-  function visibleUnreadView(state) {
+  function visibleSocialHistory(state) {
     return state && state === socialHistory && currentSource === 'social' && state.owner === currentUser?.id &&
       state.wid === workspaceId() && state.cid === currentConversation?.id && viewingSocialMessages() &&
       document.visibilityState !== 'hidden' && !sessionTransition?.pending;
@@ -3782,13 +3784,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function scheduleUnreadRead() {
     const state = socialHistory;
-    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleUnreadView(state)) return;
+    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleSocialHistory(state)) return;
     clearTimeout(unreadScrollTimer);
     unreadScrollTimer = setTimeout(() => readVisibleUnread(state), 160);
   }
 
   function readVisibleUnread(state) {
-    if (!visibleUnreadView(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
+    if (!visibleSocialHistory(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
     const unread = state.unread;
     const scroller = document.getElementById('message-scroller');
     const bounds = scroller.getBoundingClientRect();
@@ -3811,7 +3813,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function commitUnread(state, seq, explicit = false) {
     const unread = state?.unread;
-    if (!visibleUnreadView(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
+    if (!visibleSocialHistory(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
     const latestOnRead = unread.latest;
     unread.saving = true;
     updateHistoryControls();
@@ -3842,9 +3844,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function historyPage(state, query, signal) {
+    const open = socialOpen;
     const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`, undefined, undefined, signal);
-    return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
-      && currentConversation?.id === state.cid ? result : null;
+    return socialHistory === state && open === socialOpen && currentSource === 'social' &&
+      workspaceId() === state.wid && currentConversation?.id === state.cid && currentUser?.id === state.owner ? result : null;
   }
 
   async function privateHistoryPage(state, query, signal) {
@@ -3991,27 +3994,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   newerMessages?.addEventListener('click', async () => {
     const state = socialHistory;
     const unread = state?.unread;
-    if (!visibleUnreadView(state) || !unread?.after || state.loading) return;
+    const timeline = state?.after ? state : unread;
+    const after = timeline?.after;
+    if (!visibleSocialHistory(state) || !after || state.loading || state.restoring) return;
+    const jump = historyJump;
+    const open = socialOpen;
+    const stillCurrent = () => open === socialOpen && jump === historyJump && visibleSocialHistory(state);
+    const hadButtonFocus = document.activeElement === newerMessages;
     state.loading = true;
-    updateHistoryControls();
     if (unreadNotice) unreadNotice.textContent = '';
+    updateHistoryControls();
     try {
-      const result = await historyPage(state, new URLSearchParams({after: unread.after, limit: HISTORY_PAGE_SIZE, scope:'workspace'}));
-      if (!result) return;
+      const result = await historyPage(state, new URLSearchParams({after, limit: HISTORY_PAGE_SIZE, scope:'workspace'}));
+      if (!result || !stillCurrent()) return;
       if (result.status !== 200 || !Array.isArray(result.body.items)) throw new Error('history');
-      const items = result.body.items.filter(message => Number.isSafeInteger(message.seq) && message.seq > unread.after);
+      const existing = new Set(lastSocialItems.map(message => message.id));
+      const items = result.body.items.filter(message => Number.isSafeInteger(message.seq) && message.seq > after && !existing.has(message.id));
       if (result.body.has_newer && !items.length) throw new Error('history cursor');
       const anchor = chatHistoryAnchor();
-      if (Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
-      unread.after = result.body.has_newer ? items.at(-1).seq : null;
+      if (unread && Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
+      timeline.after = result.body.has_newer ? items.at(-1).seq : null;
       if (items.length) renderSocialMessages([...lastSocialItems, ...items], {anchor});
+      if (hadButtonFocus && [document.body, newerMessages].includes(document.activeElement)) historyScroller?.focus({preventScroll:true});
+      if (!timeline.after && timeline === state && unreadNotice) unreadNotice.textContent =
+        uiLabel('已加载到最新消息。', 'All newer messages are loaded.');
     } catch {
-      if (state === socialHistory && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
+      if (stillCurrent() && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
     } finally {
       state.loading = false;
       if (state === socialHistory) {
         updateHistoryControls();
-        scheduleUnreadRead();
+        if (stillCurrent()) {
+          if (hadButtonFocus && document.activeElement === document.body && !newerMessages.hidden) {
+            newerMessages.focus({preventScroll:true});
+          }
+          scheduleUnreadRead();
+        }
       }
     }
   });
@@ -7420,7 +7438,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const unread = state.unread;
             const retained = unread && unread.committed < unread.latest
               ? {committed: unread.committed, latest: unread.latest, seen: new Set()} : null;
-            setSocialHistory({...window, unread: retained});
+            const last = result.body.items.at(-1)?.seq;
+            const after = result.body.has_newer && Number.isSafeInteger(last) && last > 0 ? last : null;
+            setSocialHistory({...window, after, unread: retained});
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();

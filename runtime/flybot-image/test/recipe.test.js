@@ -130,7 +130,7 @@ test('the image overlay checks pinned inputs before adding native group and skil
   const copy = mkdtempSync(join(tmpdir(), 'ot-native-overlay-'))
   t.after(() => rmSync(copy, {recursive:true, force:true}))
   const upstream = join(repo, 'runtime', 'ds-bot-upstream', 'ds-bot')
-  for (const path of ['client.js', 'src/client/group-settings.js', 'src/client/i18n.js', 'src/host/capabilities.js', 'src/host/channel.js']) {
+  for (const path of ['client.js', 'src/client/group-settings.js', 'src/client/i18n.js', 'src/client/new-chat.js', 'src/client/team-actions.js', 'src/host/capabilities.js', 'src/host/channel.js']) {
     mkdirSync(dirname(join(copy, path)), {recursive:true})
     copyFileSync(join(upstream, path), join(copy, path))
   }
@@ -147,8 +147,10 @@ test('the image overlay checks pinned inputs before adding native group and skil
   assertNativeConsentOverlay(copy)
   assert.match(readFileSync(clientPath, 'utf8'), /Shared human participants/)
   assert.match(readFileSync(clientPath, 'utf8'), /data-ot-shared-reply-save/)
+  assert.match(readFileSync(clientPath, 'utf8'), /function SharedGroupForm\(/)
   assert.match(readFileSync(channelPath, 'utf8'), /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)
   assert.match(readFileSync(channelPath, 'utf8'), /openteamilyReplyPolicy: body\.openteamilyReplyPolicy/)
+  assert.match(readFileSync(channelPath, 'utf8'), /case 'openteamily-group-workspaces':\s+case 'openteamily-group-create':/)
   applyNativeOverlay(copy)
   assert.deepEqual(readFileSync(join(upstream, 'client.js')), originalClient)
 })

@@ -2,6 +2,7 @@
 // stable pointer to it; native and plugin views read/write the SAME messages and
 // membership, rather than copying a second chat log. No model call on import.
 import { randomUUID } from 'node:crypto'
+import { nativeGroupCreation } from './native-group-create.js'
 const installed = new WeakMap()
 const replyModes = new Set(['default', 'everyone', 'lead'])
 const groupAgentId = /^[A-Za-z0-9._:-]{1,80}$/
@@ -104,7 +105,7 @@ export function nativeGroupClient(host, raw) {
         pendingSave.add(conversation.id)
       }
       if (pendingSave.has(conversation.id)) {
-        await rt.save()
+        await rt.save({required:true})
         pendingSave.delete(conversation.id)
       }
       snapshots.set(conversation.id, {signature, activity, version:conversation.activity_version})
@@ -113,8 +114,11 @@ export function nativeGroupClient(host, raw) {
     let queue = Promise.resolve()
     const ordered = task => { const next = queue.then(task); queue = next.catch(() => {}); return next }
     const sync = conversation => ordered(() => syncOne(conversation))
+    const create = nativeGroupCreation(host, raw, rt, sync)
     const originalMobile = rt.mobileEndpoint.bind(rt)
     rt.mobileEndpoint = async (endpoint, p) => {
+      if (endpoint === 'openteamily-group-workspaces') return create.workspaces(p)
+      if (endpoint === 'openteamily-group-create') return create.create(p)
       const cid = endpoint === 'room-chat' && roomFor(p?.roomId)
       if (!cid) return originalMobile(endpoint, p)
       await sync(await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid)))
@@ -132,9 +136,9 @@ export function nativeGroupClient(host, raw) {
       const cid = roomFor(p?.sessionId)
       if (!cid) return originalSend(p)
       if (!Array.isArray(p.content) || p.content.some(c => c.type !== 'text')) throw new Error('Shared groups currently accept text only')
-      const result = await raw.post('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages', { body: p.content.map(c => c.text).join('\n'), client_key: String(p.requestId || randomUUID()).slice(0,80) })
-      await sync(await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid)))
-      return result
+      return raw.post('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages', {
+        body:p.content.map(c => c.text).join('\n'), client_key:String(p.requestId || randomUUID()).slice(0,80),
+      })
     }
     const originalUpdate = rt.updateRoom.bind(rt)
     rt.updateRoom = async (id, patch, ...rest) => {
