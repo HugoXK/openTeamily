@@ -672,6 +672,58 @@ test('late invite and approval reads cannot populate another workspace', async (
   assert.equal(elements.get('join-request-list').children.length, 0);
 });
 
+test('adding a member sends once and keeps its success and the other workspace draft separate', async () => {
+  const {doc,elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const form = doc.getElementById('add-form');
+  const username = form.elements.username = {value:''};
+  form.reset = () => { username.value = ''; form.elements.role.value = 'member'; };
+  const original = globalThis.FormData;
+  globalThis.FormData = class { constructor(node) { this.node = node; } get(name) { return this.node.elements[name]?.value; } };
+  const pending = Promise.withResolvers();
+  const writes = [];
+  try {
+    await mount(doc,{fetcher: async (path,{method,body}) => {
+      if (path === '/v1/auth/session') return jsonResponse(200,{user:self});
+      if (path === '/v1/workspaces?limit=100') return jsonResponse(200,{items:workspaceListing});
+      if (path === `/v1/workspaces/${teamA}/members` && method === 'POST') {
+        writes.push(JSON.parse(body));
+        return pending.promise;
+      }
+      if (path.endsWith('/members')) return jsonResponse(200,{items:[ALICE]});
+      if (path.endsWith('/directory')) return jsonResponse(200,{listing:{listed:false}});
+      return jsonResponse(200,{items:[]});
+    }});
+    const submit = () => form.handlers.submit[0]({preventDefault() {}});
+    username.value = 'target-A';
+    const sending = submit();
+    await submit();
+    assert.deepEqual(writes,[{username:'target-A',role:'member'}]);
+    assert.equal(elements.get('add-member-submit').disabled,true);
+    const picker = elements.get('workspace');
+    picker.value = teamB;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'');
+    assert.equal(elements.get('add-member-submit').disabled,false);
+    username.value = 'target-B draft';
+    form.handlers.input[0]();
+    pending.resolve(jsonResponse(201,{}));
+    await sending;
+    assert.equal(username.value,'target-B draft');
+    assert.equal(elements.get('add-member-status').hidden,true);
+    picker.value = teamA;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'');
+    assert.equal(elements.get('add-member-status').textContent,'已添加成员。');
+    picker.value = teamB;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'target-B draft');
+  } finally {
+    pending.resolve(jsonResponse(500,{}));
+    globalThis.FormData = original;
+  }
+});
+
 test('admins cannot approve administrator applications and one pending member decision sends one request', async () => {
   const {doc, elements} = fakeDocument();
   const pending = [{id: 'otjr_admin', role: 'admin', username: 'admin-applicant'},

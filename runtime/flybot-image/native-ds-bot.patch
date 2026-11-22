@@ -36,7 +36,7 @@ diff --git a/client.js b/client.js
 +  "Current reply policy": "当前回复策略",
 +  "All group agents decide whether to respond.": "群内智能体各自判断是否回复。",
 +  "The selected lead decides whether to respond.": "由指定智能体判断是否回复。",
-+  "The saved lead is unavailable. Send an @mention to ask another agent.": "已设置的主答智能体不可用。可用 @ 请其他智能体回复。",
++  "The saved lead is unavailable. Other available group agents decide whether to reply.": "已设置的主答智能体不可用，由其他可用的群内智能体判断是否回复。",
 +  "Reply policy": "回复策略",
 +  "Lead agent": "主答智能体",
 +  "Choose a lead agent": "选择主答智能体",
@@ -198,7 +198,7 @@ diff --git a/client.js b/client.js
 +    { title: t("Who answers") },
 +    policy ? (0, import_react38.createElement)(
 +      Row,
-+      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Send an @mention to ask another agent.") : t(policy.mode === "everyone" ? "All group agents decide whether to respond." : policy.mode === "lead" ? "The selected lead decides whether to respond." : "@mentions always pick who answers."), stack: true },
++      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Other available group agents decide whether to reply.") : t(policy.mode === "everyone" ? "All group agents decide whether to respond." : policy.mode === "lead" ? "The selected lead decides whether to respond." : "@mentions always pick who answers."), stack: true },
 +      (0, import_react38.createElement)(
 +        "span",
 +        { className: "bt-set-hint", "data-ot-shared-reply-current": true },
@@ -715,7 +715,7 @@ index fce520335d06a1098bc530c0716fa1a7e3927a9d..f32632bbb3b88d58c069d47bcc42980a
 +    ...(mode === 'lead' ? { lead: { owner_id: target.owner_id, agent_id: target.agent_id } } : {}) })
 +  return h(Card, { title: t('Who answers') },
 +    policy ? h(Row, { label: t('Current reply policy'), hint: policy.lead_unavailable
-+      ? t('The saved lead is unavailable. Send an @mention to ask another agent.')
++      ? t('The saved lead is unavailable. Other available group agents decide whether to reply.')
 +      : t(policy.mode === 'everyone' ? 'All group agents decide whether to respond.' : policy.mode === 'lead'
 +        ? 'The selected lead decides whether to respond.' : '@mentions always pick who answers.'), stack: true },
 +      h('span', { className: 'bt-set-hint', 'data-ot-shared-reply-current': true },
@@ -832,7 +832,7 @@ diff --git a/src/client/i18n.js b/src/client/i18n.js
 +  'Current reply policy': '当前回复策略',
 +  'All group agents decide whether to respond.': '群内智能体各自判断是否回复。',
 +  'The selected lead decides whether to respond.': '由指定智能体判断是否回复。',
-+  'The saved lead is unavailable. Send an @mention to ask another agent.': '已设置的主答智能体不可用。可用 @ 请其他智能体回复。',
++  'The saved lead is unavailable. Other available group agents decide whether to reply.': '已设置的主答智能体不可用，由其他可用的群内智能体判断是否回复。',
 +  'Reply policy': '回复策略',
 +  'Lead agent': '主答智能体',
 +  'Choose a lead agent': '选择主答智能体',

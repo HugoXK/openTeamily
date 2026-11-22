@@ -469,11 +469,11 @@
       <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
       <details id="version-panel" class="artifact-editor-panel" hidden>
         <summary>版本与导出</summary>
-        <p class="note">每次保存都会保留一个版本，可以复制为新作品、导出或恢复。</p>
+        <p class="note">查看已保存版本，或将历史内容复制、导出、恢复。</p>
         <p id="version-status" class="note" role="status" hidden></p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
-        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
+        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。打开历史版本后也可以选择支持的导出格式。</p>
         <button type="button" id="export-artifact">导出当前版本</button>
       </details>
       <details id="share-panel" class="artifact-editor-panel" hidden>
@@ -543,6 +543,26 @@
       </div>
     </div>
   </div>
+  <dialog id="work-version-dialog" class="send-dialog-card" aria-labelledby="work-version-title" aria-describedby="work-version-meta">
+    <header class="work-version-header">
+      <div>
+        <h2 id="work-version-title"></h2>
+        <p id="work-version-meta" class="note"></p>
+      </div>
+      <button type="button" id="work-version-close" autofocus>关闭</button>
+    </header>
+    <div id="work-version-preview" tabindex="0" aria-label="历史版本内容"></div>
+    <p id="work-version-status" class="note" role="status"></p>
+    <button type="button" id="work-version-retry" hidden>重试</button>
+    <div id="work-version-tools" hidden>
+      <div class="space-action-row">
+        <label>导出格式 <select id="work-version-format"></select></label>
+        <a id="work-version-download">导出此版本</a>
+        <button type="button" id="work-version-copy">复制版本链接</button>
+      </div>
+      <input id="work-version-link" type="url" readonly aria-label="版本链接" hidden>
+    </div>
+  </dialog>
   <dialog id="shared-work-copy-dialog" class="send-dialog-card" aria-labelledby="shared-work-copy-heading">
     <h2 id="shared-work-copy-heading">保存共享文字</h2>
     <p class="note">确认后，文字会成为个人空间中的可编辑文档。</p>

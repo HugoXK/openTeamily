@@ -97,6 +97,7 @@ test('runStatusLabel and runResultText describe durable run rows', () => {
   assert.equal(runStatusLabel({status: 'queued'}), '已排队');
   assert.equal(runStatusLabel({status: 'running'}), '运行中');
   assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
+  assert.equal(runStatusLabel({status: 'failed', error_code: 'interrupted'}), '运行中断');
   assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
   assert.equal(runResultText({result: {}}), '');
 });
@@ -1564,7 +1565,7 @@ test('a filtered watcher tracks the exact run and retains identical rows across 
     list([{...queued, status: 'failed', error_code: 'interrupted'}]);
     timers.get(timer)();
     await flush();
-    assert.equal(elements.get('manual-run-status').textContent, '失败');
+    assert.equal(elements.get('manual-run-status').textContent, '运行中断');
     assert.equal(elements.get('manual-run-status').dataset.state, 'failed');
     assert.equal(elements.get('run-filter-succeeded').getAttribute('aria-current'), 'true');
     assert.equal(elements.get('run-list').children[0], row, 'unchanged history rows survive polling');

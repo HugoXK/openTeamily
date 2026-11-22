@@ -115,7 +115,7 @@ test('a received meeting revoked during draft preparation cannot become a chat d
   assert.doesNotMatch([...stored.values()].join(' '),/Shared notes/);
 });
 
-test('a handed-off call recording stays local until the user starts transcription', () => {
+test('a handed-off call recording stays local and only explicit removal deletes its handoff', async () => {
   const document = meetingDocument();
   const element = id => document.getElementById('meeting-audio-' + id);
   element('preview').removeAttribute = name => { delete element('preview')[name]; };
@@ -124,19 +124,28 @@ test('a handed-off call recording stays local until the user starts transcriptio
     base: () => '/v1/workspaces/fixture/meetings',
     transcript: {value: ''},
   });
+  let removals = 0;
+  const discard = async () => { removals += 1; };
   const handedOff = new Blob(['browser audio'], {type:'audio/webm;codecs=opus'});
-  assert.equal(audio.acceptCallRecording(new Blob(['video'], {type:'video/webm'})), false);
-  assert.equal(audio.acceptCallRecording(handedOff), true);
+  const clip = {blob:handedOff, discard};
+  assert.equal(audio.acceptCallRecording({blob:new Blob(['video'], {type:'video/webm'}), discard}), false);
+  assert.equal(audio.acceptCallRecording(clip), true);
   const url = element('preview').src;
   assert.match(url, /^blob:/);
   assert.equal(element('preview').hidden, false);
-  assert.equal(audio.hasPendingWork(), true);
-  assert.equal(audio.acceptCallRecording(new Blob(['second recording'], {type:'audio/ogg'})), false);
+  assert.equal(audio.hasPendingWork(), false);
+  assert.equal(audio.acceptCallRecording({blob:new Blob(['second recording'], {type:'audio/ogg'}), discard}), false);
   assert.equal(element('preview').src, url);
   assert.equal(element('start').disabled, true);
   audio.reset();
   assert.equal(audio.hasPendingWork(), false);
   assert.equal(element('preview').hidden, true);
+  assert.equal(removals, 0);
+  assert.equal(audio.acceptCallRecording(clip), true);
+  await element('discard').fire('click');
+  assert.equal(removals, 1);
+  assert.equal(element('preview').hidden, true);
+  assert.equal(element('preview').src, undefined);
 });
 
 test('meeting transcript locate uses literal matches and never changes the saved text', () => {

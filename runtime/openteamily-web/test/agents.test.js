@@ -47,6 +47,63 @@ test('agent CRUD: idempotent create, unique names, revisions, archive, search', 
   await assert.rejects(e.get({ workspace_id: 'b'.repeat(32), id }), (err) => err.code === 'agents/not-found')
 })
 
+test('concurrent settings changes share one native roster revision', async () => {
+  const bots = { main: {id:'main', name:'Main', capabilities:[]} }
+  const writes = []
+  const rt = {
+    state: {bots},
+    botOf: id => bots[id],
+    createBot: async fields => bots.agent = {...fields, id:'agent'},
+    updateBot: async (id, fields) => {
+      writes.push(fields)
+      Object.assign(bots[id], fields)
+    },
+    setFlags: async (id, fields) => {
+      writes.push(fields)
+      Object.assign(bots[id], fields)
+    },
+    save: async () => {},
+  }
+  const host = {runtime: async () => ({rt, mainBot: async () => 'main'})}
+  const {endpoints:e} = createAgents({db:new DatabaseSync(':memory:'), host})
+  const created = await e.create({workspace_id:W, name:'原始名称', summary:'原始简介',
+    instructions:'原始说明', idempotency_key:'settings-race-001'})
+  const path = `/v1/workspaces/${W}/agents/${created.agent.id}`
+  const save = body => e.v1({method:'POST', path, body})
+  const read = async () => (await e.v1({method:'GET', path})).body.agent
+  const first = {revision:created.agent.revision, instructions:'标签页一的说明'}
+  const stale = {revision:created.agent.revision, summary:'标签页二的简介'}
+  const [saved, conflict] = await Promise.all([save({...first,instructions:`  ${first.instructions}  `}),save(stale)])
+  assert.deepEqual([saved.status,conflict.status], [200,409])
+  assert.equal(conflict.body.error.code, 'revision_conflict')
+  assert.equal((await read()).revision, created.agent.revision + 1)
+  assert.equal((await read()).summary, '原始简介')
+  assert.equal(bots.agent.instructions, first.instructions)
+  assert.equal(bots.agent.openteamily.summary, '原始简介')
+  assert.equal(writes.length, 1)
+
+  const revision = saved.body.agent.revision
+  const [archived, staleEdit] = await Promise.all([
+    e.v1({method:'POST', path:path+'/archive', body:{revision, archived:true}}),
+    save({revision, instructions:'归档不应接受过期编辑'}),
+  ])
+  assert.deepEqual([archived.status,staleEdit.status], [200,409])
+  assert.equal((await read()).archived, 1)
+  assert.equal((await read()).revision, revision + 1)
+  assert.equal(bots.agent.hidden, true)
+  assert.equal(bots.agent.instructions, first.instructions)
+  assert.equal(writes.length, 2)
+
+  // A direct native edit also invalidates the Web revision before it can write.
+  const archiveRevision = archived.body.agent.revision
+  bots.agent.instructions = '原生客户端保存的说明'
+  const afterNativeEdit = await save({revision:archiveRevision, instructions:'旧网页里的说明'})
+  assert.equal(afterNativeEdit.status, 409)
+  assert.equal(afterNativeEdit.body.error.code, 'revision_conflict')
+  assert.equal((await read()).instructions, bots.agent.instructions)
+  assert.equal(writes.length, 2)
+})
+
 test('messages to an agent are native DS-Bot turns on that conversation\'s own session', async () => {
   const { e, turns } = fixture()
   const { agent } = await e.create({ workspace_id: W, name: '助手', summary: '', instructions: 'Keep answers to one sentence.', idempotency_key: 'a'.repeat(16) })

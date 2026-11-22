@@ -713,7 +713,7 @@ function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typ
   }
   if (policy.mode === "lead") {
     const lead = selectedLead(policy, agents);
-    return {agents: lead ? [lead] : [], discretionary: true};
+    if (lead) return {agents: [lead], discretionary: true};
   }
   // Keep the existing opt-in auto inbox and its rate limit. With no opt-ins,
   // the DS-Bot workers decide whether the ordinary message warrants a reply.
@@ -1433,7 +1433,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(bodyText));
       const unaddressed = canQueueGroup && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
-      const targets = explicitlyAll ? roster.slice(0, MAX_INFERRED_AGENTS) : unaddressed?.agents ?? parsed.agents;
+      const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
       const suppressed = canQueueGroup && targets.length === 0 && (policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;

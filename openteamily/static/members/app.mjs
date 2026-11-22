@@ -157,6 +157,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const receiveField = document.getElementById('receive-invite-field');
   const receivePreview = document.getElementById('invitation-preview');
   const receiveButton = document.getElementById('confirm-invite');
+  const addForm = document.getElementById('add-form');
+  const inviteForm = document.getElementById('invite-form');
+  const issuedBox = document.getElementById('issued-token');
+  const issuedLink = document.getElementById('issued-invite-link');
+  const memberWrite = {form:addForm, fields:['username','role'], button:document.getElementById('add-member-submit'),
+    feedback:document.getElementById('add-member-status'), pending:'正在添加成员…'};
+  const inviteWrite = {form:inviteForm, fields:['role','expires_days','max_uses','requires_approval'],
+    button:document.getElementById('create-invite-submit'), feedback:document.getElementById('create-invite-status'), pending:'正在生成邀请…'};
   let linkedInvite = teamInviteFromHash(view?.location?.hash);
   let linkedWorkspace = workspaceFromHash(view?.location?.hash);
   let previewed = '';
@@ -180,6 +188,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const transferKey = scope => `${scope.viewer?.id}/${scope.id}`;
   const busyJoins = new Set();
   const busyDirectoryJoins = new Set();
+  const workspaceWrites = new Map();
+  let visibleWrites = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -213,6 +223,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   function inWorkspace(scope) {
     return scope.id === workspaceId() && scope.viewer === currentUser && scope.epoch === workspaceEpoch;
   }
+
+  function paintWorkspaceWrites() {
+    for (const [controls, state] of [[memberWrite,visibleWrites?.member],[inviteWrite,visibleWrites?.invite]]) {
+      controls.button.disabled = Boolean(state?.busy);
+      for (const name of controls.fields) {
+        const field = controls.form.elements[name];
+        if (field) field.disabled = controls.button.disabled;
+      }
+      controls.button.setAttribute('aria-busy', String(Boolean(state?.busy)));
+      controls.feedback.textContent = state?.busy ? controls.pending : state?.message || '';
+      controls.feedback.hidden = !controls.feedback.textContent;
+      controls.feedback.dataset.kind = state?.kind || '';
+    }
+    const issued = visibleWrites?.issued;
+    const usable = canInvite(actor) && issued && addableRoles(actor).includes(issued.invite.role) &&
+      inviteState(issued.invite).startsWith('有效');
+    issuedBox.hidden = !usable;
+    const url = usable ? issued.url : '';
+    if (issuedLink.value !== url) issuedLink.value = url;
+  }
+
+  function restoreWorkspaceWrites(scope) {
+    if (!scope.id || !scope.viewer) return;
+    const key = transferKey(scope);
+    if (!workspaceWrites.has(key)) workspaceWrites.set(key, {member:{},invite:{}});
+    const state = workspaceWrites.get(key);
+    const changed = visibleWrites !== state;
+    visibleWrites = state;
+    if (changed) {
+      for (const [controls, draft] of [[memberWrite,state.member],[inviteWrite,state.invite]]) {
+        controls.form.reset();
+        for (const [name,value] of Object.entries(draft.fields || {})) {
+          const field = controls.form.elements[name];
+          if (field.type === 'checkbox') field.checked = value;
+          else field.value = value;
+        }
+      }
+    }
+    if (!canInvite(actor)) state.issued = null;
+    paintWorkspaceWrites();
+  }
+
+  function rememberWorkspaceForm(controls, draft) {
+    if (!draft) return;
+    draft.fields = Object.fromEntries(controls.fields.flatMap(name => {
+      const field = controls.form.elements[name];
+      return field ? [[name,field.type === 'checkbox' ? field.checked : field.value]] : [];
+    }));
+  }
+
+  addForm.addEventListener('input', () => rememberWorkspaceForm(memberWrite,visibleWrites?.member));
+  inviteForm.addEventListener('input', () => rememberWorkspaceForm(inviteWrite,visibleWrites?.invite));
 
   let pendingConfirm = null;
   let confirmSerial = 0;
@@ -482,6 +544,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const list = document.getElementById('invite-list');
     const empty = document.getElementById('invites-empty');
     inviteItems = items;
+    const issued = visibleWrites?.issued;
+    const latest = issued && items.find(item => item.id === issued.invite.id);
+    if (latest) {
+      issued.invite = latest;
+      paintWorkspaceWrites();
+    }
     if (pendingConfirm?.row.parentElement === list) closeConfirm({restoreFocus: false});
     list.textContent = '';
     empty.hidden = items.length > 0;
@@ -599,6 +667,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const {id} = scope;
     if (!id || !inWorkspace(scope) || !addableRoles(actor).includes(item.role)) return;
     const result = await request('POST', `/v1/workspaces/${id}/invites/${item.id}/${action}`, {});
+    const writeState = workspaceWrites.get(transferKey(scope));
+    if (result.status === 200 && writeState?.issued?.invite.id === item.id) {
+      Object.assign(writeState.issued.invite, action === 'revoke' ? {revoked:true} : {frozen:action === 'freeze'});
+      if (visibleWrites === writeState) paintWorkspaceWrites();
+    }
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', inviteFailure(result.body.error, action));
@@ -663,6 +736,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   function clearWorkspaceView() {
     actor = null;
+    visibleWrites = null;
+    addForm.reset();
+    inviteForm.reset();
+    paintWorkspaceWrites();
     workspaceChat.hidden = true;
     workspaceChat.removeAttribute('href');
     closeConfirm({restoreFocus: false});
@@ -673,16 +750,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     for (const id of ['add-form', 'invite-form', 'invites-panel', 'join-requests-panel', 'directory-listing-form']) {
       document.getElementById(id).hidden = true;
     }
-    document.getElementById('issued-token').hidden = true;
-    document.getElementById('issued-invite-link').value = '';
   }
 
   async function loadWorkspace({reset = false} = {}) {
     const scope = workspaceScope();
     const {id} = scope;
     const seq = ++rosterRead;
-    const addForm = document.getElementById('add-form');
-    const inviteForm = document.getElementById('invite-form');
     const invitesPanel = document.getElementById('invites-panel');
     const membersPanel = document.getElementById('members-panel');
     const workspaceField = document.getElementById('member-workspace-field');
@@ -707,6 +780,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const items = listed.body.items;
     const self = items.find(item => samePerson(item, currentUser));
     actor = self && !self.suspended ? self.role : null;
+    restoreWorkspaceWrites(scope);
     workspaceChat.hidden = !actor || !WORKSPACE_ID.test(id);
     if (workspaceChat.hidden) workspaceChat.removeAttribute('href');
     else workspaceChat.setAttribute('href', '/chat#workspace=' + id);
@@ -1031,6 +1105,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (groupInvite && session.status === 200 && session.body.user) {
+      if (currentUser?.id !== session.body.user.id) workspaceWrites.clear();
       currentUser = session.body.user;
       loginPanel.hidden = mainPanel.hidden = true;
       show('', '');
@@ -1039,6 +1114,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     if (session.status === 401) {
       currentUser = null;
+      workspaceWrites.clear();
       workspaces = [];
       myRequests = [];
       myRequestsReady = false;
@@ -1061,6 +1137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (currentUser?.id !== session.body.user?.id) {
+      workspaceWrites.clear();
       workspaces = [];
       myRequests = [];
       myRequestsReady = false;
@@ -1123,67 +1200,76 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     return refreshWorkspaces({preferred: requested, explicit: true, initial: true});
   });
 
-  document.getElementById('add-form').addEventListener('submit', async event => {
+  addForm.addEventListener('submit', async event => {
     event.preventDefault();
-    const form = event.currentTarget;
     const scope = workspaceScope();
     const {id} = scope;
-    if (!id) {
-      show('error', '先选择一个工作区。');
-      return;
-    }
-    const values = readAddMember(form);
+    const writes = visibleWrites;
+    if (!id || !writes || workspaceWrites.get(transferKey(scope)) !== writes || !canAdd(actor) || writes.member.busy) return;
+    const values = readAddMember(addForm);
     if (!values.username) {
       show('error', '请填写用户名。');
       return;
     }
-    const result = await request('POST', `/v1/workspaces/${id}/members`, values);
-    if (!inWorkspace(scope)) return;
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法添加成员。'));
-      return;
+    rememberWorkspaceForm(memberWrite,writes.member);
+    writes.member.busy = true;
+    paintWorkspaceWrites();
+    const result = await request('POST', `/v1/workspaces/${id}/members`, values, undefined, AbortSignal.timeout(15000));
+    if (workspaceWrites.get(transferKey(scope)) !== writes) return;
+    const saved = result.status === 200 || result.status === 201;
+    writes.member.busy = false;
+    writes.member.kind = saved ? 'ok' : 'error';
+    writes.member.message = saved ? '已添加成员。' : messageFor(result.body.error, '无法添加成员。');
+    if (saved) writes.member.fields = {};
+    if (visibleWrites !== writes) return;
+    if (saved) {
+      addForm.reset();
+      setRoleOptions(addForm, actor);
     }
-    form.reset();
-    setRoleOptions(form, actor);
-    show('ok', '已添加。');
-    await loadWorkspace();
+    paintWorkspaceWrites();
+    if (saved) await loadWorkspace();
   });
 
-  document.getElementById('invite-form').addEventListener('submit', async event => {
+  inviteForm.addEventListener('submit', async event => {
     event.preventDefault();
     const scope = workspaceScope();
     const {id} = scope;
-    if (!id) {
-      show('error', '先选择一个工作区。');
-      return;
-    }
-    const values = readInvite(event.currentTarget);
-    const result = await request('POST', `/v1/workspaces/${id}/invites`, values);
-    if (!inWorkspace(scope)) return;
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法生成邀请。'));
-      return;
-    }
-    const box = document.getElementById('issued-token');
-    const url = teamInviteUrl(result.body.token, view?.location?.origin);
-    box.hidden = !url;
-    document.getElementById('issued-invite-link').value = url;
-    show(url ? 'ok' : 'error', url ? '已生成邀请链接，请现在复制。' : '无法显示这次生成的邀请链接。');
-    await loadWorkspace();
+    const writes = visibleWrites;
+    if (!id || !writes || workspaceWrites.get(transferKey(scope)) !== writes || !canInvite(actor) || writes.invite.busy) return;
+    const values = readInvite(inviteForm);
+    rememberWorkspaceForm(inviteWrite,writes.invite);
+    writes.invite.busy = true;
+    paintWorkspaceWrites();
+    const result = await request('POST', `/v1/workspaces/${id}/invites`, values, undefined, AbortSignal.timeout(15000));
+    if (workspaceWrites.get(transferKey(scope)) !== writes) return;
+    const {invite,token} = result.body;
+    const url = result.status === 201 && invite?.workspace_id === id && invite.id && teamInviteUrl(token, view?.location?.origin);
+    if (url) writes.issued = {invite,url};
+    writes.invite.busy = false;
+    writes.invite.kind = url ? 'ok' : 'error';
+    writes.invite.message = url ? '已生成邀请链接。' : result.status === 201 ? '无法显示这次生成的邀请链接。'
+      : messageFor(result.body.error, '无法确认邀请是否已生成，请查看已发出的邀请。');
+    if (visibleWrites !== writes) return;
+    paintWorkspaceWrites();
+    if (result.status === 201) await loadWorkspace();
   });
 
   document.getElementById('copy-issued-invite')?.addEventListener('click', async () => {
-    const field = document.getElementById('issued-invite-link');
-    if (!field.value) return;
-    const scope = workspaceScope(), value = field.value;
+    const writes = visibleWrites;
+    const value = issuedLink.value;
+    if (!writes || !value) return;
     try {
       await view.navigator.clipboard.writeText(value);
-      if (inWorkspace(scope) && field.value === value) show('ok', '已复制邀请链接。');
+      if (visibleWrites !== writes || issuedLink.value !== value) return;
+      writes.invite.message = '已复制邀请链接。';
+      writes.invite.kind = 'ok';
     } catch {
-      if (!inWorkspace(scope) || field.value !== value) return;
-      field.select();
-      show('error', '请复制选中的链接。');
+      if (visibleWrites !== writes || issuedLink.value !== value) return;
+      issuedLink.select();
+      writes.invite.message = '请复制选中的链接。';
+      writes.invite.kind = 'error';
     }
+    paintWorkspaceWrites();
   });
 
   receiveToken?.addEventListener('input', () => {

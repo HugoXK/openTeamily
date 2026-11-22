@@ -821,7 +821,9 @@ export function listFiles(store, workspaceId, text, cursor, limit) {
 export function search(store, needle, limit) {
   const like = '%' + needle.replace(/[\\%_]/g, (c) => '\\' + c) + '%'
   return store.all(ROW_SELECT + "WHERE a.title LIKE ? ESCAPE '\\' OR a.body LIKE ? ESCAPE '\\' ORDER BY a.updated DESC LIMIT ?", like, like, limit)
-    .map((row) => ({ kind: 'artifact', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: (row.body || row.title).slice(0, 160), updated: row.updated, href: `/artifacts/?artifact=${row.id}` }))
+    .map((row) => ({kind:'artifact', id:row.id, workspace_id:row.workspace_id, title:row.title,
+      snippet:(row.body || row.title).slice(0,160), updated:row.updated,
+      href:'/space?' + new URLSearchParams({workspace:row.workspace_id,artifact:row.id})}))
 }
 
 export { HEX32, mediaDigests, unlinkMedia, TOKEN }

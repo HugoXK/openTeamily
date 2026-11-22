@@ -408,6 +408,18 @@ a.catalog-create[hidden] { display: none; }
 }
 
 #catalog-panel .team-join, #teams-retry { min-height: 2.5rem; }
+.team-open {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-inline-start: auto;
+  padding-inline: .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .6rem;
+  color: var(--ot-accent-hover);
+  font-weight: 650;
+}
+.team-open:hover { background: var(--ot-accent-soft); }
 
 /* Design refresh */
 .catalog article {

@@ -99,7 +99,11 @@ export async function stageCallAudio({owner, workspace, call, blob, isCurrent = 
   return true;
 }
 
-export async function takeCallAudio(scope, browser = globalThis) {
+function clearTicket(storage, ticket) {
+  if (readTicket(storage)?.token === ticket.token) storage.removeItem(TICKET);
+}
+
+async function readCallAudio(scope, browser, consume) {
   if (!validScope(scope)) return null;
   let storage;
   try { storage = browser.sessionStorage; } catch { return null; }
@@ -118,8 +122,25 @@ export async function takeCallAudio(scope, browser = globalThis) {
             && validCallAudio(row.blob)) settle(row.blob);
       };
     }
-    store.delete(ticket.token);
+    if (consume || outdated) store.delete(ticket.token);
   });
-  if (readTicket(storage)?.token === ticket.token) storage.removeItem(TICKET);
-  return blob || null;
+  if (consume || outdated || !blob) clearTicket(storage, ticket);
+  if (!blob) return null;
+  return {
+    blob,
+    async discard() {
+      await write(browser, store => { store.delete(ticket.token); });
+      clearTicket(storage, ticket);
+    },
+  };
+}
+
+export async function takeCallAudio(scope, browser = globalThis) {
+  return (await readCallAudio(scope, browser, true))?.blob || null;
+}
+
+// Retain a recording for the exact authorized call until local deletion or the
+// original handoff deadline. The receipt is never sent to the server.
+export function previewCallAudio(scope, browser = globalThis) {
+  return readCallAudio(scope, browser, false);
 }

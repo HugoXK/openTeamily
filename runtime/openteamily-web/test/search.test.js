@@ -223,12 +223,18 @@ test('saving an authorized chat message creates one private versioned document w
 
 })
 
-test('search/all spans memory and meetings in this DS-Bot', async () => {
+test('search/all opens the exact artifact, memory and meeting from this DS-Bot', async () => {
   const bot = await bootMemory()
-  await bot.call('memory', 'POST', `/v1/workspaces/${WS}/memory`, { title: '季度目标', body: '增长 20%' }, key())
-  await bot.call('meetings', 'POST', `/v1/workspaces/${WS}/meetings`, { title: '季度复盘', summary: '回顾目标' }, key())
+  const base = `/v1/workspaces/${WS}`
+  const {page} = (await bot.call('memory','POST',base+'/memory',{title:'季度目标',body:'增长 20%'},key())).body
+  const {meeting} = (await bot.call('meetings','POST',base+'/meetings',{title:'季度复盘',summary:'回顾目标'},key())).body
+  const {artifact} = (await bot.call('artifacts','POST',base+'/artifacts',{title:'复盘材料',body:'季度报告'},key())).body
   const all = await bot.endpoint('search/all', { q: '季度' })
   assert.equal(all.ok, true, JSON.stringify(all))
-  assert.deepEqual(all.value.items.map((item) => item.kind).sort(), ['meeting', 'memory'])
+  assert.deepEqual(all.value.items.map(item=>item.href).sort(), [
+    `/meetings#workspace=${WS}&meeting=${meeting.id}`,
+    `/memory?workspace=${WS}&page=${page.id}`,
+    `/space?workspace=${WS}&artifact=${artifact.id}`,
+  ])
   assert.equal((await bot.endpoint('search/all', { q: '' })).ok, false)
 })

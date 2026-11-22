@@ -1,20 +1,23 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
-import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
+import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
 import { mountSharedStudio } from './shared-studio.mjs';
 import { mountStudioCopy } from './studio-copy.mjs';
 import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
-  if (!params.has('workspace') && !params.has('artifact')) return null;
+  if (!params.has('workspace') && !params.has('artifact') && !params.has('revision')) return null;
   const id = /^[0-9a-f]{32}$/;
   const workspace = params.get('workspace');
   const artifact = params.get('artifact');
-  if ([...params.keys()].some(key => !['workspace', 'artifact'].includes(key))
+  const revision = params.get('revision');
+  if ([...params.keys()].some(key => !['workspace', 'artifact', 'revision'].includes(key))
     || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
-    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))) return {invalid: true};
+    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))
+    || (revision !== null && (!artifact || params.getAll('revision').length !== 1 || !/^[1-9][0-9]{0,7}$/.test(revision)))) return {invalid: true};
+  if (revision !== null) return {workspace, artifact, revision:Number(revision)};
   return artifact ? {workspace, artifact} : {workspace};
 }
 
@@ -674,6 +677,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   const studio = mountSharedStudio(document, {
     request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+    onDocument(workspace, id, revision) {
+      const href = studioDocumentHref(workspace, id, revision);
+      if (href) writeSpaceAddress(href);
+    },
+    onCatalog() {
+      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    },
     onClose() {
       if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },
@@ -699,6 +709,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     openArtifact: (workspace, artifact) => {
       void openEditor(artifact, {workspace,saved:true,notice:{kind:'ok',text:'已保存到个人空间。'}});
     },
+  });
+  const workVersion = lazyEditor(async () => {
+    const {mountWorkVersion} = await import('./version-preview.mjs');
+    return mountWorkVersion(document, {
+      read: (path, signal) => request('GET', path, undefined, undefined, signal),
+      closeAddress: ({workspace, id}) => writeSpaceAddress(worksPath() + '?' + new URLSearchParams({workspace,artifact:id}),
+        {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)}),
+    });
   });
 
   function syncStudioWorkspace() {
@@ -2428,6 +2446,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   function hideEditor() {
+    workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
     studioCopy?.close();
@@ -2758,6 +2777,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return `${base}/export`+(format && format!=='original'?'?format='+encodeURIComponent(format):'');
   }
 
+  async function openWorkVersion(selection, artifact, revision, trigger) {
+    const currentSelection = () => activeEditor(selection) && current?.id === artifact.id;
+    if (!currentSelection() || !Number.isSafeInteger(revision) || revision < 1 || revision > 99_999_999) return;
+    try {
+      await workVersion.prepare();
+    } catch {
+      if (currentSelection()) show('error', '无法加载版本预览，请重试。');
+      return;
+    }
+    if (!currentSelection() || !workVersion.instance) return;
+    const workspace = selection.workspace;
+    const href = worksPath() + '?' + new URLSearchParams({workspace, artifact:artifact.id, revision:String(revision)});
+    writeSpaceAddress(href, {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)});
+    workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
+      path:editorPath(selection,artifact.id) + '/versions/' + revision});
+  }
+
   async function loadVersions() {
     const response = await readPanel('version', '/versions');
     if (!response) return;
@@ -2775,9 +2811,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const item of items) {
       const row = document.createElement('li');
       const meta = document.createElement('span');
+      row.dataset.revision = String(item.revision);
       meta.className = 'note';
       meta.textContent = `修订 ${item.revision} · ${item.title || ''} · ${item.created_by || ''}`;
       row.appendChild(meta);
+      if (typeof document.getElementById('work-version-dialog')?.showModal === 'function') {
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.textContent = '查看';
+        preview.setAttribute('aria-haspopup','dialog');
+        preview.setAttribute('aria-label','查看修订 ' + item.revision);
+        preview.addEventListener('click',()=>{ void openWorkVersion(selection,artifact,item.revision,preview); });
+        row.appendChild(preview);
+      }
       const download = document.createElement('a');
       download.href = exportHref(item.revision);
       download.textContent = '导出';
@@ -3369,7 +3415,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (requested.artifact) {
         const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
         void loadList();
-        await opening;
+        if (await opening && requested.revision) await openWorkVersion(editor,current,requested.revision);
         return;
       }
     }

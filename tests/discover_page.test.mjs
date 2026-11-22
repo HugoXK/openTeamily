@@ -92,16 +92,18 @@ test('the teams catalog links to the existing team wizard', () => {
 
 test('team cards render real membership and keep a join action for nonmembers', () => {
   const doc = fakeDocument();
-  const team = {workspace_id: 'ott_1', name: '策划团队', summary: '<b>Brief</b>', member_count: 2};
+  const team = {workspace_id: 'd'.repeat(32), name: '策划团队', summary: '<b>Brief</b>', member_count: 2};
   const card = renderTeamCard(doc, team, {onJoin() {}});
   assert.equal(card.children[0].children[1].textContent, team.name);
   assert.equal(card.children[1].textContent, team.summary);
   assert.equal(card.children[2].children[0].textContent, '2 位成员');
   assert.equal(card.children[2].children[1].textContent, '申请加入');
   for (const [membership, label] of [['member','已加入'],['pending','等待审批'],['suspended','已暂停']]) {
-    const state = renderTeamCard(doc, {...team, membership}, {onJoin() {}}).children[2].children[1];
+    const footer = renderTeamCard(doc, {...team, membership}, {onJoin() {}}).children[2];
+    const state = footer.children[1];
     assert.equal(state.tagName, 'span');
     assert.equal(state.textContent, label);
+    assert.equal(footer.children[2]?.href, membership === 'member' ? '/members#workspace=' + team.workspace_id : undefined);
   }
 });
 

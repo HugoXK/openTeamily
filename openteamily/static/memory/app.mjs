@@ -2,6 +2,7 @@ import {mountCandidates, sourceHref} from './candidates.mjs';
 import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -400,6 +401,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionMore = document.getElementById('action-list-more');
   const actionRetry = document.getElementById('action-list-retry');
   const actionFollowup = document.getElementById('action-follow-up');
+  const actionFollowupHistory = document.getElementById('action-follow-up-history');
+  const actionFollowupList = document.getElementById('action-follow-up-list');
   const newActionForm = document.getElementById('new-action-form');
   const newActionButton = document.getElementById('new-action');
   const newActionStatus = document.getElementById('new-action-status');
@@ -424,6 +427,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
+  let actionFollowupRequest = 0;
   let pageChoices = [];
   let browseDirectory = null;
   let activeDirectory = null;
@@ -2401,13 +2405,72 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
 
+  function savedActionFollowups() {
+    const workspace = workspaceId();
+    if (!personalWorkspaces.has(workspace) || currentAction?.workspace_id !== workspace ||
+        !Array.isArray(currentAction?.automation_followups)) return [];
+    return currentAction.automation_followups.filter(item => /^[0-9a-f]{32}$/.test(item?.id || '') &&
+      Number.isSafeInteger(item.revision) && item.revision > 0 && typeof item.title === 'string');
+  }
+
+  function renderActionFollowups() {
+    if (!actionFollowupHistory || !actionFollowupList) return;
+    const rows = savedActionFollowups();
+    actionFollowupList.replaceChildren(...rows.map(row => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations?' + new URLSearchParams({workspace: workspaceId(), automation: row.id});
+      link.target = '_blank';
+      link.rel = 'noopener';
+      const title = document.createElement('strong');
+      title.textContent = row.title;
+      const meta = document.createElement('small');
+      meta.className = 'note';
+      meta.textContent = `行动项修订 ${row.revision} · ${row.enabled ? '已启用' : '已暂停'}`;
+      link.append(title, meta);
+      item.append(link);
+      return item;
+    }));
+    actionFollowupHistory.hidden = !rows.length;
+  }
+
+  async function refreshActionFollowups() {
+    const action = currentAction;
+    const workspace = workspaceId();
+    if (!action || actionEditor.hidden || action.workspace_id !== workspace ||
+        !personalWorkspaces.has(workspace)) return;
+    const owner = currentUser;
+    const token = ++actionFollowupRequest;
+    try {
+      const response = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}`);
+      if (token !== actionFollowupRequest || owner !== currentUser || workspace !== workspaceId() || currentAction !== action) return;
+      const fresh = response.body?.action;
+      if (response.status !== 200 || fresh?.id !== action.id || fresh.workspace_id !== workspace ||
+          !Array.isArray(fresh.automation_followups) ||
+          JSON.stringify(fresh.automation_followups) === JSON.stringify(action.automation_followups)) return;
+      action.automation_followups = fresh.automation_followups;
+      renderActionFollowups();
+      syncActionFollowup();
+    } catch { /* Reopening the action also refreshes the list. */ }
+  }
+
+  document.defaultView?.addEventListener?.('focus', refreshActionFollowups);
+  const actionFollowupEvents = actionFollowupChannel(document.defaultView);
+  actionFollowupEvents?.addEventListener('message', ({data}) => {
+    if (data?.workspace === workspaceId() && data?.action === currentAction?.id) void refreshActionFollowups();
+  });
+
   function syncActionFollowup() {
     const workspace = workspaceId();
-    const href = personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
+    const linked = savedActionFollowups();
+    const hasCurrentFollowup = linked.some(item => item.revision === currentAction?.revision);
+    const href = !hasCurrentFollowup && personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
     actionFollowup.hidden = !href;
+    actionFollowup.textContent = linked.length ? '跟进当前修订' : '跟进自动化';
     const note = document.getElementById('action-follow-up-status');
     if (!href) {
       actionFollowup.removeAttribute('href');
+      actionFollowup.removeAttribute('aria-disabled');
       note.textContent = '';
       return;
     }
@@ -2449,6 +2512,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (chatLink) chat.href = chatLink;
     else chat.removeAttribute('href');
     document.getElementById('action-editor-source').hidden = meeting.hidden && chat.hidden;
+    renderActionFollowups();
     syncActionFollowup();
   }
 
