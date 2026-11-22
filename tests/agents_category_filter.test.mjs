@@ -247,8 +247,8 @@ test('an exact agent link opens the authorized workspace and never falls back to
       if (path === '/v1/auth/session') return json(200, {user: {id: 'user-1', username: 'alice'}});
       if (path === '/v1/workspaces?limit=100') return json(200, {items: [personal, team]});
       if (path === '/v1/personal-agent') return json(200, {});
-      if (path === base) return json(200, {workspace: team});
-      if (path === base + '/members') return json(200, {items: []});
+      if (path === base) return json(404, {});
+      if (path === base + '/members') return json(200, {items: [{user_id:'user-1',role:'owner'}]});
       if (path === base + '/agents?limit=100') return json(200, {items: [agent]});
       if (path === base + '/agents/' + agent.id) return json(200, {agent});
       if (path.endsWith('/api-keys')) return json(200, {items: []});
@@ -256,11 +256,14 @@ test('an exact agent link opens the authorized workspace and never falls back to
     };
     globalThis.location.hash = '#workspace=' + team.id + '&agent=' + agent.id;
     const exact = fakeDocument();
+    exact.doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
     await mount(exact.doc, {fetcher});
     assert.equal(exact.el('workspace').value, team.id);
     assert.equal(exact.el('edit-form').elements.name.value, agent.name);
     assert.equal(exact.el('open-in-chat').href, '/chat#workspace=' + team.id + '&agent=' + agent.id);
     assert.deepEqual(names(exact.el), [agent.name]);
+    assert.equal(exact.el('open-create').hidden, false);
+    assert.ok(!requests.includes(base));
     assert.equal(requests.filter(path => path === base + '/agents/' + agent.id).length, 1);
 
     requests.length = 0;

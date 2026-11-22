@@ -603,16 +603,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const unavailable = {status: 0, body: {}};
     const base = `/v1/workspaces/${id}`;
+    const nativeWorkspace = nativeSharing ? workspaces.find(space => space.id === id) : null;
     const [detail, members, listed] = await Promise.all([
-      includeWorkspace ? request('GET', base).catch(() => unavailable) : null,
+      includeWorkspace && !nativeSharing ? request('GET', base).catch(() => unavailable) : null,
       includeWorkspace ? request('GET', base + '/members').catch(() => unavailable) : null,
       listAgents(base, archived).catch(() => unavailable),
     ]);
     if (seq !== workspaceLoad || id !== workspaceId() || user !== currentUser?.id) return false;
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      return false;
+    }
     if (includeWorkspace) {
-      if (detail.status !== 200) {
+      const workspace = nativeSharing ? nativeWorkspace : detail?.status === 200 ? detail.body.workspace : null;
+      if (!workspace) {
         actor = null;
-        show('error', messageFor(detail.body.error, '无法打开工作区。'));
+        show('error', messageFor(detail?.body.error, '无法打开工作区。'));
         return false;
       }
       memberNames = new Map(members.status === 200
@@ -621,17 +627,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const self = members.status === 200
         ? (members.body.items || []).find(row => row.user_id === currentUser.id)
         : null;
-      actor = self ? self.role : (detail.body.workspace && detail.body.workspace.owner_id === currentUser.id ? 'owner' : 'member');
+      actor = self ? self.role : (workspace.owner_id === currentUser.id &&
+        (!nativeSharing || workspace.kind === 'personal') ? 'owner' : 'member');
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
       if (teamTemplatesLoaded) renderTeamTemplates();
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
-      return false;
-    }
     directoryAgents = listed.body.items || [];
     loadedWorkspace = id;
     loadedArchived = archived;
