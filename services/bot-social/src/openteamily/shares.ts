@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { createHash } from "node:crypto";
-import { body, OtContext, params, text } from "./core.js";
+import { body, OtContext, params, query, text } from "./core.js";
 import { requireMember } from "./teams.js";
 
 export const SHARES_SCHEMA = `
@@ -27,10 +27,11 @@ const STATUSES = new Set(["running", "succeeded", "failed", "cancelled"]);
 const SNAPSHOT_MAX = 100_000;
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 
-function view(ot: OtContext, r: any) {
+function view(ot: OtContext, r: any, detail = true) {
   return {
-    id: r.id, team_id: r.team_id, run_ref: r.run_ref, title: r.title, goal: r.goal, status: r.status,
-    snapshot: JSON.parse(r.snapshot), owner: ot.profileView(r.owner_id), created_at: r.created_at, updated_at: r.updated_at,
+    id: r.id, team_id: r.team_id, run_ref: r.run_ref, title: r.title, status: r.status,
+    ...(detail ? {goal: r.goal, snapshot: JSON.parse(r.snapshot)} : {}),
+    owner: ot.profileView(r.owner_id), created_at: r.created_at, updated_at: r.updated_at,
   };
 }
 
@@ -68,18 +69,26 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
       ot.run("UPDATE ot_shared_runs SET title = ?, goal = ?, status = ?, snapshot = ?, updated_at = ? WHERE id = ?", title, goal, b.status, snapshot, now, id);
     } else {
       assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_shared_runs WHERE team_id = ? AND owner_id = ?", team.id, me.ownerId).n < 100, 429, "too_many_shares", "share limit reached");
-      ot.run("INSERT INTO ot_shared_runs(id, team_id, owner_id, run_ref, title, goal, status, snapshot, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        id, team.id, me.ownerId, b.run_ref, title, goal, b.status, snapshot, now, now);
-      for (const m of ot.all<any>("SELECT owner_id FROM ot_team_members WHERE team_id = ? AND suspended = 0 AND owner_id != ?", team.id, me.ownerId)) {
-        ot.notify(m.owner_id, "team.run_shared", { team_id: team.id, team_name: team.name, share_id: id, title, owner: ot.profileView(me.ownerId) });
-      }
+      ot.tx(() => {
+        ot.run("INSERT INTO ot_shared_runs(id, team_id, owner_id, run_ref, title, goal, status, snapshot, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          id, team.id, me.ownerId, b.run_ref, title, goal, b.status, snapshot, now, now);
+        const owner = ot.profileView(me.ownerId);
+        for (const m of ot.all<any>("SELECT owner_id FROM ot_team_members WHERE team_id = ? AND suspended = 0 AND owner_id != ?", team.id, me.ownerId)) {
+          ot.notify(m.owner_id, "team.run_shared", {
+            team_id: team.id, team_name: team.name, workspace_id: team.workspace_id, share_id: id, title, owner,
+          });
+        }
+      });
     }
     return view(ot, ot.get("SELECT * FROM ot_shared_runs WHERE id = ?", id));
   });
   app.get("/v1/ot/teams/:id/shared-runs", async (req) => {
     const me = ot.me(req);
     const { team } = requireMember(ot, params(req).id, me.ownerId);
-    return { runs: ot.all<any>("SELECT * FROM ot_shared_runs WHERE team_id = ? ORDER BY updated_at DESC LIMIT 200", team.id).map((r) => view(ot, r)) };
+    const summary = query(req).summary === "1";
+    const fields = summary ? "id, team_id, owner_id, run_ref, title, status, created_at, updated_at" : "*";
+    return { runs: ot.all<any>(`SELECT ${fields} FROM ot_shared_runs WHERE team_id = ? ORDER BY updated_at DESC, id DESC LIMIT 200`, team.id)
+      .map((r) => view(ot, r, !summary)) };
   });
   app.get("/v1/ot/teams/:id/shared-runs/:share", async (req) => {
     const me = ot.me(req);

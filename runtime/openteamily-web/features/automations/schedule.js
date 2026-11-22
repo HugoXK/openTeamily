@@ -9,7 +9,7 @@ const formatters = new Map()
 
 export function validZone(zone) {
   if (typeof zone !== 'string' || zone.length < 1 || zone.length > 64) return false
-  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return true } catch { return false }
+  try { formatter(zone); return true } catch { return false }
 }
 
 function formatter(zone) {
@@ -74,6 +74,16 @@ export function normalizeSchedule(value) {
   return out
 }
 
+function runsOn(schedule, day, weekday) {
+  switch (schedule.kind) {
+    case 'daily': return true
+    case 'weekly': return weekday === schedule.weekday
+    case 'weekdays': return weekday <= 5
+    case 'monthly': return day === schedule.day
+    default: return false
+  }
+}
+
 // The current slot's unix time if it is due at nowTs, otherwise null.
 export function dueAt(schedule, nowTs) {
   if (!schedule || !validZone(schedule.time_zone)) return null
@@ -89,10 +99,30 @@ export function dueAt(schedule, nowTs) {
     return nowTs >= ts ? ts : null
   }
   const now = partsIn(zone, nowTs * 1000)
-  if (kind === 'weekly' && now.isoWeekday !== schedule.weekday) return null
-  if (kind === 'weekdays' && now.isoWeekday > 5) return null
-  if (kind === 'monthly' && (!Number.isInteger(schedule.day) || now.day !== schedule.day)) return null
-  if (!['daily', 'weekly', 'weekdays', 'monthly'].includes(kind)) return null
+  if (!runsOn(schedule, now.day, now.isoWeekday)) return null
   const ts = zonedEpoch(zone, now.year, now.month, now.day, hour, minute)
   return nowTs >= ts ? ts : null
+}
+
+export function nextScheduledSlot(schedule, nowTs) {
+  if (!schedule || schedule.kind === 'now' || !validSchedule(schedule)) return null
+  const { time_zone: zone } = schedule
+  const [hour, minute] = schedule.time.split(':').map(Number)
+  if (schedule.kind === 'once' || schedule.kind === 'later') {
+    const [year, month, day] = schedule.date.split('-').map(Number)
+    const slot = zonedEpoch(zone, year, month, day, hour, minute)
+    return slot > nowTs ? slot : null
+  }
+
+  const local = partsIn(zone, nowTs * 1000)
+  // The 31st may skip a short month. Every recurring rule has a date within 62 calendar days.
+  for (let offset = 0; offset <= 62; offset += 1) {
+    const date = new Date(Date.UTC(local.year, local.month - 1, local.day + offset))
+    const day = date.getUTCDate()
+    const weekday = date.getUTCDay() || 7
+    if (!runsOn(schedule, day, weekday)) continue
+    const slot = zonedEpoch(zone, date.getUTCFullYear(), date.getUTCMonth() + 1, day, hour, minute)
+    if (slot > nowTs) return slot
+  }
+  return null
 }

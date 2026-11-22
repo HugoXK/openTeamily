@@ -16,6 +16,7 @@ KEY = re.compile(r'[A-Za-z0-9_-]{16,64}')
 ACTIONS = frozenset(('create', 'start', 'stop', 'restart'))
 UNSUPPORTED = frozenset(('backup', 'restore', 'upgrade', 'reclaim', 'purge'))
 ERRORS = {'runtime_failure': 'Runtime operation failed', 'interrupted': 'Manager lease expired; operator recovery required'}
+GATEWAY_REFRESH_SECONDS = 15
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runtime_schema (version INTEGER PRIMARY KEY CHECK(version=1));
 INSERT OR IGNORE INTO runtime_schema VALUES(1);
@@ -391,6 +392,22 @@ class Lifecycle:
                     if len(rows) > limit:
                         break
             items = [{**self.snapshot(r), 'provisioning': 'auto' if r['id'] in auto_set else 'operator'} for r in rows[:limit]]
+            if manager.backend_mode == 'compose':
+                running = [item['id'] for item in items
+                           if item['converged'] and item['observed'] == 'running' and item['health'] == 'healthy']
+                published = {}
+                now = int(self.clock())
+                if running and db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
+                    # Successful stop/restart observations invalidate the previous process route.
+                    # Give the poller route state without credentials or addresses.
+                    placeholders = ','.join('?' for _ in running)
+                    published = {row['instance_id']: row['updated'] for row in db.execute(
+                        f'SELECT instance_id, updated FROM dsbot_upstreams WHERE instance_id IN ({placeholders})', running,
+                    )}
+                for item in items:
+                    updated = published.get(item['id'])
+                    item['gateway_route_present'] = updated is not None
+                    item['gateway_route_fresh'] = updated is not None and now - GATEWAY_REFRESH_SECONDS < updated <= now
             return {'items': items, 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
     def claim(self, manager, iid):
@@ -489,6 +506,11 @@ class Lifecycle:
                 if job['operation_type'] == 'restart' and process_ref == row['process_ref']:
                     fail(409, 'invalid_observation', 'Restart requires a different process identity')
             status = 'failed' if observed == 'failed' else 'succeeded'
+            # A new process must establish its own gateway session. Invalidate
+            # the previous address/cookie before making this revision routable.
+            if (status == 'succeeded' and process_ref != row['process_ref']
+                    and db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone()):
+                db.execute('DELETE FROM dsbot_upstreams WHERE instance_id=?', (iid,))
             db.execute('UPDATE instances SET observed=?,observed_revision=?,health=?,process_ref=?,error_code=? WHERE id=?',
                        (observed, revision, 'healthy' if observed == 'running' else 'unknown', process_ref if observed != 'failed' else row['process_ref'], error_code, iid))
             db.execute('UPDATE runtime_jobs SET status=?,error_code=?,finished=?,lease_hash=NULL WHERE id=?', (status, error_code, int(self.clock()), jid))

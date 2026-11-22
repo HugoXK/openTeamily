@@ -5,7 +5,7 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle, view } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, remixPublicWork, search, uniqueTitle, view } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
@@ -43,6 +43,10 @@ export default defineFeature({
   endpoints: (context) => {
     const ctx = { ...context, featureDir: context.host.featureDir() }
     return {
+    async remixPublicWork(payload, call) {
+      if (!call?.internal) refuse(404,'not_found','Internal endpoint')
+      return remixPublicWork(ctx,payload ?? {})
+    },
     async create(payload) {
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
@@ -86,6 +90,21 @@ export default defineFeature({
       const name = uniqueTitle(ctx.store, workspace, title.trim(), id)
       const result = createArtifact(ctx, workspace, {kind: 'website', title: name, body}, key)
       return {id: result.body.artifact.id}
+    },
+    async savedChatWorks(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, agent_id: agent, conversation_id: conversation, message_id: message} = input ?? {}
+      if (![workspace, agent, conversation].every(id => typeof id === 'string' && HEX32.test(id))
+          || (message !== undefined && (typeof message !== 'string' || !HEX32.test(message)))) {
+        refuse(400, 'invalid', 'Invalid chat work receipt request')
+      }
+      const rows = ctx.store.all(`SELECT source.message_id, work.id, work.title
+        FROM artifact_chat_sources source
+        CROSS JOIN artifacts work ON work.id=source.artifact_id AND work.workspace_id=source.workspace_id
+        WHERE source.workspace_id=? AND source.agent_id=? AND source.conversation_id=?
+        ${message !== undefined ? 'AND source.message_id=?' : ''}`,
+      workspace, agent, conversation, ...(message !== undefined ? [message] : []))
+      return {items: rows}
     },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')

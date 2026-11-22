@@ -1,10 +1,13 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
+import { discoverIntentFromHash } from '../shell/discover-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
+import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
+import { socialMessageFromHash, directAgentAccessFromHash, directAgentAccessHref } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
-import { csrfCookie, signupSessionError, takeSignupSession, waitForRuntime } from './runtime-readiness.mjs';
+import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -72,8 +75,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('login-form');
+  const feedback = document.getElementById('login-feedback');
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
+  const whoami = document.getElementById('whoami');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
   const view = document.defaultView ?? globalThis;
@@ -88,6 +93,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let profile = null;
   let selectedId = '';
   let loading = false;
+  let signingIn = false;
   let overviewVersion = 0;
 
   async function request(method, path, body) {
@@ -272,7 +278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     mainPanel.hidden = true;
     show(document, 'loading', loadingText);
     try {
-      const personal = await initializePersonalAgent();
+      const personal = await initializePersonalAgent(target);
       if (!stillCurrent() || !personal) return;
       const ready = await request('GET', '/v1/workspaces?scope=personal');
       if (!stillCurrent()) return;
@@ -297,7 +303,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     status.append(retry, back);
   }
 
-  async function initializePersonalAgent() {
+  async function initializePersonalAgent(resumePath = '/runtime-starting#home=1') {
     const result = await request('POST', '/v1/personal-agent').catch(() => null);
     const agent = result?.body?.personal_agent;
     const provisioning = agent?.runtime_provisioning;
@@ -314,6 +320,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         view.location.replace('/login' + view.location.hash);
         return null;
       }
+    }
+    if (provisioning?.readiness === 'stopped' || state === 'stopped') {
+      view.location.replace(resumePath);
+      return null;
     }
     const message = provisioning?.state === 'capacity'
       ? '当前运行容量已满，请稍后重试。'
@@ -333,24 +343,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     loading = true;
     try {
       const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
-      const expectedSignup = [200, 401].includes(session.status) ? takeSignupSession(view) : null;
-      const unconfirmedSignup = expectedSignup && session.body.user?.id !== expectedSignup;
+      const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
+      const isLogin = view.location?.pathname === '/login';
+      const originalPage = workspacePageTarget(view.location);
+      const returnTo = originalPage || (isLogin ? workspaceLoginTarget(view.location.hash) : '');
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
+        if (whoami) whoami.textContent = '';
+        document.body?.classList.remove('home-signed-in');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        const hash = view.location?.pathname === '/login' ? view.location.hash : '';
+        const hash = isLogin ? view.location.hash : '';
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
-        const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
-          (intent ? publicAgentContinuation(intent) : work?.continuation);
+        const discover = discoverIntentFromHash(hash);
+        const continuation = workspaceLoginHash(returnTo) || teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
+          (intent ? publicAgentContinuation(intent) : work?.continuation || discover?.continuation);
         const register = loginPanel.querySelector?.('.login-register-button');
-        if (register && continuation) register.href = '/register' + continuation;
-        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
+        if (register) register.href = '/register' + (continuation || '');
+        const back = document.getElementById('login-return-discover');
+        if (back) {
+          back.hidden = !discover;
+          if (discover) back.href = discover.target;
+        }
+        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError :
+          returnTo ? '登录后会返回你刚打开的页面。' : '');
         return;
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
+        return;
+      }
+      if (returnTo) {
+        if (originalPage) view.location.reload();
+        else view.location.replace(returnTo);
         return;
       }
       let meeting = meetingFromLink;
@@ -359,21 +385,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       } catch {}
       const target = meetingHref(meeting);
       if (target) {
-        if (!await initializePersonalAgent()) return;
+        if (!await initializePersonalAgent(target)) return;
         try { view.sessionStorage.removeItem(pendingKey); } catch {}
         view.location.replace(target);
         return;
       }
       try { view.sessionStorage.removeItem(pendingKey); } catch {}
-      if (view.location?.pathname === '/login') {
+      if (isLogin) {
         const hash = view.location.hash;
-        const invite = teamInviteFromHash(hash);
+        const invite = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash));
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
+        const discover = discoverIntentFromHash(hash);
+        const message = socialMessageFromHash(hash);
+        const access = directAgentAccessFromHash(hash);
         if (invite) {
-          if (await initializePersonalAgent() && view.location.hash === hash) {
-            view.location.replace('/members' + teamInviteHash(invite));
+          const destination = '/members' + invite;
+          if (await initializePersonalAgent(destination) && view.location.hash === hash) {
+            view.location.replace(destination);
           }
+        } else if (message) {
+          view.location.replace(message);
+        } else if (access) {
+          view.location.replace(directAgentAccessHref(access));
         } else if (intent) {
           await continuePublicActivity({
             target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
@@ -385,12 +419,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
             loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
             errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
           });
+        } else if (discover) {
+          await continuePublicActivity({
+            target: discover.target, backPath: discover.target,
+            loadingText: '正在返回发现…', errorText: '暂时无法打开你的发现页。', retryId: 'discover-login-retry',
+          });
         } else {
           view.location.replace('/');
         }
         return;
       }
       currentUser = session.body.user;
+      if (whoami) whoami.textContent = currentUser.username;
+      document.body?.classList.add('home-signed-in');
       loginPanel.hidden = true;
       personal = await initializePersonalAgent();
       if (!personal) return;
@@ -446,17 +487,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const result = await request('POST', '/v1/auth/login', {
-      username: form.elements.username.value,
-      password: form.elements.password.value,
-    });
-    if (result.status !== 200) {
-      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
-        : (result.body.error && result.body.error.message) || '无法登录。');
-      return;
+    if (signingIn) return;
+    signingIn = true;
+    const submit = form.querySelector?.('button[type="submit"]');
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = '正在登录…';
     }
-    form.reset();
-    await load();
+    show(document, '', '');
+    if (feedback) feedback.textContent = '';
+    try {
+      const result = await request('POST', '/v1/auth/login', {
+        username: form.elements.username.value,
+        password: form.elements.password.value,
+      });
+      if (result.status !== 200) {
+        if (feedback) {
+          feedback.dataset.kind = 'error';
+          feedback.textContent = result.status === 401 ? '用户名或密码不正确。'
+            : result.status === 429 ? '登录尝试过多，请稍后再试。' : '暂时无法登录，请重试。';
+        }
+        return;
+      }
+      form.reset();
+      await load();
+    } catch {
+      if (feedback) {
+        feedback.dataset.kind = 'error';
+        feedback.textContent = '无法连接，请检查网络后重试。';
+      }
+    } finally {
+      signingIn = false;
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = '登录';
+      }
+    }
   });
 
   const logout = document.getElementById('logout-form');

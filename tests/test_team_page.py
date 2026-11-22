@@ -40,12 +40,12 @@ class TeamPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/team', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/team')['status'], 405)
 
-    def test_wrapper_still_exposes_the_team_api(self):
-        created = self.client.call('POST', '/v1/teams',
-                                   {'name': 'Desk team', 'slug': 'desk-team', 'mode': 'new'},
-                                   {'HTTP_IDEMPOTENCY_KEY': 'team-page-create-0001'})
-        self.assertEqual(created['status'], 201, created)
-        self.assertEqual(created['body']['workspace']['slug'], 'desk-team')
+    def test_team_creation_has_no_legacy_management_fallback(self):
+        result = self.client.call('POST', '/v1/teams',
+                                  {'name': 'Desk team', 'slug': 'desk-team', 'mode': 'new'},
+                                  {'HTTP_IDEMPOTENCY_KEY': 'team-page-create-0001'})
+        self.assertEqual(result['status'], 410)
+        self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
 
     def test_recorded_first_step_keeps_name_id_and_modes_together(self):
         html = self.raw.call('GET', '/team')['body'].decode()

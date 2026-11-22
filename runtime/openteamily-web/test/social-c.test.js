@@ -12,6 +12,7 @@ import social from '../features/social/index.js'
 import teams from '../features/teams/index.js'
 import members from '../features/members/index.js'
 import invites from '../features/invites/index.js'
+import studio from '../features/studio/index.js'
 
 const TOKEN = 'ot-fake-connector-token-for-tests'
 const SERVER = 'https://social.example.test'
@@ -80,6 +81,114 @@ test('personal workspace can include its native catalog and never reads a linked
   assert.deepEqual(gateway.body.catalog, catalog)
 })
 
+test('the automation snapshot reads the personal list for the authenticated gateway viewer', async () => {
+  const workspace = 'a'.repeat(32)
+  const calls = []
+  let available = true
+  const items = [{id: 'd'.repeat(32), workspace_id: workspace, title: '晨报'}]
+  const endpoint = teams({ call: async (name, payload) => {
+    if (name === 'agents/personal-binding') return {workspace_id: workspace, agent_id: 'b'.repeat(32)}
+    assert.equal(name, 'automations/list')
+    calls.push(payload)
+    if (!available) throw new Error('unavailable')
+    return {items}
+  } }).endpoints.v1
+  const request = {headers: new Headers({'x-ot-owner-username': 'account-test'})}
+  const get = (suffix = '', call = {request}) => endpoint({method: 'GET',
+    path: '/v1/workspaces?scope=personal&include=automations' + suffix}, call)
+  for (const suffix of ['', '&workspace=' + workspace, '&username=other-owner']) {
+    const result = await get(suffix)
+    assert.equal(result.status, 200)
+    assert.equal(result.body.viewer_username, 'account-test')
+    assert.equal(result.body.items[0].id, workspace)
+    assert.deepEqual(result.body.automations, {items})
+  }
+  assert.deepEqual(calls, Array(3).fill({workspace_id: workspace, category: 'mine', username: 'account-test'}))
+  for (const suffix of ['&workspace=' + 'c'.repeat(32), '&workspace=' + workspace + '&workspace=' + workspace,
+    '&include=automations']) {
+    assert.equal((await get(suffix)).body.automations, undefined)
+  }
+  assert.equal((await get('', {})).body.automations, undefined)
+  assert.equal(calls.length, 3)
+  available = false
+  const fallback = await get()
+  assert.equal(fallback.status, 200)
+  assert.equal(fallback.body.items[0].id, workspace)
+  assert.equal(fallback.body.automations, undefined)
+})
+
+test('the Chat snapshot reads only the local owner’s workspace and directory', async t => {
+  const workspace = 'a'.repeat(32)
+  const agent = 'b'.repeat(32)
+  const owner = 'c'.repeat(32)
+  const previousOwner = process.env.OPENTEAMILY_OWNER_USER_ID
+  process.env.OPENTEAMILY_OWNER_USER_ID = owner
+  t.after(() => {
+    if (previousOwner === undefined) delete process.env.OPENTEAMILY_OWNER_USER_ID
+    else process.env.OPENTEAMILY_OWNER_USER_ID = previousOwner
+  })
+  const directory = { items: [{id: agent}], conversations: [{id: 'd'.repeat(32), agent_id: agent}], cursor: null }
+  const entry = {agent: {id: agent, workspace_id: workspace},
+    conversation: {id: 'd'.repeat(32), agent_id: agent, workspace_id: workspace}, items: [], cursor: null, has_newer: false}
+  const reads = []
+  const entries = []
+  let available = true
+  let hasEntry = true
+  const endpoint = teams({ call: async (endpoint, payload) => {
+    if (endpoint === 'agents/personal-binding') return { workspace_id: workspace, agent_id: agent }
+    if (endpoint === 'agents/startupEntry') {
+      entries.push(payload)
+      return hasEntry ? entry : null
+    }
+    assert.equal(endpoint, 'agents/v1')
+    reads.push(payload)
+    if (!available) throw new Error('unavailable')
+    return {status: 200, body: directory}
+  } }).endpoints.v1
+  const get = (where = '', call) => endpoint({method: 'GET', path: '/v1/workspaces?scope=personal&include=chat' + where}, call)
+  const result = await get('&workspace=' + workspace)
+  assert.equal(result.status, 200)
+  assert.equal(result.body.items[0].owner_id, owner)
+  assert.equal(result.body.personal_agent_id, agent)
+  assert.deepEqual(result.body.chat, directory)
+  assert.deepEqual(reads, [{method: 'GET', path: `/v1/workspaces/${workspace}/agents?limit=100&include=conversations`}])
+  const other = await get('&workspace=' + 'e'.repeat(32))
+  assert.equal(other.body.personal_agent_id, agent)
+  assert.equal(other.body.chat, undefined)
+  assert.equal(reads.length, 1)
+  const hint = '&entry_agent=' + agent
+  const exact = hint + '&entry_conversation=' + entry.conversation.id + '&directory=0'
+  assert.deepEqual((await get('&workspace=' + workspace + exact)).body, {
+    items: result.body.items, cursor: null, personal_agent_id: agent, entry,
+  })
+  assert.deepEqual(entries, [{workspace_id: workspace, agent_id: agent, conversation_id: entry.conversation.id}])
+  assert.equal(reads.length, 1, 'an exact transcript does not need the directory')
+  assert.equal((await get('&workspace=' + 'e'.repeat(32) + exact)).body.entry, undefined)
+  assert.equal((await get(exact)).body.entry, undefined)
+  assert.equal((await get('&workspace=' + workspace + exact + hint)).body.entry, undefined)
+  assert.equal(entries.length, 1, 'unscoped and ambiguous hints cannot read a transcript')
+  hasEntry = false
+  assert.equal((await get('&workspace=' + workspace + exact)).body.chat, undefined)
+  const newAgent = await get('&workspace=' + workspace + hint + '&directory=0')
+  assert.equal(newAgent.body.entry, null)
+  assert.deepEqual(newAgent.body.chat, directory, 'an agent without a snapshot can still open an empty draft')
+  const bindingOnly = await get('&workspace=' + workspace + '&directory=0')
+  assert.equal(bindingOnly.body.personal_agent_id, agent)
+  assert.equal(bindingOnly.body.chat, undefined)
+  available = false
+  assert.equal((await get()).body.personal_agent_id, agent)
+  assert.equal((await get()).body.chat, undefined)
+  available = true
+  delete process.env.OPENTEAMILY_OWNER_USER_ID
+  assert.equal((await get()).body.personal_agent_id, undefined)
+  assert.equal((await get()).body.chat, undefined)
+  assert.equal((await get('&workspace=' + workspace + exact)).body.entry, undefined)
+  const request = {headers: new Headers({'x-ot-owner-username': 'personal-test'})}
+  const fromGateway = await get('', {request})
+  assert.equal(fromGateway.body.viewer_username, 'personal-test')
+  assert.deepEqual(fromGateway.body.chat, directory)
+})
+
 test('requests carry the saved connector token to exactly the configured server', async () => {
   const f = fakeFetch(() => ({ handle: 'ann.home', display_name: 'Ann' }))
   const bs = createBotSocial({ server: SERVER + '/', credentialsPath: creds(), fetch: f.fetch })
@@ -112,10 +221,14 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   const bs = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: socket, localServer: SERVER,
   })
-  assert.deepEqual(await bs.post('/v1/ot/teams', { name: 'Studio' }), { ok: true })
+  assert.deepEqual(await bs.post('/v1/ot/teams', { name: '团队文档' }), { ok: true })
   assert.deepEqual([requests[0].method, requests[0].path, requests[0].headers.host, requests[0].headers.authorization],
     ['POST', '/v1/ot/teams', new URL(SERVER).host, `Bearer ${TOKEN}`])
-  assert.deepEqual(JSON.parse(requests[0].body), { name: 'Studio' })
+  assert.deepEqual(JSON.parse(requests[0].body), { name: '团队文档' })
+  const documentPath = '/v1/ot/teams/' + 'a'.repeat(32) + '/studio/documents/' + 'b'.repeat(32)
+  assert.deepEqual(await bs.request('DELETE', documentPath, { revision: 2 }), { ok: true })
+  assert.deepEqual([requests[1].method, requests[1].path], ['DELETE', documentPath])
+  assert.deepEqual(JSON.parse(requests[1].body), { revision: 2 })
   await assert.rejects(bs.get('/v1/ot/redirect'), { code: 'social/unreachable' })
   assert.equal(f.calls.length, 0)
 
@@ -125,7 +238,7 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   })
   assert.deepEqual(await other.get('/v1/ot/teams'), { ok: true })
   assert.equal(f.calls[0].url, remote + '/v1/ot/teams')
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, 3)
   const unavailable = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: join(dir, 'missing.sock'), localServer: SERVER,
   })
@@ -185,6 +298,63 @@ test('teams, members, invites and social features map to the shared routes', asy
   assert.deepEqual(f.calls[0].body, { name: 'Studio', slug: 'studio-a', summary: 's' })
   assert.equal(f.calls[6].body.requires_approval, true)
   assert.ok(f.calls.every((c) => c.auth === `Bearer ${TOKEN}`))
+})
+
+test('applicant join requests expose team names and only canonical workspace IDs', async () => {
+  const workspace = 'a'.repeat(32)
+  const common = {role:'member',member:{owner_id:'applicant',handle:'ann.home'},created_at:1795212000000}
+  const f = fakeFetch(() => ({requests:[
+    {...common,id:'otjr_valid',team_id:'ott_a',workspace_id:workspace,team_name:'Studio',status:'approved',decided_at:1795212001000},
+    {...common,id:'otjr_unbound',team_id:'ott_b',workspace_id:null,team_name:'Old studio',status:'pending'},
+  ]}))
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: creds(), fetch: f.fetch}))
+  const endpoint = invites({dataDir:'/nonexistent'}).endpoints.v1
+  const result = await endpoint({method:'GET',path:'/v1/join-requests'})
+  assert.equal(result.status,200)
+  const [approved, pending] = result.body.items
+  assert.deepEqual({id:approved.id,workspace_id:approved.workspace_id,team_name:approved.team_name,role:approved.role,
+    status:approved.status,created:approved.created,decided:approved.decided},
+  {id:'otjr_valid',workspace_id:workspace,team_name:'Studio',role:'member',status:'approved',created:1795212000,decided:1795212001})
+  assert.equal(pending.workspace_id,null)
+  assert.equal(pending.team_name,'Old studio')
+  assert.deepEqual(f.calls.map(call => call.url), [SERVER + '/v1/ot/join-requests/mine'])
+})
+
+test('a legacy shared projection cannot make the bound personal workspace convertible', async () => {
+  const personal = 'a'.repeat(32)
+  const shared = 'b'.repeat(32)
+  const row = (workspace_id, name) => ({workspace_id, name, role: 'owner'})
+  const f = fakeFetch((url, init) => {
+    const pathname = new URL(url).pathname
+    if (pathname === '/v1/ot/me') return {handle: 'ann.home', owner_id: 'ann'}
+    if (pathname === '/v1/ot/workspaces') return {workspaces: [
+      row(personal, 'Existing personal name'), row(shared, 'Studio'),
+      {...row('d'.repeat(32), 'Other workspace'), role: 'admin'},
+      {...row('e'.repeat(32), 'Already a team'), slug: 'existing-team'},
+    ]}
+    assert.equal(pathname, '/v1/ot/workspaces/' + shared + '/convert')
+    assert.equal(init.method, 'POST')
+    return {...row(shared, 'Studio'), slug: 'studio-team'}
+  })
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: creds(), fetch: f.fetch}))
+  const endpoint = teams({call: async () => ({workspace_id: personal, agent_id: 'c'.repeat(32)})}).endpoints.v1
+  const listed = await endpoint({method: 'GET', path: '/v1/workspaces'})
+  assert.deepEqual(listed.body.items.slice(0, 2).map(item => [item.id, item.kind, item.name]), [
+    [personal, 'workspace', 'Existing personal name'], [shared, 'workspace', 'Studio'],
+  ])
+  const convertible = await endpoint({method: 'GET', path: '/v1/workspaces?scope=convertible'})
+  assert.deepEqual(convertible.body.items.map(item => item.id), [shared])
+  const convert = workspace_id => endpoint({
+    method: 'POST', path: '/v1/teams', idempotency_key: 'native-convert-team',
+    body: {mode: 'convert', name: 'Studio', slug: 'studio-team', workspace_id},
+  })
+  const before = f.calls.length
+  const blocked = await convert(personal)
+  assert.equal(blocked.status, 409)
+  assert.equal(f.calls.length, before)
+  const converted = await convert(shared)
+  assert.equal(converted.status, 200)
+  assert.equal(converted.body.workspace.id, shared)
 })
 
 test('the native inbox requests recent scoped notices and constructs safe meeting and Discover links', async t => {
@@ -259,4 +429,38 @@ test('Space work notices map account messages to the recipient workspace and sco
   assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
   assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
   assert.equal(f.calls.length,2)
+})
+
+test('Studio live requests forward only the authenticated watch and presence contracts', async () => {
+  const wid = 'a'.repeat(32), id = 'b'.repeat(32)
+  const path = '/v1/workspaces/' + wid + '/studio/documents/' + id + '/live'
+  const upstream = SERVER + '/v1/ot/teams/' + wid + '/studio/documents/' + id + '/live'
+  const editors = [{name: 'Member', editing: true}]
+  const stub = fakeFetch((url, {method}) => method === 'GET'
+    ? {unchanged:true, revision:2, editors} : {ok:true})
+  setSharedBotSocial(createBotSocial({server:SERVER, credentialsPath:creds(), fetch:stub.fetch}))
+  const {v1} = studio({}).endpoints
+  const update = {session_id:'studio-fixture-session', active:true, editing:true}
+  assert.deepEqual(await v1({method:'GET',path:path+'?revision=2'}),
+    {status:200,body:{unchanged:true,revision:2,editors}})
+  assert.deepEqual(await v1({method:'POST',path,body:update}), {status:200,body:{ok:true}})
+  assert.deepEqual(stub.calls, [
+    {url:upstream+'?revision=2', method:'GET', auth:'Bearer '+TOKEN, body:undefined},
+    {url:upstream, method:'POST', auth:'Bearer '+TOKEN, body:update},
+  ])
+  for (const query of ['', '?revision=2&revision=3', '?revision=9999999999999999']) {
+    assert.equal((await v1({method:'GET',path:path+query})).status,400)
+  }
+  for (const body of [undefined, {...update, body:'local draft'}, {...update, active:false}]) {
+    assert.equal((await v1({method:'POST',path,body})).status,400)
+  }
+  const signed = new AbortController()
+  signed.abort()
+  let sawAbort
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:async (url, {signal})=>{
+    sawAbort = url === upstream+'?revision=2' && signal.aborted
+    signal.throwIfAborted()
+  }}))
+  assert.equal((await v1({method:'GET',path:path+'?revision=2'},{request:{signal:signed.signal}})).status,503)
+  assert.equal(sawAbort,true)
 })

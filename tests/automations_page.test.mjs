@@ -79,6 +79,8 @@ test('readEditor collects tag fields', () => {
 test('runStatusLabel and runResultText describe durable run rows', () => {
   assert.equal(runStatusLabel({status: 'succeeded'}), '已完成');
   assert.equal(runStatusLabel({status: 'queued', error_code: 'no_agent'}), '等待已连接的代理');
+  assert.equal(runStatusLabel({status: 'queued'}), '已排队');
+  assert.equal(runStatusLabel({status: 'running'}), '运行中');
   assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
   assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
   assert.equal(runResultText({result: {}}), '');
@@ -208,16 +210,16 @@ async function mountList(items) {
   return {list: elements.get('automation-list'), calls};
 }
 
-test('personal automations are available while the team workspaces and templates load', async () => {
+test('personal automations are available while team workspaces load', async () => {
   const {doc, elements} = fakeDocument();
-  const {promise: catalog, resolve: resolveCatalog} = Promise.withResolvers();
   const {promise: teams, resolve: resolveTeams} = Promise.withResolvers();
   const respond = body => ({status: 200, json: async () => body});
+  const calls = [];
   const fetcher = async path => {
+    calls.push(path);
     if (path === '/v1/auth/session') return respond({user: {username: 'alice'}});
     if (path === '/v1/workspaces?scope=personal') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
     if (path === '/v1/workspaces?limit=100') return teams;
-    if (path === '/v1/automation-templates') return catalog;
     if (path === '/v1/workspaces/ws1/automations?category=mine') {
       return respond({items: [{id: 'a1', title: '每日简报', schedule: {kind: 'now'}}]});
     }
@@ -230,6 +232,7 @@ test('personal automations are available while the team workspaces and templates
     await flush();
     assert.equal(elements.get('new-automation').disabled, false);
     assert.match(elements.get('automation-list').textContent, /每日简报/);
+    assert.equal(calls.includes('/v1/automation-templates'), false);
     resolveTeams(respond({items: [{id: 'team', name: '团队'}]}));
     await flush();
     const picker = elements.get('workspace');
@@ -237,9 +240,128 @@ test('personal automations are available while the team workspaces and templates
     assert.deepEqual(picker.options.map(option => option.value), ['ws1', 'team']);
   } finally {
     resolveTeams(respond({items: []}));
-    resolveCatalog(respond({items: []}));
     await mounted;
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
+
+const projectedWorkspace = 'a'.repeat(32);
+const projectedOwner = 'b'.repeat(32);
+const projectedAutomation = 'c'.repeat(32);
+const projectedPath = '/v1/workspaces?scope=personal&include=automations';
+const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
+
+test('native startup overlaps authentication and the owned list, then requests templates on demand', async t => {
+  const {doc, elements} = fakeDocument();
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const work = new FakeNode('button'); work.dataset.category = 'work';
+  const life = new FakeNode('button'); life.dataset.category = 'life';
+  doc.querySelectorAll = selector => selector === '.tabs [data-category]' ? [work, life] : [];
+  const {promise: session, resolve: authenticate} = Promise.withResolvers();
+  const {promise: teams, resolve: finishTeams} = Promise.withResolvers();
+  const {promise: catalog, resolve: finishTemplates} = Promise.withResolvers();
+  const calls = [];
+  const fetcher = async path => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return session;
+    if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: 'alice',
+      automations: {items: [{id: projectedAutomation, workspace_id: projectedWorkspace, title: '合并加载的日报'}]}});
+    if (path === '/v1/workspaces?limit=100') return teams;
+    if (path === '/v1/automation-templates') return catalog;
+    throw new Error('unexpected ' + path);
+  };
+  const mounted = mount(doc, {fetcher});
+  try {
+    await flush();
+    assert.deepEqual(calls, ['/v1/auth/session', projectedPath]);
+    assert.equal(elements.get('automation-list')?.textContent || '', '');
+    authenticate(respond({user: {id: projectedOwner, username: 'alice'}}));
+    await mounted;
+    assert.match(elements.get('automation-list').textContent, /合并加载的日报/);
+    assert.deepEqual(calls, ['/v1/auth/session', projectedPath, '/v1/workspaces?limit=100']);
+    const workOpen = work.handlers.click[0]();
+    const lifeOpen = life.handlers.click[0]();
+    assert.match(elements.get('list-empty').textContent, /加载模板/);
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    finishTemplates(respond({items: [
+      {id: 'daily_brief', title: '工作简报', category: 'work'},
+      {id: 'habit_reminder', title: '生活提醒', category: 'life'},
+    ]}));
+    await Promise.all([workOpen, lifeOpen]);
+    assert.match(elements.get('automation-list').textContent, /生活提醒/);
+    assert.doesNotMatch(elements.get('automation-list').textContent, /工作简报/);
+    await work.handlers.click[0]();
+    assert.match(elements.get('automation-list').textContent, /工作简报/);
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    finishTeams(respond({items: [{id: 'team', name: '团队工作区'}]}));
+    await flush();
+    assert.equal(elements.get('workspace').value, projectedWorkspace);
+  } finally {
+    authenticate(respond({user: {id: projectedOwner, username: 'alice'}}));
+    finishTemplates(respond({items: []}));
+    finishTeams(respond({items: []}));
+    await mounted;
+  }
+});
+
+test('native startup falls back on a different viewer or an out-of-workspace automation row', async t => {
+  for (const viewer of ['someone-else', 'alice']) await t.test(viewer, async scenario => {
+    const {doc, elements} = fakeDocument();
+    const previousDocument = globalThis.document;
+    globalThis.document = doc;
+    scenario.after(() => { globalThis.document = previousDocument; });
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const calls = [];
+    const listPath = `/v1/workspaces/${projectedWorkspace}/automations?category=mine`;
+    await mount(doc, {fetcher: async path => {
+      calls.push(path);
+      if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+      if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: viewer,
+        automations: {items: [{id: projectedAutomation,
+          workspace_id: viewer === 'alice' ? 'f'.repeat(32) : projectedWorkspace, title: '不能显示的日报'}]}});
+      if (path === '/v1/workspaces?scope=personal' || path === '/v1/workspaces?limit=100') {
+        return respond({items: [projectedPersonal]});
+      }
+      if (path === listPath) return respond({items: [{id: projectedAutomation, title: '正常读取的日报'}]});
+      throw new Error('unexpected ' + path);
+    }});
+    assert.equal(calls.includes('/v1/workspaces?scope=personal'), viewer !== 'alice');
+    assert.equal(calls.filter(path => path === listPath).length, 1);
+    assert.match(elements.get('automation-list').textContent, /正常读取的日报/);
+    assert.doesNotMatch(elements.get('automation-list').textContent, /不能显示的日报/);
+  });
+});
+
+test('an explicit template link opens its draft while the shared directory is still loading', async t => {
+  const {doc, elements} = fakeDocument();
+  doc.defaultView = {location: {search: '?template=daily_brief'}};
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  const {promise: teams, resolve: finishTeams} = Promise.withResolvers();
+  const calls = [];
+  try {
+    await mount(doc, {fetcher: async path => {
+      calls.push(path);
+      if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+      if (path === '/v1/workspaces?scope=personal') return respond({items: [projectedPersonal]});
+      if (path === '/v1/workspaces?limit=100') return teams;
+      if (path === '/v1/automation-templates') return respond({items: [{id: 'daily_brief', title: '日报模板', category: 'work'}]});
+      throw new Error('unexpected ' + path);
+    }});
+    assert.equal(elements.get('editor-form').hidden, false);
+    assert.equal(elements.get('editor-form').elements.title.value, '日报模板');
+    assert.equal(elements.get('editor-form').elements.template_id.value, 'daily_brief');
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    assert.equal(calls.includes(projectedPath), false);
+    assert.equal(calls.some(path => path.endsWith('/automations?category=mine')), false);
+  } finally {
+    finishTeams(respond({items: []}));
+    await flush();
   }
 });
 
@@ -289,6 +411,8 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     assert.equal(elements.get('editor-form').elements.enabled.checked, false);
     assert.match(elements.get('manual-run-note').textContent, /仍保持暂停/);
     assert.equal(calls.filter(([method]) => method === 'POST').length, 0);
+    assert.equal(calls.some(([, target]) => target.endsWith('/automations?category=mine')), false);
+    assert.equal(calls.some(([, target]) => target === '/v1/automation-templates'), false);
     await elements.get('run-filter-succeeded').handlers.click[0]();
     assert.equal(view.location.search, entry + '&runs=succeeded');
     await elements.get('tick-automation').handlers.click[0]();
@@ -300,6 +424,7 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     assert.deepEqual(calls.filter(([method]) => method === 'POST'), [['POST', path + '/run']]);
     await elements.get('cancel-editor').handlers.click[0]();
     assert.equal(view.location.search, '');
+    assert.equal(calls.filter(([, target]) => target.endsWith('/automations?category=mine')).length, 1);
   } finally {
     resolveTeams(respond({items: []}));
     resolveTemplates(respond({items: []}));
@@ -314,14 +439,17 @@ const SOURCE_MEETING = 'b'.repeat(32);
 const FOLLOW_UP = 'c'.repeat(32);
 const SOURCE_LINK = `?workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}&action=1&revision=4`;
 const SOURCE_PATH = `/v1/workspaces/${SOURCE_WORKSPACE}/meetings/${SOURCE_MEETING}/action?index=1&revision=4`;
+const SOURCE_LOOKUP = `/v1/workspaces/${SOURCE_WORKSPACE}/automations?meeting=${SOURCE_MEETING}&revision=4&action=1`;
 const SOURCE = {
   meeting: {id: SOURCE_MEETING, workspace_id: SOURCE_WORKSPACE, title: '交付例会', revision: 4, transcript: '会议私有全文'},
   action: {text: '列出待核对的交付项', owner: 'Bob', done: false},
   viewer_username: 'alice',
 };
 const respond = (body, status = 200) => ({status, json: async () => body});
+const SAVED_SOURCE = {meeting_id: SOURCE_MEETING, revision: 4, action_index: 1, title: SOURCE.meeting.title, text: SOURCE.action.text, owner: SOURCE.action.owner};
 
-function mountFollowUp(t, {readSource = () => respond(SOURCE), workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
+function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, saveStatus = 201,
+  workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
   const {doc, elements} = fakeDocument();
   const view = {location: {search: SOURCE_LINK, pathname: '/automations'}, history: {
     replaceState(state, title, url) { view.location.search = new URL(url, 'https://test.local').search; },
@@ -345,9 +473,11 @@ function mountFollowUp(t, {readSource = () => respond(SOURCE), workspaces = [{id
     if (target === '/v1/workspaces?limit=100') return respond({items: workspaces});
     if (target === '/v1/automation-templates') return respond({items: []});
     if (target === SOURCE_PATH) return readSource();
+    if (target === SOURCE_LOOKUP) return respond({automation: lookup, viewer_username: 'alice'});
     if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items: []});
     if (target === `/v1/workspaces/${SOURCE_WORKSPACE}/automations` && method === 'POST') {
-      return respond({automation: {...JSON.parse(body), id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 1}}, 201);
+      if (saveStatus !== 201) return respond({error: {code: 'meeting_source_unavailable'}}, saveStatus);
+      return respond({automation: {...JSON.parse(body), id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 1, source_meeting: SAVED_SOURCE}}, 201);
     }
     throw new Error('unexpected ' + method + ' ' + target);
   }});
@@ -375,29 +505,42 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   form.elements.enabled.checked = true;
   await form.handlers.submit[0]({preventDefault() {}});
   const writes = calls.filter(({method}) => method === 'POST');
-  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 2);
+  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 1);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].target, `/v1/workspaces/${SOURCE_WORKSPACE}/automations`);
   assert.equal(writes[0].body.enabled, false);
   assert.deepEqual(writes[0].body.participants, ['alice']);
   assert.equal(writes[0].body.template_id, 'custom');
+  assert.deepEqual(writes[0].body.source_meeting, {meeting_id: SOURCE_MEETING, revision: 4, action_index: 1});
   assert.match(writes[0].body.prompt, /增加完整性检查/);
   assert.match(writes[0].headers['Idempotency-Key'], /^[a-z0-9_-]{16,64}$/i);
-  assert.equal(elements.get('meeting-action-source').hidden, true);
+  assert.equal(elements.get('meeting-action-source').hidden, false);
   assert.equal(form.elements.enabled.disabled, false);
   assert.equal(elements.get('tick-automation').hidden, false);
   assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
 });
 
 test('meeting follow-up blocks a completed action or changed revision before saving', async t => {
-  let reads = 0;
-  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => ++reads === 1 ? respond(SOURCE) : respond({}, 409)});
+  const {mounted, elements, calls} = mountFollowUp(t, {saveStatus: 409});
   await mounted;
   await elements.get('editor-form').handlers.submit[0]({preventDefault() {}});
-  assert.equal(reads, 2);
-  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 1);
   assert.match(elements.get('status').textContent, /行动项已更新/);
   assert.equal(elements.get('tick-automation').hidden, true);
+});
+
+test('an older exact meeting-action link resumes the saved follow-up even after the meeting changes', async t => {
+  const lookup = {id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 3, enabled: true, title: '跟进原行动项', source_meeting: SAVED_SOURCE};
+  const {mounted, elements, calls, view} = mountFollowUp(t, {lookup, readSource: () => respond({}, 409)});
+  await mounted;
+  assert.equal(elements.get('editor-form').elements.title.value, '跟进原行动项');
+  assert.equal(elements.get('editor-form').elements.enabled.checked, true);
+  assert.equal(elements.get('editor-form').elements.enabled.disabled, false);
+  assert.equal(elements.get('meeting-action-source-text').textContent, SAVED_SOURCE.text);
+  assert.equal(elements.get('tick-automation').hidden, false);
+  assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  await elements.get('cancel-editor').handlers.click[0]();
 });
 
 test('meeting follow-up never asks for a meeting from an unverified workspace', async t => {
@@ -469,15 +612,15 @@ test('list rows describe the schedule instead of printing the internal kind', as
   ]);
   const rows = list.children.map(row => row.textContent);
   assert.match(rows[0], /每日简报/);
-  assert.match(rows[0], /每天 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[0], /每天 09:00（Asia\/Shanghai）已启用/);
   assert.match(rows[1], /周报/);
-  assert.match(rows[1], /每周四 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[1], /每周四 09:00（Asia\/Shanghai）已启用/);
   assert.match(rows[2], /一次性提醒/);
-  assert.match(rows[2], /单次 2026-11-20 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[2], /单次 2026-11-20 09:00（Asia\/Shanghai）已启用/);
   assert.match(rows[3], /立即运行的任务/);
-  assert.match(rows[3], /立即运行 · 已启用/);
+  assert.match(rows[3], /立即运行已启用/);
   assert.match(rows[4], /每月复盘/);
-  assert.match(rows[4], /每月 16 日 18:00（UTC）· 未启用/);
+  assert.match(rows[4], /每月 16 日 18:00（UTC）未启用/);
   const joined = list.textContent;
   assert.doesNotMatch(joined, /(?:^|\s)(?:now|later|once|daily|weekly|monthly|weekdays)(?=\s|$)/u,
     `the list must not print an internal schedule kind: ${joined}`);
@@ -973,9 +1116,12 @@ function runRowButtons(elements, label) {
   return found;
 }
 
-async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
-  const restorePolling = holdRunPolling();
+async function mountRuns({runs = RETRY_RUNS.filter(item => item.status !== 'queued'), retry = 'ok', dispatch, schedulePoll} = {}) {
+  const restorePolling = holdRunPolling(schedulePoll);
   const {doc, elements} = fakeDocument();
+  doc.defaultView = {location: {search: ''}, history: {pushState(state, title, url) {
+    doc.defaultView.location.search = new URL(url, 'https://test.local').search;
+  }}};
   const calls = [];
   const posts = [];
   let listed = runs.slice();
@@ -989,11 +1135,16 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
     if (path === '/v1/workspaces/ws1/automations?category=mine') {
       return {status: 200, json: async () => ({items: [AUTOMATION]})};
     }
-    if (method === 'GET' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\?limit=20$/.test(path)) {
-      return {status: 200, json: async () => ({items: listed})};
+    if (method === 'GET' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\?/.test(path)) {
+      const filter = new URL(path, 'https://test.local').searchParams.get('status') || 'all';
+      return respond({items: listed.filter(item => matchesRunFilter(item, filter)),
+        has_pending: listed.some(item => ['queued', 'running'].includes(item.status))});
     }
-    if (method === 'POST' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\/[^/]+\/retry$/.test(path)) {
+    const exact = method === 'GET' && path.match(/^\/v1\/workspaces\/ws1\/automations\/a1\/runs\/([^/]+)$/);
+    if (exact) return respond({run: listed.find(item => item.id === exact[1])});
+    if (method === 'POST' && /^\/v1\/workspaces\/ws1\/automations\/a1\/(run|runs\/[^/]+\/retry)$/.test(path)) {
       posts.push({path, headers: options.headers || {}, body: options.body});
+      if (dispatch) return dispatch({posts, list: rows => { listed = [...rows, ...runs]; }});
       if (retry === 'ok') {
         const fresh = {id: 'r9', status: 'queued', error_code: 'no_agent', due_at: 1795086000, started: 1795086000, finished: null};
         listed = [fresh, ...listed];
@@ -1009,6 +1160,7 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
   await openFirst(elements);
   return {
     elements, calls, posts,
+    list(rows) { listed = [...rows, ...runs]; },
     restore() {
       if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
       restorePolling();
@@ -1045,24 +1197,84 @@ test('点「重新运行」带幂等键请求 /retry，成功后列表出现一�
     assert.match(posts[0].headers['Idempotency-Key'] || '', /^[A-Za-z0-9_-]{16,64}$/,
       'the request needs an idempotency key or a double click queues the automation twice');
     const rows = elements.get('run-list').children;
-    assert.equal(rows.length, 5, 'the reloaded list now carries the new queued run');
+    assert.equal(rows.length, 4, 'the reloaded list now carries the new queued run');
     assert.match(rows[0].textContent, /等待已连接的代理|运行中/, 'the new run is queued, not a finished failure');
-    assert.match(elements.get('status').textContent, /重新排队/);
+    assert.equal(elements.get('manual-run-status').textContent, '等待已连接的代理');
+    assert.equal(elements.get('status').textContent, '');
   } finally {
     restore();
   }
 });
 
-test('连点两次用同一把幂等键，不会排两次队', async () => {
+test('a double click on retry sends one request', async () => {
   const {elements, posts, restore} = await mountRuns();
   try {
     const [button] = runRowButtons(elements, '重新运行');
     const handler = button.handlers.click[0];
     await Promise.all([handler(), handler()]);
     await flush();
-    assert.equal(posts.length, 2, 'both clicks reach the server');
-    assert.equal(posts[0].headers['Idempotency-Key'], posts[1].headers['Idempotency-Key'],
-      'two clicks on the same run must reuse one key, otherwise the server queues two runs');
+    assert.equal(posts.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+for (const command of ['manual', 'retry']) {
+  test(`an interrupted ${command} response can be checked with the same key while its run is active`, async () => {
+    const running = {id: 'r9', status: 'running'};
+    const {elements, calls, posts, restore} = await mountRuns({
+      dispatch({posts, list}) {
+        list([running]);
+        if (posts.length === 1) throw new TypeError('response lost');
+        return respond({run: running});
+      },
+    });
+    try {
+      const button = command === 'retry' ? runRowButtons(elements, '重新运行')[0] : elements.get('tick-automation');
+      await button.handlers.click[0]();
+      const runControl = elements.get('tick-automation');
+      assert.equal(runControl.textContent, '确认并重试');
+      assert.equal(runControl.disabled, false);
+      assert.equal(elements.get('manual-run-status').dataset.state, 'uncertain');
+      assert.equal(runRowButtons(elements, '取消这次运行').length, 0, 'running work can no longer be cancelled');
+      await runControl.handlers.click[0]();
+      assert.equal(posts.length, 2);
+      assert.deepEqual(posts[0], posts[1], 'the same route, body and idempotency key are replayed');
+      assert.equal(runControl.disabled, true);
+      assert.equal(elements.get('manual-run-status').textContent, '运行中');
+      assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 0, 'a visible run needs no extra request');
+    } finally {
+      restore();
+    }
+  });
+}
+
+test('a filtered watcher tracks the exact run and retains identical rows across a poll', async () => {
+  const timers = new Map();
+  let timer = 0;
+  const queued = {id: 'r9', status: 'queued'};
+  const {elements, calls, list, restore} = await mountRuns({
+    dispatch({list}) { list([queued]); return respond({run: queued}, 202); },
+    schedulePoll(callback) { timers.set(++timer, callback); return timer; },
+  });
+  try {
+    await elements.get('tick-automation').handlers.click[0]();
+    assert.equal(elements.get('manual-run-status').textContent, '已排队');
+    list([{...queued, status: 'running'}]);
+    await elements.get('run-filter-succeeded').handlers.click[0]();
+    const row = elements.get('run-list').children[0];
+    assert.equal(elements.get('manual-run-status').textContent, '运行中');
+    assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 1);
+    list([{...queued, status: 'failed', error_code: 'interrupted'}]);
+    timers.get(timer)();
+    await flush();
+    assert.equal(elements.get('manual-run-status').textContent, '失败');
+    assert.equal(elements.get('manual-run-status').dataset.state, 'failed');
+    assert.equal(elements.get('run-filter-succeeded').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-list').children[0], row, 'unchanged history rows survive polling');
+    assert.equal(elements.get('view-watched-run').hidden, false);
+    assert.equal(elements.get('tick-automation').disabled, false);
+    assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 2);
   } finally {
     restore();
   }
@@ -1112,4 +1324,52 @@ test('a succeeded run expands to its summary and the model that wrote it', () =>
     {label: '摘要', value: '今天的简报'},
     {label: '模型', value: 'deepseek-v4'},
   ]);
+});
+
+test('recorded trigger and execution location distinguish manual, scheduled and retried runs', () => {
+  assert.deepEqual(runDetailFields({trigger: 'manual', dispatch: {backend: 'ds-bot'}}), [
+    {label: '触发方式', value: '手动运行'}, {label: '执行位置', value: '个人 DS-Bot'},
+  ]);
+  assert.deepEqual(runDetailFields({trigger: 'scheduled', dispatch: {backend: 'legacy'}}), [
+    {label: '触发方式', value: '定时触发'}, {label: '执行位置', value: '旧版平台'},
+  ]);
+  assert.deepEqual(runDetailFields({trigger: 'retry'}), [{label: '触发方式', value: '重新运行'}]);
+});
+
+test('unsaved edits require confirmation before a saved-version run or leaving the editor', async () => {
+  const {elements, posts, restore} = await mountRuns({
+    runs: [],
+    dispatch: async () => ({status:202, json:async () => ({run:{id:'r1',status:'queued'}})}),
+  });
+  try {
+    const form = elements.get('editor-form');
+    const confirmArea = elements.get('editor-head-confirm') || form;
+    const run = elements.get('tick-automation');
+    const back = elements.get('cancel-editor');
+    form.elements.prompt.value = '仅存在于未保存草稿中的任务';
+
+    await run.handlers.click[0]();
+    let dialog = alertdialogIn(confirmArea);
+    assert.match(labelledQuestion(dialog).textContent, /使用已保存的设置/);
+    assert.equal(posts.length, 0);
+    dialog.children.find(node => node.textContent === '取消').handlers.click[0]();
+    assert.equal(posts.length, 0);
+    assert.equal(alertdialogIn(confirmArea), undefined);
+
+    await back.handlers.click[0]();
+    dialog = alertdialogIn(confirmArea);
+    assert.match(labelledQuestion(dialog).textContent, /放弃修改/);
+    dialog.children.find(node => node.textContent === '取消').handlers.click[0]();
+    assert.equal(form.hidden, false);
+    assert.equal(form.elements.prompt.value, '仅存在于未保存草稿中的任务');
+
+    await run.handlers.click[0]();
+    alertdialogIn(confirmArea).children.find(node => node.textContent === '运行已保存版本').handlers.click[0]();
+    await flush();
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body, '{}');
+    assert.equal(form.elements.prompt.value, '仅存在于未保存草稿中的任务');
+  } finally {
+    restore();
+  }
 });

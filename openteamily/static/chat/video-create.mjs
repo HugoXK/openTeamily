@@ -141,7 +141,7 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
   const trigger = document.getElementById('composer-' + type + '-create');
   const element = name => document.getElementById(type + '-create-' + name);
   const dialog = element('dialog');
-  if (!trigger || typeof dialog?.showModal !== 'function') return {sync() {}};
+  if (!trigger || typeof dialog?.showModal !== 'function') return {open() {}, sync() {}};
 
   const form = element('form');
   const {prompt} = form.elements;
@@ -232,12 +232,11 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     }
   }
 
-  trigger.addEventListener('click', async () => {
+  async function open(text = document.getElementById('chat-body').value.trim()) {
     const target = context();
     if (!target || dialog.open) return;
     const draft = session = {...target, path: `/v1/workspaces/${target.workspace}/${endpoint}`};
     const prior = attempts.get(draft.scope);
-    const text = document.getElementById('chat-body').value.trim();
     prompt.value = prior?.values.prompt ?? (text.length <= prompt.maxLength ? text : '');
     media.fill?.(form.elements, prior?.values);
     if (media.manual) {
@@ -267,7 +266,7 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     if (media.focusPrompt && draft.configured && !running(job) && document.activeElement === close) {
       prompt.focus({preventScroll: true});
     }
-  });
+  }
 
   if (media.sync) form.addEventListener('change', () => media.sync(form.elements, false));
   form.addEventListener('submit', async event => {
@@ -340,7 +339,7 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     clearResult();
   });
 
-  return {sync() {
+  return {open, sync() {
     trigger.disabled = !context();
     if (dialog.open && session && !current(session)) dialog.close();
   }};
