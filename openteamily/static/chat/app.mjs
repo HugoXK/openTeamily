@@ -392,7 +392,7 @@ export function groupAgentSummary(conversation) {
 }
 
 function activeGroupAgent(conversation, target) {
-  return target && (conversation?.agent_members || []).find(agent => !agent.archived &&
+  return target && (conversation?.agent_members || []).find(agent => !agent.archived && !agent.native_deleted &&
     agent.owner_id === target.owner_id && (agent.id || agent.agent_id) === target.agent_id);
 }
 
@@ -1100,10 +1100,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       !currentConversation.public_agent ? currentConversation : null;
     const scope = sendScope();
     const mentions = groupMentions?.scope === scope ? groupMentions : null;
-    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived);
-    node.hidden = !conversation || (!agents.length && !mentions?.stale);
+    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived && !agent.native_deleted);
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    node.hidden = !conversation || (!agents.length && !mentions?.stale && policy?.mode !== 'lead');
     if (node.hidden) return;
-    const routing = conversation.group_agent_routing;
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
@@ -1117,6 +1118,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
+    } else if (policy?.mode === 'everyone') {
+      text = uiLabel('群内智能体会全员回复 · 用 @ 可指定回复对象', 'All group agents reply · Use @ to pick who replies');
+    } else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) text = uiLabel(`${lead.name} 优先回复 · 用 @ 可指定其他智能体`, `${lead.name} replies first · Use @ to pick another agent`);
+      else {
+        kind = 'attention';
+        text = uiLabel('优先智能体不可用 · 仍可用 @ 指定回复对象', 'Preferred agent unavailable · Use @ to pick who replies');
+      }
     } else if (routing?.mode === 'personal') {
       text = auto || routing.default === 'auto' ? uiLabel('按群内自动回复设置运行 · 说「你们好」可请全员回复',
         'Group auto-reply settings apply · Say “hello everyone” to ask all agents')
@@ -5104,6 +5114,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupInfo(currentConversation);
   }
 
+  function renderGroupReplyPolicy(conversation) {
+    const section = document.getElementById('group-reply-policy');
+    const summary = document.getElementById('group-reply-policy-summary');
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
+      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    if (section.hidden) return;
+    if (policy?.mode === 'everyone') summary.textContent = uiLabel('全员回复', 'All agents reply');
+    else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) {
+        const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
+        summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
+      } else summary.textContent = uiLabel('优先智能体不可用。普通消息暂不触发回复。',
+        'Preferred agent unavailable. Ordinary messages currently do not trigger replies.');
+    } else summary.textContent = uiLabel('跟随群组默认', 'Uses the group default');
+  }
+
   function setGroupInfoTab(which) {
     const agentsTab = document.getElementById('group-info-tab-agents');
     const peopleTab = document.getElementById('group-info-tab-people');
@@ -5116,6 +5145,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
+    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -5421,6 +5451,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
+    renderGroupReplyPolicy(conversation);
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     const feedbackScope = group ? sendScope() : '';
     if (feedbackScope !== groupInfoFeedbackScope) groupInfoAddFeedback.textContent = '';

@@ -1,8 +1,29 @@
 diff --git a/client.js b/client.js
-index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36cef2bcf8e6 100644
+index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..77f514dab099a8bcdd4cb8afc42398c96dbc16e6 100644
 --- a/client.js
 +++ b/client.js
-@@ -19664,7 +19664,7 @@ var COMPUTER_CSS = `
+@@ -12781,6 +12781,20 @@ var ZH = {
+   "{name} leads this group: it can call members with @Name, change the group, and post here.": "{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。",
+   "No admin yet. An admin can call members with @Name, change the group, and post here.": "还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。",
+   "Who answers": "谁来回答",
++  "Group defaults": "群组默认",
++  "All agents": "全体智能体",
++  "Agent leads": "指定主答",
++  "Lead {name}": "{name} 主答",
++  "Lead unavailable": "主答智能体不可用",
++  "Current reply policy": "当前回复策略",
++  "All group agents respond to ordinary text.": "群内所有智能体都会回复普通文本。",
++  "Ordinary text goes to the selected lead.": "普通文本由指定智能体主答。",
++  "The saved lead is unavailable. Send an @mention to ask another agent.": "已设置的主答智能体不可用。可用 @ 请其他智能体回复。",
++  "Reply policy": "回复策略",
++  "Lead agent": "主答智能体",
++  "Choose a lead agent": "选择主答智能体",
++  "Only a human can change shared group reply settings": "只有用户可以更改共享群组的回复设置。",
++  "Only the group owner can change who answers": "只有群主可以更改回复对象。",
+   "Choose an admin first": "先选一个管理员",
+   "@mentions always pick who answers.": "@提及总是指定由谁回答。",
+   Notice: "群公告",
+@@ -19664,7 +19678,7 @@ var COMPUTER_CSS = `
  .bt-cstep-shot-open img{max-height:280px;max-width:480px}
  `;
 
@@ -11,7 +32,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var import_react13 = require("react");
  var FallbackMarkdown = ({ text }) => (0, import_react13.createElement)("span", null, String(text ?? ""));
  var ViewUi = (0, import_react13.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
-@@ -19731,7 +19731,7 @@ function useOptionKeys2(count, onPick, ownRef) {
+@@ -19731,7 +19745,7 @@ function useOptionKeys2(count, onPick, ownRef) {
    return count > 0 && listening <= 1;
  }
 
@@ -20,7 +41,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var FUNCTIONS = {
    min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
    max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
-@@ -20012,7 +20012,7 @@ function evaluate(tree, lookup) {
+@@ -20012,7 +20026,7 @@ function evaluate(tree, lookup) {
    }
  }
 
@@ -29,7 +50,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var LAYOUT = ["stack", "row"];
  var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
  var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
-@@ -20644,7 +20644,7 @@ function validateForm(node, values) {
+@@ -20644,7 +20658,7 @@ function validateForm(node, values) {
    return { fields };
  }
 
@@ -38,7 +59,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var import_react14 = require("react");
  var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
  var colorAt = (index) => PALETTE[index % PALETTE.length];
-@@ -21083,7 +21083,7 @@ var CHART_CSS = `
+@@ -21083,7 +21097,7 @@ var CHART_CSS = `
  @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
  `;
 
@@ -47,7 +68,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var import_react15 = require("react");
  var THEME_VARS = [
    ["--view-ink", "--bt-ink", "--dv-ink"],
-@@ -21165,7 +21165,7 @@ var HTML_CSS = `
+@@ -21165,7 +21179,7 @@ var HTML_CSS = `
  .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
  `;
 
@@ -56,7 +77,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var import_react16 = require("react");
  var mdLabels2 = (ui2) => ({ code: { copyLabel: ui2.t("Copy"), copiedLabel: ui2.t("Copied") }, footnotes: ui2.t("Footnotes") });
  var TONES2 = ["good", "warn", "bad"];
-@@ -21907,7 +21907,7 @@ ${CHART_CSS}
+@@ -21907,7 +21921,7 @@ ${CHART_CSS}
  ${HTML_CSS}
  `;
 
@@ -65,7 +86,7 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var THEME_CSS = `
  body{
  --dv-ink:var(--dsw-alias-label-primary);
-@@ -22005,10 +22005,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
+@@ -22005,10 +22019,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
  @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
  `;
 
@@ -78,10 +99,161 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
  var REPLY_KIND = "user-question-reply";
  var REPLY_SOURCE_KIND = "deep-view-reply";
  function viewCardText(args) {
-@@ -31244,6 +31244,20 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -31121,9 +31135,139 @@ var ROOM_MODES = [
+   ["everyone", "Everyone", "Every member answers in turn, admin first."]
+ ];
+ var shownMode = (room2, roster) => roster.byId[room2.admin] ? room2.mode : "everyone";
++var SHARED_REPLY_MODES = [
++  ["default", "Group defaults"],
++  ["everyone", "All agents"],
++  ["lead", "Agent leads"]
++];
++var replyPairKey = (pair) => pair ? JSON.stringify([pair.owner_id, pair.agent_id]) : "";
++var replyModeLabel = (mode) => SHARED_REPLY_MODES.find(([value]) => value === mode)?.[1] ?? "Group defaults";
++var replyLead = (policy) => policy.targets.find((target) => replyPairKey(target) === replyPairKey(policy.lead));
+ function roomSubtitle(room2, roster) {
++  const count = t("{count} members", { count: room2.members.length });
++  const policy = room2.openteamily?.reply_policy;
++  if (room2.openteamily?.conversation_id) {
++    const lead = policy?.mode === "lead" && !policy.lead_unavailable && replyLead(policy);
++    return [count, lead ? t("Lead {name}", { name: lead.name }) : t(policy?.lead_unavailable ? "Lead unavailable" : replyModeLabel(policy?.mode))].join(" · ");
++  }
+   const admin = roster.byId[room2.admin];
+-  return [t("{count} members", { count: room2.members.length }), admin ? t("Admin {name}", { name: admin.name }) : t("No admin")].join(" · ");
++  return [count, admin ? t("Admin {name}", { name: admin.name }) : t("No admin")].join(" · ");
++}
++function SharedReplyPolicy({ policy, update }) {
++  const [mode, setMode] = (0, import_react38.useState)(policy?.mode ?? "default");
++  const savedLead = replyPairKey(policy?.lead);
++  const [lead, setLead] = (0, import_react38.useState)(savedLead);
++  const [busy, setBusy] = (0, import_react38.useState)(false);
++  const [failed, setFailed] = (0, import_react38.useState)(false);
++  const target = policy?.targets.find((item) => replyPairKey(item) === lead);
++  const editable = policy?.can_edit === true && Number.isSafeInteger(policy.revision);
++  const needsRefresh = !policy || policy.can_edit && !editable || failed;
++  const currentLead = policy?.mode === "lead" && !policy.lead_unavailable ? replyLead(policy) : void 0;
++  const changed = mode !== policy?.mode || mode === "lead" && lead !== savedLead;
++  const canSave = editable && changed && (mode !== "lead" || target);
++  const submit = async (patch) => {
++    setBusy(true);
++    try {
++      setFailed(!await update({ openteamilyReplyPolicy: patch }));
++    } finally {
++      setBusy(false);
++    }
++  };
++  (0, import_react38.useEffect)(() => {
++    if (policy && !(policy.can_edit && !Number.isSafeInteger(policy.revision))) return;
++    let current2 = true;
++    setBusy(true);
++    void update({ openteamilyReplyPolicy: { refresh: true } }).then((done) => {
++      if (current2) setFailed(!done);
++    }).finally(() => {
++      if (current2) setBusy(false);
++    });
++    return () => {
++      current2 = false;
++    };
++  }, [policy?.can_edit, policy?.revision]);
++  const save = () => submit({
++    mode,
++    revision: policy.revision,
++    ...mode === "lead" ? { lead: { owner_id: target.owner_id, agent_id: target.agent_id } } : {}
++  });
++  return (0, import_react38.createElement)(
++    Card2,
++    { title: t("Who answers") },
++    policy ? (0, import_react38.createElement)(
++      Row,
++      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Send an @mention to ask another agent.") : t(policy.mode === "everyone" ? "All group agents respond to ordinary text." : policy.mode === "lead" ? "Ordinary text goes to the selected lead." : "@mentions always pick who answers."), stack: true },
++      (0, import_react38.createElement)(
++        "span",
++        { className: "bt-set-hint", "data-ot-shared-reply-current": true },
++        currentLead ? t("Lead {name}", { name: currentLead.name }) : t(policy.lead_unavailable ? "Lead unavailable" : replyModeLabel(policy.mode))
++      )
++    ) : null,
++    editable ? (0, import_react38.createElement)(
++      "div",
++      { "data-ot-shared-reply-controls": true },
++      (0, import_react38.createElement)(
++        Row,
++        { label: t("Reply policy") },
++        (0, import_react38.createElement)(
++          "select",
++          {
++            className: "bt-bs-input",
++            "aria-label": t("Reply policy"),
++            value: mode,
++            disabled: busy,
++            onChange: (event) => setMode(event.target.value)
++          },
++          SHARED_REPLY_MODES.map(([value, label]) => (0, import_react38.createElement)("option", {
++            key: value,
++            value,
++            disabled: value === "lead" && !policy.targets.length && policy.mode !== "lead"
++          }, t(label)))
++        )
++      ),
++      mode === "lead" ? (0, import_react38.createElement)(
++        Row,
++        { label: t("Lead agent") },
++        (0, import_react38.createElement)(
++          "select",
++          {
++            className: "bt-bs-input",
++            "aria-label": t("Lead agent"),
++            value: target ? lead : "",
++            disabled: busy,
++            onChange: (event) => setLead(event.target.value)
++          },
++          (0, import_react38.createElement)("option", { value: "", disabled: true }, t("Choose a lead agent")),
++          policy.targets.map((item) => {
++            const key = replyPairKey(item);
++            return (0, import_react38.createElement)("option", { key, value: key }, [item.name, item.owner_name].filter(Boolean).join(" · "));
++          })
++        )
++      ) : null,
++      (0, import_react38.createElement)(
++        "div",
++        { className: "bt-set-row bt-task-foot" },
++        (0, import_react38.createElement)("button", {
++          type: "button",
++          className: "bt-soft bt-soft-sm",
++          disabled: busy || !canSave,
++          "data-ot-shared-reply-save": true,
++          onClick: () => void save()
++        }, t("Save"))
++      )
++    ) : policy && !policy.can_edit ? (0, import_react38.createElement)(Row, { label: t("Read only") }) : null,
++    needsRefresh ? (0, import_react38.createElement)(
++      "div",
++      { className: "bt-set-row bt-task-foot" },
++      (0, import_react38.createElement)("button", {
++        type: "button",
++        className: "bt-soft bt-soft-sm",
++        disabled: busy,
++        "data-ot-shared-reply-refresh": true,
++        onClick: () => void submit({ refresh: true })
++      }, t("Refresh"))
++    ) : null
++  );
+ }
+ function GroupPermission({ room: room2, catalog, update }) {
+   if (!catalog?.options?.length) return null;
+@@ -31197,6 +31341,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+     const timer = setTimeout(() => setConfirming(false), 4e3);
+     return () => clearTimeout(timer);
+   }, [confirming]);
++  const shared2 = Boolean(room2.openteamily?.conversation_id);
++  const replyPolicy = room2.openteamily?.reply_policy;
+   const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
+   const outside = roster.bots.filter((bot) => !room2.members.includes(bot.id));
+   const admin = roster.byId[room2.admin];
+@@ -31244,7 +31390,21 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
          (0, import_react38.createElement)(InlineText, { label: t("Group notice"), value: room2.notice, multiline: true, maxLength: 2e3, placeholder: t("Shared instructions every member reads before speaking…"), onSave: (notice) => update({ notice }) })
        )
      ),
+-    (0, import_react38.createElement)(
 +    room2.openteamily?.conversation_id ? (0, import_react38.createElement)(
 +      Card2,
 +      { title: "Shared human participants" },
@@ -96,10 +268,38 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
 +        })
 +      )
 +    ) : null,
-     (0, import_react38.createElement)(
++    shared2 ? (0, import_react38.createElement)(SharedReplyPolicy, { key: room2.id + ":" + (replyPolicy?.revision ?? ""), policy: replyPolicy, update }) : (0, import_react38.createElement)(
        Card2,
        { title: t("Who answers") },
-@@ -32964,7 +32978,7 @@ var CONNECTORS_PAGE_CSS = `
+       (0, import_react38.createElement)(
+@@ -31278,7 +31438,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+       Card2,
+       { title: t("Members · {count}", { count: members.length }) },
+       members.map((member) => {
+-        const leads = room2.admin === member.id;
++        const leads = !shared2 && room2.admin === member.id;
+         return (0, import_react38.createElement)(
+           "div",
+           { key: member.id, className: "bt-set-row bt-bs-row bt-gs-member" },
+@@ -31289,7 +31449,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+             (0, import_react38.createElement)("span", { className: "bt-row-title" }, member.name),
+             leads ? (0, import_react38.createElement)("span", { className: "bt-tag" }, t("Admin")) : null
+           ),
+-          leads ? (0, import_react38.createElement)("button", { type: "button", className: "bt-mini", title: t("Leave the group without an admin"), onClick: () => update({ admin: null }) }, t("Unset")) : (0, import_react38.createElement)("button", { type: "button", className: "bt-mini", onClick: () => update({ admin: member.id }) }, t("Make admin")),
++          shared2 ? null : leads ? (0, import_react38.createElement)("button", { type: "button", className: "bt-mini", title: t("Leave the group without an admin"), onClick: () => update({ admin: null }) }, t("Unset")) : (0, import_react38.createElement)("button", { type: "button", className: "bt-mini", onClick: () => update({ admin: member.id }) }, t("Make admin")),
+           members.length > 2 ? (0, import_react38.createElement)("button", { type: "button", className: "bt-x", "aria-label": t("Remove {name} from the group", { name: member.name }), title: t("Remove from group"), onClick: () => update({ remove: [member.id] }) }, "×") : null
+         );
+       }),
+@@ -31306,7 +31466,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+         )),
+         (0, import_react38.createElement)("button", { key: "cancel", type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(false) }, t("Cancel"))
+       ] : outside.length > 0 ? (0, import_react38.createElement)("button", { type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(true) }, (0, import_react38.createElement)(PlusIcon), t("Add member")) : null,
+-      (0, import_react38.createElement)("div", { className: "bt-set-row bt-gs-note" }, (0, import_react38.createElement)(
++      shared2 ? null : (0, import_react38.createElement)("div", { className: "bt-set-row bt-gs-note" }, (0, import_react38.createElement)(
+         "span",
+         { className: "bt-set-hint" },
+         // The host checks for two members on every change, even a rename.
+@@ -32964,7 +33124,7 @@ var CONNECTORS_PAGE_CSS = `
  @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
  `;
 
@@ -109,20 +309,169 @@ index 13a8c3a19315fe571d5f9dbb9b301d771d3c2806..0b46852808c13e9cbae7600ee4eb36ce
    const PAD0 = 236;
    const PAD1 = 17;
 diff --git a/src/client/group-settings.js b/src/client/group-settings.js
-index fce520335d06a1098bc530c0716fa1a7e3927a9d..410667beaf4b4786625878d4f530d9d1c8664ef7 100644
+index fce520335d06a1098bc530c0716fa1a7e3927a9d..f32632bbb3b88d58c069d47bcc42980a9b5e76e3 100644
 --- a/src/client/group-settings.js
 +++ b/src/client/group-settings.js
-@@ -95,6 +95,10 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+@@ -16,9 +16,85 @@ export const ROOM_MODES = [
+ // Without an admin the host answers as everyone, whatever the stored mode says.
+ export const shownMode = (room, roster) => (roster.byId[room.admin] ? room.mode : 'everyone')
+
++const SHARED_REPLY_MODES = [
++  ['default', 'Group defaults'],
++  ['everyone', 'All agents'],
++  ['lead', 'Agent leads'],
++]
++const replyPairKey = pair => pair ? JSON.stringify([pair.owner_id, pair.agent_id]) : ''
++const replyModeLabel = mode => SHARED_REPLY_MODES.find(([value]) => value === mode)?.[1] ?? 'Group defaults'
++const replyLead = policy => policy.targets.find(target => replyPairKey(target) === replyPairKey(policy.lead))
++
+ export function roomSubtitle(room, roster) {
++  const count = t('{count} members', { count: room.members.length })
++  const policy = room.openteamily?.reply_policy
++  if (room.openteamily?.conversation_id) {
++    const lead = policy?.mode === 'lead' && !policy.lead_unavailable && replyLead(policy)
++    return [count, lead ? t('Lead {name}', { name: lead.name }) : t(policy?.lead_unavailable
++      ? 'Lead unavailable' : replyModeLabel(policy?.mode))].join(' · ')
++  }
+   const admin = roster.byId[room.admin]
+-  return [t('{count} members', { count: room.members.length }), admin ? t('Admin {name}', { name: admin.name }) : t('No admin')].join(' · ')
++  return [count, admin ? t('Admin {name}', { name: admin.name }) : t('No admin')].join(' · ')
++}
++
++function SharedReplyPolicy({ policy, update }) {
++  const [mode, setMode] = useState(policy?.mode ?? 'default')
++  const savedLead = replyPairKey(policy?.lead)
++  const [lead, setLead] = useState(savedLead)
++  const [busy, setBusy] = useState(false)
++  const [failed, setFailed] = useState(false)
++  const target = policy?.targets.find(item => replyPairKey(item) === lead)
++  const editable = policy?.can_edit === true && Number.isSafeInteger(policy.revision)
++  const needsRefresh = !policy || (policy.can_edit && !editable) || failed
++  const currentLead = policy?.mode === 'lead' && !policy.lead_unavailable ? replyLead(policy) : undefined
++  const changed = mode !== policy?.mode || (mode === 'lead' && lead !== savedLead)
++  const canSave = editable && changed && (mode !== 'lead' || target)
++  const submit = async patch => {
++    setBusy(true)
++    try { setFailed(!await update({ openteamilyReplyPolicy: patch })) }
++    finally { setBusy(false) }
++  }
++  useEffect(() => {
++    if (policy && !(policy.can_edit && !Number.isSafeInteger(policy.revision))) return
++    let current = true
++    setBusy(true)
++    void update({ openteamilyReplyPolicy: { refresh: true } }).then(done => {
++      if (current) setFailed(!done)
++    }).finally(() => { if (current) setBusy(false) })
++    return () => { current = false }
++  }, [policy?.can_edit, policy?.revision])
++  const save = () => submit({ mode, revision: policy.revision,
++    ...(mode === 'lead' ? { lead: { owner_id: target.owner_id, agent_id: target.agent_id } } : {}) })
++  return h(Card, { title: t('Who answers') },
++    policy ? h(Row, { label: t('Current reply policy'), hint: policy.lead_unavailable
++      ? t('The saved lead is unavailable. Send an @mention to ask another agent.')
++      : t(policy.mode === 'everyone' ? 'All group agents respond to ordinary text.' : policy.mode === 'lead'
++        ? 'Ordinary text goes to the selected lead.' : '@mentions always pick who answers.'), stack: true },
++      h('span', { className: 'bt-set-hint', 'data-ot-shared-reply-current': true },
++        currentLead ? t('Lead {name}', { name: currentLead.name })
++          : t(policy.lead_unavailable ? 'Lead unavailable' : replyModeLabel(policy.mode)))) : null,
++    editable ? h('div', { 'data-ot-shared-reply-controls': true },
++      h(Row, { label: t('Reply policy') },
++        h('select', { className: 'bt-bs-input', 'aria-label': t('Reply policy'), value: mode,
++          disabled: busy, onChange: event => setMode(event.target.value) },
++        SHARED_REPLY_MODES.map(([value, label]) => h('option', {
++          key: value, value, disabled: value === 'lead' && !policy.targets.length && policy.mode !== 'lead',
++        }, t(label))))),
++      mode === 'lead' ? h(Row, { label: t('Lead agent') },
++        h('select', { className: 'bt-bs-input', 'aria-label': t('Lead agent'),
++          value: target ? lead : '', disabled: busy, onChange: event => setLead(event.target.value) },
++        h('option', { value: '', disabled: true }, t('Choose a lead agent')),
++        policy.targets.map(item => {
++          const key = replyPairKey(item)
++          return h('option', { key, value: key }, [item.name, item.owner_name].filter(Boolean).join(' · '))
++        }))) : null,
++      h('div', { className: 'bt-set-row bt-task-foot' },
++        h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || !canSave,
++          'data-ot-shared-reply-save': true, onClick: () => void save() }, t('Save')))) : policy && !policy.can_edit
++      ? h(Row, { label: t('Read only') }) : null,
++    needsRefresh ? h('div', { className: 'bt-set-row bt-task-foot' },
++      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy,
++        'data-ot-shared-reply-refresh': true, onClick: () => void submit({ refresh: true }) }, t('Refresh'))) : null)
+ }
+
+ // One preset for every member in the group, or each member's own. Turning it on starts
+@@ -73,6 +149,8 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+     const timer = setTimeout(() => setConfirming(false), 4000)
+     return () => clearTimeout(timer)
+   }, [confirming])
++  const shared = Boolean(room.openteamily?.conversation_id)
++  const replyPolicy = room.openteamily?.reply_policy
+   const members = room.members.map(id => roster.byId[id]).filter(Boolean)
+   const outside = roster.bots.filter(bot => !room.members.includes(bot.id))
+   const admin = roster.byId[room.admin]
+@@ -95,7 +173,12 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
          h(InlineText, { label: t('Group name'), value: room.named ? room.name : '', placeholder: t('Name after members'), maxLength: 60, onSave: name => update({ name }) })),
        h(Row, { label: t('Notice'), hint: t('Every member reads it before speaking in this group.'), stack: true },
          h(InlineText, { label: t('Group notice'), value: room.notice, multiline: true, maxLength: 2000, placeholder: t('Shared instructions every member reads before speaking…'), onSave: notice => update({ notice }) }))),
+-    h(Card, { title: t('Who answers') },
 +    room.openteamily?.conversation_id ? h(Card, { title: 'Shared human participants' },
 +      h(Row, { label: 'Bot Social handles', hint: 'Comma-separated handles. Membership and history are shared with OpenTeamily.', stack: true },
 +        h(InlineText, { label: 'Shared human participants', value: (room.remoteParticipants || []).map(m=>m.handle).join(', '), maxLength: 4000,
 +          onSave: text => update({ remoteParticipants: text.split(',').map(x=>x.trim()).filter(Boolean) }) }))) : null,
-     h(Card, { title: t('Who answers') },
++    shared ? h(SharedReplyPolicy, { key: room.id + ':' + (replyPolicy?.revision ?? ''), policy: replyPolicy, update })
++      : h(Card, { title: t('Who answers') },
        h('div', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
          h(Segmented, { label: t('Who answers'), value: mode }, ROOM_MODES.map(([id, label]) => h('button', {
+           key: id, type: 'button', 'aria-pressed': mode === id, disabled: id === 'admin' && !admin,
+@@ -110,13 +193,13 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+     h(GroupPermission, { room, catalog: roster.permissions, update }),
+     h(Card, { title: t('Members · {count}', { count: members.length }) },
+       members.map((member) => {
+-        const leads = room.admin === member.id
++        const leads = !shared && room.admin === member.id
+         return h('div', { key: member.id, className: 'bt-set-row bt-bs-row bt-gs-member' },
+           h('button', { type: 'button', className: 'bt-gs-who', title: t("Open {name}'s chat", { name: member.name }), onClick: () => openBot(member.id) },
+             h(BotAvatar, { bot: member, size: 26, main: isMainOf(roster, member.id), admin: leads, live: false }),
+             h('span', { className: 'bt-row-title' }, member.name),
+             leads ? h('span', { className: 'bt-tag' }, t('Admin')) : null),
+-          leads
++          shared ? null : leads
+             ? h('button', { type: 'button', className: 'bt-mini', title: t('Leave the group without an admin'), onClick: () => update({ admin: null }) }, t('Unset'))
+             : h('button', { type: 'button', className: 'bt-mini', onClick: () => update({ admin: member.id }) }, t('Make admin')),
+           members.length > 2 ? h('button', { type: 'button', className: 'bt-x', 'aria-label': t('Remove {name} from the group', { name: member.name }), title: t('Remove from group'), onClick: () => update({ remove: [member.id] }) }, '×') : null)
+@@ -130,7 +213,7 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+         : outside.length > 0
+           ? h('button', { type: 'button', className: 'bt-set-row bt-bs-row bt-gs-add', onClick: () => setAdding(true) }, h(PlusIcon), t('Add member'))
+           : null,
+-      h('div', { className: 'bt-set-row bt-gs-note' }, h('span', { className: 'bt-set-hint' },
++      shared ? null : h('div', { className: 'bt-set-row bt-gs-note' }, h('span', { className: 'bt-set-hint' },
+         // The host checks for two members on every change, even a rename.
+         members.length < 2 ? t('Add a Bot first: a group chat needs at least two.')
+           : admin ? t('{name} leads this group: it can call members with @Name, change the group, and post here.', { name: admin.name })
+diff --git a/src/client/i18n.js b/src/client/i18n.js
+index 6a04691041e9e214b770671213d1c10026fb8995..51045be83a4ab01304d8d33363534ebb77006b02 100644
+--- a/src/client/i18n.js
++++ b/src/client/i18n.js
+@@ -456,6 +456,20 @@ const ZH = {
+   '{name} leads this group: it can call members with @Name, change the group, and post here.': '{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。',
+   'No admin yet. An admin can call members with @Name, change the group, and post here.': '还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。',
+   'Who answers': '谁来回答',
++  'Group defaults': '群组默认',
++  'All agents': '全体智能体',
++  'Agent leads': '指定主答',
++  'Lead {name}': '{name} 主答',
++  'Lead unavailable': '主答智能体不可用',
++  'Current reply policy': '当前回复策略',
++  'All group agents respond to ordinary text.': '群内所有智能体都会回复普通文本。',
++  'Ordinary text goes to the selected lead.': '普通文本由指定智能体主答。',
++  'The saved lead is unavailable. Send an @mention to ask another agent.': '已设置的主答智能体不可用。可用 @ 请其他智能体回复。',
++  'Reply policy': '回复策略',
++  'Lead agent': '主答智能体',
++  'Choose a lead agent': '选择主答智能体',
++  'Only a human can change shared group reply settings': '只有用户可以更改共享群组的回复设置。',
++  'Only the group owner can change who answers': '只有群主可以更改回复对象。',
+   'Choose an admin first': '先选一个管理员',
+   '@mentions always pick who answers.': '@提及总是指定由谁回答。',
+   Notice: '群公告',
 diff --git a/src/host/capabilities.js b/src/host/capabilities.js
 index 7b22edf4079d040c668aeeec4f5ee69ef18d99d1..0845ebbba96d3ad03c48f3d295f024c2ee7d1a0e 100644
 --- a/src/host/capabilities.js
@@ -139,14 +488,15 @@ index 7b22edf4079d040c668aeeec4f5ee69ef18d99d1..0845ebbba96d3ad03c48f3d295f024c2
      if (desired.size > 0) mounts.set(agent, agentMounts)
      if (bot) {
 diff --git a/src/host/channel.js b/src/host/channel.js
-index bae09b7cad099bdcfc29f0b97b5065d5545047bf..a7d74f5ffec886e6df67480e3593d959753377fb 100644
+index bae09b7cad099bdcfc29f0b97b5065d5545047bf..d4a566c81bcfdea0292a9f30a529ed57c79562f0 100644
 --- a/src/host/channel.js
 +++ b/src/host/channel.js
-@@ -444,6 +444,7 @@ export function install(rt) {
+@@ -444,6 +444,8 @@ export function install(rt) {
            await rt.load()
            const { room, changes } = await rt.updateRoom(body.id, {
              name: body.name,
 +            remoteParticipants: Array.isArray(body.remoteParticipants) ? body.remoteParticipants : undefined,
++            openteamilyReplyPolicy: body.openteamilyReplyPolicy,
              notice: body.notice,
              mode: body.mode,
              admin: body.admin,

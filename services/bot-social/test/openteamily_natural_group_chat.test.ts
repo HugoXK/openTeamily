@@ -39,7 +39,7 @@ test("an existing single-member agent group answers naturally without creating f
     kind: "group", account_group: true, title: "产品研发小队", agents: [lead, engineer, reviewer],
   });
   const room = roomPath(group);
-  assert.deepEqual(group.group_agent_routing, {mode: "personal", default: "all"});
+  assert.deepEqual(group.group_agent_routing, {mode: "personal", default: "all", policy: {mode: "default"}, can_edit: true});
   const send = (body: string, extras = {}) => owner.ok("POST", room + "/messages", {body, direct: true, ...extras});
   const ordinary = await send("帮我整理一下验收计划");
   assert.deepEqual(targets(ordinary), [lead.agent_ref, engineer.agent_ref, reviewer.agent_ref]);
@@ -66,7 +66,8 @@ test("an existing single-member agent group answers naturally without creating f
   assert.deepEqual(targets(followup), [engineer.agent_ref]);
 
   await owner.ok("PATCH", room + "/agents/" + reviewer.agent_ref, {auto_reply: true});
-  assert.deepEqual((await owner.ok("GET", room)).group_agent_routing, {mode: "personal", default: "auto"});
+  assert.deepEqual((await owner.ok("GET", room)).group_agent_routing,
+    {mode: "personal", default: "auto", policy: {mode: "default"}, can_edit: true});
   const autos = await send("现在总结一下");
   assert.deepEqual(targets(autos), []);
   const addressed = await send("@研发工程师助理 你好");
@@ -104,7 +105,7 @@ test("shared conversation uses natural fanout only for explicit all-agent langua
   });
   const room = roomPath(group);
   await colleague.ok("PUT", room + "/agents/" + engineer.agent_ref, {name: engineer.name, auto_reply: true});
-  assert.deepEqual((await author.ok("GET", room)).group_agent_routing, {mode: "shared"});
+  assert.deepEqual((await author.ok("GET", room)).group_agent_routing, {mode: "shared", policy: {mode: "default"}, can_edit: true});
   const conversation = await author.ok("POST", room + "/messages", {body: "你们好，这里先讨论排期"});
   assert.deepEqual(targets(conversation), []);
   assert.deepEqual((await colleague.ok("GET", queue)).items.map((item: any) => [item.message.id, item.mode]), [[conversation.id, "auto"]]);

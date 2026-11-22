@@ -17,7 +17,7 @@ import {
   saveAttachment, type ChatFileMetadata,
 } from "./chat-files.js";
 import {
-  GROUP_MANAGEMENT_SCHEMA, changeGroup, groupManagementRequest, groupManagementView, groupOwner, managedGroup,
+  GROUP_MANAGEMENT_SCHEMA, changeGroup, groupManagementRequest, groupManagementView, groupOwner, managedGroup, readGroupReplyPolicy,
   registerGroupManagement, type Group,
 } from "./group-management.js";
 
@@ -108,6 +108,9 @@ CREATE INDEX IF NOT EXISTS ot_agent_reply_jobs_queue ON ot_agent_reply_jobs(owne
 CREATE TABLE IF NOT EXISTS ot_group_agent_message_requests (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
   request_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ot_group_reply_suppressions (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS ot_direct_agent_message_requests (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
@@ -579,7 +582,7 @@ function conversationView(ot: OtContext, c: any, viewer: string, includeManageme
   const directOpen = Boolean(peer && ordinaryDirect(c) && directReachable(ot, viewer, peer.owner_id));
   const directAgents = directOpen && members.length === 2 && c.dm_key === [viewer, peer.owner_id].sort().join(":");
   const agents = ordinaryDirect(c) && !directAgents ? [] : conversationAgents(ot, c.id);
-  const routing = ordinaryAgentGroup(c) && agents.length ? groupAgentRouting(ot, c, viewer, agents) : null;
+  const routing = ordinaryAgentGroup(c) && (agents.length || managedGroup(c)) ? groupAgentRouting(ot, c, viewer, agents) : null;
   const management = includeManagement ? groupManagementView(ot, c, viewer) : undefined;
   const pending = open && !!ot.get(`SELECT 1 FROM ot_messages m
     WHERE m.conversation_id=? AND m.rowseq>? AND m.author_id=? AND m.author_kind='member' AND m.retracted=0
@@ -664,17 +667,26 @@ function ordinaryAgentGroup(conv: {kind: string; dm_key?: string | null; group_a
   return conv.kind === "group" && !conv.group_archived_at && !fixedPublicThread(conv);
 }
 
-function groupAgentRouting(ot: OtContext, conv: {id: string; team_id: string | null}, viewer: string, agents: ConversationAgent[]) {
+function selectedLead(policy: ReturnType<typeof readGroupReplyPolicy>, agents: ConversationAgent[]) {
+  return policy.mode === "lead"
+    ? agents.find(agent => agent.owner_id === policy.lead.owner_id && agent.agent_ref === policy.lead.agent_id)
+    : undefined;
+}
+
+function groupAgentRouting(ot: OtContext, conv: Group, viewer: string, agents: ConversationAgent[]) {
   const other = ot.get(`SELECT 1 FROM ot_conversation_members member
     WHERE member.conversation_id=? AND member.owner_id<>? AND (? IS NULL OR EXISTS (
       SELECT 1 FROM ot_team_members team WHERE team.team_id=? AND team.owner_id=member.owner_id AND team.suspended=0)) LIMIT 1`,
   conv.id, viewer, conv.team_id, conv.team_id);
-  if (other) return {mode: "shared" as const};
-  return {mode: "personal" as const, default: agents.some(agent => agent.auto_reply) ? "auto" as const : "all" as const};
+  const policy = readGroupReplyPolicy(conv);
+  const current = policy.mode === "lead" && !selectedLead(policy, agents) ? {...policy, lead_unavailable: true} : policy;
+  const access = {policy: current, can_edit: managedGroup(conv) && groupOwner(conv) === viewer};
+  if (other) return {mode: "shared" as const, ...access};
+  return {mode: "personal" as const, default: agents.some(agent => agent.auto_reply) ? "auto" as const : "all" as const, ...access};
 }
 
-function inferredAgents(ot: OtContext, conv: any, viewer: string, agents: ConversationAgent[], message: string,
-  quote: ReturnType<typeof replyOriginal>) {
+function inferredAgents(ot: OtContext, conv: Group, viewer: string, agents: ConversationAgent[], message: string,
+  quote: ReturnType<typeof replyOriginal>, policy: ReturnType<typeof readGroupReplyPolicy>) {
   if (!agents.length) return [];
   if (quote?.author_kind === "agent") {
     return agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref);
@@ -682,6 +694,11 @@ function inferredAgents(ot: OtContext, conv: any, viewer: string, agents: Conver
   const command = message.trim().normalize("NFKC");
   if (ALL_BOTS_EN.test(command) || (ALL_BOTS.test(command) && (BOT_REQUEST_START.test(command) || BOT_REQUEST_END.test(command)))) {
     return agents.slice(0, MAX_INFERRED_AGENTS);
+  }
+  if (policy.mode === "everyone") return agents.slice(0, MAX_INFERRED_AGENTS);
+  if (policy.mode === "lead") {
+    const lead = selectedLead(policy, agents);
+    return lead ? [lead] : [];
   }
   const routing = groupAgentRouting(ot, conv, viewer, agents);
   if (routing.mode === "shared") return [];
@@ -1354,16 +1371,19 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, selected, roster, scope, Boolean(studio));
       const addressed = selected !== undefined || parsed.mentions.length > 0 || TYPED_ADDRESS.test(bodyText);
       const canQueueGroup = ordinaryAgentGroup(conv) && !voice && !file && !sourceConversation;
+      const policy = readGroupReplyPolicy(conv);
       let targets = parsed.agents;
       if (canQueueGroup && !studio) {
         if (selected === undefined && ALL_AGENT_ADDRESS.test(bodyText)) targets = roster.slice(0, MAX_INFERRED_AGENTS);
-        else if (!addressed) targets = inferredAgents(ot, conv, me.ownerId, roster, bodyText, quote);
+        else if (!addressed) targets = inferredAgents(ot, conv, me.ownerId, roster, bodyText, quote, policy);
       }
+      const suppressed = canQueueGroup && targets.length === 0 && (policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
       if (groupRequest) ot.run("INSERT INTO ot_group_agent_message_requests VALUES (?,?)", m.id, groupRequest);
       if (directRequest) ot.run("INSERT INTO ot_direct_agent_message_requests VALUES (?,?,?)", m.id, directRequest, quote?.revision ?? null);
+      if (suppressed) ot.run("INSERT INTO ot_group_reply_suppressions(message_id) VALUES (?)", m.id);
       if (studio) ot.run("INSERT INTO ot_studio_message_references VALUES (?,?,?,?)",
         m.id, studio.document_id, studio.revision, studio.fingerprint);
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
@@ -1386,7 +1406,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           wakeOwners.add(agent.owner_id);
         }
       }
-      if (!voice && !file && !groupRequest && !studio &&
+      if (!voice && !file && !groupRequest && !studio && !suppressed &&
           (fixedPublicThread(conv) || (!addressed && targets.length === 0))) {
         for (const {owner_id} of legacyWakeOwners(conv, m.seq)) wakeOwners.add(owner_id);
       }
@@ -1890,6 +1910,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_studio_message_references r WHERE r.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_group_agent_message_requests r WHERE r.message_id=m.id)
+        AND NOT EXISTS (SELECT 1 FROM ot_group_reply_suppressions s WHERE s.message_id=m.id)
         AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
         AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
         AND (room.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members tm
@@ -2034,7 +2055,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const explicitRequest = !job && originalId && ot.get(`SELECT 1 FROM ot_messages source
         WHERE source.id=? AND source.conversation_id=? AND (EXISTS (
           SELECT 1 FROM ot_group_agent_message_requests req WHERE req.message_id=source.id
-        ) OR EXISTS (SELECT 1 FROM ot_agent_reply_jobs routed WHERE routed.message_id=source.id))`, originalId, conv.id);
+        ) OR EXISTS (SELECT 1 FROM ot_agent_reply_jobs routed WHERE routed.message_id=source.id)
+          OR EXISTS (SELECT 1 FROM ot_group_reply_suppressions s WHERE s.message_id=source.id))`, originalId, conv.id);
       if (job?.group_text_only || explicitRequest) {
         assert(mode === "mention" && job && claim !== null,
           409, "reply_job_unavailable", "队友请求只可由已领取任务的指定智能体回复。");

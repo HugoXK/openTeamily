@@ -266,6 +266,11 @@ class FakeElement {
       },
       remove(name) { element.className = names().filter((item) => item !== name).join(' '); },
       contains(name) { return names().includes(name); },
+      toggle(name, force = !this.contains(name)) {
+        if (force) this.add(name);
+        else this.remove(name);
+        return force;
+      },
     };
   }
   get options() { return this.children.filter((child) => child.tagName === 'OPTION'); }
@@ -3734,6 +3739,51 @@ test('group settings adds an owned workspace agent alongside a teammate with the
   } finally {
     restore();
   }
+});
+
+test('group reply policy readback updates the settings and composer from the same saved revision', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, restore} = fixture;
+  doc.documentElement = {lang:'zh-CN'};
+  const control = id => el('group-management-' + id);
+  const dialog = control('dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
+  const own = {id:linkAgent, owner_id:alice, name:'文案助手', mine:true};
+  const peer = {id:linkAgent, owner_id:bob, name:'文案助手', owner_name:'小周', mine:false};
+  const path = linkBase(linkTeam) + linkSocialPath;
+  const conversation = {id:linkSocial, workspace_id:linkTeam, title:'编辑部', kind:'group', members:[linkMember],
+    agent_members:[own, peer], group_agent_requests:true, group_agent_routing:{mode:'shared',can_edit:true,policy:{mode:'default'}},
+    group_management:{revision:4}};
+  const writes = [];
+  routes.set(path, () => json(200, {conversation, items:[]}));
+  routes.set(path + '/management', ({method,body}) => {
+    assert.equal(method, 'POST');
+    writes.push(body);
+    const updated = {...conversation, group_management:{revision:5},
+      group_agent_routing:{...conversation.group_agent_routing, policy:{mode:body.mode,lead:body.lead}}};
+    return json(200, {conversation:updated});
+  });
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    await fire(el('group-info-toggle'),'click');
+    await settle();
+    assert.equal(el('group-reply-policy').hidden, false);
+    assert.match(el('group-reply-policy-summary').textContent, /跟随群组默认/);
+    assert.equal(control('reply-policy').hidden, false);
+    await fire(control('reply-policy'),'click');
+    control('reply-mode').value = 'lead';
+    await fire(control('reply-mode'),'change');
+    control('reply-lead').value = JSON.stringify([bob, linkAgent]);
+    await fire(control('reply-lead'),'change');
+    await fire(control('form'),'submit',{preventDefault() {}});
+    assert.deepEqual(writes,[{action:'reply_policy',revision:4,mode:'lead',lead:{owner_id:bob,agent_id:linkAgent}}]);
+    assert.equal(dialog.open, false);
+    assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
+    assert.match(el('group-reply-policy-summary').textContent, /优先.*文案助手.*小周/);
+    assert.match(el('group-composer-routing-text').textContent, /文案助手.*优先回复/);
+  } finally {restore();}
 });
 
 test('named team group replies explicitly pin what was previewed and keep drafts across stale versions', async t => {

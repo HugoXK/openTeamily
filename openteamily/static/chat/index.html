@@ -293,6 +293,13 @@
           <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
           <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
         </div>
+        <section id="group-reply-policy" aria-labelledby="group-reply-policy-title" hidden>
+          <div class="group-reply-policy-copy">
+            <h4 id="group-reply-policy-title" data-ui-text="chat.group.reply_policy">谁来回复</h4>
+            <p id="group-reply-policy-summary" class="note"></p>
+          </div>
+          <button type="button" id="group-management-reply-policy" class="group-info-link" aria-haspopup="dialog" aria-controls="group-management-dialog" data-ui-text="chat.group.edit_reply_policy" hidden>调整规则</button>
+        </section>
         <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
         <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
         <button type="button" class="group-info-link" id="group-info-add-agent" aria-haspopup="dialog" aria-controls="group-info-add-agent-dialog" data-ui-text="chat.group.add_agent" hidden>添加我的智能体</button>
@@ -329,6 +336,19 @@
           <span data-ui-text="chat.group.name">群组名称</span>
           <input id="group-management-name" maxlength="80" autocomplete="off" required>
         </label>
+        <div id="group-management-reply-fields" hidden>
+          <label><span data-ui-text="chat.group.reply_policy">谁来回复</span>
+            <select id="group-management-reply-mode">
+              <option value="default" data-ui-text="chat.group.reply_default">跟随群组默认</option>
+              <option value="everyone" data-ui-text="chat.group.reply_everyone">全员回复</option>
+              <option value="lead" data-ui-text="chat.group.reply_lead">指定智能体优先</option>
+            </select>
+          </label>
+          <label id="group-management-reply-lead-row" hidden><span data-ui-text="chat.group.reply_lead_agent">优先智能体</span>
+            <select id="group-management-reply-lead" aria-describedby="group-management-reply-lead-note"></select>
+          </label>
+          <p id="group-management-reply-lead-note" class="note" hidden></p>
+        </div>
         <div id="group-management-member-actions" hidden>
           <button type="button" id="group-management-transfer" data-ui-text="chat.group.transfer">转让群主</button>
           <button type="button" id="group-management-remove" data-ui-text="chat.group.remove_member">移除成员</button>
