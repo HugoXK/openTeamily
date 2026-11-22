@@ -354,6 +354,7 @@
     <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden data-ui-label="chat.messages.actions">
       <div class="message-menu-reactions" id="message-menu-reactions"></div>
       <button type="button" role="menuitem" data-menu="reply" data-ui-text="chat.messages.reply">回复</button>
+      <button type="button" role="menuitem" data-menu="ask-group" data-ui-text="chat.group.ask_agents" hidden>请智能体回复</button>
       <button type="button" role="menuitem" data-menu="save" data-ui-text="chat.messages.save_to_space">保存到资料空间</button>
       <button type="button" role="menuitem" data-menu="translate" title="使用配置的模型和自己的在线运行时" data-ui-title="chat.translate.model_help" data-ui-text="chat.translate.translate">翻译</button>
       <button type="button" role="menuitem" data-menu="ask" data-ui-text="chat.messages.ask_ai">问 AI</button>
@@ -738,6 +739,7 @@
           </div>
           <button type="button" id="composer-emoji-open" title="表情和贴纸" aria-haspopup="dialog" data-ui-title="chat.emoji.picker"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only" data-ui-text="chat.emoji.emoji">表情</span></button>
           <button type="button" id="voice-record" aria-label="录制语音" title="录制语音" hidden data-ui-title="chat.voice.record" data-ui-label="chat.voice.record"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only" data-ui-text="chat.voice.record">录制语音</span></button>
+          <button type="button" id="chat-agent-picker-open" aria-haspopup="dialog" aria-label="请智能体回复" title="请智能体回复" data-ui-title="chat.group.ask_agents" data-ui-label="chat.group.ask_agents" hidden><span aria-hidden="true">@</span><span class="chat-agent-picker-label" aria-hidden="true" data-ui-text="chat.nav.agents">智能体</span></button>
           <select id="agent-memory-recall" aria-label="记忆检索范围" title="跨工作区时，智能体可参考你仍有权访问的工作区记忆和行动项" hidden data-ui-title="chat.memory.cross_workspace_help" data-ui-label="chat.memory.scope">
             <option value="workspace" data-ui-text="chat.memory.current_workspace">记忆 · 本工作区</option>
             <option value="workspaces" data-ui-text="chat.memory.all_workspaces">记忆 · 跨工作区</option>
@@ -753,6 +755,22 @@
     </section>
   </section>
   </main>
+
+<dialog id="chat-agent-picker" aria-labelledby="chat-agent-picker-title" aria-describedby="chat-agent-picker-help">
+  <form id="chat-agent-picker-form" novalidate>
+    <h2 id="chat-agent-picker-title" tabindex="-1" data-ui-text="chat.group.ask_agents">请智能体回复</h2>
+    <p id="chat-agent-picker-help" data-ui-text="chat.group.choose_reply_targets">选中的智能体会在你发送消息后回复。</p>
+    <figure id="chat-agent-picker-quote" hidden><figcaption id="chat-agent-picker-quote-author"></figcaption><blockquote id="chat-agent-picker-quote-text"></blockquote></figure>
+    <label class="chat-agent-picker-search"><span class="sr-only" data-ui-text="chat.group.search_agents">搜索群智能体</span><input type="search" id="chat-agent-picker-search" autocomplete="off" maxlength="80" placeholder="搜索智能体名称或所有者" data-ui-placeholder="chat.group.search_reply_targets"></label>
+    <fieldset id="chat-agent-picker-choices"><legend class="sr-only" data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend><div id="chat-agent-picker-results"></div></fieldset>
+    <p id="chat-agent-picker-empty" data-ui-text="chat.group.no_reply_targets" hidden>没有匹配的智能体。</p>
+    <div class="chat-agent-picker-actions">
+      <span id="chat-agent-picker-count" role="status"></span>
+      <button type="button" id="chat-agent-picker-cancel" data-ui-text="chat.cancel">取消</button>
+      <button type="submit" id="chat-agent-picker-confirm" data-ui-text="chat.group.use_reply_targets">确认选择</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="history-capture-dialog" aria-labelledby="history-capture-title">
   <form id="history-capture-form">

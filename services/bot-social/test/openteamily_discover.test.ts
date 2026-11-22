@@ -24,6 +24,47 @@ let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
 
+test("work remix yields only exact listed document or website snapshots", async () => {
+  const author = await home(S.base,"remix-author");
+  const reader = await home(S.base,"remix-reader");
+  const work = {kind:"work",work_kind:"document",ref:"remix-doc",slug:"remix-doc-fixture",title:"Launch notes",
+    snapshot:"## Approved version\nMake a copy."};
+  const listed = await author.ok("PUT","/v1/ot/listings",work);
+  const detail = "/v1/ot/discover/"+work.slug;
+  const remix = detail+"/remix";
+  assert.equal((await fetch(S.base+remix)).status,401);
+  const card = (await reader.ok("GET",detail+"/detail")).work;
+  assert.equal(card.remix_available,true);
+  assert.equal(card.snapshot,undefined);
+  const first = await reader.ok("GET",remix);
+  assert.deepEqual(Object.keys(first),["template"]);
+  assert.deepEqual({kind:first.template.kind,title:first.template.title},{kind:"document",title:work.title});
+  assert.match(first.template.revision,/^[0-9a-f]{64}$/);
+  assert.deepEqual((await reader.ok("GET",remix+"?revision="+first.template.revision)).source,
+    {kind:"document",body:work.snapshot});
+  const latest = await author.ok("PUT","/v1/ot/listings",{...work,snapshot:"Another content revision"});
+  assert.equal(latest.id,listed.id);
+  const stale = await reader.call("GET",remix+"?revision="+first.template.revision);
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"listing_changed");
+  assert.equal((await reader.call("GET",remix+"?include=private")).status,400);
+  await author.ok("DELETE","/v1/ot/listings/"+listed.id);
+  assert.equal((await author.call("GET",remix)).status,404);
+  assert.equal((await reader.call("GET",remix)).status,404);
+
+  const site = {kind:"work",work_kind:"website",ref:"remix-site",slug:"remix-site-fixture",title:"Public site",
+    site_html:"<!doctype html><title>Site</title><h1>Released page</h1>"};
+  await author.ok("PUT","/v1/ot/listings",site);
+  const siteRemix = "/v1/ot/discover/"+site.slug+"/remix";
+  const {template} = await reader.ok("GET",siteRemix);
+  assert.deepEqual((await reader.ok("GET",siteRemix+"?revision="+template.revision)).source,{kind:"website",body:site.site_html});
+  for (const [kind,snapshot] of [["slides","Visible outline"],["document",'{"legacy":"non-canonical content"}'],["document",""]]) {
+    const slug = "remix-none-"+kind+(snapshot ? "-value" : "-empty");
+    await author.ok("PUT","/v1/ot/listings",{kind:"work",work_kind:kind,ref:slug,slug,title:"Unsupported",snapshot});
+    assert.equal((await reader.call("GET","/v1/ot/discover/"+slug+"/remix")).status,404);
+  }
+});
+
 test("publish, discover, like, collect, follow and notify followers", async () => {
   const A = await home(S.base, "creator");
   const B = await home(S.base, "fan");

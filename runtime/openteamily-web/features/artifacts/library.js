@@ -296,7 +296,7 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false, receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
@@ -328,7 +328,7 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   if (dashboard) payload.dashboard = dashboard
   if (spreadsheet) payload.spreadsheet = spreadsheet
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
     const source = input.source
     const already = existingSource(store, workspaceId, source)
@@ -366,6 +366,29 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
     void featureDir
     return saved(store, workspaceId, id, 201)
   })
+}
+
+export function remixPublicWork(ctx, {workspace_id:workspace,slug,revision,title,idempotency_key:key,source} = {}) {
+  if (typeof workspace !== 'string' || !HEX32.test(workspace) || typeof slug !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) || typeof revision !== 'string' || !/^[0-9a-f]{64}$/.test(revision)
+      || !validTitle(title) || /[\x00-\x1f\x7f]/.test(title) || typeof key !== 'string' || !KEY.test(key)) {
+    refuse(400,'invalid','请填写副本名称并选择公开作品的版本。')
+  }
+  const trimmed = title.trim()
+  const receiptHash = digest(stableJson({public_work:slug,revision,title:trimmed}))
+  const prior = ctx.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',workspace,digest('artifact:' + key))
+  if (prior) {
+    if (prior.request_hash !== receiptHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
+    return {status:200,body:{artifact:view(load(ctx.store,workspace,prior.id))}}
+  }
+  if (!source) return null
+  if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
+    refuse(400,'invalid','该公开版本无法复制。')
+  }
+  if (ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?',workspace,titleHash(trimmed))) {
+    refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+  }
+  return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,body:source.body},key,{receiptHash})
 }
 
 export function duplicateArtifact({store, owner, featureDir}, workspaceId, {artifact_id: sourceId, revision, title}, key) {

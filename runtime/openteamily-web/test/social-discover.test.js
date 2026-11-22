@@ -7,8 +7,53 @@ import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
 import { createDispatch } from '../src/dispatch.js'
+import { boot } from './helpers.js'
 
 const SERVER = 'https://social.example.test'
+
+test('public work remix writes only verified publications to the viewer’s personal Space', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = 'b'.repeat(64)
+  const source = {kind:'document',body:'Published notes'}
+  const template = {revision,title:'Original',kind:source.kind}
+  let closed = false
+  let reads = 0
+  setSharedBotSocial({request:async (method,path) => {
+    assert.equal(method,'GET')
+    reads++
+    assert.match(path,/^\/v1\/ot\/discover\/public-notes\/remix(?:\?revision=b{64})?$/)
+    if (closed) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,...(path.includes('?') ? {source} : {})}
+  }})
+  const target = '/v1/discover/works/public-notes/remix'
+  const forged = await bot.endpoint('artifacts/remixPublicWork',{workspace_id:workspace,slug:'public-notes',revision,
+    title:'Forged source',source,idempotency_key:'fake-copy-assertion'})
+  assert.equal(forged.ok,false)
+  assert.deepEqual((await bot.call('discover','GET',target)).body,{template})
+  const input = {title:'Public notes copy',revision}
+  const key = 'work-remix-example'
+  assert.equal((await bot.call('discover','POST',target,{...input,workspace_id:'c'.repeat(32)},key)).status,400)
+  assert.equal((await bot.call('discover','POST',target,{...input,source:{...source,body:'Forged'}},key)).status,400)
+  const created = await bot.call('discover','POST',target,input,key)
+  assert.equal(created.status,201,JSON.stringify(created.body))
+  const copy = created.body.artifact
+  assert.equal(copy.workspace_id,workspace)
+  assert.equal(copy.body,undefined)
+  const detail = `/v1/workspaces/${workspace}/artifacts/${copy.id}`
+  const artifact = (await bot.call('artifacts','GET',detail)).body.artifact
+  assert.deepEqual([artifact.body,artifact.source,artifact.revision],[source.body,undefined,1])
+  assert.equal((await other.call('artifacts','GET',detail)).status,404)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'Different'},key)).status,409)
+  assert.equal(reads,2)
+  closed = true
+  assert.deepEqual(await bot.call('discover','POST',target,input,key),{status:200,body:created.body})
+  assert.equal(reads,2)
+  assert.equal((await bot.call('discover','POST',target,{...input,title:'New copy'},'another-remix-key')).status,404)
+  assert.equal(reads,3)
+})
 
 test('profile social sends only actor-scoped queries and explicit follow requests', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-profile-social-'))

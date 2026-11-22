@@ -24,6 +24,30 @@
   justify-content: space-between;
   gap: 0.5rem;
 }
+#meeting-inbox[hidden], #meeting-layout[hidden] { display: none; }
+#meeting-inbox-open[aria-expanded="true"] { display: none; }
+#meeting-inbox { max-width: 55rem; }
+#meeting-inbox h2 { margin: 0; }
+#meeting-inbox > .meeting-list-head { position: static; padding: 0 0 .5rem; background: transparent; box-shadow: none; }
+#meeting-inbox button, #meeting-inbox-open { min-height: 2.75rem; }
+.meeting-inbox-filters, .meeting-inbox-buttons { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.meeting-inbox-filters { margin-top: .8rem; justify-content: space-between; }
+.meeting-inbox-filters label { display: flex; align-items: center; gap: .5rem; }
+.meeting-inbox-filters input { width: auto; }
+#meeting-inbox-list { list-style: none; margin: .5rem 0; padding: 0; }
+#meeting-inbox-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .55rem 1rem;
+  padding: .65rem 0;
+  border-bottom: 1px solid var(--ot-line);
+  overflow-wrap: anywhere;
+}
+#meeting-inbox-list li > div:first-child { flex: 1 1 18rem; min-width: 0; }
+#meeting-inbox-list .note { margin: .18rem 0 0; }
+#meeting-inbox-status:empty { display: none; }
 #meeting-shares-history, #meeting-resume { margin-top: .5rem; }
 @media (min-width: 701px) {
   #meeting-resume { display: none; }
@@ -280,7 +304,7 @@
   #save-meeting-artifact, #save-meeting-memory, .action-followup, #meeting-artifact-link, #meeting-memory-link { min-height: 2.75rem; }
   #meeting-search { font-size: 1rem; }
   :is(#meeting-artifact-link, #meeting-memory-link):not([hidden]) { display: inline-flex; align-items: center; }
-  body.app-workspace.app-primary:has(.meeting-layout[data-view="editor"]) > :is(.app-rail, .mobile-primary-nav) { display: none; }
-  #main-panel:has(.meeting-layout[data-view="editor"]) .meeting-page-top { display: none; }
+  body.app-workspace.app-primary:has(.meeting-layout[data-view="editor"]:not([hidden])) > :is(.app-rail, .mobile-primary-nav) { display: none; }
+  #main-panel:has(.meeting-layout[data-view="editor"]:not([hidden])) .meeting-page-top { display: none; }
   .meeting-layout[data-view="editor"] #save-meeting { display: none; }
 }

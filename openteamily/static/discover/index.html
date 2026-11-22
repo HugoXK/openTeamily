@@ -136,6 +136,7 @@
         <div class="work-detail-actions" id="work-detail-actions" hidden>
           <a class="feed-detail-open" id="work-detail-open" href="/discover">打开原作品</a>
           <a class="feed-detail-open" id="work-detail-download" download hidden>下载原文件</a>
+          <button type="button" id="work-detail-remix" aria-haspopup="dialog" aria-controls="work-remix-dialog" hidden>复制到资料空间</button>
           <button type="button" id="work-detail-share" aria-haspopup="dialog" aria-controls="work-share-dialog">分享</button>
           <button type="button" id="work-detail-comments" aria-haspopup="dialog" aria-controls="feed-comments-dialog">评论</button>
           <button type="button" id="work-detail-like" aria-pressed="false" hidden>点赞</button>
@@ -207,6 +208,20 @@
     </section>
   </section>
   </main>
+  <dialog class="catalog-dialog work-remix-dialog" id="work-remix-dialog" aria-labelledby="work-remix-heading">
+    <h2 id="work-remix-heading">复制到资料空间</h2>
+    <p id="work-remix-source" class="note"></p>
+    <form id="work-remix-form">
+      <label id="work-remix-name-field">副本名称 <input id="work-remix-name" autocomplete="off" required maxlength="80" autofocus></label>
+      <p id="work-remix-status" role="status"></p>
+      <div class="catalog-dialog-actions">
+        <button type="button" id="work-remix-close">取消</button>
+        <button type="button" id="work-remix-refresh" hidden>重新读取版本</button>
+        <button type="submit" id="work-remix-submit" disabled>创建副本</button>
+        <a class="feed-detail-open" id="work-remix-open" hidden>打开副本</a>
+      </div>
+    </form>
+  </dialog>
   <dialog class="catalog-dialog work-share-dialog" id="work-share-dialog" aria-labelledby="work-share-title">
     <h2 id="work-share-title">分享作品</h2>
     <label>公开链接 <input type="url" id="work-share-url" readonly></label>

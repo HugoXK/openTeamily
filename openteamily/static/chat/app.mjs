@@ -870,8 +870,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     },
   };
   const agentMentions = mountAgentMentions(document, () => {
-    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
-    return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
+    if (!currentUser || currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent ||
+        currentConversation.direct?.open === false) return null;
+    return {scope: sendScope(), agents: currentConversation.agent_members || []};
   });
   function voiceContext() {
     if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -1037,11 +1038,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
   }
 
-  function composeReply(item, author) {
-    if (currentSource !== 'social' || item.retracted) return;
+  function composerReply(item, author) {
     const excerpt = String(item.body || item.attachment?.title || (item.voice ? '语音消息' : '消息'))
       .replace(/\s+/g, ' ').trim().slice(0, 120);
-    replyDrafts.set(sendScope(), {message_id: item.id, author, excerpt, available: true});
+    return {message_id: item.id, author, excerpt, available: true};
+  }
+
+  function composeReply(item, author) {
+    if (currentSource !== 'social' || item.retracted) return;
+    replyDrafts.set(sendScope(), composerReply(item, author));
     renderReplyDraft();
     document.getElementById('chat-body').focus();
   }
@@ -1234,6 +1239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    agentMentions.refresh();
     syncStickers();
     syncPrivateThreadControls();
     syncMemoryRecall(scope);
@@ -2565,7 +2571,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
     const scroller = document.getElementById('message-scroller');
-    messageMenuTarget = {item, li, mine, scrollTop: scroller?.scrollTop};
+    messageMenuTarget = {item, li, mine, scope: sendScope(), scrollTop: scroller?.scrollTop};
     const reactions = document.getElementById('message-menu-reactions');
     reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
       const button = document.createElement('button');
@@ -2580,6 +2586,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="reply"]').hidden = currentConversation?.public_agent?.open === false
       || currentConversation?.direct?.open === false;
+    const askGroup = menu.querySelector('[data-menu="ask-group"]');
+    if (askGroup) askGroup.hidden = item.retracted || !agentMentions.canPick();
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
@@ -2604,7 +2612,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageMenu.addEventListener('click', async event => {
       const button = event.target.closest('button');
       if (!button || button.disabled || !messageMenuTarget) return;
-      const {item, li} = messageMenuTarget;
+      const {item, li, scope} = messageMenuTarget;
       const action = button.dataset.menu;
       closeMessageMenu();
       if (button.dataset.emoji) {
@@ -2613,6 +2621,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else if (action === 'reply') {
         const author = li.querySelector('.role')?.textContent || '成员';
         composeReply(item, author);
+      } else if (action === 'ask-group' && scope === sendScope()) {
+        const reply = composerReply(item, li.querySelector('.role')?.textContent || uiLabel('成员', 'Member'));
+        agentMentions.openPicker({reply, onApply: () => {
+          replyDrafts.set(scope, reply);
+          renderReplyDraft();
+        }});
       } else if (action === 'translate' || action === 'ask') {
         messageUtilities.open(item, action);
       } else if (action === 'save') {
@@ -5208,6 +5222,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      agentMentions.clear();
       clearComposerDrafts();
       renderReplyDraft();
       currentConversation = null;
@@ -5239,6 +5254,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
+      agentMentions.clear();
       clearComposerDrafts();
       renderReplyDraft();
     }

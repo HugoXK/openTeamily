@@ -5,7 +5,7 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle, view } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, remixPublicWork, search, uniqueTitle, view } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
@@ -43,6 +43,10 @@ export default defineFeature({
   endpoints: (context) => {
     const ctx = { ...context, featureDir: context.host.featureDir() }
     return {
+    async remixPublicWork(payload, call) {
+      if (!call?.internal) refuse(404,'not_found','Internal endpoint')
+      return remixPublicWork(ctx,payload ?? {})
+    },
     async create(payload) {
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)

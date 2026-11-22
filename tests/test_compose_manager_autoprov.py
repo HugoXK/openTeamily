@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 import test_compose_manager as base
 from openteamily import model_api
-from openteamily.lifecycle import ManagerAuth, ManagerIdentity
+from openteamily.lifecycle import GATEWAY_REFRESH_SECONDS, ManagerAuth, ManagerIdentity
 from openteamily.dsbot_gateway import ensure_schema, owner_runtime_readiness, record_upstream
-from openteamily.manager.__main__ import main, dsbot_route
+from openteamily.manager.__main__ import main, dsbot_import, dsbot_route
 from openteamily.manager.engine import ComposeEngine, Registry, Runner
 from openteamily.manager.safety import ManagerError, write_new
 from openteamily.manager.worker import ManagerWorker
@@ -54,10 +54,10 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual((state['state'], state['instance_id']), ('existing', first[0]['instance_id']))
         return user, state['instance_id']
 
-    def poll(self):
+    def poll(self, *options):
         out = io.StringIO()
         with redirect_stdout(out):
-            code = main(['--config', str(self.cfgpath), '--execute', 'poll-once'])
+            code = main(['--config', str(self.cfgpath), '--execute', 'poll-once', *options])
         return code, json.loads(out.getvalue())
 
     def test_poll_once_adopts_auto_instance_without_restart(self):
@@ -189,7 +189,47 @@ class AutoProvisionPollTests(unittest.TestCase):
               patch.object(dsbot_route, 'publish', side_effect=publish)):
             code, result = self.poll()
         self.assertEqual(code, 0, result)
-        self.assertEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid), ('claim', stopped)])
+        self.assertEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid)])
+
+    def test_recent_route_skips_repeat_claim_and_docker_publish_until_due(self):
+        client = self.start_http()
+        _, iid = self.auto_instance()
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['instances'] = {}
+        self.cfg['dsbot_gateway'] = {'web_container': 'fixture-web'}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        with self.store.transaction() as db:
+            ensure_schema(db)
+
+        calls = []
+        def publish(_engine, _client, target):
+            calls.append(target)
+            with self.store.transaction() as db:
+                record_upstream(db, target, '10.0.0.1:8080', 'dsh-auth-fixture=' + 'x' * 24, int(self.runtime.clock()))
+            return {'status': 'published', 'instance_id': target}
+
+        with patch.object(dsbot_route, 'publish', side_effect=publish):
+            self.assertEqual(self.poll()[0], 0)
+            item = client.snapshot(iid)
+            self.assertTrue(item['gateway_route_fresh'])
+            self.assertNotIn('auth_cookie', item)
+            self.assertNotIn('address', item)
+            with patch.object(ManagerWorker, 'run_once', side_effect=AssertionError('idle claim')):
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid])
+                with self.store.transaction() as db:
+                    db.execute('UPDATE dsbot_upstreams SET updated=updated-? WHERE instance_id=?', (GATEWAY_REFRESH_SECONDS, iid))
+                self.assertFalse(client.snapshot(iid)['gateway_route_fresh'])
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid, iid])
+                with self.store.transaction() as db:
+                    db.execute('DELETE FROM dsbot_upstreams WHERE instance_id=?', (iid,))
+                self.assertEqual(self.poll()[0], 0)
+                self.assertEqual(calls, [iid, iid, iid])
+                with patch.object(dsbot_import, 'deliver', return_value={'status': 'delivered'}) as deliver:
+                    self.assertEqual(self.poll('--import-legacy')[0], 0)
+                    self.assertEqual(calls, [iid, iid, iid, iid])
+                    self.assertEqual(deliver.call_args.args[-1], iid)
 
     def test_adopt_requires_matching_auto_snapshot(self):
         self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}

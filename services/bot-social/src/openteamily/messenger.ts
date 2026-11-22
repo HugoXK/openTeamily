@@ -120,12 +120,13 @@ const REPLY_PROGRESS_PAGE = 50;
 type ReplyAgent = {owner_id: string; agent_ref: string; name: string};
 type ReplyJob = {
   id: string; message_id: string; owner_id: string; agent_ref: string; agent_name: string;
+  conversation_id: string; quoted_message_id: string | null;
   status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
   available: number; source_revision: number | null; current_revision: number; progress_revision: number;
   claim_id: string | null;
 };
 
-const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.seq, src.revision AS current_revision,
+const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.reply_to AS quoted_message_id, src.retracted, src.seq, src.revision AS current_revision,
   c.title AS conversation_title,
   (src.retracted=0 AND c.kind='group' AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%'
     AND member.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
@@ -297,6 +298,13 @@ function replyPreview(ot: OtContext, message: any, viewer: string) {
   const author = original.author_kind === "agent" ? original.agent_name : ot.profileView(original.author_id).display_name;
   return {message_id: message.reply_to, available: true, author: author || "成员",
     excerpt: original.body.replace(/\s+/g, " ").trim().slice(0, 120)};
+}
+
+function replyClaimReceipt(ot: OtContext, job: ReplyJob) {
+  const original = job.quoted_message_id && replyOriginal(ot, job.conversation_id, job.quoted_message_id, job.owner_id);
+  if (!original) return {ok: true};
+  const author = original.author_kind === "agent" ? original.agent_name : ot.profileView(original.author_id).display_name;
+  return {ok: true, quoted_message: {author: author || "成员", text: original.body.slice(0, 1500).replace(/[\uD800-\uDBFF]$/, "")}};
 }
 
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
@@ -480,9 +488,10 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
   };
 }
 
-function replyContext(ot: OtContext, conversationId: string, seq: number) {
-  return ot.all<any>(`SELECT * FROM (SELECT * FROM ot_messages
-    WHERE conversation_id=? AND seq<=? ORDER BY seq DESC LIMIT 12) ORDER BY seq`, conversationId, seq).map(m => messageView(ot, m));
+function replyContext(ot: OtContext, conversationId: string, seq: number, viewer: string) {
+  return ot.all<any>(`SELECT * FROM (SELECT m.* FROM ot_messages m
+    WHERE m.conversation_id=? AND m.seq<=? AND m.retracted=0 AND ${VISIBLE_MESSAGE}
+    ORDER BY m.seq DESC LIMIT 12) ORDER BY seq`, conversationId, seq, viewer).map(m => messageView(ot, m));
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
@@ -1203,7 +1212,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (b.action === "start") {
         assert(b.source_revision === undefined || b.source_revision === job.current_revision,
           409, "reply_job_unavailable", "原消息已更新。");
-        if (state === "running" && claim !== null && job.claim_id === claim) return {ok: true};
+        if (state === "running" && claim !== null && job.claim_id === claim) return replyClaimReceipt(ot, job);
         assert(state === "queued", 409, "reply_job_unavailable", "这次回复的状态已更新。");
         ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=? WHERE id=?",
           now, job.current_revision, claim, job.id);
@@ -1212,7 +1221,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=? WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);
-      return {ok: true};
+      return b.action === "start" ? replyClaimReceipt(ot, job) : {ok: true};
     });
   });
 
@@ -1401,7 +1410,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const message = ot.get<any>("SELECT * FROM ot_messages WHERE id=?", job.message_id);
       return {job_id: job.id, attempt: job.attempt, conversation_id: job.conversation_id,
         conversation_title: job.conversation_title, agent_ref: job.agent_ref, agent_name: job.agent_name,
-        mode: "mention", message: messageView(ot, message), context: replyContext(ot, job.conversation_id, job.seq), group_memories:memories(job.conversation_id)};
+        mode: "mention", message: messageView(ot, message), context: replyContext(ot, job.conversation_id, job.seq, me.ownerId), group_memories:memories(job.conversation_id)};
     }) : [];
     let cursor = after;
     const items: any[] = [];
@@ -1432,7 +1441,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const mentioned = agentMentioned(mentions, {owner_id: me.ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name,
-        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq), group_memories:memories(m.conversation_id) });
+        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq, me.ownerId), group_memories:memories(m.conversation_id) });
     }
     return managed ? { cursor, items, jobs } : { cursor, items };
   });

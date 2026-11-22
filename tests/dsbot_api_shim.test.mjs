@@ -214,10 +214,10 @@ test('moved notification read requests retain keepalive on the actual DS-Bot fet
   }});
 });
 
-test('work detail and comment paths stay within the viewer’s Discover plugin', () => {
+test('work detail, remix and comment paths stay within the viewer’s Discover plugin', () => {
   const base = '/v1/discover/works/work-demo';
   const id = 'otwc_' + '0'.repeat(26);
-  for (const path of [base, base + '/comments?limit=20', base + '/comments/' + id + '/like', base + '/comments/' + id + '/remove']) {
+  for (const path of [base, base + '/remix', base + '/comments?limit=20', base + '/comments/' + id + '/like', base + '/comments/' + id + '/remove']) {
     assert.equal(movedTarget(path, ORIGIN)?.feature, 'discover');
   }
   assert.equal(movedTarget(base + '/comments/forum/comment', ORIGIN), null);

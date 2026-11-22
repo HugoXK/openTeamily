@@ -58,6 +58,8 @@ const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agen
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
 const WORK_PREVIEW_MAX = 2_000;
+const REMIX_BODY_LIMIT = 8_000;
+const REMIX_REVISION = /^[0-9a-f]{64}$/;
 const MODEL_MIME = "model/gltf-binary";
 const MAX_SITE_BYTES = 32 * 1024;
 const SITE_POLICY = [
@@ -337,6 +339,24 @@ function listedBySlug(ot: OtContext, slug: string) {
   const l = ot.get<any>("SELECT * FROM ot_listings WHERE slug = ? AND listed = 1", slug);
   assert(l, 404, "listing_not_found", "no such listing");
   return l;
+}
+
+function publicRemixSource(ot: OtContext, listing: {id: string; work_kind: string | null}) {
+  const kind = listing.work_kind;
+  const content = kind === "website"
+    ? ot.get<{body: string}>("SELECT html AS body FROM ot_listing_sites WHERE listing_id=? AND length(html)<=?", listing.id, REMIX_BODY_LIMIT)
+    : kind === "document"
+      ? ot.get<{body: string}>("SELECT snapshot AS body FROM ot_listings WHERE id=? AND length(snapshot)<=?", listing.id, REMIX_BODY_LIMIT)
+      : undefined;
+  if (!content?.body?.trim() || content.body.length > REMIX_BODY_LIMIT || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content.body)
+      || (kind !== "document" && kind !== "website")) return null;
+  if (kind === "document" && /^[{\[]/.test(content.body.trimStart())) {
+    try {
+      const decoded = JSON.parse(content.body);
+      if (decoded && typeof decoded === "object") return null;
+    } catch { /* A document may begin with literal punctuation. */ }
+  }
+  return {kind,body:content.body};
 }
 
 type FeedScope = { where: string; args: unknown[] };
@@ -737,7 +757,10 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
     assert(work, 404, "listing_not_found", "no such work");
     reply.header("Cache-Control", "no-store");
-    const detail = {work: listingView(ot, work, me.ownerId), previous: null, next: null};
+    const detail = {
+      work: {...listingView(ot, work, me.ownerId), ...(publicRemixSource(ot,work) ? {remix_available:true} : {})},
+      previous: null, next: null,
+    };
     if (scope.sort === "popular") {
       const ids = rankedWorkIds(ot, scope);
       const position = ids.indexOf(work.id);
@@ -750,6 +773,23 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
     return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
+  });
+  app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
+    ot.me(req);
+    reply.header("Cache-Control", "no-store");
+    const q = query(req);
+    assert(Object.keys(q).every(key => key === "revision") &&
+      (q.revision === undefined || (typeof q.revision === "string" && REMIX_REVISION.test(q.revision))),
+    400,"invalid_request","Invalid work copy revision");
+    return ot.tx(() => {
+      const work = listedBySlug(ot, params(req).slug);
+      const source = work.kind === "work" ? publicRemixSource(ot,work) : null;
+      assert(source,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      const revision = hashCode(JSON.stringify([work.id,work.slug,work.updated_at,work.title,source]));
+      assert(q.revision === undefined || q.revision === revision,
+        409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+      return {template:{title:work.title,kind:source.kind,revision},...(q.revision ? {source} : {})};
+    });
   });
   app.get("/v1/ot/discover/:slug", async (req) => {
     const me = ot.me(req);

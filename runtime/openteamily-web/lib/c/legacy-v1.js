@@ -191,6 +191,7 @@ function workItem(row) {
     ...(match ? {match} : {}),
     ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
     ...(fileAvailable ? {file_available: true, file_mime: row.file_mime, file_bytes: row.file_bytes} : {}),
+    ...(row.remix_available === true ? {remix_available: true} : {}),
   }
 }
 
@@ -240,6 +241,7 @@ function rethrow(error) {
     member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
+    listing_changed: 'listing_changed',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
     comment_not_found: 'not_found',
@@ -1486,6 +1488,43 @@ function discoverRoutes(host) {
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null
           return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'GET', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query }, call) {
+        return wrap(async () => {
+          if (query) throw new Fault(400,'invalid','无效的作品复制请求。')
+          const {template} = await client(host).get(`/v1/ot/discover/${match[1]}/remix`)
+          return [200,{template,...platformViewer(call)}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: new RegExp(`^${DISCOVER_WORK}/remix$`),
+      async handle({ match, query, body, idempotency_key: key }, call) {
+        return wrap(async () => {
+          if (query || !body || Object.keys(body).length !== 2 || !Object.hasOwn(body,'title') ||
+              typeof body.revision !== 'string' || !/^[0-9a-f]{64}$/.test(body.revision) ||
+              typeof key !== 'string' || !COMMENT_KEY.test(key)) {
+            throw new Fault(400,'invalid','无效的作品复制请求。')
+          }
+          const binding = await host.call('agents/personal-binding', {})
+          if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409,'no_personal_workspace','请先打开个人工作区。')
+          const slug = match[1]
+          const payload = {slug,workspace_id:binding.workspace_id,revision:body.revision,title:body.title,idempotency_key:key}
+          const previous = await host.call('artifacts/remixPublicWork',payload)
+          const project = ({status,body:{artifact}}) => [status,{
+            artifact:{id:artifact.id,workspace_id:artifact.workspace_id,kind:artifact.kind,title:artifact.title,revision:artifact.revision},
+            ...platformViewer(call),
+          }]
+          if (previous) return project(previous)
+          const snapshot = await client(host).get(`/v1/ot/discover/${slug}/remix` + qs({revision:body.revision}))
+          if (!snapshot.source || snapshot.template?.revision !== body.revision || snapshot.template.kind !== snapshot.source.kind) {
+            throw new Fault(409,'listing_changed','这个公开版本已不可用，请重新查看。')
+          }
+          return project(await host.call('artifacts/remixPublicWork',{...payload,source:snapshot.source}))
         })
       },
     },

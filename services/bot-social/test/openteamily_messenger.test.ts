@@ -807,6 +807,39 @@ test("editing or retracting an originating message invalidates managed reply pro
   assert.equal((await worker.call("POST", progress, {attempt: 2, revision: 2, text: "Late"})).status, 409);
 });
 
+test("a group reply claim returns an older exact quote only while its agent owner can read it", async () => {
+  const [worker, sender] = await Promise.all([home(S.base, "quote-worker"), home(S.base, "quote-sender")]);
+  const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
+  await sender.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
+  const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
+    title: "Read the quote", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+  const room = `/v1/ot/conversations/${group.id}/messages`;
+  const oldText = "Earlier exact decision: keep the launch on Friday.";
+  const original = await sender.ok("POST", room, {body: oldText});
+  for (let i = 0; i < 13; i++) await sender.ok("POST", room, {body: `Later message ${i}`});
+  const request = async (id: string) => sender.ok("POST", room, {body: "@helper review", reply_to: id});
+  const target = await request(original.id);
+  const job = (await worker.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.find((row: any) => row.message.id === target.id);
+  assert.ok(job);
+  assert.equal(job.context.some((row: any) => row.id === original.id), false);
+  assert.equal(job.quoted_message, undefined);
+  const claimPath = `/v1/ot/agent-reply-jobs/${job.job_id}`;
+  const claim = {action: "start", attempt: 1, claim_id: "0a4e44a7-9c24-4b66-a637-9bdacb2b85ec"};
+  assert.equal((await sender.call("POST", claimPath, claim)).status, 404);
+  assert.deepEqual((await worker.ok("POST", claimPath, claim)).quoted_message,
+    {author: (await sender.ok("GET", "/v1/ot/me")).display_name, text: oldText});
+  await worker.ok("POST", `/v1/ot/messages/${original.id}/hide`, {conversation_id: group.id});
+  assert.deepEqual(await worker.ok("POST", claimPath, claim), {ok: true});
+
+  const retractable = await sender.ok("POST", room, {body: "Do not read the retracted sentence"});
+  const beforeRetraction = await request(retractable.id);
+  await sender.ok("DELETE", `/v1/ot/messages/${retractable.id}`);
+  assert.deepEqual(await worker.ok("POST", `/v1/ot/agent-reply-jobs/${beforeRetraction.reply_jobs[0].id}`, claim), {ok: true});
+  const other = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true, title: "Other group", members: [worker.handle]});
+  const unrelated = await sender.ok("POST", `/v1/ot/conversations/${other.id}/messages`, {body: "Other group text"});
+  assert.equal((await sender.call("POST", room, {body: "@helper review", reply_to: unrelated.id})).status, 409);
+});
+
 test("attachment search is newest-first, case-insensitive and scoped to readable files", async () => {
   const author = await home(S.base, "search-file-author");
   const reader = await home(S.base, "search-file-reader");
