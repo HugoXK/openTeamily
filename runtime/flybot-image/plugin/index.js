@@ -7,7 +7,7 @@ import { createRuntime } from '../../ds-bot-upstream/ds-bot/index.js'
 import { applyOnRuntime } from '../../flybot-social-host/index.js'
 import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
 import { loadBotSocialConfig } from '../bot-social-config.js'
-import { startBridge, runTurn, prepareNativeChat } from '../ds-bot-bridge.mjs'
+import { startBridge, runTurn, prepareNativeChat, textOnlyCompletion } from '../ds-bot-bridge.mjs'
 import { normalizeImportedSession } from '../../openteamily-web/features/agents/history.js'
 import { attachRuntime } from '../../openteamily-web/src/host.js'
 import { boundName } from '../../openteamily-web/features/skills/index.js'
@@ -98,18 +98,7 @@ export function apply(ctx, config = {}) {
       if (bytes !== file.bytes) throw new Error('Native attachment size mismatch')
       return Buffer.concat(chunks)
     }
-    const privateText = async prompt => {
-      await bridge.setup()
-      const response = await fetch(bridge.baseURL + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
-        body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
-        signal: AbortSignal.timeout(170000), redirect: 'error',
-      })
-      if (!response.ok) throw new Error('Text-only model inference failed')
-      const data = await response.json(), text = data.choices?.[0]?.message?.content
-      if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
-      return text.slice(0, 20000)
-    }
+    const privateText = (prompt, options) => textOnlyCompletion(bridge, prompt, options)
     attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly: privateText, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached

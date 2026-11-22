@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { body, hashCode, one, params, query, text, type OtContext } from "./core.js";
 import { requireMember } from "./teams.js";
+import { studioLiveState } from "./studio-live.js";
 
 export const STUDIO_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_studio_documents (
@@ -31,6 +32,7 @@ const MAX_REVISIONS = 30;
 const COLLECTION = "/v1/ot/teams/:team/studio/documents";
 const DETAIL = COLLECTION + "/:document";
 const HISTORY = DETAIL + "/versions";
+const LIVE = DETAIL + "/live";
 const SUMMARY = `d.id, d.title, d.revision, d.created_by, d.updated_at,
   COALESCE(creator.display_name, '') AS creator_name,
   COALESCE(editor.display_name, '') AS editor_name`;
@@ -138,6 +140,7 @@ function checkRevision(current: number, expected: number) {
 }
 
 export function registerStudio(app: FastifyInstance, ot: OtContext) {
+  const live = studioLiveState(ot);
   app.get(COLLECTION, async (req, reply) => ot.tx(() => {
     const access = scope(ot, req);
     reply.header("Cache-Control", "private, no-store");
@@ -192,16 +195,56 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
     return { document: view(access, detail(ot, access, id)) };
   }));
 
-  app.put(DETAIL, async req => ot.db.transaction(() => {
+  app.get(LIVE, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const access = scope(ot, req);
-    const row = detail(ot, access, params(req).document);
-    const input = fields(req, ["title", "body", "revision"]);
-    const revision = expectedRevision(input.revision);
-    checkRevision(row.revision, revision);
-    const draft = content(input);
-    if (draft.title === row.title && draft.body === row.body) return { document: view(access, row) };
-    return update(ot, access, row.id, revision, draft);
-  }).immediate());
+    const id = params(req).document;
+    const filters = query(req);
+    assert(Object.keys(filters).length === 1, 400, "invalid_request", "A Studio watch requires one revision");
+    const requested = one(filters.revision, "revision");
+    assert(requested, 400, "invalid_request", "A Studio watch requires a revision");
+    const known = revisionNumber(requested);
+    const read = (authorized: Scope, revision: number) => ({
+      ...(revision === known ? { unchanged: true, revision } : { document: view(authorized, detail(ot, authorized, id)) }),
+      editors: live.editors(id, authorized.teamId, authorized.ownerId),
+    });
+    const current = currentRevision(ot, access, id);
+    if (known !== current) return read(access, current);
+    await live.wait(id, access.ownerId, reply.raw);
+    return ot.tx(() => {
+      const authorized = scope(ot, req);
+      return read(authorized, currentRevision(ot, authorized, id));
+    });
+  });
+
+  app.post(LIVE, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const access = scope(ot, req);
+    const id = params(req).document;
+    const {session_id, active, editing} = fields(req, ["session_id", "active", "editing"]);
+    assert(Object.keys(query(req)).length === 0 && typeof session_id === "string" && CREATE_KEY.test(session_id) &&
+      typeof active === "boolean" && typeof editing === "boolean", 400, "invalid_request", "Invalid Studio presence");
+    currentRevision(ot, access, id);
+    live.touch(id, access.ownerId, session_id, active, editing);
+    return { ok: true };
+  });
+
+  app.put(DETAIL, async req => {
+    const {result, changed} = ot.db.transaction(() => {
+      const access = scope(ot, req);
+      const row = detail(ot, access, params(req).document);
+      const input = fields(req, ["title", "body", "revision"]);
+      const revision = expectedRevision(input.revision);
+      checkRevision(row.revision, revision);
+      const draft = content(input);
+      if (draft.title === row.title && draft.body === row.body) {
+        return {result:{document:view(access, row)}, changed:false};
+      }
+      return {result:update(ot, access, row.id, revision, draft), changed:true};
+    }).immediate();
+    if (changed) live.update(result.document.id);
+    return result;
+  });
 
   app.get(HISTORY, async (req, reply) => ot.tx(() => {
     const access = scope(ot, req);
@@ -224,33 +267,41 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
     return { version, current_revision };
   }));
 
-  app.post(DETAIL + "/restore", async req => ot.db.transaction(() => {
-    const access = scope(ot, req);
-    const id = params(req).document;
-    const current = currentRevision(ot, access, id);
-    const input = fields(req, ["revision", "to"]);
-    const base = expectedRevision(input.revision);
-    const to = expectedRevision(input.to);
-    checkRevision(current, base);
-    assert(to < current, 400, "invalid_request", "Choose an earlier revision");
-    const version = ot.get<{title: string; body: string}>(`SELECT title, body FROM ot_studio_revisions
-      WHERE document_id=? AND revision=?`, id, to);
-    assert(version, 404, "revision_not_found", "no such revision");
-    return update(ot, access, id, base, version, to);
-  }).immediate());
+  app.post(DETAIL + "/restore", async req => {
+    const result = ot.db.transaction(() => {
+      const access = scope(ot, req);
+      const id = params(req).document;
+      const current = currentRevision(ot, access, id);
+      const input = fields(req, ["revision", "to"]);
+      const base = expectedRevision(input.revision);
+      const to = expectedRevision(input.to);
+      checkRevision(current, base);
+      assert(to < current, 400, "invalid_request", "Choose an earlier revision");
+      const version = ot.get<{title: string; body: string}>(`SELECT title, body FROM ot_studio_revisions
+        WHERE document_id=? AND revision=?`, id, to);
+      assert(version, 404, "revision_not_found", "no such revision");
+      return update(ot, access, id, base, version, to);
+    }).immediate();
+    live.update(result.document.id);
+    return result;
+  });
 
-  app.delete(DETAIL, async req => ot.db.transaction(() => {
-    const access = scope(ot, req);
-    const row = detail(ot, access, params(req).document);
-    assert(canDelete(access, row), 403, "forbidden", "Your role cannot delete this document");
-    const revision = expectedRevision(fields(req, ["revision"]).revision);
-    checkRevision(row.revision, revision);
-    // Retain the create receipt after removing the contents, so a retry cannot recreate the document.
-    const result = ot.run(`UPDATE ot_studio_documents SET title='',body='',deleted_at=?
-      WHERE team_id=? AND id=? AND revision=? AND deleted_at IS NULL`,
-    ot.now(), access.teamId, row.id, revision);
-    assert(result.changes === 1, 409, "revision_conflict", "The document has a newer revision");
-    ot.run("DELETE FROM ot_studio_revisions WHERE document_id=?", row.id);
+  app.delete(DETAIL, async req => {
+    const id = params(req).document;
+    ot.db.transaction(() => {
+      const access = scope(ot, req);
+      const row = detail(ot, access, id);
+      assert(canDelete(access, row), 403, "forbidden", "Your role cannot delete this document");
+      const revision = expectedRevision(fields(req, ["revision"]).revision);
+      checkRevision(row.revision, revision);
+      // Retain the create receipt after removing the contents, so a retry cannot recreate the document.
+      const result = ot.run(`UPDATE ot_studio_documents SET title='',body='',deleted_at=?
+        WHERE team_id=? AND id=? AND revision=? AND deleted_at IS NULL`,
+      ot.now(), access.teamId, row.id, revision);
+      assert(result.changes === 1, 409, "revision_conflict", "The document has a newer revision");
+      ot.run("DELETE FROM ot_studio_revisions WHERE document_id=?", row.id);
+    }).immediate();
+    live.update(id, true);
     return { deleted: true };
-  }).immediate());
+  });
 }

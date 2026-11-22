@@ -1,10 +1,33 @@
 import {studioDocumentHref} from '../shell/studio-link.mjs';
 import {mountStudioHistory} from './studio-history.mjs';
 import {mountStudioDiscussion} from './studio-discussion.mjs';
+import {mergeStudioDraft} from './studio-merge.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
 const ROLES = new Set(['owner', 'admin', 'member']);
 const UPDATE_INTERVAL = 4000;
+const WATCH_INTERVAL = 200;
+const WATCH_BACKOFF = 20000;
+const PRESENCE_INTERVAL = 6500;
+const displayedBody = body => body.replace(/\r\n?/g, '\n');
+
+function setEditorValue(input, value) {
+  const previous = input.value;
+  if (previous === value) return;
+  const selected = input === input.ownerDocument.activeElement;
+  const {selectionStart, selectionEnd, selectionDirection, scrollTop} = input;
+  input.value = value;
+  if (!selected || !Number.isInteger(selectionStart) || !Number.isInteger(selectionEnd)) return;
+  let prefix = 0, suffix = 0;
+  const edge = Math.min(previous.length, value.length);
+  while (prefix < edge && previous[prefix] === value[prefix]) prefix += 1;
+  while (suffix < edge - prefix && previous.at(-1 - suffix) === value.at(-1 - suffix)) suffix += 1;
+  const offset = index => index <= prefix ? index
+    : index >= previous.length - suffix ? index + value.length - previous.length
+      : Math.min(index, value.length - suffix);
+  input.setSelectionRange(offset(selectionStart), offset(selectionEnd), selectionDirection);
+  input.scrollTop = scrollTop;
+}
 
 export function mountSharedStudio(document, {request, onClose}) {
   const get = id => document.getElementById('studio-' + id);
@@ -28,7 +51,6 @@ export function mountSharedStudio(document, {request, onClose}) {
   const view = document.defaultView;
   let scope = null;
   let screen;
-  let poll;
 
   function show(text = '', kind = '') {
     const status = get('status');
@@ -36,10 +58,15 @@ export function mountSharedStudio(document, {request, onClose}) {
     status.dataset.kind = kind;
   }
 
-  const clearPoll = () => view.clearTimeout(poll);
   const documentPath = (state, id = state.base?.id) => state.path + (id ? '/' + id : '');
   const isCurrent = state => dialog.open && screen === state;
-  const content = () => ({title: titleInput.value.trim(), body: bodyInput.value});
+  const isVisible = state => isCurrent(state) && state.base && !state.unavailable && document.visibilityState !== 'hidden';
+  function content() {
+    const body = bodyInput.value;
+    if (body === screen?.displayBase) return {title: titleInput.value.trim(), body: screen.base.body};
+    const withLineEndings = screen?.useCRLF ? body.replace(/\n/g, '\r\n') : body;
+    return {title: titleInput.value.trim(), body: withLineEndings.length <= bodyInput.maxLength ? withLineEndings : body};
+  }
   const sameContent = (left, right) => left.title === right.title && left.body === right.body;
   const isDirty = state => !form.hidden && (state?.base
     ? !sameContent(content(), state.base)
@@ -73,7 +100,7 @@ export function mountSharedStudio(document, {request, onClose}) {
         return 'conflict';
       }
       state.busy = true;
-      clearPoll();
+      stopWatch(state);
       controls(state);
       const result = await send('POST', path + '/restore', {revision,to}, state.controller.signal);
       if (!isCurrent(state)) return '';
@@ -98,7 +125,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     closeButton.disabled = busy;
     add.disabled = busy;
     titleInput.readOnly = bodyInput.readOnly = busy;
-    save.disabled = busy || Boolean(remote || blocked || unavailable) || !titleInput.value.trim() || !isDirty(state);
+    save.disabled = busy || state.composing || Boolean(remote || blocked || unavailable) || !titleInput.value.trim() || !isDirty(state);
     remove.hidden = !base?.can_delete || unavailable;
     remove.disabled = busy || Boolean(remote || blocked);
     copyLink.hidden = !base || unavailable;
@@ -117,11 +144,14 @@ export function mountSharedStudio(document, {request, onClose}) {
   function stopScreen() {
     discussion?.close();
     history.dismiss();
-    clearPoll();
-    screen?.controller.abort();
+    const previous = screen;
     screen = null;
+    stopWatch(previous);
+    previous?.controller.abort();
+    refreshPresence(previous);
     titleInput.value = bodyInput.value = get('link').value = '';
-    get('server-title').textContent = get('server-body').textContent = '';
+    clearComparison();
+    renderPresence([]);
     list.replaceChildren();
   }
 
@@ -130,7 +160,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     screen = {
       path: '/v1/workspaces/' + scope.id + '/studio/documents',
       mode, controller: new AbortController(),
-      base: null, remote: null, attempt: null, busy: false, blocked: false, unavailable: false,
+      base: null, remote: null, attempt: null, busy: false, blocked: false, unavailable: false, composing: false,
     };
     catalog.hidden = mode !== 'catalog';
     form.hidden = true;
@@ -153,11 +183,14 @@ export function mountSharedStudio(document, {request, onClose}) {
     state.remote = null;
     state.blocked = false;
     state.unavailable = false;
-    titleInput.value = fields?.title || '';
-    bodyInput.value = fields?.body || '';
+    state.displayBase = item ? displayedBody(item.body) : undefined;
+    state.useCRLF = Boolean(item?.body.includes('\r\n') && !/[\r\n]/.test(item.body.replaceAll('\r\n', '')));
+    setEditorValue(titleInput, fields?.title || '');
+    setEditorValue(bodyInput, displayedBody(fields?.body || ''));
     get('link').value = item ? new URL(studioDocumentHref(scope.id, item.id), view.location.origin).href : '';
     form.hidden = false;
     compare.open = false;
+    clearComparison();
     controls(state);
   }
 
@@ -170,13 +203,33 @@ export function mountSharedStudio(document, {request, onClose}) {
 
   function unavailable(state) {
     state.unavailable = true;
-    clearPoll();
+    state.remote = state.deferred = null;
+    stopWatch(state);
+    refreshPresence(state);
+    renderPresence([]);
+    clearComparison();
     controls(state);
     show('已无法读取此文档。你仍可以复制当前内容。', 'error');
   }
 
+  function clearComparison() {
+    get('server-title').textContent = get('server-body').textContent = '';
+    get('local-title').textContent = get('local-body').textContent = '';
+  }
+
+  function updateLocalComparison(state) {
+    if (!state.remote) return;
+    const draft = content();
+    get('local-title').textContent = draft.title || '未填写标题';
+    get('local-body').textContent = draft.body;
+  }
+
   function applyRemote(state, latest) {
-    if (latest.revision < state.base.revision) return;
+    if (latest.revision < (state.remote?.revision || state.base.revision)) return;
+    if (state.composing) {
+      state.deferred = latest;
+      return;
+    }
     if (latest.revision === state.base.revision) {
       state.base = latest;
       controls(state);
@@ -187,40 +240,110 @@ export function mountSharedStudio(document, {request, onClose}) {
       show('已同步团队文档。', 'success');
       return;
     }
+    const merged = mergeStudioDraft(state.base, content(), latest);
+    if (merged) {
+      showForm(state, latest, merged);
+      show(sameContent(merged, latest)
+        ? '你的修改已包含在团队版本中。'
+        : '已合并团队更新。请检查草稿后保存。', 'success');
+      refreshPresence(state);
+      return;
+    }
+    if (!state.remote) compare.open = true;
     state.remote = latest;
+    updateLocalComparison(state);
     get('server-title').textContent = '版本 ' + latest.revision + ' · ' + latest.title;
     get('server-body').textContent = latest.body;
     controls(state);
     show();
   }
 
+  function renderPresence(editors) {
+    const others = editors.filter(row => typeof row?.name === 'string' && row.name.trim());
+    const labels = others.slice(0, 3).map(row => row.name.trim().slice(0, 80) + (row.editing ? ' 正在编辑' : ' 正在查看'));
+    if (others.length > labels.length) labels.push('另有 ' + (others.length - labels.length) + ' 人在线');
+    const indicator = get('presence');
+    const text = labels.join(' · ');
+    if (text !== indicator.textContent) indicator.textContent = text;
+    indicator.hidden = !text;
+  }
+
+  function refreshPresence(state, heartbeat = false) {
+    const active = Boolean(state && isVisible(state));
+    if (active && !state.presence) state.presence = {id: view.crypto.randomUUID()};
+    const presence = state?.presence;
+    if (!presence || presence.request) return;
+    const editing = active && isDirty(state);
+    if (!heartbeat && presence.active === active && presence.editing === editing) return;
+    if (!active && presence.active !== true) return;
+    view.clearTimeout(presence.timer);
+    presence.active = active;
+    presence.editing = editing;
+    presence.request = send('POST', documentPath(state) + '/live', {
+      session_id: presence.id, active, editing,
+    });
+    void presence.request.then(result => {
+      presence.request = null;
+      if (Boolean(isVisible(state)) !== active || (active && isDirty(state) !== editing)) {
+        refreshPresence(state);
+      } else if (active) {
+        const delay = result.status === 200 ? PRESENCE_INTERVAL : WATCH_BACKOFF;
+        presence.timer = view.setTimeout(() => refreshPresence(state, true), delay);
+      }
+    });
+  }
+
+  function stopWatch(state) {
+    if (!state) return;
+    view.clearTimeout(state.watchTimer);
+    const watch = state.watch;
+    state.watch = null;
+    watch?.abort();
+  }
+
   function queueUpdate(state) {
-    clearPoll();
-    if (isCurrent(state) && state.base && !state.unavailable && document.visibilityState !== 'hidden') {
-      poll = view.setTimeout(() => void checkUpdates(state), UPDATE_INTERVAL);
-    }
+    view.clearTimeout(state.watchTimer);
+    if (!isVisible(state) || state.busy || state.watch) return;
+    const interval = Date.now() < state.watchBackoff ? UPDATE_INTERVAL : WATCH_INTERVAL;
+    state.watchTimer = view.setTimeout(() => void checkUpdates(state), interval);
   }
 
   async function checkUpdates(state, force = false) {
-    if (!isCurrent(state) || !state.base || state.busy || state.polling || state.unavailable) return;
-    state.polling = true;
-    const known = state.remote?.revision || state.base.revision;
-    const result = await send('GET', documentPath(state) + (force || state.blocked ? '' : '?revision=' + known),
-      undefined, state.controller.signal);
-    state.polling = false;
-    if (!isCurrent(state) || state.unavailable) return;
-    if (!state.busy) {
-      const latest = responseDocument(result, state.base.id);
-      if (latest) applyRemote(state, latest);
-      else if (result.status === 401 || result.status === 403 || result.status === 404) {
-        unavailable(state);
-        return;
+    if (!isVisible(state) || state.busy) return;
+    if (force) stopWatch(state);
+    if (state.watch) return;
+    const controller = new AbortController();
+    state.watch = controller;
+    const path = documentPath(state);
+    const known = state.deferred?.revision || state.remote?.revision || state.base.revision;
+    const query = '?revision=' + known;
+    let result;
+    if (!force && !state.blocked && !(Date.now() < state.watchBackoff)) {
+      result = await send('GET', path + '/live' + query, undefined, controller.signal);
+      if (state.watch !== controller) return;
+      if (result.status === 200 && Array.isArray(result.body?.editors)) {
+        renderPresence(result.body.editors);
+      } else if (![401, 403, 410].includes(result.status)) {
+        state.watchBackoff = Date.now() + WATCH_BACKOFF;
+        renderPresence([]);
+        result = null;
       }
     }
+    result ??= await send('GET', path + (force || state.blocked ? '' : query), undefined, controller.signal);
+    if (state.watch !== controller) return;
+    state.watch = null;
+    if (!isVisible(state)) return;
+    const latest = responseDocument(result, state.base.id);
+    if (latest) applyRemote(state, latest);
+    else if ([401, 403, 404, 410].includes(result.status)) {
+      unavailable(state);
+      return;
+    }
+    refreshPresence(state);
     queueUpdate(state);
   }
 
-  async function openDocument(id) {
+  async function openDocument(id, revision) {
     if (!ID.test(id || '')) return;
     const state = newScreen('edit');
     show('正在打开团队文档…');
@@ -235,8 +358,10 @@ export function mountSharedStudio(document, {request, onClose}) {
     }
     show();
     showForm(state, item);
+    refreshPresence(state);
     queueUpdate(state);
-    get('back').focus();
+    if (revision) history.showVersion(revision);
+    else get('back').focus();
   }
 
   async function loadCatalog(failure = '') {
@@ -270,12 +395,12 @@ export function mountSharedStudio(document, {request, onClose}) {
     }
   }
 
-  async function open(id) {
+  async function open(id, revision) {
     if (!scope || dialog.open) return false;
     get('workspace-name').textContent = scope.name;
     dialog.showModal();
     closeButton.focus();
-    if (id) await openDocument(id);
+    if (id) await openDocument(id, revision);
     else await loadCatalog();
     return true;
   }
@@ -306,7 +431,31 @@ export function mountSharedStudio(document, {request, onClose}) {
   });
   get('refresh').addEventListener('click', () => void loadCatalog());
   form.addEventListener('input', () => {
-    if (screen) controls(screen);
+    if (!screen) return;
+    if (compare.open) updateLocalComparison(screen);
+    controls(screen);
+    refreshPresence(screen);
+  });
+  compare.addEventListener('toggle', () => {
+    if (screen && compare.open) updateLocalComparison(screen);
+  });
+  form.addEventListener('compositionstart', () => {
+    if (!screen?.base) return;
+    screen.composing = true;
+    controls(screen);
+  });
+  form.addEventListener('compositionend', () => {
+    const state = screen;
+    if (!state?.base) return;
+    view.setTimeout(() => {
+      if (!isCurrent(state)) return;
+      state.composing = false;
+      const latest = state.deferred;
+      state.deferred = null;
+      if (latest) applyRemote(state, latest);
+      controls(state);
+      refreshPresence(state);
+    }, 0);
   });
 
   form.addEventListener('submit', async event => {
@@ -318,7 +467,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     const payload = creating ? (state.attempt ??= {...draft, client_key: view.crypto.randomUUID()})
       : {...draft, revision: state.base.revision};
     state.busy = true;
-    clearPoll();
+    stopWatch(state);
     controls(state);
     show('正在保存…');
     const result = await send('POST', documentPath(state), payload, state.controller.signal);
@@ -344,22 +493,25 @@ export function mountSharedStudio(document, {request, onClose}) {
         : '暂时无法确认保存，当前草稿仍保留。请重试。', 'error');
     }
     controls(state);
+    refreshPresence(state);
     queueUpdate(state);
   });
 
   get('use-server').addEventListener('click', () => {
     const state = screen;
-    if (!state?.remote || state.busy || !view.confirm('要放弃当前草稿并采用服务器版本吗？')) return;
+    if (!state?.remote || state.busy || state.unavailable || !view.confirm('要放弃当前草稿并采用团队版本吗？')) return;
     showForm(state, state.remote);
-    show('已采用服务器版本。', 'success');
+    show('已采用团队版本。', 'success');
+    refreshPresence(state);
     titleInput.focus();
   });
   get('rebase').addEventListener('click', () => {
     const state = screen;
-    if (!state?.remote || state.busy) return;
+    if (!state?.remote || state.busy || state.unavailable) return;
     showForm(state, state.remote, content());
-    show('已保留草稿。再次保存会替换刚查看的服务器版本。');
-    titleInput.focus();
+    show('已保留草稿。请确认修改，保存后会成为新的团队版本。');
+    refreshPresence(state);
+    bodyInput.focus();
   });
 
   remove.addEventListener('click', async () => {
@@ -367,7 +519,7 @@ export function mountSharedStudio(document, {request, onClose}) {
     if (!state?.base?.can_delete || state.busy || state.remote || state.blocked || state.unavailable ||
         !view.confirm('要删除此团队文档吗？此操作会影响所有团队成员。')) return;
     state.busy = true;
-    clearPoll();
+    stopWatch(state);
     controls(state);
     const result = await send('POST', documentPath(state) + '/remove',
       {revision: state.base.revision}, state.controller.signal);
@@ -406,8 +558,9 @@ export function mountSharedStudio(document, {request, onClose}) {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') clearPoll();
+    if (document.visibilityState === 'hidden') stopWatch(screen);
     else if (screen?.base) void checkUpdates(screen);
+    refreshPresence(screen);
   });
   view.addEventListener('beforeunload', event => {
     if (!dialog.open || (!screen?.busy && !isDirty(screen))) return;

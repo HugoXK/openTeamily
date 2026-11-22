@@ -675,10 +675,6 @@ body.app-workspace > .app-rail button:disabled {
   font: inherit;
 }
 
-body.app-workspace > .app-rail .rail-spacer {
-  flex: 1;
-}
-
 body.app-workspace > .app-rail > .rail-actions {
   display: flex;
   flex: 1 1 0;
@@ -692,7 +688,7 @@ body.app-workspace > .app-rail > .rail-actions {
   scrollbar-width: none;
 }
 
-body.app-workspace > .app-rail > .rail-actions > :not(.rail-spacer),
+body.app-workspace > .app-rail > .rail-actions > *,
 body.app-workspace > .app-rail > :is(.brand-mark, .rail-link, .account-slot) {
   flex-shrink: 0;
 }

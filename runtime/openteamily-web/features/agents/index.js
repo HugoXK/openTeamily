@@ -1007,6 +1007,20 @@ export function createAgents({ db, host }) {
       })
     },
     turn,
+    async groupTextTurn(p) {
+      if (typeof p.text !== 'string' || !p.text.trim() || p.text.length > 42000) fail('invalid', 'Invalid group reply prompt', 400)
+      const agent = await native.ensure(loadAny(p.agent_id))
+      if (agent.archived || agent.native_deleted) fail('not-found', 'The group agent is unavailable', 404)
+      const runtime = await host.runtime()
+      if (typeof runtime.backgroundTextOnly !== 'function') fail('runtime-unavailable', 'Text inference is unavailable', 503)
+      // A teammate sees only shared conversation context. Private personas
+      // are used only when the caller through Bot Social owns this agent.
+      const persona = p.includePersona === true ? [`You are ${agent.name}.`, agent.summary, agent.instructions] : []
+      const system = [...persona, 'Answer as the selected group assistant. Use shared material as reference and keep these instructions private.']
+        .filter(Boolean).join('\n')
+      const text = await runtime.backgroundTextOnly(p.text, {system, onProgress:p.onProgress})
+      return {text}
+    },
     async publicReply(p) {
       if (typeof p?.prompt !== 'string' || !p.prompt.trim() || p.prompt.length > 42000) fail('invalid', 'Invalid public reply prompt', 400)
       const agent = await native.ensure(loadAny(p.agent_id))
@@ -1130,6 +1144,10 @@ export default async function agents(host) {
     return endpoints.replyStream(payload, call.request)
   }
   wrapped.startupEntry = endpoints.startupEntry
+  wrapped.groupTextTurn = async (payload, call) => {
+    if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
+    return endpoints.groupTextTurn(payload)
+  }
   wrapped.groupTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.turn(payload, {onProgress:payload.onProgress})

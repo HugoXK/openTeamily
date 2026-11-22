@@ -1,4 +1,4 @@
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mountActionMenus} from '../openteamily/static/shell/action-menu.mjs';
@@ -248,13 +248,19 @@ test('calling both menu helpers without an existing 新手引导 link keeps the 
 });
 
 
-test('shared icon rails keep accessible link names and leave account-menu text visible', () => {
-  for (const name of ['chat', 'discover', 'settings', 'memory', 'artifacts', 'onboarding', 'agents']) {
-    const html = readFileSync(new URL('../openteamily/static/' + name + '/index.html', import.meta.url), 'utf8');
-    const nav = html.split('<nav class="app-rail"')[1].split('<div class="account-slot"')[0];
+test('workspace pages render one accessible account icon in the rail before shell startup', () => {
+  const staticPages = new URL('../openteamily/static/', import.meta.url);
+  for (const page of readdirSync(staticPages, {recursive: true}).filter(path => path.endsWith('/index.html'))) {
+    const html = readFileSync(new URL(page, staticPages), 'utf8');
+    if (!html.includes('<nav class="app-rail"')) continue;
+    const [nav, menu] = html.split('<nav class="app-rail"')[1].split('</nav>')[0].split('<div class="account-slot"');
+    assert.match(nav, /class="rail-actions"/, page);
+    assert.doesNotMatch(nav, /href="\/profile"|class="rail-spacer"/, page);
     assert.match(nav, /href="\/chat"[^>]*aria-label="聊天">[\s\S]*?<svg/);
     assert.match(nav, /class="rail-label">发现<\/span>/);
-    const menu = html.split('<div class="account-slot"')[1].split('</nav>')[0];
+    const trigger = menu.match(/<button[^>]*id="account-menu-button"[^>]*>[\s\S]*?<\/button>/g);
+    assert.equal(trigger?.length, 1, page);
+    assert.match(trigger[0], /aria-label="账户菜单"[^>]*>\s*<svg[^>]*aria-hidden="true"[^>]*>[^<]*<path[^>]*\/>\s*<\/svg>\s*<\/button>/, page);
     assert.doesNotMatch(menu, /class="rail-label"/);
     assert.match(menu, /所有设置<\/a>/);
   }

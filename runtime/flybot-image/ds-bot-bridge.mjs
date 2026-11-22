@@ -129,6 +129,51 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
 const PROGRESS_TEXT_LIMIT = 20_000
 const PROGRESS_INTERVAL_MS = 50
 
+async function streamedCompletion(body, onProgress) {
+  if (!body) throw new Error('Text inference did not return a stream')
+  let pending = '', text = ''
+  for await (const chunk of body.pipeThrough(new TextDecoderStream())) {
+    pending += chunk
+    let frame
+    while ((frame = /\r?\n\r?\n/.exec(pending))) {
+      const data = pending.slice(0, frame.index).split(/\r?\n/)
+        .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')
+      pending = pending.slice(frame.index + frame[0].length)
+      if (!data) continue
+      if (data === '[DONE]') return text
+      const payload = JSON.parse(data)
+      if (payload.error) throw new Error('Text inference stream failed')
+      const choice = payload.choices?.[0]
+      const next = choice?.delta?.content
+      if (typeof next === 'string' && next) {
+        text += next.slice(0, PROGRESS_TEXT_LIMIT - text.length)
+        onProgress(text.toWellFormed())
+      }
+      if (choice?.finish_reason === 'stop' || choice?.finish_reason === 'length' ||
+          text.length === PROGRESS_TEXT_LIMIT) return text
+    }
+    if (pending.length > 512 * 1024) throw new Error('Text inference event is too large')
+  }
+  throw new Error('Text inference stream ended early')
+}
+
+export async function textOnlyCompletion(bridge, prompt, {system, onProgress} = {}) {
+  await bridge.setup()
+  const stream = typeof onProgress === 'function'
+  const messages = [...(system ? [{role:'system', content:system}] : []), {role:'user', content:prompt}]
+  const response = await fetch(bridge.baseURL + '/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+    body: JSON.stringify({ model: MODEL_ID, messages, stream }),
+    signal: AbortSignal.timeout(170000), redirect: 'error',
+  })
+  if (!response.ok) throw new Error('Text-only model inference failed')
+  const text = stream && response.headers.get('content-type')?.includes('text/event-stream')
+    ? await streamedCompletion(response.body, onProgress)
+    : (await response.json()).choices?.[0]?.message?.content
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
+  return text.slice(0, PROGRESS_TEXT_LIMIT).toWellFormed()
+}
+
 function turnProgress(onProgress) {
   if (typeof onProgress !== 'function') return
   let committed = '', draft = '', sent = ''

@@ -2,7 +2,7 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
   const get = name => document.getElementById('studio-history' + (name ? '-' + name : ''));
   const dialog = get();
   const open = get('open');
-  if (!dialog || !open) return {sync() {}, dismiss() {}};
+  if (!dialog || !open) return {sync() {}, dismiss() {}, showVersion() {}};
   const list = get('list'), preview = get('preview'), restore = get('restore'), status = get('status');
   const refresh = get('refresh'), close = get('close');
   const view = document.defaultView;
@@ -54,7 +54,7 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
     const version = result.body.version;
     if (result.status !== 200 || version?.revision !== revision ||
         typeof version.title !== 'string' || typeof version.body !== 'string') {
-      status.textContent = '该版本暂时无法打开，请刷新版本列表。';
+      status.textContent = result.status === 404 ? '该版本已不可用。' : '该版本暂时无法打开，请刷新版本列表。';
       return;
     }
     history.current = result.body.current_revision;
@@ -98,14 +98,17 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
     }
   }
 
-  open.addEventListener('click', () => {
+  function showVersion(revision) {
     const current = context();
     if (!current || current.unavailable || current.busy || dialog.open) return;
     active = {path:current.path};
     dialog.showModal();
     refresh.focus();
-    void load();
-  });
+    if (revision) void choose(revision);
+    else void load();
+  }
+
+  open.addEventListener('click', () => showVersion());
   refresh.addEventListener('click', () => { if (active && !restoring) void load(); });
   close.addEventListener('click', () => { if (!restoring) dismiss(); });
   dialog.addEventListener('cancel', event => {
@@ -131,5 +134,5 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
     sync();
   });
 
-  return {sync,dismiss};
+  return {sync,dismiss,showVersion};
 }
