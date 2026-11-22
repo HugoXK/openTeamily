@@ -60,11 +60,14 @@ export function apply(ctx, config = {}) {
       }, botId)
     }
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
+    const prepareMappedChat = async (botId, sessionId) => {
+      await bridge.prepareModel()
+      await prepareNativeChat(rt, botId, sessionId)
+    }
     const attachmentStore = () => ctx.get?.('attachments')
     const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
       options.signal?.throwIfAborted()
-      await bridge.prepareModel()
-      await prepareNativeChat(rt, botId, sessionId)
+      await prepareMappedChat(botId, sessionId)
       const parts = [], stored = []
       const uploads = ctx.get?.('fileUploads')
       for (const file of options.files || []) {
@@ -102,7 +105,8 @@ export function apply(ctx, config = {}) {
       return Buffer.concat(chunks)
     }
     const privateText = (prompt, options) => textOnlyCompletion(bridge, prompt, options)
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly: privateText, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
+    attachRuntime({ rt, ctx, chatTurn, mainBot, prepareMappedChat, nativeTurn, readNativeAttachment,
+      textOnly: privateText, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached
 }
