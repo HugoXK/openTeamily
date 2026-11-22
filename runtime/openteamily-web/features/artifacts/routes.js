@@ -65,7 +65,7 @@ function catalogQuery(query) {
   const since = catalogTime(args.get('updated_since'))
   const before = catalogTime(args.get('updated_before'))
   const validLabel = (value, max) => value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value)
-  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
+  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory', 'automation'].includes(scope) ||
       !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
       !['id', 'recent'].includes(order) || [...types].some(type => !FILE_TYPES.has(type)) ||
       [...creators].some(value => !validLabel(value, 100)) || [...sessions].some(value => !validLabel(value, 128)) ||

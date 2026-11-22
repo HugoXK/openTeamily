@@ -323,7 +323,8 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 
 #empty-all,
 #empty-starred,
-#empty-memory {
+#empty-memory,
+#empty-automation {
   display: grid;
   justify-items: center;
   text-align: center;
@@ -333,14 +334,16 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 
 #empty-all h2,
 #empty-starred h2,
-#empty-memory h2 {
+#empty-memory h2,
+#empty-automation h2 {
   margin: 0.2rem 0 0;
   font-size: 1.15rem;
 }
 
 #empty-all > p,
 #empty-starred > p,
-#empty-memory > p {
+#empty-memory > p,
+#empty-automation > p {
   margin: 0;
   color: var(--ot-muted);
 }
@@ -1273,13 +1276,14 @@ html[data-theme-resolved="dark"] #artifact-list[data-layout="grid"] li.artifact-
 }
 .artifact-item-menu[hidden] { display: none; }
 .artifact-item-menu, #new-menu { max-height: calc(100dvh - 1rem); overflow: auto; overscroll-behavior: contain; }
-.artifact-item-menu button { height: 2rem; min-height: 0; padding: 0 .625rem; border: 0; border-radius: .5rem; background: transparent; color: var(--ot-ink); font-size: .8125rem; text-align: left; box-shadow: none; }
-.artifact-item-menu button:hover:not(:disabled) { background: var(--ot-surface-2); }
-:is(.artifact-item-menu, #new-menu) button:focus-visible {
+.artifact-item-menu :is(button, a) { height: 2rem; min-height: 0; padding: 0 .625rem; border: 0; border-radius: .5rem; background: transparent; color: var(--ot-ink); font-size: .8125rem; text-align: left; box-shadow: none; }
+.artifact-item-menu a { display: flex; align-items: center; text-decoration: none; }
+.artifact-item-menu :is(button, a):hover:not(:disabled) { background: var(--ot-surface-2); }
+:is(.artifact-item-menu, #new-menu) [role="menuitem"]:focus-visible {
   background: var(--ot-bg-accent); outline: 2px solid var(--ot-accent); outline-offset: -2px;
 }
 @media (pointer: coarse) {
-  :is(.artifact-item-menu, #new-menu) button { min-height: 2.75rem; }
+  :is(.artifact-item-menu, #new-menu) [role="menuitem"] { min-height: 2.75rem; }
 }
 .artifact-item-menu button:disabled { color: var(--ot-muted); opacity: 1; cursor: not-allowed; }
 .artifact-item-menu .artifact-menu-danger { color: #b42318; }

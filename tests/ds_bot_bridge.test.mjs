@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { EventEmitter, once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -249,6 +249,111 @@ test('sending to a live mapped part selects its route without changing the foreg
   rt.chatOwners.set(target,'other')
   await assert.rejects(runTurn(rt,ctx,bot.id,'one test prompt','stale-target',500,[],{sessionId:target}),/no longer active/)
   assert.equal(operations.length,4)
+})
+
+test('the model proxy aborts the upstream request when DS-Bot disconnects before any response bytes', {timeout:3000}, async t => {
+  const arrived = Promise.withResolvers(), disconnected = Promise.withResolvers()
+  const upstream = createServer((req,res) => {
+    req.resume()
+    res.once('close', disconnected.resolve)
+    arrived.resolve()
+  })
+  const upstreamPort = await listen(upstream)
+  t.after(() => { upstream.closeAllConnections(); return close(upstream) })
+  const log = []
+  const model = {base_url:'https://cancel-provider.example/v1',model:'test',api_key:'synthetic'}
+  const proxy = createBridgeServer({token:'local-only',startupModel:() => model}, {
+    log:line => log.push(line), forward: (api,raw,res) => forwardModel(api,raw,res,{
+      httpsRequester: (url, options, callback) => httpRequest(`http://127.0.0.1:${upstreamPort}${url.pathname}`,options,callback),
+    }),
+  })
+  const port = await listen(proxy)
+  t.after(() => { proxy.closeAllConnections(); return close(proxy) })
+  const controller = new AbortController()
+  const result = assert.rejects(fetch(`http://127.0.0.1:${port}/v1/chat/completions`,{method:'POST',body:'{}',
+    headers:{authorization:'Bearer local-only'},signal:controller.signal}),{name:'AbortError'})
+  await arrived.promise
+  controller.abort()
+  await result
+  await disconnected.promise
+  assert.deepEqual(log,[])
+})
+
+test('aborting a mapped text turn waits for its exact request echo and native settlement', async () => {
+  const ctx = new EventEmitter()
+  const listen = ctx.on.bind(ctx)
+  ctx.on = (type, listener) => { listen(type, listener); return () => ctx.off(type, listener) }
+  const bot = {id:'bot',sessionId:'foreground',openParts:[{sessionId:'target'}]}
+  const session = {id:'target'}, foreground = {id:'foreground'}
+  const stopped = Promise.withResolvers(), children = Promise.withResolvers()
+  const calls = []
+  const rt = {
+    botOf: () => bot,
+    chatOf: () => bot.sessionId,
+    chatOwners:new Map([[session.id,bot.id],[foreground.id,bot.id]]),
+    pastOwners:new Map(), live:new Map(),
+    sendUser({sessionId,requestId}) { calls.push(['send',sessionId,requestId]) },
+    async resolveAgent(id) {
+      assert.equal(id,session.id)
+      return {session,cancel(reason) { calls.push(['cancel',reason]); stopped.resolve() }}
+    },
+    stopSubagents(id) { calls.push(['children',id]); return children.promise },
+    displayItems: () => [],
+  }
+  const already = AbortSignal.abort()
+  await assert.rejects(runTurn(rt,ctx,bot.id,'Never send','pre-aborted',1000,[],{sessionId:session.id,signal:already}),{name:'AbortError'})
+  const controller = new AbortController()
+  const turn = runTurn(rt,ctx,bot.id,'Stop this one','current-request',1000,[],{sessionId:session.id,signal:controller.signal})
+  let completed = false
+  const final = assert.rejects(turn,{name:'AbortError'}).then(() => { completed = true })
+  const event = (source,type,data) => ctx.emit('session/event',source,{type,data})
+  controller.abort()
+  event(foreground,'turn/start',{turn:41})
+  event(foreground,'user/message',{source:{rpcId:'current-request'}})
+  rt.live.set(session.id,{turn:2})
+  event(session,'turn/start',{turn:2})
+  event(session,'user/message',{source:{rpcId:'unrelated-prior-turn'}})
+  await delay(0)
+  assert.deepEqual(calls,[['send',session.id,'current-request']])
+  event(session,'turn/end',{turn:2})
+  rt.live.set(session.id,{turn:3})
+  event(session,'turn/start',{turn:3})
+  event(session,'user/message',{source:{rpcId:'current-request'}})
+  await stopped.promise
+  assert.deepEqual(calls,[['send',session.id,'current-request'],['children',session.id],['cancel',{kind:'user'}]])
+  assert.equal(completed,false)
+  event(session,'turn/end',{turn:3})
+  await delay(0)
+  assert.equal(completed,false)
+  children.resolve()
+  await final
+  assert.equal(ctx.listenerCount('session/event'),0)
+})
+
+test('a delayed abort lookup cannot cancel a newer turn on the same Session', async () => {
+  const ctx = new EventEmitter()
+  const session = {id:'target'}
+  const lookup = Promise.withResolvers(), resolveCalled = Promise.withResolvers()
+  const controller = new AbortController()
+  const rt = {
+    chatOf: () => session.id,
+    botOf: () => ({id:'bot',sessionId:session.id}),
+    chatOwners:new Map([[session.id,'bot']]), pastOwners:new Map(), live:new Map([[session.id,{turn:1}]]),
+    sendUser({requestId}) {
+      ctx.emit('session/event',session,{type:'turn/start',data:{turn:1}})
+      ctx.emit('session/event',session,{type:'user/message',data:{source:{rpcId:requestId}}})
+    },
+    resolveAgent() { resolveCalled.resolve(); return lookup.promise },
+    stopSubagents() { assert.fail('a newer turn must be left running') },
+    displayItems: () => [],
+  }
+  const result = assert.rejects(runTurn(rt,ctx,'bot','Original','current-request',1000,[],{signal:controller.signal}), {name:'AbortError'})
+  controller.abort()
+  await resolveCalled.promise
+  rt.live.set(session.id,{turn:2})
+  ctx.emit('session/event',session,{type:'turn/end',data:{turn:1}})
+  lookup.resolve({session,cancel() { assert.fail('a newer turn must be left running') }})
+  await result
 })
 
 test('an owned historical segment can still be opened using the native runtime', async () => {

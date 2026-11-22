@@ -80,20 +80,26 @@ export async function forwardModel(modelApi, raw, res, { httpRequester = httpReq
     stream.on('error', () => { res.destroy(); resolve() })
     stream.on('close', resolve)
   })
-  const signal = AbortSignal.timeout(180000)
-  if (httpTask) {
-    return streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
-  }
-  const url = new URL(base + '/chat/completions')
-  const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
-  return new Promise((resolve, reject) => {
-    const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
-      if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
-      resolve(relay(response.statusCode, response.headers, response))
+  const downstream = new AbortController()
+  const closed = () => { if (!res.writableFinished) downstream.abort() }
+  res.once?.('close', closed)
+  if (res.destroyed) closed()
+  const signal = AbortSignal.any([downstream.signal, AbortSignal.timeout(180000)])
+  try {
+    if (httpTask) {
+      return await streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
+    }
+    const url = new URL(base + '/chat/completions')
+    const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
+    return await new Promise((resolve, reject) => {
+      const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
+        if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
+        resolve(relay(response.statusCode, response.headers, response))
+      })
+      req.on('error', () => reject(new Error('model request failed')))
+      req.end(body)
     })
-    req.on('error', () => reject(new Error('model request failed')))
-    req.end(body)
-  })
+  } finally { res.off?.('close', closed) }
 }
 
 // Loopback model server for the native DS-Bot provider.
@@ -113,6 +119,7 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
         const modelApi = state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
         try { await forward(modelApi, raw, res) } catch (error) {
+          if (res.destroyed) return
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))
           if (!res.headersSent) sendJson(res, 502, { error: { message: 'upstream model request failed' } })
           else res.destroy()
@@ -245,13 +252,15 @@ export async function prepareNativeChat(rt, botId, sessionId) {
 
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId, signal } = {}) {
+  if (signal?.aborted) return Promise.reject(signal.reason)
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
   if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
   sessionId ??= rt.chatOf(botId)
   return new Promise((resolve, reject) => {
     const progress = turnProgress(onProgress)
     let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
+    let stopping
     let revision = 0
     let phase = 'preparing'
     function emitPhase(next) {
@@ -267,15 +276,31 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
       settled = true
       clearTimeout(timer)
       progress?.dispose()
+      signal?.removeEventListener('abort', cancelNative)
       for (const listener of listeners) {
         try {
           if (typeof listener === 'function') listener()
           else listener?.dispose?.()
         } catch {}
       }
-      error ? reject(error) : resolve(value)
+      const complete = () => error ? reject(error) : resolve(value)
+      if (stopping) void stopping.then(complete, complete)
+      else complete()
     }
     const timer = setTimeout(() => finish(new Error('DS-Bot turn timed out')), timeoutMs)
+    function cancelNative() {
+      if (settled || stopping || !boundSession || boundTurn === undefined) return
+      const session = boundSession, turn = boundTurn
+      stopping = Promise.resolve().then(() => rt.resolveAgent(sessionId)).then(agent => {
+        // Do not stop another turn even if it now owns the same Bot or Session.
+        if (settled || boundSession !== session || agent?.session !== session || boundTurn !== turn ||
+            rt.live?.get(sessionId)?.turn !== turn || !ownsLiveChat(rt, botId, sessionId)) return
+        const children = rt.stopSubagents?.(sessionId)
+        agent.cancel({kind:'user'})
+        return children
+      }).catch(() => {})
+    }
+    signal?.addEventListener('abort', cancelNative, {once:true})
     function discardAttempt() {
       attempt = undefined
       progress?.discard()
@@ -303,6 +328,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
         if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) {
           boundSession = session
           boundTurn = session === observedSession ? observedTurn : undefined
+          if (signal?.aborted) cancelNative()
           return
         }
         if (!boundSession) {
@@ -325,6 +351,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           progress?.commit(parts.slice(start))
         }
         if (event.type === 'turn/end') {
+          if (signal?.aborted) { finish(signal.reason); return }
           const reply = parts.join('\n\n').trim()
           if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
           else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))

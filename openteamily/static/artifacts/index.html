@@ -98,6 +98,7 @@
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
         <button type="button" data-scope="favorites">收藏</button>
+        <button type="button" data-scope="automation">自动化结果</button>
         <button type="button" data-scope="memory">记忆</button>
       </nav>
       <div id="meetings-chrome" hidden>
@@ -305,6 +306,10 @@
             <h2>没有匹配的作品</h2>
             <p>智能体生成的作品将显示在此处。</p>
             <p>清除筛选条件或切换作品类型，以扩大结果范围。</p>
+          </div>
+          <div id="empty-automation" hidden>
+            <h2>暂无自动化结果</h2>
+            <p>在自动化的运行详情中选择「保存到作品库」，即可在这里找到结果。</p>
           </div>
           <div id="empty-kind" hidden>
             <p id="empty-kind-note" class="note">这一类还没有作品。</p>

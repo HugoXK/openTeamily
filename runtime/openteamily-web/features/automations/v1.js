@@ -1,7 +1,7 @@
 // Legacy /v1 routes for /automations/ once the core stream flips that page
 // into moved_pages. The browser shim (shell/dsbot-api.mjs) posts
 // {endpoint:'automations/v1', payload:{method,path,body,idempotency_key}}.
-import { FeatureError } from '../../featurekit/http.js'
+import { FeatureError, HEX32 } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 
 const HEX = '([0-9a-f]{32})'
@@ -16,8 +16,28 @@ function wrap(fn) {
   }
 }
 
-export function automationsV1({ endpoints, log, personalBinding }) {
+export function automationsV1({ endpoints, log, personalBinding, readSavedWorks }) {
   const call = (name, payload) => endpoints[name](payload)
+
+  async function withSavedWorks(result, workspace, automation) {
+    const runs = result.items ?? [result.run]
+    const eligible = runs.filter(run => run.status === 'succeeded')
+    if (!readSavedWorks || !eligible.length) return result
+    let receipts
+    try {
+      receipts = await readSavedWorks({workspace_id: workspace, automation_id: automation, run_ids: eligible.map(run => run.id)})
+    } catch {
+      // Opening an automation run does not depend on Space being available.
+      return result
+    }
+    if (!Array.isArray(receipts?.items)) return result
+    const saved = new Map(receipts.items
+      .filter(work => typeof work?.id === 'string' && HEX32.test(work.id) && typeof work.title === 'string')
+      .map(({run_id, id, title}) => [run_id, {id, title}]))
+    const attach = run => run.status === 'succeeded' ? {...run, saved_work: saved.get(run.id) ?? null} : run
+    return result.items ? {...result, items: runs.map(attach)} : {...result, run: attach(result.run)}
+  }
+
   const routes = [
     { pattern: /^\/v1\/onboarding\/automations$/, handle: wrap(async (req) => {
       if (req.method !== 'POST' || req.query.size) throw new FeatureError(400, 'invalid', 'Invalid onboarding automation request')
@@ -63,9 +83,13 @@ export function automationsV1({ endpoints, log, personalBinding }) {
       return {status: 200, body: await call('studioPublish', {...target, review: body.review})}
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id, runId) => {
-      if (runId) return { status: 200, body: await call('run', { workspace_id: workspaceId, id, run_id: runId }) }
+      if (runId) {
+        const result = await call('run', { workspace_id: workspaceId, id, run_id: runId })
+        return { status: 200, body: await withSavedWorks(result, workspaceId, id) }
+      }
       const limit = req.query.get('limit')
-      return { status: 200, body: await call('runs', { workspace_id: workspaceId, id, status: req.query.get('status') || undefined, cursor: req.query.get('cursor') || undefined, limit: limit ? Number(limit) : undefined }) }
+      const result = await call('runs', { workspace_id: workspaceId, id, status: req.query.get('status') || undefined, cursor: req.query.get('cursor') || undefined, limit: limit ? Number(limit) : undefined })
+      return { status: 200, body: await withSavedWorks(result, workspaceId, id) }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/remove$`), handle: wrap(async (req, workspaceId, id) => {
       if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')

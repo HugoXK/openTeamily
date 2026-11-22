@@ -847,42 +847,45 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runHeading?.focus({preventScroll: true});
   }
 
+  const runResultKey = (target, item) => target.key + '/' + item.id;
+  function savedRunWork(item, target) {
+    const work = exactRunForTarget(item, target) && Object.hasOwn(item, 'saved_work')
+      ? item.saved_work : savedRunResults.get(runResultKey(target, item));
+    return typeof work?.id === 'string' && /^[a-f0-9]{32}$/.test(work.id) ? work : null;
+  }
+
   async function saveRunResult(button, item, target) {
-    if (savingRunResults.has(item.id)) return;
-    savingRunResults.add(item.id);
+    const key = runResultKey(target, item);
+    if (savingRunResults.has(key)) return;
+    savingRunResults.add(key);
     button.disabled = true;
     button.textContent = '保存中…';
-    const sameEditor = () => current?.id === target.automation && workspaceId() === target.workspace && !form.hidden;
+    let savedWork = null;
     try {
-      const result = await request('POST',
-        `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${item.id}/artifact`, {});
-      const artifact = result.body.artifact?.id;
-      if (![200, 201].includes(result.status) || !/^[0-9a-f]{32}$/.test(artifact || '')) {
-        if (sameEditor()) show('error', messageFor(result.body.error, '保存到作品库失败。'));
+      const result = await request('POST', `${runPath(target)}/runs/${item.id}/artifact`, {});
+      if (!currentRunScope(target)) return;
+      const work = result.body.artifact;
+      if (![200, 201].includes(result.status) || typeof work?.id !== 'string' || !/^[a-f0-9]{32}$/.test(work.id)) {
+        show('error', messageFor(result.body.error, '保存到作品库失败。'));
         return;
       }
-      savedRunResults.set(item.id, artifact);
-      if (sameEditor()) {
-        show('ok', '已保存到作品库。');
-        if (!button.isConnected) {
-          renderRuns(recentRuns);
-          return;
-        }
-        const link = document.createElement('a');
-        link.href = spaceHref(target.workspace, artifact);
-        link.className = 'run-work-link';
-        link.textContent = '打开作品';
-        button.insertAdjacentElement('afterend', link);
-        button.hidden = true;
-        link.focus();
-      }
+      savedWork = {id:work.id, title:work.title};
+      savedRunResults.set(key, savedWork);
+      const attach = run => run?.id === item.id ? {...run, saved_work: savedWork} : run;
+      selectedRun = attach(selectedRun);
+      recentRuns = recentRuns.map(attach);
+      show('ok', '已保存到作品库。');
     } catch {
-      if (sameEditor()) show('error', '暂时无法确认是否已保存，可以重试。');
+      if (currentRunScope(target)) show('error', '暂时无法确认是否已保存，可以重试。');
     } finally {
-      savingRunResults.delete(item.id);
-      if (sameEditor() && !button.isConnected && !savedRunResults.has(item.id)) renderRuns(recentRuns);
+      savingRunResults.delete(key);
       button.disabled = false;
       button.textContent = '保存到作品库';
+      if (currentRunScope(target)) {
+        renderRuns(recentRuns);
+        // A list request started before the save may still carry an empty receipt.
+        if (savedWork) void loadRuns();
+      }
     }
   }
 
@@ -943,7 +946,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const hasRetry = visible.some(retryAllowed);
     const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible, hasRetry && activeRun,
       hasRetry && submission?.state, hasRetry && submission?.source,
-      visible.map(({id}) => [savedRunResults.get(id), savingRunResults.has(id), cancellingRuns.has(`${target.key}/${id}`)])]);
+      visible.map(item => [savedRunWork(item, target), savingRunResults.has(runResultKey(target, item)),
+        cancellingRuns.has(`${target.key}/${item.id}`)])]);
     if (runFingerprint === fingerprint) return;
     runFingerprint = fingerprint;
     const focused = document.activeElement;
@@ -1007,17 +1011,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
           detail.appendChild(exports);
         }
-        const artifact = savedRunResults.get(item.id);
+        const artifact = savedRunWork(item, target);
         const action = document.createElement(artifact ? 'a' : 'button');
         action.dataset.runControl = 'artifact';
         if (restore && focusRow.dataset.runId === item.id && focusedControl === 'artifact') nextFocus = action;
         if (artifact) {
-          action.href = spaceHref(target.workspace, artifact);
+          action.href = spaceHref(target.workspace, artifact.id);
           action.className = 'run-work-link';
           action.textContent = '打开作品';
+          if (artifact.title) action.title = artifact.title;
         } else {
           action.type = 'button';
-          action.disabled = savingRunResults.has(item.id);
+          action.disabled = savingRunResults.has(runResultKey(target, item));
           action.textContent = action.disabled ? '保存中…' : '保存到作品库';
           action.addEventListener('click', () => saveRunResult(action, item, target));
         }

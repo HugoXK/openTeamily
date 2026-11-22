@@ -328,6 +328,7 @@ export function createAgents({ db, host }) {
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
   async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }, options) {
+    options?.signal?.throwIfAborted()
     const agent = await native.ensure(loadAny(agentId))
     if (agent.archived) fail('archived', 'Agent is archived', 409)
     if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
@@ -339,6 +340,7 @@ export function createAgents({ db, host }) {
     if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
     const prompt = [typeof context === 'string' ? context.slice(0, CONTEXT_LIMIT) : '', lang ? `Reply in ${lang}.\n\n${text}` : text].filter(Boolean).join('\n\n')
     const args = [mapping.native_bot_id, mapping.native_session_id, prompt, requestId || `ot-agent:${newId()}`]
+    options?.signal?.throwIfAborted()
     if (options) args.push(options)
     const reply = await services.nativeTurn(...args)
     const out = String(reply?.text ?? '').trim()
@@ -364,25 +366,26 @@ export function createAgents({ db, host }) {
     if (typeof p.key !== 'string' || !IDEM.test(p.key)) fail('invalid', 'Invalid message send key', 400)
     const textId = sendId('text', 'reply', id, p.key)
     const attachmentId = sendId('attachment', 'reply', id, p.key)
-    const find = () => one(`SELECT id,status FROM agent_messages
+    const find = () => one(`SELECT id,status,text,meta FROM agent_messages
       WHERE conversation_id=? AND role='assistant' AND id IN (?,?) ORDER BY rowid DESC LIMIT 1`,
       id, textId, attachmentId)
     return {id, textId, find}
   }
 
-  async function trackSend(conversationId, userId, replyId, perform, onAccepted) {
-    const progress = {text:'', phase:'preparing', revision:0, waiters:new Set(), ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
+  async function trackSend(conversationId, userId, replyId, perform, onAccepted, stop) {
+    const progress = {text:'', phase:'preparing', revision:0, waiters:new Set(), stop,
+      ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
     const wake = () => { for (const waiter of progress.waiters) waiter() }
     liveReplies.set(replyId, progress)
     const runTurn = () => perform(text => {
-      if (typeof text !== 'string') return
+      if (stop?.signal.aborted || typeof text !== 'string') return
       const snapshot = text.slice(0, LIMITS.text)
       if (snapshot === progress.text) return
       progress.text = snapshot
       progress.revision += 1
       wake()
     }, phase => {
-      if (!['preparing','thinking','writing'].includes(phase) || phase === progress.phase) return
+      if (stop?.signal.aborted || !['preparing','thinking','writing'].includes(phase) || phase === progress.phase) return
       progress.phase = phase
       progress.revision += 1
       wake()
@@ -402,17 +405,22 @@ export function createAgents({ db, host }) {
   }
 
   function runTextReply({agent, convo, userId, replyId, text, userMeta, replyMeta, attempt, extra, returnFailed}) {
+    const stop = replyMeta.clientKey ? new AbortController() : undefined
+    const signal = stop?.signal
     return trackSend(convo.id, userId, replyId, async (onProgress, onPhase) => {
       try {
+        signal?.throwIfAborted()
         const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, extra)
         const requestId = attempt === 1 ? `ot-agent:${userId}` : `ot-agent:${userId}:retry:${attempt}`
         const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:requestId,reply_language:userMeta.replyLanguage,context},
-          {onProgress,onPhase})
+          {onProgress,onPhase,signal})
+        if (signal?.aborted) return sentPair(userId, replyId)
         run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
         run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
           JSON.stringify({...replyMeta,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id,memory_refs:refs,memory_profile_workspace:personalWorkspace}), replyId)
         enqueueCapture(agent, convo, userId, text, remember)
       } catch (error) {
+        if (signal?.aborted) return sentPair(userId, replyId)
         run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify(userMeta), userId)
         run('UPDATE agent_messages SET status=?, meta=? WHERE id=?', 'failed',
           JSON.stringify({...replyMeta,error:String(error?.code ?? 'agents/failed')}), replyId)
@@ -421,7 +429,7 @@ export function createAgents({ db, host }) {
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       }
       return sentPair(userId, replyId)
-    })
+    }, undefined, stop)
   }
 
   async function sendWithAttachments(p, agent, convo, text, reference) {
@@ -1017,6 +1025,33 @@ export function createAgents({ db, host }) {
         .catch(error => host.log?.('private reply retry: ' + String(error?.code ?? error?.name ?? 'error')))
       return {status:202,...sentPair(userId, replyId)}
     },
+    stopReply(p) {
+      if (!Number.isSafeInteger(p.attempt) || p.attempt < 1) fail('invalid', 'Provide the current reply attempt', 400)
+      const {id, textId, find} = scopedReplyLookup(p)
+      const row = find()
+      if (!row) fail('not-found', 'Reply not found', 404)
+      const meta = JSON.parse(row.meta)
+      if (row.id !== textId || textReplyAttempt(meta) !== p.attempt) {
+        fail('reply_stop_unavailable', '这次回复无法停止或已更新。', 409)
+      }
+      const userId = sendId('text', 'user', id, p.key)
+      if (row.status === 'cancelled') return sentPair(userId, row.id)
+      const progress = liveReplies.get(row.id)
+      if (row.status !== 'running' || !progress?.stop) fail('reply_stop_unavailable', '这次回复已结束。', 409)
+      const partial = progress.text.toWellFormed()
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const changed = run(`UPDATE agent_messages SET status='cancelled',text=?,meta=json_remove(meta,'$.nativePending')
+          WHERE id=? AND status='running' AND COALESCE(json_extract(meta,'$.replyAttempt'),1)=?`, partial, row.id, p.attempt)
+        if (!changed.changes) fail('reply_stop_unavailable', '这次回复已结束。', 409)
+        run(`UPDATE agent_messages SET meta=json_remove(meta,'$.nativePending') WHERE id=?`, userId)
+        run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), id)
+        db.exec('COMMIT')
+      } catch (error) { db.exec('ROLLBACK'); throw error }
+      progress.stop.abort()
+      for (const waiter of progress.waiters) waiter()
+      return sentPair(userId, row.id)
+    },
     async replyProgress(p) {
       const {id, textId, find} = scopedReplyLookup(p)
       let reply = find()
@@ -1029,7 +1064,8 @@ export function createAgents({ db, host }) {
         progress = liveReplies.get(reply.id)
       }
       const result = reply.status === 'running' ? {state:'running', text:progress?.text || '',
-        ...(p.after !== undefined && progress ? {revision:progress.revision, phase:progress.phase} : {})} : {state:reply.status}
+        ...(p.after !== undefined && progress ? {revision:progress.revision, phase:progress.phase} : {})}
+        : {state:reply.status, ...(reply.status === 'cancelled' ? {text:reply.text} : {})}
       if (!p.receipt) return result
       const kind = reply.id === textId ? 'text' : 'attachment'
       const userId = sendId(kind, 'user', id, p.key)
@@ -1048,7 +1084,8 @@ export function createAgents({ db, host }) {
         release: () => { activeReplyStreams -= 1 },
         findReply() {
           const row = find()
-          return {state: row?.status ?? 'pending', progress: row?.status === 'running' ? liveReplies.get(row.id) : undefined}
+          return {state: row?.status ?? 'pending', progress: row?.status === 'running' ? liveReplies.get(row.id) : undefined,
+            ...(row?.status === 'cancelled' ? {text:row.text} : {})}
         },
       })
     },

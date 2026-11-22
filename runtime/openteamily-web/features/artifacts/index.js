@@ -128,6 +128,20 @@ export default defineFeature({
       const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, 'automation-run-' + run_id, {reuseSource: true})
       return {status: result.status, artifact: result.body.artifact}
     },
+    async savedAutomationWorks(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, automation_id: automation, run_ids: runs} = input ?? {}
+      if (!Array.isArray(runs) || !runs.length || runs.length > 100 ||
+          ![workspace, automation, ...runs].every(id => typeof id === 'string' && HEX32.test(id))) {
+        refuse(400, 'invalid', 'Invalid automation work request')
+      }
+      const items = ctx.store.all(`SELECT source.source_id AS run_id, work.id, work.title
+        FROM artifact_sources source
+        JOIN artifacts work ON work.id=source.artifact_id AND work.workspace_id=source.workspace_id
+        WHERE source.workspace_id=? AND source.automation_id=? AND source.source_kind='automation_run'
+          AND source.source_id IN (${runs.map(() => '?').join(',')})`, workspace, automation, ...runs)
+      return {items}
+    },
     async chatAttachment(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Send saved works from an authenticated conversation')
       const {workspace_id: workspace, artifact_id: id, revision} = input ?? {}

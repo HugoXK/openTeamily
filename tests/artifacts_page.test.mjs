@@ -10,7 +10,7 @@ import {
 } from '../openteamily/static/shell/thumb.mjs';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
-  artifactMatchesModified, artifactModifiedBounds, viewFromSearch, queryForView, FILE_TYPE_LABELS,
+  artifactMatchesModified, artifactModifiedBounds, viewFromSearch, queryForView, artifactOrigin, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
   createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
@@ -329,13 +329,39 @@ test('viewFromSearch and queryForView stay on the recorded allowlist', () => {
   assert.deepEqual(viewFromSearch('?view=created'), {kind: 'all', scope: 'mine'});
   assert.deepEqual(viewFromSearch('?view=starred'), {kind: 'all', scope: 'favorites'});
   assert.deepEqual(viewFromSearch('?view=memory'), {kind: 'all', scope: 'memory'});
+  assert.deepEqual(viewFromSearch('?view=automation'), {kind: 'all', scope: 'automation'});
   assert.deepEqual(viewFromSearch('?view=meetings'), {kind: 'meetings', scope: 'all'});
   assert.deepEqual(viewFromSearch('?view=unknown'), {kind: 'all', scope: 'all'});
   assert.equal(queryForView('all', 'all'), '');
   assert.equal(queryForView('all', 'mine'), '?view=created');
   assert.equal(queryForView('all', 'favorites'), '?view=starred');
   assert.equal(queryForView('all', 'memory'), '?view=memory');
+  assert.equal(queryForView('all', 'automation'), '?view=automation');
   assert.equal(queryForView('meetings', 'all'), '?view=meetings');
+});
+
+test('Space opens only the saved source coordinates from the selected workspace', () => {
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const result = {workspace_id: workspace, source: {
+    kind: 'automation_run', id: run, automation_id: automation, automation_title: '整理日报',
+  }};
+  assert.deepEqual(visibleArtifacts([result, {source:{kind:'agent_task'}}, {}], {scope:'automation'}), [result]);
+  assert.deepEqual(artifactOrigin(result, workspace), {
+    kind:'自动化运行', title:'整理日报', label:'查看原运行',
+    href:`/automations?workspace=${workspace}&automation=${automation}&run=${run}`,
+  });
+  assert.equal(artifactOrigin(result, 'd'.repeat(32)).href, '');
+  assert.equal(artifactOrigin({...result, source:{...result.source, id:'../../other'}}, workspace).href, '');
+  const chat = {workspace_id:workspace, source:{
+    kind:'agent_message', id:'message_01', conversation_id:'otc_example', conversation_title:'工作群',
+  }};
+  assert.equal(artifactOrigin(chat, workspace).href, `/chat#workspace=${workspace}&social=otc_example&message=message_01`);
+  chat.source = {...chat.source, id:run, agent_id:automation, conversation_id:'d'.repeat(32)};
+  assert.equal(artifactOrigin(chat, workspace).href,
+    `/chat#workspace=${workspace}&agent=${automation}&conversation=${chat.source.conversation_id}&message=${run}`);
+  assert.deepEqual(artifactOrigin({source:{kind:'agent_task', id:run}}, workspace), {kind:'智能体任务'});
 });
 
 test('applyDirectoryCollapsed hides the directory in session only', () => {

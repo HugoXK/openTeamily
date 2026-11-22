@@ -44,7 +44,7 @@ const publicMessage = (row, workspaceId, agentId) => {
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
     ...(meta?.memory_refs?.length ? {memory_refs: meta.memory_refs} : {}),
     ...(meta?.memory_profile_workspace === workspaceId ? {memory_profile_workspace: workspaceId} : {}),
-    ...(canRetryText ? {attempt: textReplyAttempt(meta), can_retry: status === 'failed'} : {}),
+    ...(canRetryText ? {attempt: textReplyAttempt(meta), can_retry: status === 'failed', ...(status === 'running' ? {can_stop:true} : {})} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,
@@ -59,6 +59,14 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
     ...agentCopyRoutes(host,endpoints),
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-stop$`),
+      handle: wrap(async (req, workspaceId, id, conversationId) => {
+        if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+        if (req.query.size) throw new FeatureError(400, 'invalid', 'Invalid reply stop query')
+        const {key, attempt} = requireBodyKeys(await req.json(1024), ['key', 'attempt'])
+        const result = await call('stopReply', {workspace_id:workspaceId,id,conversation_id:conversationId,key,attempt})
+        return {body:publicPair(result, workspaceId, id)}
+      }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-progress$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')

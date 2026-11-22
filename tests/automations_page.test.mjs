@@ -535,6 +535,7 @@ test('an exact linked run stays visible when older than the first page of histor
   const workspace = 'a'.repeat(32);
   const automation = 'b'.repeat(32);
   const run = 'c'.repeat(32);
+  const work = 'e'.repeat(32);
   const path = `/v1/workspaces/${workspace}/automations/${automation}`;
   doc.defaultView = {location: {search: `?workspace=${workspace}&automation=${automation}&run=${run}`}};
   doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
@@ -542,14 +543,16 @@ test('an exact linked run stays visible when older than the first page of histor
   globalThis.document = doc;
   t.after(() => { globalThis.document = saved; });
   const calls = [];
-  const savedRun = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded', result: {text: '历史样例'}};
+  const savedRun = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded',
+    result: {text: '历史样例'}, saved_work: {id:work, title:'重命名的作品'}};
   await mount(doc, {fetcher: async target => {
     calls.push(target);
     if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
     if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
     if (target === path) return respond({automation: {id: automation, workspace_id: workspace, title: '日报', enabled: false}});
     if (target === path + '/runs/' + run) return respond({run: savedRun});
-    if (target.startsWith(path + '/runs?')) return respond({items: [{...savedRun, id: 'd'.repeat(32), result: {text:'最新运行'}}]});
+    if (target.startsWith(path + '/runs?')) return respond({items: [{...savedRun, id: 'd'.repeat(32),
+      result: {text:'最新运行'}, saved_work:null}]});
     assert.fail('Unexpected request ' + target);
   }});
   await flush();
@@ -559,6 +562,11 @@ test('an exact linked run stays visible when older than the first page of histor
   assert.equal(exact.children[1].hidden, false);
   assert.equal(newest.children[1].hidden, true);
   assert.match(exact.textContent, /历史样例/);
+  const link = exact.children[1].children.find(child => child.dataset.runControl === 'artifact');
+  assert.equal(link.textContent,'打开作品');
+  assert.equal(link.href,`/space?workspace=${workspace}&artifact=${work}`);
+  assert.equal(link.title,'重命名的作品');
+  assert.equal(newest.children[1].children.find(child => child.dataset.runControl === 'artifact').textContent,'保存到作品库');
   assert.equal(calls.filter(target => target === path + '/runs/' + run).length, 1);
 });
 

@@ -193,7 +193,7 @@ export function runView(row) {
 }
 
 export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
-  readMeetingAction, readMemoryAction, studioRequest, requireWorkspace }) {
+  readMeetingAction, readMemoryAction, studioRequest, requireWorkspace, readSavedWorks }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -946,7 +946,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   const ops = {}
   for (const [name, handler] of Object.entries(endpoints)) ops[name.slice('automations/'.length)] = handler
-  ops.v1 = automationsV1({ endpoints: ops, log, personalBinding })
+  ops.v1 = automationsV1({ endpoints: ops, log, personalBinding, readSavedWorks })
   ops.importRuns = (p) => ({ imported: recordLegacyRuns(db, p) })
   endpoints['automations/v1'] = ops.v1
   endpoints['automations/import-runs'] = ops.importRuns
@@ -961,6 +961,7 @@ export default async function automations(host) {
     personalBinding: () => host.call('agents/personal-binding', {}),
     requireWorkspace: workspace => requireMemoryWorkspace(host, workspace),
     saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
+    readSavedWorks: payload => host.call('artifacts/savedAutomationWorks', payload),
     studioRequest: payload => host.call('studio/v1', payload),
     readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
       method: 'GET', path: `/v1/workspaces/${workspace}/meetings/${meeting_id}/action?index=${action_index}&revision=${revision}`,

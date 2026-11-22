@@ -233,6 +233,21 @@
       <button type="button" id="confirm-remove-meeting">确认删除</button>
     </div>
   </dialog>
+  <dialog id="meeting-action-copy-dialog" aria-labelledby="meeting-action-copy-heading">
+    <h2 id="meeting-action-copy-heading">存入我的待办</h2>
+    <p id="meeting-action-copy-source" class="note"></p>
+    <form id="meeting-action-copy-form">
+      <label>待办标题 <input id="meeting-action-copy-title" maxlength="80" required autofocus></label>
+      <label>备注 <textarea id="meeting-action-copy-notes" maxlength="2000" rows="3"></textarea></label>
+      <label>截止日期 <input id="meeting-action-copy-date" type="date" min="1970-01-01" max="2038-01-19"></label>
+      <p id="meeting-action-copy-status" class="note" role="status"></p>
+      <div class="meeting-actions">
+        <button type="button" class="secondary" id="meeting-action-copy-close">取消</button>
+        <button type="submit" id="meeting-action-copy-submit">保存到个人空间</button>
+        <a id="meeting-action-copy-link" class="secondary" target="_blank" rel="noopener" hidden>打开我的待办</a>
+      </div>
+    </form>
+  </dialog>
   <dialog id="meeting-share-dialog" aria-labelledby="meeting-share-title">
     <header class="meeting-share-head">
       <h2 id="meeting-share-title">分享纪要</h2>

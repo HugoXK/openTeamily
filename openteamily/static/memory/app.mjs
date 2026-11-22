@@ -2424,8 +2424,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     const source = currentAction.source;
     const meeting = document.getElementById('action-source-meeting');
-    meeting.hidden = source?.kind !== 'shared_meeting';
-    if (!meeting.hidden) {
+    const ownedMeeting = source?.kind === 'meeting' && /^[0-9a-f]{32}$/.test(source.workspace_id || '') &&
+      /^[0-9a-f]{32}$/.test(source.meeting_id || '') && Number.isSafeInteger(source.revision) && source.revision > 0 &&
+      Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
+    meeting.hidden = source?.kind !== 'shared_meeting' && !ownedMeeting;
+    if (ownedMeeting) {
+      meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, meeting:source.meeting_id,
+        action:source.action_index, revision:source.revision});
+      meeting.textContent = `查看来源行动项 · 修订 ${source.revision}`;
+    } else if (!meeting.hidden) {
       meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
       meeting.textContent = `查看来源纪要 · 版本 ${source.revision}`;
     } else meeting.removeAttribute('href');

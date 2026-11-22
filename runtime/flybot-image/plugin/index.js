@@ -62,6 +62,7 @@ export function apply(ctx, config = {}) {
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
     const attachmentStore = () => ctx.get?.('attachments')
     const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
+      options.signal?.throwIfAborted()
       await bridge.prepareModel()
       await prepareNativeChat(rt, botId, sessionId)
       const parts = [], stored = []
@@ -82,7 +83,9 @@ export function apply(ctx, config = {}) {
       }
       if (stored.length) options.onStaged?.(stored)
       bridge.requireModel(botId)
-      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { sessionId, onProgress: options.onProgress, onPhase: options.onPhase })
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, {
+        sessionId, onProgress: options.onProgress, onPhase: options.onPhase, signal: options.signal,
+      })
     }, botId)
     const readNativeAttachment = async file => {
       const store = attachmentStore()

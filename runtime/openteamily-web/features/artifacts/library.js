@@ -111,11 +111,12 @@ export function listing(store, workspaceId, cursor, limit, filters) {
     boundary += ' AND a.updated<?'
     bindings.push(filters.before)
   }
-  const metadata = filters.scope !== 'all' || filters.kind !== 'all' ||
+  if (filters.scope === 'automation') boundary += " AND s.source_kind='automation_run'"
+  const metadata = ['favorites', 'mine', 'memory'].includes(filters.scope) || filters.kind !== 'all' ||
     filters.types.size || filters.creators.size || filters.sessions.size
   const names = filters.creators.size ? usernames(store) : null
   const rows = filters.needle || metadata
-    ? filteredPage(store, {boundary, bindings, order, metadata}, limit, filters, names)
+    ? filteredPage(store, {boundary, bindings, order, metadata: metadata || filters.scope === 'automation'}, limit, filters, names)
     : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
   if (!rows.length) return rows
   const user = names || usernames(store)
