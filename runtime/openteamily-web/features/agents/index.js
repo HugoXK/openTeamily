@@ -213,11 +213,16 @@ export function createAgents({ db, host }) {
       ORDER BY created ${order}, rowid ${order} LIMIT ?`, id, anchor.created, count - sameTime.length))
   }
 
-  function conversationHistory(id, {limit, before, around}) {
-    const target = before ?? around
+  function conversationHistory(id, {limit, before, after, around}) {
+    const target = before ?? after ?? around
     const anchor = target === undefined ? null : one(
       'SELECT rowid AS position, * FROM agent_messages WHERE id=? AND conversation_id=?', target, id)
     if (target !== undefined && !anchor) fail('not-found', 'Message not found', 404)
+    if (after !== undefined) {
+      const rows = adjacentMessages(id, anchor, limit + 1, true)
+      const items = rows.slice(0, limit).map(readMessage)
+      return {items, cursor: items[0]?.id ?? null, has_newer: rows.length > limit}
+    }
     if (around === undefined) {
       const rows = anchor ? adjacentMessages(id, anchor, limit + 1, false) : all(
         'SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created DESC, rowid DESC LIMIT ?', id, limit + 1)
@@ -881,14 +886,15 @@ export function createAgents({ db, host }) {
     async openConversation(p) {
       const agent = load(ws(p), p.id)
       const history = p.history
+      const anchors = [history?.before, history?.after, history?.around].filter(value => value !== undefined)
       if (history !== undefined) {
         if (!history || !Number.isInteger(history.limit) || history.limit < 1 || history.limit > 100 ||
-          (history.before !== undefined && (typeof history.before !== 'string' || !ID.test(history.before))) ||
-          (history.around !== undefined && (typeof history.around !== 'string' || !ID.test(history.around))) ||
-          (history.before !== undefined && history.around !== undefined)) fail('invalid', 'Invalid history parameters', 400)
+          anchors.length > 1 || anchors.some(value => typeof value !== 'string' || !ID.test(value))) {
+          fail('invalid', 'Invalid history parameters', 400)
+        }
       }
       const snapshot = p.snapshot === true
-      if (snapshot && (!history || history.limit > 50 || history.before !== undefined || history.around !== undefined)) {
+      if (snapshot && (!history || history.limit > 50 || anchors.length)) {
         fail('invalid', 'A snapshot requires a recent window of at most 50 messages', 400)
       }
       const row = activeConversation(agent,p.conversation_id) ?? await conversationOrDiscussion(agent,p.conversation_id)
@@ -913,7 +919,7 @@ export function createAgents({ db, host }) {
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       const memory = memorySetting(await conversationMemoryMode(row, agent))
-      if (!snapshot && !history?.before && !history?.around && mapped && row.archived_at === null && !observed.archived) {
+      if (!snapshot && !anchors.length && mapped && row.archived_at === null && !observed.archived) {
         await historyProjection.catchUp(runtime,mapped,row.id)
       }
       const pendingHistory = historyProjection.pending(row.id)

@@ -2,23 +2,30 @@ import {readChatDraftMentions, writeChatDraftMentions} from '../home/runtime-rea
 
 const MAX_MENTIONS = 20;
 const EVERYONE = Symbol('everyone');
-const GROUP_ALL_TOKEN_PATTERN = /(^|[\s(（\[，。！？、,:：;；])[@＠](all|所有智能体|所有人)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/giu;
+const GROUP_ALL_TOKEN_PATTERN = /(^|[\s(（\[，。！？、,:：;；])[@＠](all|everyone|所有智能体|所有人|全体)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/giu;
+const EVERYONE_SEARCH = '所有人 所有智能体 全员 全体 everyone all';
 const mentionsLimit = room => room?.direct ? 5 : MAX_MENTIONS;
 const agentKey = agent => JSON.stringify([agent.owner_id, agent.id]);
 const availableAgent = agent => Boolean(agent?.name && agent.owner_id && agent.id && !agent.archived);
 
+function mentionText(body) {
+  // Preserve offsets so editing an active mention leaves literal text intact.
+  return body.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^\s)]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g,
+    literal => ' '.repeat(literal.length));
+}
+
 export function hasGroupAllMention(body) {
-  return Boolean(body?.match(GROUP_ALL_TOKEN_PATTERN));
+  return Boolean(body && mentionText(body).match(GROUP_ALL_TOKEN_PATTERN));
 }
 
 export function hasEveryoneMention(body) {
-  return [...String(body ?? '').matchAll(GROUP_ALL_TOKEN_PATTERN)].some(match => match[2] !== '所有智能体');
+  return [...mentionText(body ?? '').matchAll(GROUP_ALL_TOKEN_PATTERN)].some(match => match[2] !== '所有智能体');
 }
 
 function withoutGroupAllMention(body) {
   let text = '';
   let cursor = 0;
-  for (const match of body.matchAll(GROUP_ALL_TOKEN_PATTERN)) {
+  for (const match of mentionText(body).matchAll(GROUP_ALL_TOKEN_PATTERN)) {
     text += body.slice(cursor, match.index + match[1].length);
     const end = match.index + match[0].length;
     cursor = body[end] === ' ' ? end + 1 : end;
@@ -27,7 +34,7 @@ function withoutGroupAllMention(body) {
 }
 
 export function activeMentionQuery(text, caret) {
-  const match = /(?:^|[\s(（\[，。！？、,:：;；])[@＠]([^\s@＠]{0,40})$/u.exec(text.slice(0, caret));
+  const match = /(?:^|[\s(（\[，。！？、,:：;；])[@＠]([^\s@＠]{0,40})$/u.exec(mentionText(text).slice(0, caret));
   return match ? {start: caret - match[1].length - 1, query: match[1]} : null;
 }
 
@@ -217,8 +224,9 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     if (!group || !query) { close(); return; }
     const needle = query.query.toLowerCase();
     const matches = !groupAllMention && selected.size >= mentionsLimit(group) ? [] : group.agents.filter(agent =>
-      availableAgent(agent) && (groupAllMention || !selected.has(agentKey(agent))) && agent.name.toLowerCase().includes(needle));
-    if (!group.direct && '所有人 所有智能体 全员 everyone all'.includes(needle)) matches.unshift(EVERYONE);
+      availableAgent(agent) && (groupAllMention || !selected.has(agentKey(agent))) &&
+      [agent.name, agent.owner_name].some(value => value?.toLowerCase().includes(needle)));
+    if (!group.direct && EVERYONE_SEARCH.includes(needle)) matches.unshift(EVERYONE);
     options = matches.slice(0, 8);
     if (!options.length) { close(); return; }
     active = 0;
@@ -260,7 +268,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     const view = picking;
     const filter = queryField.value.trim().toLocaleLowerCase();
     const people = [...view.roster].filter(([, agent]) => `${agent.name} ${agent.owner_name || ''}`.toLocaleLowerCase().includes(filter));
-    if (!view.direct && '所有人 所有智能体 全员 everyone all'.includes(filter)) people.unshift([EVERYONE]);
+    if (!view.direct && EVERYONE_SEARCH.includes(filter)) people.unshift([EVERYONE]);
     results.replaceChildren(...people.map(([key, agent]) => {
       const everyone = key === EVERYONE;
       const label = doc.createElement('label');

@@ -623,6 +623,54 @@ test('an exact linked run stays visible when older than the first page of histor
   assert.equal(calls.filter(target => target === path + '/runs/' + run).length, 1);
 });
 
+for (const [outcome, committed, receiptWorkspace, expectedStatus] of [
+  ['recovers the committed work', true, 'a', '已保存到作品库。'],
+  ['keeps retry available when no receipt exists', false, 'a', '作品库暂未显示这次结果，可以重试保存。'],
+  ['ignores a receipt from another workspace', true, 'f', '暂时无法确认是否已保存，可以重试。'],
+]) {
+  test(`a lost result-save response ${outcome}`, async t => {
+    const {doc, elements} = fakeDocument();
+    const workspace = 'a'.repeat(32), automation = 'b'.repeat(32), run = 'c'.repeat(32);
+    const artifact = {id:'e'.repeat(32), title:'运行结果'};
+    const exact = `/v1/workspaces/${workspace}/automations/${automation}`;
+    const runPath = exact+'/runs/'+run;
+    const output = {id:run, workspace_id:workspace, automation_id:automation, status:'succeeded',
+      result:{text:'待保存的结果'}, saved_work:null};
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {location:{search:`?workspace=${workspace}&automation=${automation}&run=${run}`}};
+    let attempted = false;
+    const calls = [];
+    await mount(doc, {fetcher:async (path, options = {}) => {
+      calls.push([options.method,path]);
+      if (path === '/v1/auth/session') return respond({user:{id:'owner',username:'alice'}});
+      if (path.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace,name:'个人空间',kind:'personal'}]});
+      if (path === exact) return respond({automation:{id:automation,workspace_id:workspace,title:'日报',enabled:false}});
+      if (path.startsWith(exact+'/runs?')) return respond({items:[{...output,
+        saved_work:attempted && committed && receiptWorkspace === 'a' ? artifact : null}]});
+      if (path === runPath) return respond({run:attempted
+        ? {...output,workspace_id:receiptWorkspace.repeat(32),saved_work:committed? artifact : null} : output});
+      if (path === runPath+'/artifact' && options.method === 'POST') {
+        attempted = true;
+        throw new TypeError('response lost');
+      }
+      assert.fail('Unexpected request '+path);
+    }});
+    await flush();
+    const control = () => elements.get('run-list').children[0].children[1].children
+      .find(child=>child.dataset.runControl==='artifact');
+    await control().handlers.click[0]();
+    assert.equal(elements.get('status').textContent,expectedStatus);
+    assert.equal(calls.filter(([method,path])=>method==='POST' && path===runPath+'/artifact').length,1);
+    assert.equal(calls.filter(([method,path])=>method==='GET' && path===runPath).length,2);
+    if (committed && receiptWorkspace === 'a') {
+      assert.equal(control().href,`/space?workspace=${workspace}&artifact=${artifact.id}`);
+    } else {
+      assert.equal(control().textContent,'保存到作品库');
+      assert.equal(control().disabled,false);
+    }
+  });
+}
+
 test('exact failure and retry links are scoped and render without waiting for filtered history', async () => {
   const {doc, elements} = fakeDocument();
   const workspace = 'a'.repeat(32);

@@ -111,6 +111,25 @@ test('a failed step blocks dependants; retry resets them and finishes the run', 
   await assert.rejects(e.retry({ workspace_id: W, id: run.id, position: 1 }), (err) => err.status === 409)
 })
 
+test('private team runs export every finished result intact and fence literal text', async () => {
+  const long = '首行\n~~~~\n<script>text only</script>\n' + '长文本'.repeat(3000) + '\n最后一行'
+  const {feature, e, a, b, state} = await fixture(key => ({text:key.includes(':0:') ? long : '第二项结果'}), {runWorkspace:TEAM})
+  const {run} = await e.create(body(a,b,{workspace_id:TEAM}))
+  const path = `/v1/workspaces/${TEAM}/team-runs/${run.id}/export`
+  const read = () => e.v1({method:'GET', path})
+  await settle(feature)
+  const {status, download} = await read()
+  assert.equal(status, 200)
+  assert.equal(download.content_type, 'text/markdown; charset=utf-8')
+  assert.equal(download.filename, `team-run-${run.id}.md`)
+  const content = Buffer.from(download.data,'base64').toString('utf8')
+  assert.ok(content.includes('\n~~~~~\n' + long + '\n~~~~~\n'))
+  assert.ok(content.includes('## 第 2 步\n') && content.includes('第二项结果'))
+  assert.equal((await e.v1({method:'GET',path:path.replace(TEAM,W)})).status,404)
+  state.teams=[]
+  assert.equal((await read()).status,404)
+})
+
 test('a shared follow-up only starts and dispatches with its exact authorized source', async () => {
   const keepFirst = Promise.withResolvers()
   const entered = Promise.withResolvers()

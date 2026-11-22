@@ -306,7 +306,23 @@ test('private history pages and anchors keep native message order and conversati
   assert.equal(empty.cursor,null)
   assert.equal(empty.has_newer,true)
 
-  for (const query of ['limit=0','limit=101','limit=50&limit=50','around=','cursor=x',`before=${ids[1]}&around=${ids[1]}`]) {
+  const forward = await history(`after=${nearStart.items.at(-1).id}`)
+  assert.deepEqual(messageIds(forward.items),ids.slice(50,100))
+  assert.equal(forward.cursor,ids[50])
+  assert.equal(forward.has_newer,true)
+  const forwardEnd = await history(`after=${forward.items.at(-1).id}`)
+  assert.deepEqual(messageIds(forwardEnd.items),ids.slice(100))
+  assert.equal(forwardEnd.has_newer,false)
+  const forwardEmpty = await history(`after=${ids.at(-1)}`)
+  assert.deepEqual(forwardEmpty.items,[])
+  assert.equal(forwardEmpty.cursor,null)
+  assert.equal(forwardEmpty.has_newer,false)
+  const acrossTimestamp = await history(`limit=3&after=${ids[13]}`)
+  assert.deepEqual(messageIds(acrossTimestamp.items),ids.slice(14,17))
+
+  for (const query of ['limit=0','limit=101','limit=50&limit=50','around=','after=','cursor=x',
+    `before=${ids[1]}&around=${ids[1]}`, `before=${ids[1]}&after=${ids[2]}`,
+    `around=${ids[1]}&after=${ids[2]}`, `after=${ids[1]}&after=${ids[2]}`, `snapshot=1&after=${ids[2]}`]) {
     assert.equal((await request(path,{},query)).status,400,query)
   }
   const missing = await request(path,{},`limit=50&around=${'c'.repeat(32)}`)
@@ -315,6 +331,11 @@ test('private history pages and anchors keep native message order and conversati
   assert.equal(foreignAnchor.status,404)
   assert.deepEqual(await missing.json(),await foreignAnchor.json())
   assert.equal((await request(path,{},`limit=50&before=${foreign}`)).status,404)
+  const wrongForward = await request(path,{},`limit=50&after=${foreign}`)
+  const missingForward = await request(path,{},`limit=50&after=${'c'.repeat(32)}`)
+  assert.equal(wrongForward.status,404)
+  assert.equal(missingForward.status,404)
+  assert.deepEqual(await wrongForward.json(),await missingForward.json())
   assert.equal((await request(path.replace(workspace,'b'.repeat(32)),{},`limit=50&around=${ids[60]}`)).status,404)
   const unpaged = await history('')
   assert.deepEqual(messageIds(unpaged.items),ids)

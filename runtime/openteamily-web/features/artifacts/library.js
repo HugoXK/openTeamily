@@ -1,7 +1,7 @@
 // Works-library operations (legacy artifacts.py + app.py artifact_*), executed
 // inside this user's DS-Bot. Share records live here; the public /share/<token>
 // page is rendered by the dedicated Bot Social from a published snapshot.
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
@@ -731,7 +731,22 @@ export function parseExportFormat(query) {
   return format === 'original' ? null : format
 }
 
-export function opaque() { return randomBytes(32).toString('base64url') }
+function shareToken(store, id, create = false) {
+  const key = 'SELECT secret FROM artifact_share_keys WHERE id=1'
+  let row = store.get(key)
+  if (!row && create) {
+    store.run('INSERT OR IGNORE INTO artifact_share_keys(id,secret) VALUES(1,?)', randomBytes(32).toString('hex'))
+    row = store.get(key)
+  }
+  if (!row?.secret) return null
+  return createHmac('sha256',Buffer.from(row.secret,'hex')).update('artifact-read-only:' + id).digest('base64url')
+}
+
+export function recoverShareToken(store, row) {
+  if (row.recovery_version !== 1) return null
+  const token = shareToken(store,row.id)
+  return token && digest('share:' + token) === row.token_hash ? token : null
+}
 
 export function shareView(row, { includeToken = false, token = null, store, now = null } = {}) {
   const user = store ? usernames(store) : () => null
@@ -741,6 +756,7 @@ export function shareView(row, { includeToken = false, token = null, store, now 
     created: row.created, created_by: row.created_by_username ?? user(row.created_by),
     expires: row.expires, revoked, revocation_pending: Boolean(row.revoked && !revoked), scope: 'read',
     ...(Number.isSafeInteger(row.source_revision) ? {revision:row.source_revision} : {}),
+    ...(row.recovery_version === 1 ? {recoverable:true} : {}),
   }
   if (now != null) data.expired = row.expires != null && row.expires <= now
   if (includeToken && token) { data.token = token; data.path = '/share/' + token }
@@ -760,11 +776,11 @@ export function createShare(store, row, owner, now, expiresIn) {
   const active = store.get(`SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=?
     AND revocation_confirmed_at IS NULL AND (expires IS NULL OR expires>?)`, row.id, now).n
   if (active >= MAX_SHARES) refuse(429, 'quota', 'Share capacity reached')
-  const token = opaque()
   const id = newId()
+  const token = shareToken(store,id,true)
   store.run(`INSERT INTO artifact_shares
-    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at,source_revision)
-    VALUES(?,?,?,?,?,?,?,?,0,NULL,?)`,
+    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at,source_revision,recovery_version)
+    VALUES(?,?,?,?,?,?,?,?,0,NULL,?,1)`,
     id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires, row.revision)
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', id, row.id)
   return { status: 201, body: { share: shareView(item, { includeToken: true, token, store }) } }

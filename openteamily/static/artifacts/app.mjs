@@ -2712,6 +2712,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.getElementById('share-copy-status').textContent = '';
   }
 
+  function showShareLink(share) {
+    if (!/^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) return false;
+    const value = new URL(share.path, document.defaultView.location.origin).href;
+    const once = document.getElementById('share-once');
+    document.getElementById('share-url').value = value;
+    document.getElementById('open-share').href = value;
+    document.getElementById('share-copy-status').textContent = '';
+    once.dataset.shareId = share.id;
+    once.hidden = false;
+    return true;
+  }
+
+  async function copyShareLink() {
+    const field = document.getElementById('share-url');
+    const status = document.getElementById('share-copy-status');
+    const value = field.value;
+    if (!value) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(value);
+      if (field.value === value) status.textContent = '已复制链接。';
+    } catch {
+      if (field.value !== value) return;
+      field.focus({preventScroll: true});
+      field.select();
+      status.textContent = '已选中链接，请手动复制。';
+    }
+  }
+
+  async function recoverShareLink(selection, path, item, button) {
+    if (!activeEditor(selection) || selection.shareWrite) return;
+    selection.shareWrite = button.disabled = true;
+    panelStatus('share', '正在读取分享链接…');
+    try {
+      const result = await request('POST', path + '/link', {}, undefined, selection.controller.signal)
+        .catch(() => ({status:0,body:{}}));
+      if (!activeEditor(selection)) return;
+      const share = result.body?.share;
+      if (result.status === 200 && share?.id === item.id && showShareLink(share)) {
+        panelStatus('share', '');
+        await copyShareLink();
+      } else {
+        if (result.status === 404 && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
+        panelStatus('share', messageFor(result.body?.error, '暂时无法读取分享链接，请重试。'));
+      }
+    } finally {
+      selection.shareWrite = false;
+      if (activeEditor(selection)) button.disabled = false;
+    }
+  }
+
   async function changeShare(selection, path, {create = false, item, button}) {
     if (!activeEditor(selection) || selection.shareWrite) return;
     const restoreFocus = document.activeElement === button;
@@ -2731,16 +2781,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         panelStatus('share', '已保存的作品版本已更新，请查看后再创建分享链接。');
         return;
       }
-      if (create && result.status === 201 && /^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) {
-        const value = new URL(share.path, document.defaultView.location.origin).href;
-        const once = document.getElementById('share-once');
-        const copy = document.getElementById('copy-share');
-        document.getElementById('share-url').value = value;
-        document.getElementById('open-share').href = value;
-        document.getElementById('share-copy-status').textContent = '';
-        once.dataset.shareId = share.id;
-        once.hidden = false;
-        copy.focus({preventScroll: true});
+      if (create && result.status === 201 && showShareLink(share)) {
+        document.getElementById('copy-share').focus({preventScroll: true});
         await loadShares();
         return;
       }
@@ -2751,7 +2793,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
       await loadShares();
       if (activeEditor(selection)) panelStatus('share', create
-        ? '无法确认分享链接已创建。请查看分享列表后再试。'
+        ? '暂未确认创建结果。若列表已有有效分享，可直接复制链接。'
         : '撤销尚未确认，链接可能仍可访问。请重试撤销。');
     } finally {
       selection.shareWrite = false;
@@ -2790,12 +2832,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const revision = Number.isSafeInteger(item.revision) ? ` · 修订 ${item.revision}` : '';
       meta.textContent = `${state} · ${item.prefix}…${revision}${expiry}`;
       row.appendChild(meta);
+      const path = editorPath(selection, artifact.id) + '/shares/' + item.id;
+      if (item.recoverable && !item.revoked && !expired && !item.revocation_pending) {
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = '复制链接';
+        copy.addEventListener('click', () => recoverShareLink(selection, path, item, copy));
+        row.appendChild(copy);
+      }
       if (!item.revoked && !expired) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
         revoke.textContent = item.revocation_pending ? '重试撤销' : '撤销';
-        revoke.addEventListener('click', () => changeShare(selection,
-          editorPath(selection, artifact.id) + `/shares/${item.id}/revoke`, {item, button: revoke}));
+        revoke.addEventListener('click', () => changeShare(selection, path + '/revoke', {item, button: revoke}));
         row.appendChild(revoke);
       }
       list.appendChild(row);
@@ -4490,21 +4539,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!activeEditor(editor)) return;
     void changeShare(editor, editorPath(editor) + '/shares', {create: true, button: createShareButton});
   });
-  document.getElementById('copy-share').addEventListener('click', async () => {
-    const field = document.getElementById('share-url');
-    const status = document.getElementById('share-copy-status');
-    const value = field.value;
-    if (!value) return;
-    try {
-      await document.defaultView.navigator.clipboard.writeText(value);
-      if (field.value === value) status.textContent = '已复制链接。';
-    } catch {
-      if (field.value !== value) return;
-      field.focus({preventScroll: true});
-      field.select();
-      status.textContent = '已选中链接，请手动复制。';
-    }
-  });
+  document.getElementById('copy-share').addEventListener('click', copyShareLink);
 
   document.getElementById('export-artifact').addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) {

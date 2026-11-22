@@ -677,8 +677,13 @@ function conversationAgents(ot: OtContext, conversationId: string) {
 
 const MAX_INFERRED_AGENTS = 20;
 const TYPED_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@][\p{L}\p{N}_]/u;
-const ALL_PEOPLE_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@](?:all|所有人)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/iu;
+const ALL_PEOPLE_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@](?:all|everyone|所有人|全体)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/iu;
 const ALL_AGENT_ADDRESS = /(?:^|[\s(（\[，。！？、,:：;；])[＠@]所有智能体(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/u;
+
+function mentionText(body: string) {
+  // Match the literal forms skipped by the DS-Bot group composer.
+  return body.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^\s)]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g, " ");
+}
 
 function ordinaryAgentGroup(conv: {kind: string; dm_key?: string | null; group_archived_at?: unknown}) {
   return conv.kind === "group" && !conv.group_archived_at && !fixedPublicThread(conv);
@@ -788,11 +793,11 @@ function agentMentioned(mentions: string[], agent: ReplyAgent) {
     : mentions.includes(agent.agent_ref.toLowerCase()) || mentions.includes(agent.name.toLowerCase());
 }
 
-function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, selectedAgents: unknown,
+function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, addressText: string, selectedAgents: unknown,
   agents: ConversationAgent[], scope?: "group" | "direct", studio = false) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
-  for (const m of bodyText.matchAll(/(?:^|[\s(（\[，。！？、,:：;；])[＠@]([\p{L}\p{N}._-]{1,40})/gu)) handles.add(handleKey(m[1]));
+  for (const m of addressText.matchAll(/(?:^|[\s(（\[，。！？、,:：;；])[＠@]([\p{L}\p{N}._-]{1,40})/gu)) handles.add(handleKey(m[1]));
   const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
   if (selectedAgents === undefined) {
     const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
@@ -1425,12 +1430,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const scope = directRequest ? "direct" : groupRequest ? "group" : undefined;
       const roster = ordinaryDm && scope !== "direct" ? [] : conversationAgents(ot, conv.id);
       const selected = Array.isArray(b.agent_mentions) && b.agent_mentions.length === 0 ? undefined : b.agent_mentions;
-      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, selected, roster, scope, Boolean(studio));
-      const addressed = selected !== undefined || parsed.mentions.length > 0 || TYPED_ADDRESS.test(bodyText);
+      const addressText = conv.kind === "group" ? mentionText(bodyText) : bodyText;
+      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
+      const addressed = selected !== undefined || parsed.mentions.length > 0 || TYPED_ADDRESS.test(addressText);
       const canQueueGroup = ordinaryAgentGroup(conv) && !voice && !file && !sourceConversation;
-      const allPeople = ordinaryAgentGroup(conv) && !sourceConversation && ALL_PEOPLE_ADDRESS.test(bodyText);
+      const allPeople = ordinaryAgentGroup(conv) && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
-      const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(bodyText));
+      const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(addressText));
       const unaddressed = canQueueGroup && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
       const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
@@ -2068,7 +2074,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         m.id, ownerId, m.my_agent);
       if (tracked && (managed || m.author_id !== ownerId)) continue;
       const mentioned = agentMentioned(mentions, {owner_id: ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
-      if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq || m.routed || mentions.length > 0 || TYPED_ADDRESS.test(m.body))) continue;
+      if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq || m.routed || mentions.length > 0 || TYPED_ADDRESS.test(mentionText(m.body)))) continue;
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name,
         mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq, ownerId), group_memories:memories(m.conversation_id) });
     }
@@ -2187,7 +2193,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           const trigger = ot.get<any>(`SELECT seq,body,mentions,author_kind,forwarded_author
             FROM ot_messages WHERE id=? AND conversation_id=?`, String(b.reply_to), conv.id);
           assert(trigger && trigger.seq > agent.auto_reply_after_seq && trigger.author_kind === "member" &&
-            !trigger.forwarded_author && trigger.mentions === "[]" && !TYPED_ADDRESS.test(trigger.body),
+            !trigger.forwarded_author && trigger.mentions === "[]" && !TYPED_ADDRESS.test(mentionText(trigger.body)),
           409, "auto_reply_disabled", "This message is unavailable for automatic replies");
         }
       }

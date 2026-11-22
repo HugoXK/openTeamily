@@ -877,10 +877,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const runResultKey = (target, item) => target.key + '/' + item.id;
+  const runWorkReceipt = work => typeof work?.id === 'string' && /^[a-f0-9]{32}$/.test(work.id)
+    ? {id:work.id, title:work.title} : null;
+
   function savedRunWork(item, target) {
     const work = exactRunForTarget(item, target) && Object.hasOwn(item, 'saved_work')
       ? item.saved_work : savedRunResults.get(runResultKey(target, item));
-    return typeof work?.id === 'string' && /^[a-f0-9]{32}$/.test(work.id) ? work : null;
+    return runWorkReceipt(work);
   }
 
   async function saveRunResult(button, item, target) {
@@ -891,21 +894,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.textContent = '保存中…';
     let savedWork = null;
     try {
-      const result = await request('POST', `${runPath(target)}/runs/${item.id}/artifact`, {});
+      const path = `${runPath(target)}/runs/${item.id}`;
+      const result = await runRequestWithTimeout('POST', path + '/artifact', {});
       if (!currentRunScope(target)) return;
-      const work = result.body.artifact;
-      if (![200, 201].includes(result.status) || typeof work?.id !== 'string' || !/^[a-f0-9]{32}$/.test(work.id)) {
-        show('error', messageFor(result.body.error, '保存到作品库失败。'));
+      const accepted = result.status === 200 || result.status === 201;
+      const unconfirmed = '暂时无法确认是否已保存，可以重试。';
+      savedWork = accepted ? runWorkReceipt(result.body?.artifact) : null;
+      if (!savedWork && (accepted || result.status === 0 || result.status === 408 || result.status >= 500) &&
+          native && exactRunForTarget(item, target)) {
+        show('loading', '正在确认作品是否已保存…');
+        const read = await runRequestWithTimeout('GET', path);
+        if (!currentRunScope(target)) return;
+        const run = read.body?.run;
+        if (read.status === 200 && run?.id === item.id && exactRunForTarget(run, target) && run.status === 'succeeded') {
+          savedWork = runWorkReceipt(run.saved_work);
+          if (run.saved_work === null) {
+            show('error', '作品库暂未显示这次结果，可以重试保存。');
+            return;
+          }
+        }
+        if (!savedWork) {
+          show('error', unconfirmed);
+          return;
+        }
+      }
+      if (!savedWork) {
+        show('error', messageFor(result.body?.error, result.status === 0 ? unconfirmed : '保存到作品库失败。'));
         return;
       }
-      savedWork = {id:work.id, title:work.title};
       savedRunResults.set(key, savedWork);
       const attach = run => run?.id === item.id ? {...run, saved_work: savedWork} : run;
       selectedRun = attach(selectedRun);
       recentRuns = recentRuns.map(attach);
       show('ok', '已保存到作品库。');
-    } catch {
-      if (currentRunScope(target)) show('error', '暂时无法确认是否已保存，可以重试。');
     } finally {
       savingRunResults.delete(key);
       button.disabled = false;

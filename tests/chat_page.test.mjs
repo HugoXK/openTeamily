@@ -4447,6 +4447,19 @@ test('group chat keeps roster tools near the header and shows the authority for 
     assert.equal(composer.value,'@');
     await fire(composer,'keydown',{key:'Home',preventDefault() {assert.fail('Home must allow the caret to move');}});
     assert.equal(suggestions.hidden,true);
+    composer.value = '参考 ` @everyone`、[术语 @全体](/help)';
+    composer.setSelectionRange(12,12);
+    await fire(composer,'input');
+    assert.equal(suggestions.hidden,true);
+    assert.match(el('group-composer-routing-text').textContent, /设计助理.*引用/);
+    composer.value = '＠全体 请看这段';
+    composer.setSelectionRange(composer.value.length,composer.value.length);
+    await fire(composer,'input');
+    assert.match(el('group-composer-routing-text').textContent, /将提及所有人/);
+    composer.value = '@小周';
+    composer.setSelectionRange(3,3);
+    await fire(composer,'input');
+    assert.match(suggestions.children[0].textContent, /设计助理 · 小周/);
     composer.value = '@产品';
     composer.setSelectionRange(3, 3);
     await fire(composer, 'input');
@@ -5215,6 +5228,50 @@ test('sending supersedes a pending native older page while keeping the current t
     pending.resolve(page([]));
     sent.resolve(json(404, {}));
     fixture.restore();
+  }
+});
+
+test('paging forward from a native permalink preserves drafts while an explicit jump to the latest supersedes a pending page', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`);
+  const {el, messages, routes, restore} = fixture;
+  const scope = {agent:fixture.agent,conversation:fixture.nativeThread};
+  const [older, latest] = fixture.nativeRows;
+  const middle = {...older,id:'c'.repeat(32),created:7,body:'Intervening message'};
+  const pending = Promise.withResolvers();
+  const page = (items, has_newer = false) => json(200,{...scope,items,cursor:null,has_newer});
+  const query = id => `${path}?after=${id}&limit=50`;
+  let attempts = 0;
+  routes.set(path + '?limit=50', () => page([latest]));
+  routes.set(`${path}?around=${older.id}&limit=50`, () => page([older],true));
+  routes.set(query(older.id), () => ++attempts === 1 ? json(503,{}) : page([middle],true));
+  routes.set(query(middle.id), () => pending.promise);
+  try {
+    await mount(fixture.doc,{fetcher:fixture.fetcher});
+    const newer = el('chat-load-newer');
+    assert.equal(newer.hidden,false);
+    assert.deepEqual(messages(),[older.id]);
+    el('chat-body').value = 'draft survives history';
+    await fire(el('chat-body'),'input');
+    await fire(newer,'click');
+    assert.match(el('chat-unread-status').textContent,/后续消息加载失败/);
+    assert.equal(newer.disabled,false);
+    assert.deepEqual(messages(),[older.id]);
+    await fire(newer,'click');
+    assert.deepEqual(messages(),[older.id,middle.id]);
+    assert.equal(el('chat-body').value,'draft survives history');
+    const loading = fire(newer,'click');
+    assert.equal(newer.disabled,true);
+    await fire(el('chat-back-to-latest'),'click');
+    await settle();
+    pending.resolve(page([{...middle,id:'d'.repeat(32)}]));
+    await loading;
+    assert.equal(newer.hidden,true);
+    assert.deepEqual(messages(),[latest.id]);
+    assert.equal(el('chat-body').value,'draft survives history');
+  } finally {
+    pending.resolve(page([]));
+    restore();
   }
 });
 

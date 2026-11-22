@@ -1,10 +1,10 @@
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // Legacy /v1 artifact routes, executed inside this user's DS-Bot. The browser
 // shim turns the works-library page's existing fetches into artifacts/v1.
-import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
+import { digest, FeatureError, nowSeconds, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
   canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
-  load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
+  load, mediaDigests, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
   uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
@@ -313,7 +313,40 @@ async function copySharedText(req, workspaceId) {
   return createArtifact(ctx(req), workspaceId, {title:name, body, kind:'document'}, key, {receiptHash:reviewed})
 }
 
-export async function shares(req, workspaceId, artifactId, shareId, revoking) {
+async function recoverShareLink(req, row, shareId) {
+  requireBodyKeys(await req.json(), [])
+  const active = () => {
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE artifact_id=? AND id=?', row.id, shareId)
+    if (!item || item.revoked || (item.expires !== null && item.expires <= nowSeconds())) {
+      refuse(404, 'share_unavailable', '此分享已过期或撤销。')
+    }
+    if (publishingShares.has(item.id)) refuse(409, 'share_publishing', '分享正在创建，请稍后再试。')
+    return item
+  }
+  const item = active()
+  if (!canEdit('owner', req.owner, row)) refuse(404, 'not_found', 'Share not found')
+  const binding = await req.host.call('agents/personal-binding', {}).catch(() => null)
+  if (binding?.workspace_id !== row.workspace_id) {
+    const teams = await req.host.call('teams/activeWorkspaces', {}).catch(() => null)
+    if (!Array.isArray(teams) || !teams.some(team => team.id === row.workspace_id)) {
+      refuse(404, 'not_found', 'Share not found')
+    }
+  }
+  const token = recoverShareToken(req.store, item)
+  if (!token) refuse(404, 'share_unavailable', '无法恢复此前的分享链接。')
+  let status
+  try {
+    status = await sharedBotSocial(req.host).get('/v1/ot/public-shares/' + item.token_hash, {signal:req.signal})
+  } catch (error) {
+    if (error?.status === 404) refuse(404, 'share_unavailable', '此分享链接已不可用。')
+    refuse(503, 'share_link_unconfirmed', '暂时无法确认分享链接仍可访问。')
+  }
+  if (status?.active !== true) refuse(503, 'share_link_unconfirmed', '暂时无法确认分享链接仍可访问。')
+  active()
+  return {body: {share:{id:item.id, path:'/share/' + token}}}
+}
+
+export async function shares(req, workspaceId, artifactId, shareId, action) {
   const row = mustLoad(req, workspaceId, artifactId)
   if (!shareId && req.method === 'GET' && !req.queryString) {
     return { body: { items: listShares(req.store, row.id).map((item) => shareView(item, { store: req.store, now: req.now })) } }
@@ -343,7 +376,11 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
     } finally { publishingShares.delete(item.id) }
     return created
   }
-  if (shareId && revoking) {
+  if (shareId && action === '/link') {
+    if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid share request')
+    return recoverShareLink(req, row, shareId)
+  }
+  if (shareId && action === '/revoke') {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
     await req.json()
@@ -467,7 +504,7 @@ export const routes = [
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
-  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/revoke)?)?$/, handle: shares },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/(?:revoke|link))?)?$/, handle: shares },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/studio-copy$/, handle: copyToStudio },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts(?:\/([0-9a-f]{32})(?:\/(remove|favorite|preview|file|export|restore))?)?$/, handle: dispatch },
 ]

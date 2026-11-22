@@ -61,7 +61,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/(?:team-runs/[0-9a-f]{32}/share|shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?)$'), 'shares'),
     (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
@@ -99,7 +99,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$'), 'studio'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
     (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look|progress))?$'), 'settings'),
@@ -126,7 +126,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
     'location = /v1/team-templates { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?$ { return 418; }',
     'location = /v1/invites/accept { return 418; }',
     'location = /v1/invites/preview { return 418; }',
@@ -168,7 +168,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$ { return 418; }',
 )
 
 

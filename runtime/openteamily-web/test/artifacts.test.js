@@ -18,6 +18,68 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
+test('owner recovery survives a native restart and only reveals an active confirmed share', async (t) => {
+  let bot = await boot()
+  const outsider = await boot()
+  const bindings = target => {
+    target.features.table['agents/personal-binding'] = async () => ({workspace_id:WS})
+  }
+  bindings(bot)
+  let publishes = 0
+  let checkState = 200
+  const hashes = new Set()
+  setSharedBotSocial({
+    async request(method,path,payload) {
+      if (method === 'PUT') {
+        publishes += 1
+        hashes.add(payload.token_hash)
+        return {published:true}
+      }
+      if (method === 'DELETE') {
+        hashes.delete(path.split('/').at(-1))
+        return {revoked:true}
+      }
+      const present = hashes.has(path.split('/').at(-1))
+      if (!present || checkState !== 200) throw Object.assign(Error('Unavailable'),{status:present ? checkState : 404})
+      return {active:true}
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+  const {artifact} = (await bot.call('artifacts','POST',base(),{title:'Recover a shared link',body:'Exact source'},key())).body
+  const path = base('/'+artifact.id+'/shares')
+  const create = () => bot.call('artifacts','POST',path,{revision:1})
+  const {share} = (await create()).body
+  const link = path+'/'+share.id+'/link'
+  assert.equal((await outsider.call('artifacts','POST',link,{})).status,404)
+  const db = new DatabaseSync(join(bot.vol.data,'openteamily','features','artifacts','artifacts.sqlite3'))
+  t.after(()=>db.close())
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM artifact_shares').all()).includes(share.token))
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM artifact_share_keys').all()).includes(share.token))
+
+  bot = await boot(bot.vol)
+  bindings(bot)
+  const recover = () => bot.call('artifacts','POST',link,{})
+  const listed = (await bot.call('artifacts','GET',path)).body.items
+  assert.equal(listed[0].recoverable,true)
+  assert.equal(listed[0].path,undefined)
+  assert.equal(listed[0].token,undefined)
+  checkState = 503
+  assert.equal((await recover()).status,503)
+  checkState = 404
+  assert.equal((await recover()).status,404)
+  checkState = 200
+  assert.deepEqual((await recover()).body.share,{id:share.id,path:share.path})
+  assert.equal(publishes,1)
+  db.prepare('UPDATE artifact_shares SET recovery_version=0 WHERE id=?').run(share.id)
+  assert.equal((await recover()).status,404)
+  db.prepare('UPDATE artifact_shares SET recovery_version=1,expires=1 WHERE id=?').run(share.id)
+  assert.equal((await recover()).status,404)
+  db.prepare('UPDATE artifact_shares SET expires=NULL WHERE id=?').run(share.id)
+  await bot.call('artifacts','POST',path+'/'+share.id+'/revoke',{})
+  assert.equal((await recover()).status,404)
+  assert.equal(publishes,1)
+})
+
 test('Studio copy verifies the reviewed private revision and keeps a stable per-version receipt', async (t) => {
   const bot = await boot()
   const other = await boot()

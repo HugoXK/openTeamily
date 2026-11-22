@@ -167,7 +167,7 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
       }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       for (const name of req.query.keys()) {
-        if (!['limit', 'before', 'around', 'snapshot'].includes(name) || req.query.getAll(name).length !== 1) {
+        if (!['limit', 'before', 'after', 'around', 'snapshot'].includes(name) || req.query.getAll(name).length !== 1) {
           throw new FeatureError(400, 'invalid', 'Invalid history parameters')
         }
       }
@@ -177,7 +177,8 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
       if (req.query.size) {
         const limit = req.query.get('limit') ?? '50'
         if (!/^(?:[1-9]\d?|100)$/.test(limit)) throw new FeatureError(400, 'invalid', 'Invalid history limit')
-        history = {limit: Number(limit), before: req.query.get('before') ?? undefined, around: req.query.get('around') ?? undefined}
+        history = {limit: Number(limit), before: req.query.get('before') ?? undefined,
+          after: req.query.get('after') ?? undefined, around: req.query.get('around') ?? undefined}
       }
       const {agent, conversation, items, cursor, has_newer} = await call('openConversation', {
         workspace_id: workspaceId, id, conversation_id: conversationId, history, snapshot: snapshot === '1',
