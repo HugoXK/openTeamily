@@ -127,6 +127,7 @@ function conversationItem(row, me, env, workspaceId) {
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
     ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
+    ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
     agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
       mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
       owner_handle: a.owner?.handle || '' })),
@@ -265,6 +266,8 @@ function rethrow(error) {
     reply_unavailable: 'reply_unavailable',
     group_agent_unavailable: 'group_agent_unavailable',
     group_agent_request_conflict: 'group_agent_request_conflict',
+    direct_agent_unavailable: 'direct_agent_unavailable',
+    direct_agent_request_conflict: 'direct_agent_request_conflict',
     studio_reference_changed: 'studio_reference_changed',
     studio_reference_unavailable: 'studio_reference_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
@@ -740,15 +743,15 @@ async function requireSharedGroupScope(host,bs,workspace,cid) {
   return group
 }
 
-function groupAgentTargets(input) {
+function sharedAgentTargets(input) {
   if (!Array.isArray(input) || input.length < 1 || input.length > 5 || input.some(target =>
     !target || typeof target.owner_id !== 'string' || typeof target.agent_id !== 'string' ||
     Object.keys(target).length !== 2 || !GROUP_AGENT_ID.test(target.owner_id) || !GROUP_AGENT_ID.test(target.agent_id))) {
-    throw new Fault(400, 'invalid', '请选择 1 至 5 个有效的群内智能体。')
+    throw new Fault(400, 'invalid', '请选择 1 至 5 个有效的智能体。')
   }
   const ordered = input.map(({owner_id, agent_id}) => ({owner_id, agent_id}))
   if (new Set(ordered.map(item => JSON.stringify(item))).size !== ordered.length) {
-    throw new Fault(400, 'invalid', '不能重复选择同一个群内智能体。')
+    throw new Fault(400, 'invalid', '不能重复选择同一个智能体。')
   }
   return ordered
 }
@@ -839,7 +842,7 @@ function messengerRoutes(host, wakeReplies) {
           const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
             limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
-            workspace_id: unread && !scope.personal ? match[1] : undefined,
+            workspace_id: !scope.personal && (unread || conv.kind === 'dm') ? match[1] : undefined,
           }))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
@@ -983,6 +986,28 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
+          if (body?.direct_agent_request !== undefined) {
+            const [, workspace, conversationId] = match
+            const path = '/v1/ot/conversations/' + seg(conversationId)
+            const conversation = scope.conversation || await bs.get(path)
+            if (conversation.kind !== 'dm' || !conversation.direct || conversation.direct_agent_requests !== true) {
+              throw new Fault(404, 'not_found', '此私聊无法请求智能体。')
+            }
+            if (body.direct_agent_request !== true || typeof body.body !== 'string' ||
+                !body.body.trim() || body.body.length > 4000 ||
+                typeof idempotency_key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(idempotency_key) ||
+                Object.keys(body).some(k => !['body','agent_mentions','reply_to','direct_agent_request'].includes(k))) {
+              throw new Fault(400, 'invalid', '只能向私聊智能体发送文字或引用一条消息。')
+            }
+            const data = await bs.post(path + '/messages', {
+              direct:true, direct_agent_request:true, body:body.body, reply_to:body.reply_to,
+              agent_mentions:sharedAgentTargets(body.agent_mentions), client_key:idempotency_key,
+              ...(!scope.personal ? {workspace} : {}),
+            })
+            if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
+            const me = await meOf(bs, env)
+            return [201, {message:messageItem({...data,conversation_id:conversationId},me,env,workspace)}]
+          }
           let attachment
           let stickerReplay = false
           if (body?.sticker_id !== undefined) {
@@ -1084,9 +1109,9 @@ function messengerExtraRoutes(host, wakeReplies) {
       handle: ({match, body}) => wrap(async () => {
         const [, workspace, conversation, message] = match
         const bs = client(host)
-        await messengerScope(host, bs, workspace, conversation)
+        const scope = await messengerScope(host, bs, workspace, conversation)
         const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry',
-          {job_id: body?.job_id, attempt: body?.attempt})
+          {job_id:body?.job_id, attempt:body?.attempt, ...(!scope.personal ? {workspace} : {})})
         wakeReplies()
         return [200, result]
       }),
@@ -1268,12 +1293,26 @@ function messengerExtraRoutes(host, wakeReplies) {
       method: 'POST', path: re('\\/agents'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
+          const bs = client(host)
+          const scope = await messengerScope(host, bs, match[1], match[2])
+          const conversation = scope.conversation || await bs.get(conv(match[2]))
           const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 10) : []
           if (!ids.length) throw new Fault(400, 'invalid', 'Provide agent_ids')
+          let workspace = match[1]
+          const direct = conversation.kind === 'dm'
+          if (direct) {
+            if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法加入智能体。')
+            workspace = (await host.call('agents/personal-binding', {}))?.workspace_id
+            if (!workspace) throw new Fault(503,'unavailable','无法加载个人智能体。')
+          }
           for (const id of ids) {
-            const { agent } = await host.call('agents/get', { id, workspace_id: match[1] })
-            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`, { name: String(agent.name).slice(0, 40), auto_reply: false })
+            const { agent } = await host.call('agents/get', { id, workspace_id:workspace })
+            if (direct && (agent.archived || agent.native_deleted)) throw new Fault(404,'not_found','该个人智能体不可用。')
+            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
+              {
+                name:String(agent.name).slice(0,40), ...(!direct ? {auto_reply:false} : {}),
+                ...(direct && !scope.personal ? {workspace:match[1]} : {}),
+              })
           }
           return [201, { added: ids.length }]
         })
@@ -1292,10 +1331,20 @@ function messengerExtraRoutes(host, wakeReplies) {
     },
     {
       method: 'POST', path: re('\\/agents\\/([A-Za-z0-9._:-]{1,80})\\/remove'),
-      async handle({ match }) {
+      async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
-          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}`)
+          const bs = client(host)
+          const scope = await messengerScope(host, bs, match[1], match[2])
+          const conversation = scope.conversation || await bs.get(conv(match[2]))
+          let owner = ''
+          if (conversation.kind === 'dm') {
+            if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法移除智能体。')
+            if (typeof body?.owner_id !== 'string' || !GROUP_AGENT_ID.test(body.owner_id)) {
+              throw new Fault(400,'invalid','请选择要移除的智能体。')
+            }
+            owner = qs({owner_id:body.owner_id, ...(!scope.personal ? {workspace:match[1]} : {})})
+          }
+          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
           return [200, { removed: true }]
         })
       },
@@ -1326,7 +1375,7 @@ function messengerExtraRoutes(host, wakeReplies) {
               || typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
             throw new Fault(400, 'invalid', 'Provide up to five group agents, a prompt and a send key')
           }
-          const selected = paired ? groupAgentTargets(body.agent_targets) : null
+          const selected = paired ? sharedAgentTargets(body.agent_targets) : null
           const reference = body.studio_reference
           const studio = studioReference(reference)
           if (reference !== undefined && (!studio || Object.keys(reference).length !== 2)) {

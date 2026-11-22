@@ -251,6 +251,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.messages.save_copy_help": ["把消息文字复制到当前工作区的个人资料空间。副本独立于原消息，重复保存会沿用已有副本。", "Save a separate copy of the message in your personal Space for this workspace. Repeated saves reuse the existing copy."],
   "chat.messages.document_title": ["文档标题", "Document title"],
   "chat.group.agents": ["群内智能体", "Group agents"],
+  "chat.direct.agents_help": ["双方都可以添加自己的个人智能体。在输入框用 @ 选择智能体，它只会收到这条文字和你明确引用的一条消息。", "Both people can add their personal agents. Use @ in the composer to choose an agent. It receives only this text and one message you explicitly quote."],
   "chat.group.request_reply_help": ["请求会作为一条消息发送到群聊，并请选中的智能体回复。", "Send a message to the group and ask the selected agents to reply."],
   "chat.group.add_agent": ["添加我的智能体", "Add one of my agents"],
   "chat.group.select_reply_agents": ["请求哪些智能体回复", "Choose agents to ask"],

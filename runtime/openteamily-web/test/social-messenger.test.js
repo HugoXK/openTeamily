@@ -490,7 +490,7 @@ test('group sender retry forwards the displayed attempt to Bot Social', async ()
   const body = {job_id:'otj_live',attempt:3}
   const result = await feature.v1({method:'POST',path,body})
   assert.deepEqual(result,{status:200,body:{reply_jobs:jobs}})
-  assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body})
+  assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body:{...body,workspace}})
 })
 
 test('Studio claims only expose a matching pin to a stateless group turn', async () => {
@@ -610,5 +610,92 @@ test('a teammate request is text-only and fails closed if its claim lacks the re
     })
     assert.equal((await replier.once()).replied,replies)
     assert.deepEqual(actions,['start',replies ? '/v1/ot/conversations/otc_group/agent-messages' : 'fail'])
+  }
+})
+
+test('direct agent requests use exact pairs and cannot attach documents or cross into a group', async () => {
+  const workspace = 'a'.repeat(32)
+  const teamWorkspace = 'b'.repeat(32)
+  const room = '/v1/workspaces/'+workspace+'/social/conversations/otc_direct'
+  const social = '/v1/ot/conversations/otc_direct'
+  const targets = [{owner_id:'owner-b',agent_id:'helper'}]
+  let conversation = {id:'otc_direct',kind:'dm',direct:true}
+  let failure
+  const f = fake({
+    [`GET ${social}`]: () => conversation,
+    [`GET ${social}/messages`]: () => ({messages:[]}),
+    [`POST ${social}/messages`]: () => ({id:'otm_direct',body:'Please help'}),
+    [`GET /v1/ot/teams/by-workspace/${teamWorkspace}`]: () => ({id:'ott_team'}),
+    'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
+  })
+  const dir = fixture()
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch(url, init) {
+    if (failure && init.method === 'POST' && url.endsWith(social+'/messages')) {
+      return new Response(JSON.stringify({error:{code:failure,message:'Direct request rejected'}}),{status:409})
+    }
+    return f.fetch(url,init)
+  }}))
+  const feature = messenger({dataDir:dir, async call(){return {workspace_id:workspace}}}).endpoints
+  const send = {method:'POST',path:room+'/messages',idempotency_key:'scoped-direct-fixture',
+    body:{body:'Please help',agent_mentions:targets,reply_to:'otm_quote',direct_agent_request:true}}
+  assert.equal((await feature.v1(send)).status,404)
+  conversation.direct_agent_requests = true
+  assert.equal((await feature.v1({...send,body:{...send.body,artifact_id:'secret'}})).status,400)
+  assert.equal((await feature.v1({...send,body:{...send.body,agent_mentions:[targets[0],targets[0]]}})).status,400)
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,0)
+  assert.equal((await feature.v1(send)).status,201)
+  assert.deepEqual(f.calls.find(call=>call.method==='POST').body,{direct:true,direct_agent_request:true,body:'Please help',
+    reply_to:'otm_quote',agent_mentions:targets,client_key:'scoped-direct-fixture'})
+  assert.equal((await feature.v1({method:'GET',path:room})).body.conversation.direct_agent_requests,true)
+  const fromTeam = {...send,path:send.path.replace(workspace,teamWorkspace)}
+  assert.equal((await feature.v1(fromTeam)).status,201)
+  assert.equal(f.calls.filter(call=>call.method==='POST').at(-1).body.workspace,teamWorkspace)
+  for (failure of ['direct_agent_unavailable','direct_agent_request_conflict']) {
+    const result = await feature.v1(fromTeam)
+    assert.equal(result.status,409)
+    assert.equal(result.body.error.code,failure)
+  }
+  failure = undefined
+  conversation = {...conversation,kind:'group'}
+  assert.equal((await feature.v1(send)).status,404)
+})
+
+test('a direct reply uses only the prompt and quote returned by its scoped claim', async () => {
+  const job = {job_id:'otj_direct',attempt:1,conversation_id:'otc_direct',agent_ref:'helper',
+    mode:'mention',direct_text_only:true,message:{id:'otm_member',revision:1,body:'inbox secret'},
+    context:[{author:{display_name:'Peer'},body:'other private history'}],
+    group_memories:[{id:'note',title:'secret',body:'memory secret'}]}
+  const approved = {direct_text_only:true,direct_prompt:'Approved direct request',quoted_message:{text:'Approved quote'}}
+  for (const [receipt, replies] of [[approved,1],[{direct_text_only:true},0],[{direct_prompt:'unscoped'},0]]) {
+    const actions = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'direct-state.json'),
+      bs:{
+        async get(){return {jobs:[job]}},
+        async post(path,body) {
+          actions.push(body.action || 'deliver')
+          if (body.action === 'start') {
+            assert.equal(body.accept_direct_text_turn,true)
+            assert.equal(body.source_revision,1)
+            return receipt
+          }
+          assert.equal(body.group_memory_ids,undefined)
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint,payload) {
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(payload.direct,true)
+          assert.equal(payload.includePersona,undefined)
+          assert.match(payload.text,/Approved direct request/)
+          assert.match(payload.text,/Approved quote/)
+          assert.doesNotMatch(payload.text,/secret|private history/)
+          return {text:'Scoped direct answer'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied,replies)
+    assert.deepEqual(actions,['start',replies ? 'deliver' : 'fail'])
   }
 })

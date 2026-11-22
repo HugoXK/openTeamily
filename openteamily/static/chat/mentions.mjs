@@ -1,6 +1,7 @@
 import {readChatDraftMentions, writeChatDraftMentions} from '../home/runtime-readiness.mjs';
 
 const MAX_MENTIONS = 20;
+const mentionsLimit = room => room?.direct ? 5 : MAX_MENTIONS;
 const agentKey = agent => JSON.stringify([agent.owner_id, agent.id]);
 const availableAgent = agent => Boolean(agent?.name && agent.owner_id && agent.id && !agent.archived);
 
@@ -15,7 +16,8 @@ export function mountAgentMentions(doc, context) {
   const chips = doc.getElementById('chat-agent-mentions');
   const staleStatus = doc.getElementById('chat-agent-mention-status');
   if (!input || !list || !chips) return {
-    refresh() {}, clear() {}, forget() {}, openPicker() {}, canPick: () => false, keydown: () => false, message: body => ({body}),
+    refresh() {}, clear() {}, forget() {}, openPicker() {}, canPick: () => false, keydown: () => false,
+    restoreDirect: () => false, message: body => ({body}),
   };
   const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
   const launcher = pickerNode('open');
@@ -85,6 +87,10 @@ export function mountAgentMentions(doc, context) {
     writeChatDraftMentions(doc.defaultView, scope, targets);
   }
 
+  function restoreTargets(targets) {
+    for (const target of targets) selected.set(agentKey({owner_id: target.owner_id, id: target.agent_id}), target);
+  }
+
   function refresh() {
     const group = context();
     const changedScope = scope !== group?.scope;
@@ -93,10 +99,15 @@ export function mountAgentMentions(doc, context) {
       selected.clear();
       if (scope) {
         const targets = savedSelections.get(scope) || readChatDraftMentions(doc.defaultView, scope);
-        for (const target of targets) selected.set(agentKey({owner_id: target.owner_id, id: target.agent_id}), target);
+        restoreTargets(targets);
       }
       close();
       if (picker?.open) picker.close();
+      list.setAttribute('aria-label', group?.direct ? text('提及私聊智能体', 'Mention chat agents')
+        : text('提及群智能体', 'Mention group agents'));
+      const searchLabel = pickerNode('search-label');
+      if (searchLabel) searchLabel.textContent = group?.direct ? text('搜索私聊智能体', 'Search chat agents')
+        : text('搜索群智能体', 'Search group agents');
     }
     if (changedScope || roster !== group?.agents) {
       roster = group?.agents;
@@ -108,9 +119,9 @@ export function mountAgentMentions(doc, context) {
   }
 
   function choose(agent) {
-    refresh();
+    const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!query || !available.has(agentKey(agent)) || selected.size >= MAX_MENTIONS) {
+    if (!query || !available.has(agentKey(agent)) || selected.size >= mentionsLimit(group)) {
       close();
       return;
     }
@@ -134,7 +145,7 @@ export function mountAgentMentions(doc, context) {
     if (event?.isComposing) return;
     const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!group || !query || selected.size >= MAX_MENTIONS) { close(); return; }
+    if (!group || !query || selected.size >= mentionsLimit(group)) { close(); return; }
     const needle = query.query.toLowerCase();
     options = group.agents.filter(agent => availableAgent(agent) && !selected.has(agentKey(agent))
       && agent.name.toLowerCase().includes(needle)).slice(0, 8);
@@ -160,9 +171,10 @@ export function mountAgentMentions(doc, context) {
 
   function setPickerCount() {
     const size = picking.choices.size;
-    selectedLabel.textContent = text(`已选 ${size}`, `${size} selected`);
+    selectedLabel.textContent = picking.direct ? text(`已选 ${size} / ${picking.limit}`, `${size} of ${picking.limit} selected`)
+      : text(`已选 ${size}`, `${size} selected`);
     applyButton.disabled = Boolean(picking.reply && !size);
-    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= MAX_MENTIONS;
+    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= picking.limit;
   }
 
   function renderPicker() {
@@ -200,7 +212,8 @@ export function mountAgentMentions(doc, context) {
     if (!picker || picker.open || !group || input.disabled) return false;
     const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
     if (!roster.size) return false;
-    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))), reply, onApply};
+    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))),
+      direct: group.direct, limit: mentionsLimit(group), reply, onApply};
     queryField.value = '';
     pickerNode('quote').hidden = !reply;
     pickerNode('quote-author').textContent = reply?.author || '';
@@ -274,6 +287,13 @@ export function mountAgentMentions(doc, context) {
       close();
       if (picker?.open) picker.close();
     },
+    restoreDirect(targets) {
+      if (!refresh()?.direct || selected.size || !Array.isArray(targets)) return false;
+      restoreTargets(targets);
+      remember();
+      renderSelected();
+      return true;
+    },
     keydown(event) {
       if (event.isComposing || list.hidden || !options.length) return false;
       const keys = ['Escape', 'ArrowDown', 'ArrowUp', 'Enter', 'Tab'];
@@ -290,8 +310,8 @@ export function mountAgentMentions(doc, context) {
     message(body) {
       const group = refresh();
       if (!group || !selected.size) return {body};
-      if ([...selected.keys()].some(key => !available.has(key))) return null;
-      return {body, agent_mentions: [...selected.values()]};
+      if (selected.size > mentionsLimit(group) || [...selected.keys()].some(key => !available.has(key))) return null;
+      return {body, agent_mentions: [...selected.values()], ...(group.direct ? {direct_agent_request: true} : {})};
     },
   };
 }

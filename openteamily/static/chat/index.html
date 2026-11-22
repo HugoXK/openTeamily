@@ -648,11 +648,12 @@
       </form>
     </dialog>
     <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
-      <details class="group-agent-sheet">
-      <summary data-ui-text="chat.group.agents">群内智能体</summary>
-      <h2 class="visually-hidden" data-ui-text="chat.group.agents">群内智能体</h2>
+      <details id="conversation-agents-sheet" class="group-agent-sheet">
+      <summary id="conversation-agents-label" data-ui-text="chat.group.agents">群内智能体</summary>
+      <h2 id="conversation-agents-heading" class="visually-hidden" data-ui-text="chat.group.agents">群内智能体</h2>
       <p id="social-agent-members" class="group-agent-note" hidden></p>
-      <p class="note" data-ui-text="chat.group.request_reply_help">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
+      <p id="group-agent-request-help" class="note" data-ui-text="chat.group.request_reply_help">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
+      <p id="direct-agent-help" class="note" hidden data-ui-text="chat.direct.agents_help">双方都可以添加自己的个人智能体。在输入框用 @ 选择智能体，它只会收到这条文字和你明确引用的一条消息。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
         <div class="agent-add">
@@ -660,6 +661,7 @@
           <button type="button" id="group-agent-add-submit" data-ui-text="chat.add">添加</button>
         </div>
       </div>
+      <p id="direct-agent-status" class="note" role="status" hidden></p>
       <form id="group-agent-form">
         <fieldset>
           <legend data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend>
@@ -838,7 +840,7 @@
     <h2 id="chat-agent-picker-title" tabindex="-1" data-ui-text="chat.group.ask_agents">请智能体回复</h2>
     <p id="chat-agent-picker-help" data-ui-text="chat.group.choose_reply_targets">选中的智能体会在你发送消息后回复。</p>
     <figure id="chat-agent-picker-quote" hidden><figcaption id="chat-agent-picker-quote-author"></figcaption><blockquote id="chat-agent-picker-quote-text"></blockquote></figure>
-    <label class="chat-agent-picker-search"><span class="sr-only" data-ui-text="chat.group.search_agents">搜索群智能体</span><input type="search" id="chat-agent-picker-search" autocomplete="off" maxlength="80" placeholder="搜索智能体名称或所有者" data-ui-placeholder="chat.group.search_reply_targets"></label>
+    <label class="chat-agent-picker-search"><span id="chat-agent-picker-search-label" class="sr-only" data-ui-text="chat.group.search_agents">搜索群智能体</span><input type="search" id="chat-agent-picker-search" autocomplete="off" maxlength="80" placeholder="搜索智能体名称或所有者" data-ui-placeholder="chat.group.search_reply_targets"></label>
     <fieldset id="chat-agent-picker-choices"><legend class="sr-only" data-ui-text="chat.group.select_reply_agents">请求哪些智能体回复</legend><div id="chat-agent-picker-results"></div></fieldset>
     <p id="chat-agent-picker-empty" data-ui-text="chat.group.no_reply_targets" hidden>没有匹配的智能体。</p>
     <div class="chat-agent-picker-actions">
