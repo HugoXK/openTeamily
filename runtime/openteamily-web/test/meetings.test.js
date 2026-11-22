@@ -224,8 +224,13 @@ test('only an authorized finished call can prefill and associate a personal meet
   const source = {id, title:'Discussion', kind:'video', started_at:1795212000123, ended_at:1795212200123,
     attendees:['Alex','  Morgan  ','alex']}
   const reads = []
+  const shares = []
   let relay = 'social/meeting_call_active'
-  setSharedBotSocial({async request(method, path) {
+  setSharedBotSocial({async request(method, path, payload) {
+    if (method === 'POST' && path === '/v1/ot/meeting-shares') {
+      shares.push(payload)
+      return {meeting: {id:'c'.repeat(32)}}
+    }
     assert.equal(method,'GET')
     reads.push(path)
     assert.equal(path,'/v1/ot/call-records/' + id)
@@ -269,6 +274,16 @@ test('only an authorized finished call can prefill and associate a personal meet
   assert.equal((await call('POST', base(meeting.id), {revision:1,changes:{source_call_id:null}})).status,400)
   const edited = await call('POST', base(meeting.id), {revision:1,changes:{title:'Edited notes'}})
   assert.equal(edited.body.meeting.source_call_id,id)
+  const sharePath = base(meeting.id + '/shares')
+  const selected = {call_id:id,revision:2,recipient_ids:['fixture-attendee']}
+  assert.equal((await call('POST',sharePath,{...selected,call_id:'otcav_'+'B'.repeat(26)},key())).status,404)
+  assert.equal((await call('POST',sharePath,{...selected,conversation_id:'wrong-recipient-mode'},key())).status,400)
+  assert.equal((await call('POST',sharePath,{...selected,revision:1},key())).status,409)
+  assert.deepEqual(shares,[])
+  const shareKey = key()
+  assert.equal((await call('POST',sharePath,selected,shareKey)).status,201)
+  assert.deepEqual(shares,[{title:edited.body.meeting.title, started_at:meeting.started_at, summary:meeting.summary,
+    action_items:[], source_id:meeting.id, client_key:shareKey, ...selected}])
   const restarted = await boot(bot.vol)
   installBinding(restarted)
   assert.deepEqual((await restarted.call('meetings','GET',sourcePath)).body.meeting,edited.body.meeting)
@@ -431,6 +446,54 @@ test('meeting shares publish only the saved summary and action items through the
   assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
   assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})
   assert.equal((await call('GET','shared?source_id='+meeting.id)).status,400)
+})
+
+test('received meeting actions are copied once into personal memory and every retry rechecks access', async t => {
+  const team = 'b'.repeat(32), shareId = 'c'.repeat(32)
+  const bot = await bootMemory(volume(), {teams:[team]})
+  const text = '📋'.repeat(45) + ' 在周五前确认议程'
+  const meeting = {id:shareId, title:'周会', revision:3, shared:true, action_items:[
+    {text,owner:'Alice',due_date:'2032-02-29',done:false}, {text:'已确认的事项',done:true},
+  ]}
+  let received = true, revoked = false
+  setSharedBotSocial({async request(method, path) {
+    assert.equal(method, 'GET')
+    assert.equal(path, `/v1/ot/workspaces/${team}/meeting-shares/${shareId}`)
+    if (revoked) throw Object.assign(new Error('Meeting share not found'), {status:404,code:'social/not_found'})
+    return {meeting, received}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const receipt = base('shared/' + shareId, team)
+  const copy = (input) => bot.call('meetings', 'POST', receipt + '/action', input)
+  const actions = '/v1/workspaces/' + WS + '/memory/actions'
+  const item = {revision:3,index:0}
+  assert.equal((await bot.endpoint('memory/saveSharedMeetingAction', {})).ok,false)
+  assert.equal((await copy({...item,workspace_id:team})).status,400)
+  assert.equal((await copy({...item,revision:2})).status,409)
+  assert.equal((await copy({...item,index:1})).status,409)
+  assert.equal((await copy({...item,index:2})).status,404)
+  received = false
+  assert.equal((await copy(item)).status,404)
+  received = true
+  const copied = await Promise.all([copy(item),copy(item)])
+  assert.deepEqual(copied.map(result=>result.status).sort(),[200,201])
+  const action = copied[0].body.action
+  assert.deepEqual(copied[1].body.action,action)
+  assert.equal(action.workspace_id,WS)
+  const privatePath = actions + '/' + action.id
+  const saved = (await bot.call('memory','GET',privatePath)).body.action
+  assert.match(saved.notes,/在周五前确认议程/)
+  assert.equal(saved.due_at,Date.parse('2032-02-29') / 1000)
+  assert.deepEqual(saved.source,{kind:'shared_meeting',workspace_id:team,share_id:shareId,revision:3,action_index:0})
+  await bot.call('memory','POST',privatePath,{revision:1,changes:{status:'done',notes:'已自行处理'}})
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...action}])
+  assert.equal((await copy(item)).status,200)
+  assert.equal((await bot.call('memory','GET',privatePath)).body.action.notes,'已自行处理')
+  assert.equal((await bot.call('memory','GET',actions.replace(WS,team))).body.items.length,0)
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.meeting,meeting)
+  revoked = true
+  assert.equal((await copy(item)).status,404)
+  assert.equal((await bot.call('memory','GET',actions)).body.items.length,1)
 })
 
 test('meeting speech prepares and uses the local provider in the signed-in runtime', async (t) => {

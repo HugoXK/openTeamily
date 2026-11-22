@@ -18,6 +18,49 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
+test('Studio copy verifies the reviewed private revision and keeps a stable per-version receipt', async (t) => {
+  const bot = await boot()
+  const other = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const privateBody = 'Reviewed body\n\n'
+  const created = await call('POST', base(), {
+    title: 'Team   notes', body: privateBody, kind: 'document',
+    source: {kind:'agent_message', id:'b'.repeat(32), conversation_id:'c'.repeat(32)},
+  }, key())
+  assert.equal(created.status, 201)
+  const original = created.body.artifact
+  const path = base('/' + original.id + '/studio-copy')
+  const input = {revision: original.revision, title:'Team notes', body:privateBody}
+  const outgoing = []
+  const studioId = 'e'.repeat(32)
+  setSharedBotSocial({
+    request: async (method, target, payload) => {
+      assert.equal(method, 'POST')
+      assert.equal(target, '/v1/ot/teams/' + WS + '/studio/documents')
+      outgoing.push(payload)
+      if (outgoing.length === 1) throw Error('Lost acknowledgment')
+      return {document:{id:studioId}}
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  assert.equal((await call('POST', path, {...input, body:'Unreviewed body'})).body.error.code, 'source_changed')
+  assert.equal((await other.call('artifacts', 'POST', path, input)).status, 404)
+  assert.equal(outgoing.length, 0)
+  assert.equal((await call('POST', path, input)).body.error.code, 'studio_copy_unconfirmed')
+  assert.deepEqual((await call('POST', path, input)).body, {id:studioId})
+  assert.deepEqual(outgoing[0], {title:input.title, body:privateBody, client_key:outgoing[1].client_key})
+  assert.match(outgoing[1].client_key, /^[a-f0-9]{64}$/)
+  const originalPath = base('/' + original.id)
+  assert.deepEqual((await call('GET', originalPath)).body.artifact, original)
+
+  assert.equal((await call('POST', originalPath, {revision:original.revision, changes:{body:'Updated later'}})).status, 200)
+  assert.equal((await call('POST', path, input)).body.error.code, 'source_changed')
+  assert.equal(outgoing.length, 2)
+  await call('POST', path, {...input, revision:original.revision + 1, body:'Updated later'})
+  assert.notEqual(outgoing[2].client_key, outgoing[1].client_key)
+})
+
 test('copying a saved work version creates a separate private artifact and replays after the source is removed', async () => {
   const owner = await boot()
   const other = await boot()

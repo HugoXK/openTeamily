@@ -77,6 +77,128 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   gap: inherit;
 }
 
+#studio-open {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+:is(#studio-dialog, #studio-discussion-dialog) {
+  box-sizing: border-box;
+  width: min(43rem, calc(100% - 1.5rem));
+  max-height: min(48rem, calc(100% - 1.5rem));
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  box-shadow: var(--ot-shadow);
+}
+
+:is(#studio-dialog, #studio-discussion-dialog)::backdrop { background: rgb(12 22 17 / .38); }
+#studio-discussion-dialog { width: min(34rem, calc(100% - 1.5rem)); }
+#studio-discussion-title { margin: 0; font-size: 1.15rem; }
+#studio-discussion-source { margin: .35rem 0 1rem; overflow-wrap: anywhere; }
+#studio-discussion-form { display: grid; gap: .65rem; }
+#studio-discussion-form label { margin: 0; }
+#studio-discussion-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ot-line);
+  border-radius: .55rem;
+  padding: .58rem .7rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+#studio-discussion-preview-wrap:not([hidden]) { display: grid; gap: .45rem; }
+#studio-discussion-form .studio-discussion-choice { display: flex; align-items: center; gap: .4rem; min-height: 2.75rem; }
+#studio-discussion-form .studio-discussion-choice input { margin: 0; }
+:is(#studio-discussion-status, #studio-discussion-notice) { margin: 0; overflow-wrap: anywhere; }
+:is(#studio-discussion-status, #studio-discussion-notice):empty { display: none; }
+.studio-header, .studio-actions {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+#studio-dialog > .studio-header {
+  margin: 0;
+  padding: 0 0 .8rem;
+  border: 0;
+  border-bottom: 1px solid var(--ot-line);
+  background: transparent;
+  box-shadow: none;
+}
+.studio-header h2 { margin: .15rem 0 0; font-size: 1.15rem; }
+.studio-header .note,
+#studio-revision { margin: 0; }
+#studio-status:not(:empty) { margin: .8rem 0; overflow-wrap: anywhere; }
+#studio-status:empty { display: none; }
+#studio-catalog, #studio-form { margin-top: 1rem; }
+#studio-form:not([hidden]) { display: grid; gap: .55rem; }
+#studio-form label { margin: 0; }
+#studio-form input, #studio-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--ot-line);
+  border-radius: .55rem;
+  padding: .58rem .7rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  line-height: 1.45;
+}
+#studio-body { min-height: 13rem; resize: vertical; }
+#studio-delete { justify-self: start; margin-top: .5rem; }
+#studio-list { margin: .65rem 0 0; padding: 0; list-style: none; }
+#studio-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .6rem;
+  align-items: center;
+  border-bottom: 1px solid var(--ot-line);
+  padding-block: .35rem;
+}
+#studio-list button { text-align: start; white-space: normal; overflow-wrap: anywhere; }
+#studio-list .note { max-width: 12rem; overflow-wrap: anywhere; }
+.studio-conflict { border: 1px solid var(--ot-line); border-radius: .65rem; background: var(--ot-surface-2); padding: .6rem .75rem; }
+.studio-conflict > p { margin: 0; }
+#studio-compare summary { min-height: 2.75rem; align-content: center; cursor: pointer; }
+#studio-server-title { margin: .25rem 0; overflow-wrap: anywhere; }
+#studio-server-body { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#studio-compare .studio-actions { justify-content: flex-start; }
+
+#studio-history {
+  width: min(34rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#studio-history::backdrop { background: rgb(12 22 17 / .38); }
+#studio-history > header { margin: 0; padding: 0; background: transparent; box-shadow: none; }
+#studio-history-status { overflow-wrap: anywhere; }
+#studio-history-list { max-height: 12rem; overflow: auto; list-style: none; padding: 0; }
+#studio-history-list li + li { margin-top: .35rem; }
+#studio-history-list button { width: 100%; text-align: start; overflow-wrap: anywhere; }
+#studio-history-preview { border-top: 1px solid var(--ot-line); }
+#studio-history-body { max-height: 13rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#studio-history button { min-height: 2.75rem; }
+
+@media (max-width: 700px) {
+  #studio-open, :is(#studio-dialog, #studio-discussion-dialog) button { min-height: 2.75rem; }
+  :is(#studio-dialog, #studio-discussion-dialog) { padding: .85rem; }
+  #studio-form input { min-height: 2.75rem; }
+  #studio-form input, #studio-form textarea { font-size: 1rem; }
+  #studio-list li { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
+}
+
 .artifacts-disclaimer {
   margin: 0 0 0.65rem;
 }
@@ -1288,15 +1410,25 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: 1.05rem;
 }
 
-#duplicate-artifact-dialog {
+#duplicate-artifact-dialog, #studio-copy-dialog {
   width: min(26rem, calc(100% - 2rem));
   margin: auto;
   border: 1px solid var(--ot-line);
 }
 
-#duplicate-artifact-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+#duplicate-artifact-dialog::backdrop, #studio-copy-dialog::backdrop { background: rgb(15 23 42 / 32%); }
 #duplicate-artifact-source { overflow-wrap: anywhere; }
 #duplicate-artifact-title { width: 100%; margin-top: .3rem; }
+#studio-copy-open { justify-self: start; }
+#studio-copy-dialog { box-sizing: border-box; width: min(33rem, calc(100% - 1.5rem)); }
+#studio-copy-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem; overflow-wrap: anywhere; }
+#studio-copy-preview { background: var(--ot-surface-2); border: 1px solid var(--ot-line); border-radius: .65rem; padding: .75rem; }
+#studio-copy-title { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+#studio-copy-body { max-height: min(13rem, 35dvh); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#studio-copy-status:empty { display: none; }
+#studio-copy-dialog .send-dialog-actions { margin-top: .75rem; align-items: center; flex-wrap: wrap; }
+#studio-copy-dialog :is(button, a) { min-height: 2.75rem; align-content: center; }
+#studio-copy-result { padding-inline: .75rem; }
 
 #send-to-chat-list {
   list-style: none;
@@ -1483,7 +1615,10 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #artifact-draft-details summary { align-content: center; cursor: pointer; }
 #artifact-draft-copy { display: block; width: 100%; box-sizing: border-box; }
 
-#artifact-live-load { min-height: 2.75rem; }
+.artifact-live-actions { display: flex; flex-wrap: wrap; gap: .25rem .75rem; }
+#artifact-live-load,
+#artifact-live-compare { min-height: 2.75rem; }
+#artifact-live-compare:not([hidden]) { display: inline-flex; align-items: center; }
 
 #main-panel.is-meetings #artifact-list {
   display: grid;
@@ -1599,11 +1734,15 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #sheet-grid input:focus { outline: 2px solid var(--ot-accent); outline-offset: -2px; position: relative; z-index: 1; }
 #sheet-status:empty { display: none; }
 
-#main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
-  display: none;
+@media (width > 700px) {
+  #main-panel:has(> #editor-form:not([hidden]) :is(#spreadsheet-editor, #slides-editor):not([hidden])) > .artifacts-top {
+    display: none;
+  }
+  body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
+    grid-row: 1 / -1;
+  }
 }
 body #main-panel > #editor-form:not([hidden]):has(:is(#spreadsheet-editor, #slides-editor):not([hidden])) {
-  grid-row: 1 / -1;
   grid-template-columns: minmax(0,1fr);
   max-width: min(66rem, 100%);
   min-width: 0;
@@ -2090,7 +2229,7 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
     padding: .75rem .875rem max(1.5rem, env(safe-area-inset-bottom));
     border-radius: 0;
   }
-  #editor-form :is(#document-save, #sheet-save, #sheet-back, #slides-save, #slides-back, #save-artifact, #cancel-editor, #remove-artifact) {
+  #editor-form :is(#document-save, #studio-copy-open, #sheet-save, #sheet-back, #slides-save, #slides-back, #save-artifact, #cancel-editor, #remove-artifact) {
     display: none;
   }
   #editor-form .document-toolbar {

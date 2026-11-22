@@ -39,6 +39,7 @@ const publicMessage = (row, workspaceId, agentId) => {
   const canRetryText = textReplyKey(row, meta)
   return {
     ...(attachments.length ? {attachments} : {}),
+    ...(row.saved_work ? {saved_work:row.saved_work} : {}),
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
     ...(meta?.memory_refs?.length ? {memory_refs: meta.memory_refs} : {}),
     ...(meta?.memory_profile_workspace === workspaceId ? {memory_profile_workspace: workspaceId} : {}),
@@ -97,7 +98,11 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         return {status:200, raw:file.data, filename:file.title, headers:{'content-type':file.mime}, inline}
       }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async (req, workspaceId, id, conversationId, messageId) => {
-      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      if (req.method === 'GET') {
+        if (req.query.size) throw new FeatureError(400, 'invalid', 'Invalid saved work request')
+        return {body:await call('savedMessageWork', {workspace_id:workspaceId,id,conversation_id:conversationId,message_id:messageId})}
+      }
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only GET and POST are supported')
       const body = await req.json()
       const {status, artifact} = await call('saveMessage', {workspace_id: workspaceId, id,
         conversation_id: conversationId, message_id: messageId, title: body.title})

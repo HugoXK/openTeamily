@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/artifacts/app.css">
   <link rel="modulepreload" href="/artifacts/notifications.mjs">
+  <link rel="modulepreload" href="/artifacts/shared-studio.mjs">
+  <link rel="modulepreload" href="/artifacts/studio-copy.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
   <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/work-notification.mjs">
@@ -78,6 +80,7 @@
             <button type="button" id="mobile-editor-markdown" aria-controls="document-source" hidden>切换 Markdown</button>
             <button type="button" id="mobile-editor-version" aria-controls="version-panel" hidden>版本与导出</button>
             <button type="button" id="mobile-editor-share" aria-controls="share-panel" hidden>只读分享</button>
+            <button type="button" id="studio-copy-mobile" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
             <button type="button" id="mobile-editor-discover" aria-controls="discover-panel" hidden>公开到发现页</button>
             <button type="button" id="mobile-editor-reconnect">检查更新</button>
             <button type="button" id="mobile-editor-delete" class="danger" hidden>删除作品</button>
@@ -108,6 +111,7 @@
         <div class="workspace-selection">
           <label for="workspace">工作区</label>
           <select id="workspace"></select>
+          <button type="button" id="studio-open" aria-haspopup="dialog" aria-controls="studio-dialog" hidden>团队协作</button>
         </div>
         <div class="workspace-recovery">
           <span id="workspace-events-status" class="note" role="status"></span>
@@ -322,9 +326,13 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
+      <button type="button" id="studio-copy-open" class="secondary" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
       <div id="artifact-live-update" hidden>
         <p id="artifact-live-message" role="status"></p>
-        <button type="button" id="artifact-live-load">读取服务器版本</button>
+        <div class="artifact-live-actions">
+          <button type="button" id="artifact-live-load">切换到服务器版本</button>
+          <a id="artifact-live-compare" target="_blank" rel="noopener">在新标签页查看</a>
+        </div>
       </div>
       <section id="artifact-draft-recovery" class="artifact-draft-recovery" aria-label="草稿恢复" hidden>
         <div class="artifact-draft-heading">
@@ -533,6 +541,22 @@
       </div>
     </form>
   </dialog>
+  <dialog id="studio-copy-dialog" class="send-dialog-card" aria-labelledby="studio-copy-heading" aria-describedby="studio-copy-description">
+    <h2 id="studio-copy-heading">复制到团队协作</h2>
+    <p id="studio-copy-description" class="note">确认后，团队成员可以编辑下方内容的副本。原文档仍保存在你的资料空间。</p>
+    <p id="studio-copy-scope"><strong id="studio-copy-target"></strong><span id="studio-copy-revision" class="note"></span></p>
+    <section id="studio-copy-preview" aria-label="要复制的内容">
+      <h3 id="studio-copy-title"></h3>
+      <pre id="studio-copy-body" tabindex="0"></pre>
+      <p id="studio-copy-empty" class="note" hidden>正文为空</p>
+    </section>
+    <p id="studio-copy-status" class="note" role="status"></p>
+    <div class="send-dialog-actions">
+      <button type="button" id="studio-copy-dismiss" autofocus>取消</button>
+      <button type="button" id="studio-copy-confirm" class="primary">确认复制</button>
+      <a id="studio-copy-result" hidden>打开团队文档</a>
+    </div>
+  </dialog>
   <dialog id="artifact-notifications" aria-labelledby="artifact-notifications-heading">
     <div class="artifact-notifications-head">
       <h2 id="artifact-notifications-heading">作品通知</h2>
@@ -547,6 +571,88 @@
       <p id="artifact-notifications-empty" class="note" hidden>暂无作品通知。</p>
       <ul id="artifact-notifications-list"></ul>
     </div>
+  </dialog>
+  <dialog id="studio-dialog" aria-labelledby="studio-heading">
+    <header class="studio-header">
+      <div>
+        <p id="studio-workspace-name" class="note"></p>
+        <h2 id="studio-heading">团队协作</h2>
+      </div>
+      <button type="button" id="studio-close" class="secondary">关闭</button>
+    </header>
+    <p id="studio-status" role="status"></p>
+    <section id="studio-catalog">
+      <div class="studio-actions">
+        <button type="button" id="studio-add">新建团队文档</button>
+        <button type="button" id="studio-refresh" class="secondary">刷新列表</button>
+      </div>
+      <ul id="studio-list"></ul>
+    </section>
+    <form id="studio-form" hidden>
+      <div class="studio-actions">
+        <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+        <div class="studio-actions">
+          <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
+          <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
+          <button type="submit" id="studio-save">保存</button>
+        </div>
+      </div>
+      <label id="studio-link-wrap" hidden>文档链接<input id="studio-link" readonly></label>
+      <div id="studio-conflict" class="studio-conflict" hidden>
+        <p>团队文档已有新版本。当前草稿仍保留。</p>
+        <details id="studio-compare">
+          <summary>查看服务器版本</summary>
+          <p id="studio-server-title"></p>
+          <pre id="studio-server-body"></pre>
+          <div class="studio-actions">
+            <button type="button" id="studio-use-server" class="secondary">采用服务器版本</button>
+            <button type="button" id="studio-rebase" class="secondary">保留草稿并更新版本</button>
+          </div>
+        </details>
+      </div>
+      <label for="studio-title">标题</label>
+      <input id="studio-title" maxlength="120" required autocomplete="off">
+      <label for="studio-body">正文</label>
+      <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      <div class="studio-actions">
+        <p id="studio-revision" class="note"></p>
+        <button type="button" id="studio-history-open" class="secondary" aria-haspopup="dialog" hidden>版本历史</button>
+      </div>
+      <button type="button" id="studio-delete" class="danger" hidden>删除团队文档</button>
+    </form>
+  </dialog>
+  <dialog id="studio-discussion-dialog" aria-labelledby="studio-discussion-title">
+    <h2 id="studio-discussion-title">与个人智能体讨论</h2>
+    <p id="studio-discussion-source" class="note"></p>
+    <form id="studio-discussion-form">
+      <label for="studio-discussion-question">你的问题</label>
+      <textarea id="studio-discussion-question" rows="3" maxlength="1000" required></textarea>
+      <label class="studio-discussion-choice"><input type="checkbox" id="studio-discussion-include">附上已保存的正文片段</label>
+      <div id="studio-discussion-preview-wrap" hidden>
+        <label for="studio-discussion-preview">将附到草稿的内容</label>
+        <textarea id="studio-discussion-preview" rows="6" readonly></textarea>
+        <p id="studio-discussion-notice" class="note"></p>
+      </div>
+      <p id="studio-discussion-status" role="status" aria-live="polite"></p>
+      <div class="studio-actions">
+        <button type="button" id="studio-discussion-cancel" class="secondary">返回文档</button>
+        <button type="submit" id="studio-discussion-submit">打开私人草稿</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="studio-history" aria-labelledby="studio-history-heading">
+    <header class="studio-header">
+      <h2 id="studio-history-heading">团队文档版本历史</h2>
+      <button type="button" id="studio-history-close" class="secondary">关闭</button>
+    </header>
+    <p id="studio-history-status" role="status"></p>
+    <button type="button" id="studio-history-refresh" class="secondary">刷新版本</button>
+    <ul id="studio-history-list" aria-label="已保存的版本"></ul>
+    <section id="studio-history-preview" hidden aria-labelledby="studio-history-title">
+      <h3 id="studio-history-title"></h3>
+      <pre id="studio-history-body"></pre>
+      <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
+    </section>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

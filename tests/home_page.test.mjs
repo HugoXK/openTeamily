@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
-import { confirmSignupSession, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, rememberSignupSession, signupDraftScope, takeColdDraftHandoff, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
+import { confirmSignupSession, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, rememberSignupSession, signupDraftScope, takeColdDraftHandoff, takeSignupSession, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
 import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
 import { discoverIntentFromHash, discoverLoginHref } from '../openteamily/static/shell/discover-link.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
@@ -90,6 +90,23 @@ test('a first draft shares only the registered owner and exact personal chat sco
   assert.equal(readChatDrafts(view, bob).size, 0);
 });
 
+test('workspace login resumes the exact page, query and fragment', async () => {
+  const target = '/space?workspace=' + alice + '&artifact=' + bob + '#versions';
+  const {document, view} = homeFixture('/login', workspaceLoginHash(target));
+  const paths = [];
+  view.location.replace = path => paths.push(path);
+  mount(document, {fetcher: async url => {
+    assert.equal(url, '/v1/auth/session');
+    return {status: 200, json: async () => ({user: {id: alice, username: 'alice'}})};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(paths, [target]);
+  for (const invalid of ['/', '/register', '/v1/auth/logout', '/chat/app.mjs', 'https://workspace.invalid/chat']) {
+    assert.equal(workspaceLoginTarget(workspaceLoginHash(invalid)), '');
+  }
+  assert.equal(workspaceLoginTarget(workspaceLoginHash(target) + '&resume=/team'), '');
+});
+
 test('a new tab can draft only for the exact authenticated personal chat', () => {
   const hash = '#workspace=' + alice + '&agent=' + bob;
   const {view} = homeFixture('/chat', hash);
@@ -129,7 +146,7 @@ test('the startup composer drops its visible draft when another account signs in
     return {status: 200, json: async () => ({state: 'ready', user_id: bob})};
   }});
   assert.deepEqual(requests, ['/v1/auth/runtime-readiness?include=personal-chat', '/v1/auth/runtime-readiness']);
-  assert.deepEqual(paths, ['/login' + hash]);
+  assert.deepEqual(paths, ['/login' + workspaceLoginHash('/chat' + hash)]);
   assert.equal(read('runtime-first-message').value, '');
   assert.equal(read('runtime-draft').hidden, true);
   assert.deepEqual([...readChatDrafts(view, alice)], [[draftScope, '只在 Alice 的草稿']]);

@@ -13,6 +13,31 @@ const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
+const workspacePage = /^\/(?:agents|artifacts|automations|chat|contacts|meetings|members|memory|messenger|onboarding|profile|settings|skills|team|team-runs)\/?$/;
+const workspaceSubpage = /^\/(?:profile\/edit|settings\/[a-z0-9][a-z0-9-]{0,40})\/?$/;
+
+export function workspacePageTarget({pathname, search = '', hash = ''} = {}) {
+  if (pathname !== '/space' && !workspacePage.test(pathname) && !workspaceSubpage.test(pathname)) return '';
+  const target = pathname + search + hash;
+  return target.length <= 8192 ? target : '';
+}
+
+export function workspaceLoginHash(target) {
+  return target ? '#resume=' + encodeURIComponent(target) : '';
+}
+
+export function workspaceLoginTarget(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const value = params.get('resume');
+  if (!value || value.length > 8192 || params.size !== 1) return '';
+  try {
+    const url = new URL(value, 'https://workspace.invalid');
+    return workspacePageTarget(url) === value ? value : '';
+  } catch {
+    return '';
+  }
+}
+
 export function rememberSignupSession(view, id, now = Date.now(), chat = '') {
   if (!validSignupUser(id)) return false;
   try {

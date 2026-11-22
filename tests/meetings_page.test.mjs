@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
+import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
+
+test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
+  const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],
+    action_items:[{text:'Check proof', owner:'Rae', due_date:'2026-11-25', done:false}, {text:'Closed task', done:true}]};
+  const {text,clipped} = discussionContext(meeting);
+  assert.match(text,/Review.*3/);
+  assert.match(text,/Saved notes/);
+  assert.match(text,/Check proof.*Rae.*2026-11-25/);
+  assert.doesNotMatch(text,/Private transcript|Private attendee|Closed task/);
+  assert.equal(clipped,false);
+  assert.match(discussionContext(meeting,true).text,/Private transcript/);
+  const transcriptOnly = {...meeting,summary:'',action_items:[]};
+  assert.equal(discussionContext(transcriptOnly).text,'');
+  assert.match(discussionContext(transcriptOnly,true).text,/Private transcript/);
+});
+
+test('meeting discussion preview leaves enough room for the editable question', () => {
+  const large = '😀'.repeat(4000);
+  const meeting = {title:'Review',revision:7,summary:large,transcript:large,action_items:[{text:large}]};
+  const {text,clipped} = discussionContext(meeting,true);
+  assert.equal(clipped,true);
+  assert.ok(text.length + 1002 <= 4000);
+  assert.match(text,/摘要\n[\s\S]+未完成的行动项\n[\s\S]+转写 \/ 正文/);
+  assert.equal(text.isWellFormed(),true);
+});
 
 test('parseAttendees trims, dedupes and splits both comma forms', () => {
   assert.deepEqual(parseAttendees('alice, bob，alice'), ['alice', 'bob']);

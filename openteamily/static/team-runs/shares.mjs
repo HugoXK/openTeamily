@@ -6,7 +6,7 @@ const LABELS = {
   waiting: '等待前序', queued: '等待执行', running: '执行中',
 };
 
-export function createTeamRunShares({document, request, selectAddress}) {
+export function createTeamRunShares({document, request, selectAddress, adopt}) {
   const panel = document.getElementById('team-shared-runs');
   const actions = document.getElementById('share-team-run');
   if (!panel || !actions) return {selectWorkspace() {}, selectRun() {}, openTarget() {}};
@@ -166,13 +166,54 @@ export function createTeamRunShares({document, request, selectAddress}) {
       toolbar.append(revoke);
     }
     const steps = element('ol', null, 'shared-run-steps');
+    const checks = new Map();
+    const canFollow = adopt && /^[a-f0-9]{64}$/.test(share.source_version || '');
     for (const step of share.snapshot?.steps ?? []) {
       const row = element('li');
       row.append(element('strong', [step.agent_name, LABELS[step.status]].filter(Boolean).join(' · ')));
       if (step.output) row.append(element('p', step.output));
+      if (canFollow && Number.isInteger(step.position) && step.position >= 0 && step.position < 8 &&
+          step.status === 'succeeded' && typeof step.output === 'string' && step.output.trim()) {
+        const checkbox = element('input');
+        checkbox.type = 'checkbox';
+        const label = element('label', null, 'shared-run-choice');
+        label.append(checkbox, `引用第 ${step.position + 1} 步结果摘要`);
+        row.append(label);
+        checks.set(step.position, checkbox);
+      }
       steps.append(row);
     }
+    if (checks.size) {
+      detail.append(element('p', '可选最多 3 个已完成的步骤。每步引用开头 400 字。', 'shared-run-meta'));
+    }
     detail.append(steps);
+    if (checks.size) {
+      const workspaceId = scope.id;
+      const follow = button('发起后续任务', () => openDraft());
+      follow.disabled = true;
+      function openDraft(replace = false) {
+        if (selection?.id !== share.id || selection.source_version !== share.source_version) return;
+        const positions = [...checks.keys()].filter(position => checks.get(position).checked);
+        if (!positions.length) return;
+        const result = adopt({workspaceId, name: share.title,
+          source: {id: share.id, version: share.source_version, positions}}, {replace});
+        if (result === 'replace') {
+          confirm(follow, '发起后续任务将替换当前工作区的草稿。', '替换草稿', () => openDraft(true));
+        } else if (result === 'pending') {
+          detailFeedback.textContent = '请先继续草稿，确认上次启动结果。';
+        } else if (result === 'opened') {
+          clearDetail();
+        }
+      }
+      for (const checkbox of checks.values()) {
+        checkbox.addEventListener('change', () => {
+          const selected = [...checks.values()].filter(input => input.checked).length;
+          follow.disabled = selected === 0;
+          for (const input of checks.values()) input.disabled = selected >= 3 && !input.checked;
+        });
+      }
+      detail.append(follow);
+    }
     detail.hidden = false;
     if (focus) title.focus();
   }
@@ -215,10 +256,10 @@ export function createTeamRunShares({document, request, selectAddress}) {
       accept.disabled = true;
       await action();
       box.remove();
-      if (trigger.isConnected) {
+      if (trigger.isConnected && !trigger.parentElement.closest('[hidden]')) {
         trigger.hidden = false;
         trigger.focus();
-      } else actions.querySelector('button')?.focus();
+      } else if (!trigger.isConnected && !actions.closest('[hidden]')) actions.querySelector('button')?.focus();
     });
     const cancel = button('取消', () => {
       box.remove();

@@ -51,6 +51,7 @@ class SettingsPage:
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
         '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/automations/studio-share.mjs': ('automations', 'studio-share.mjs', 'text/javascript; charset=utf-8'),
         '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
@@ -66,6 +67,10 @@ class SettingsPage:
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/shared-studio.mjs': ('artifacts', 'shared-studio.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
@@ -87,6 +92,7 @@ class SettingsPage:
         '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/studio-link.mjs': ('shell', 'studio-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
         '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
@@ -121,6 +127,7 @@ class SettingsPage:
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/discussion.mjs': ('meetings', 'discussion.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -210,6 +217,8 @@ class SettingsPage:
             identifier = r'[0-9a-f]{32}'
             if re.fullmatch(rf'workspace={identifier}&artifact={identifier}|artifact={identifier}&workspace={identifier}', query):
                 return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}|studio={identifier}&workspace={identifier}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
@@ -233,7 +242,8 @@ class SettingsPage:
                 if 'section' in filters:
                     return (filters['section'] == 'groups' and filters.keys() <= {'tab', 'section', 'q'}
                             and len(text) <= 60 and not any(ord(ch) < 32 for ch in text))
-                return (filters.keys() <= {'tab', 'category', 'q'}
+                return (filters.keys() <= {'tab', 'category', 'q', 'creator'}
+                        and ('creator' not in filters or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', filters['creator']))
                         and ('category' not in filters or filters['category'] in discover.AGENT_CATEGORY_SLUGS)
                         and len(text) <= 80 and not any(ord(ch) < 32 for ch in text))
             # Feed filters and work detail links use the same management page.

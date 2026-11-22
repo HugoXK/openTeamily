@@ -2315,6 +2315,10 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationSummary(task), '小林 分享了协作结果「评审纪要」');
   assert.equal(notificationTarget({...task, path: taskPath}, workspace), taskPath);
   assert.equal(notificationTarget(task, other), null);
+  const ownership = {kind: 'team.owner_transferred', workspace_id: workspace, team_name: '设计组'};
+  assert.equal(notificationSummary(ownership), '你已成为「设计组」的所有者');
+  assert.equal(notificationTarget(ownership, workspace), '/members#workspace=' + workspace);
+  assert.equal(notificationTarget(ownership, other), null);
   assert.equal(notificationTarget({...task, path: taskPath + '&run=' + share}, workspace), null);
 });
 
@@ -3065,6 +3069,18 @@ test('the message menu offers delete that hides the message only for this accoun
   assert.doesNotMatch(html, /data-menu="delete"[^>]*disabled/);
   assert.doesNotMatch(html, /还没有删除消息接口/);
   assert.match(app, /request\('DELETE', `\$\{socialBase\(\)\}\/\$\{cid\}\/messages\/\$\{item\.id\}`\)/);
+});
+
+test('team document links open the exact same-origin workspace and document', async () => {
+  const {studioDocumentHref,studioDocumentFromSearch,studioDocumentHrefInMessage} =
+    await import('../openteamily/static/shell/studio-link.mjs');
+  const workspace = 'a'.repeat(32), id = 'b'.repeat(32), origin = 'https://example.test';
+  const href = studioDocumentHref(workspace,id);
+  assert.deepEqual(studioDocumentFromSearch(href.slice('/space'.length)), {workspace,id});
+  assert.equal(studioDocumentHrefInMessage('讨论 ' + origin + href + '。',origin),href);
+  assert.equal(studioDocumentHrefInMessage('讨论 ' + href,origin),href);
+  assert.equal(studioDocumentHrefInMessage('https://elsewhere.test'+href,origin),'');
+  assert.equal(studioDocumentHrefInMessage(origin+href+'&studio='+id,origin),'');
 });
 
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {

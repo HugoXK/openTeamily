@@ -63,7 +63,7 @@ async function fixture(reply, {runWorkspace = W, database = ':memory:'} = {}) {
   const db = new DatabaseSync(database)
   db.exec('PRAGMA foreign_keys=ON')
   const feature = createTeamRuns({ db, host })
-  return { feature, e: feature.endpoints, a, b, agents, turns, host, state, db }
+  return { feature, e: feature.endpoints, a, b, agents, turns, host, state, db, table }
 }
 
 const body = (a, b, extra = {}) => ({ workspace_id: W, title: '调研报告', goal: '写一份行业调研', idempotency_key: 'r'.repeat(16),
@@ -109,6 +109,42 @@ test('a failed step blocks dependants; retry resets them and finishes the run', 
   assert.equal(now.status, 'succeeded')
   assert.equal(now.steps[0].attempts, 2)
   await assert.rejects(e.retry({ workspace_id: W, id: run.id, position: 1 }), (err) => err.status === 409)
+})
+
+test('a shared follow-up only starts and dispatches with its exact authorized source', async () => {
+  const keepFirst = Promise.withResolvers()
+  const entered = Promise.withResolvers()
+  const {feature, e, a, b, db, table, turns} = await fixture((key, prompt) => {
+    assert.match(key, /:0:1$/)
+    assert.match(prompt, /authorized team excerpt/)
+    entered.resolve()
+    return keepFirst.promise
+  }, {runWorkspace: TEAM})
+  const source = {id: 'otsr_' + 'A'.repeat(26), version: 'a'.repeat(64), positions: [1]}
+  let access = true
+  table['shares/teamRunContext'] = async (payload, call) => {
+    assert.equal(call.internal, true)
+    assert.deepEqual(payload, {workspace_id: TEAM, source})
+    if (!access) throw Object.assign(new Error('Revoked'), {status: 404})
+    return {title: 'Reviewed plan', outputs: [{position: 2, text: 'authorized team excerpt'}]}
+  }
+  const params = body(a, b, {workspace_id: TEAM, source})
+  params.steps = [params.steps[0], {...params.steps[2], depends_on:[0]}]
+  const {status, run} = await e.create(params)
+  assert.equal(status, 201)
+  assert.deepEqual(run.source, source)
+  await entered.promise
+  access = false
+  keepFirst.resolve({text:'first step result'})
+  await settle(feature)
+  const done = (await e.get({workspace_id: TEAM, id: run.id})).run
+  assert.deepEqual(done.steps.map(step => [step.status, step.error_code]), [['succeeded', null], ['failed', 'source_unavailable']])
+  assert.equal(turns.length, 1)
+  assert.equal((await e.create(params)).status, 200)
+  await assert.rejects(e.create({...params, idempotency_key:'fresh-followup-key'}), {status: 404, code: 'team-runs/source_unavailable'})
+  await assert.rejects(e.retry({workspace_id:TEAM, id:run.id, position:1}), {status: 404, code: 'team-runs/source_unavailable'})
+  assert.equal((await e.get({workspace_id:TEAM, id:run.id})).run.steps[1].attempts, 1)
+  assert.deepEqual(JSON.parse(db.prepare('SELECT source FROM team_run_sources WHERE run_id=?').get(run.id).source), source)
 })
 
 test('only the authorized live attempt can expose an ephemeral preview', async () => {

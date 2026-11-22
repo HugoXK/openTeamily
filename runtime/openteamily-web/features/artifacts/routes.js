@@ -198,6 +198,35 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   return { body: { version: versionView(snapshot, true, usernames(req.store)) } }
 }
 
+async function copyToStudio(req, workspaceId, artifactId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid Studio copy request')
+  const {revision, title, body} = requireBodyKeys(await req.json(70_000), ['revision', 'title', 'body'])
+  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string') {
+    refuse(400, 'invalid', 'Invalid Studio copy review')
+  }
+  const source = mustLoad(req, workspaceId, artifactId)
+  if (publicKind(source) !== 'document') refuse(400, 'invalid', 'Only plain documents can be copied to Studio')
+  const studioTitle = source.title.replace(/\s+/g, ' ').trim()
+  if (source.revision !== revision || studioTitle !== title || source.body !== body) {
+    refuse(409, 'source_changed', 'Review the current saved document before copying it to Studio')
+  }
+  // The team service checks active membership and consumes the same key even
+  // if the client did not receive the original acknowledgment.
+  const clientKey = digest(JSON.stringify(['artifact-studio-copy', workspaceId, artifactId, revision]))
+  try {
+    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${workspaceId}/studio/documents`, {
+      title: studioTitle, body: source.body, client_key: clientKey,
+    })
+    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id}}
+  } catch (error) {
+    const code = /^social\/([a-z][a-z0-9_]{0,59})$/.exec(error?.code || '')?.[1]
+    if (code && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+      refuse(error.status, code, 'Studio could not create this team copy')
+    }
+  }
+  refuse(503, 'studio_copy_unconfirmed', 'Studio could not confirm the team copy')
+}
+
 const publishingShares = new Set()
 
 export async function shares(req, workspaceId, artifactId, shareId, revoking) {
@@ -349,5 +378,6 @@ export const routes = [
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/revoke)?)?$/, handle: shares },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/studio-copy$/, handle: copyToStudio },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts(?:\/([0-9a-f]{32})(?:\/(remove|favorite|preview|file|export|restore))?)?$/, handle: dispatch },
 ]

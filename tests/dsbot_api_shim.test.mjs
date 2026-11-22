@@ -100,6 +100,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/transfer-ownership`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites/oti_01/revoke`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget('/v1/invites/accept', ORIGIN).feature, 'invites');
@@ -134,6 +135,13 @@ test('Space activity stays in the owner artifact feature and does not reuse mana
   const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
   assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
   assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
+});
+
+test('team studio is dispatched to the account runtime with its revision query', () => {
+  const path = `/v1/workspaces/${WS}/studio/documents/${ID}?revision=3`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'studio',path});
+  const revision = `/v1/workspaces/${WS}/studio/documents/${ID}/versions/3`;
+  assert.deepEqual(movedTarget(revision, ORIGIN), {feature:'studio',path:revision});
 });
 
 test('answers become ordinary responses, downloads keep their name', async () => {

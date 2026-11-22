@@ -89,7 +89,10 @@
       <a id="workspace-chat" hidden>打开聊天</a>
     </div>
     <section id="members-panel">
-      <h2 id="members-heading" tabindex="-1">成员列表</h2>
+      <div class="requests-heading">
+        <h2 id="members-heading" tabindex="-1">成员列表</h2>
+        <button type="button" id="refresh-members" aria-controls="member-list">刷新成员</button>
+      </div>
       <ul id="member-list"></ul>
       <p id="members-empty" class="empty-state" hidden>这个工作区还没有可显示的成员。</p>
     </section>

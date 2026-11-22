@@ -125,6 +125,26 @@ export function createAgents({ db, host }) {
     if (conversation(agent, id).archived_at !== null) fail('conversation_archived', '请恢复此对话后再发送消息。', 409)
   }
   const readMessage = message => ({ ...message, meta: JSON.parse(message.meta) })
+  const receiptScope = (agent, convo) => ({
+    workspace_id: agent.workspace_id, agent_id: agent.id, conversation_id: convo.id,
+  })
+  const chatWorkView = ({id, title}) => ({id, title})
+  async function withSavedChatWorks(agent, convo, history) {
+    if (!history.items.some(row => row.role === 'assistant' && ['sent', 'succeeded'].includes(row.status))) return history
+    // History can still open when the independent Space feature is unavailable.
+    let receipts
+    try { receipts = await host.call('artifacts/savedChatWorks', receiptScope(agent, convo)) } catch { return history }
+    if (!receipts?.items?.length) return history
+    const saved = new Map(receipts.items.map(row => [row.message_id, chatWorkView(row)]))
+    return {...history, items: history.items.map(row => saved.has(row.id) ? {...row, saved_work: saved.get(row.id)} : row)}
+  }
+
+  function messageForWork(convo, id) {
+    if (typeof id !== 'string' || !ID.test(id)) fail('invalid', 'Invalid message ID', 400)
+    const row = one('SELECT * FROM agent_messages WHERE id=? AND conversation_id=?', id, convo.id)
+    if (!row) fail('not-found', 'Message not found', 404)
+    return row
+  }
   const conversationMessages = id => all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, rowid', id)
     .map(readMessage)
 
@@ -768,7 +788,7 @@ export function createAgents({ db, host }) {
       return {
         agent: view(observed),
         conversation: {...conversation(agent, row.id), ...mapping, ...memory},
-        ...(history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
+        ...await withSavedChatWorks(agent, row, history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
       }
     },
     async captureSource(p) {
@@ -835,16 +855,21 @@ export function createAgents({ db, host }) {
       if (convo.archived_at === null) await native.readSession(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: conversationMessages(convo.id) }
     },
+    async savedMessageWork(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const row = messageForWork(convo, p.message_id)
+      const {items} = await host.call('artifacts/savedChatWorks', {...receiptScope(agent, convo), message_id: row.id})
+      if (!items.length) fail('not-found', 'No saved work for this message', 404)
+      return {artifact: chatWorkView(items[0])}
+    },
     async saveMessage(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
-      if (typeof p.message_id !== 'string' || !ID.test(p.message_id)) fail('invalid', 'Invalid message ID', 400)
-      const row = one('SELECT * FROM agent_messages WHERE id=? AND conversation_id=?', p.message_id, convo.id)
-      if (!row) fail('not-found', 'Message not found', 404)
+      const row = messageForWork(convo, p.message_id)
       if (!['sent', 'succeeded'].includes(row.status) || !row.text.trim()) fail('conflict', 'Only completed text messages can be saved', 409)
       return host.call('artifacts/saveChatMessage', {
-        workspace_id: agent.workspace_id, agent_id: agent.id, conversation_id: convo.id,
-        conversation_title: convo.title, message_id: row.id, title: p.title, body: row.text,
+        ...receiptScope(agent, convo), conversation_title: convo.title, message_id: row.id, title: p.title, body: row.text,
       })
     },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.

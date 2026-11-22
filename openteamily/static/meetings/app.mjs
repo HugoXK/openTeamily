@@ -1,4 +1,5 @@
 import {mountMeetingAudio} from './audio.mjs';
+import {mountMeetingDiscussion} from './discussion.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
@@ -159,6 +160,11 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
 
   const call = (method, path, body, headers, signal) => request(method, path, body, headers, signal)
     .catch(() => ({status: 0, body: {}}));
+  function selectedAudience(state) {
+    const id = state.meeting.source_call_id;
+    return isMeetingCallId(id) && select.value === 'call:' + id
+      ? {call_id: id} : {conversation_id: select.value};
+  }
   function isCurrent(state) {
     if (!dialog.open || view !== state || !state) return false;
     if (state.historyOnly) return historyWorkspace() === state.workspace;
@@ -276,8 +282,14 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     select.replaceChildren();
     const option = document.createElement('option');
     option.value = '';
-    option.textContent = '请选择会话';
+    option.textContent = isMeetingCallId(state.meeting.source_call_id) ? '请选择接收范围' : '请选择会话';
     select.append(option);
+    if (isMeetingCallId(state.meeting.source_call_id)) {
+      const callOption = document.createElement('option');
+      callOption.value = 'call:' + state.meeting.source_call_id;
+      callOption.textContent = '这场通话的参会人';
+      select.append(callOption);
+    }
     select.value = '';
     choices.replaceChildren();
     sent.replaceChildren();
@@ -290,11 +302,7 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     const path = `/v1/workspaces/${state.workspace}/social/conversations?limit=100`;
     const result = await call('GET', path, undefined, undefined, state.controller.signal);
     if (!isCurrent(state)) return;
-    if (result.status !== 200) {
-      feedback.textContent = messageFor(result.body.error, '无法加载会话。关闭后可重新打开。');
-      return;
-    }
-    for (const row of result.body.items || []) {
+    for (const row of (result.status === 200 ? result.body.items || [] : [])) {
       if (!['group', 'dm'].includes(row.kind) || row.public_agent || row.direct?.open === false) continue;
       const entry = document.createElement('option');
       entry.value = row.id;
@@ -302,7 +310,11 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
         || (row.kind === 'group' ? '群聊' : '单聊');
       select.append(entry);
     }
-    feedback.textContent = select.options.length > 1 ? '' : '当前工作区没有可分享的会话。';
+    if (!select.value) {
+      feedback.textContent = select.options.length > 1 ? '' : result.status !== 200
+        ? messageFor(result.body.error, '无法加载会话。关闭后可重新打开。')
+        : '当前工作区没有可分享的会话。';
+    }
     syncForm(state);
   }
   trigger.addEventListener('click', () => open(context()));
@@ -321,11 +333,15 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     feedback.textContent = conversation ? '正在加载接收人…' : '';
     if (!conversation) return;
     const controller = state.recipientRequest = new AbortController();
-    const query = new URLSearchParams({conversation_id: conversation});
+    const audience = selectedAudience(state);
+    const query = new URLSearchParams(audience);
     const result = await call('GET', `${state.base}/share-recipients?${query}`, undefined, undefined, controller.signal);
     if (!isCurrent(state) || state.recipientRequest !== controller || select.value !== conversation) return;
     if (result.status !== 200) {
-      feedback.textContent = messageFor(result.body.error, '无法加载接收人，请重新选择会话。');
+      feedback.textContent = result.body.error?.code === 'meeting_call_active'
+        ? '通话结束后才能分享纪要。' : result.body.error?.code === 'call_record_not_found'
+          ? '无法访问这场通话的参会记录。'
+          : messageFor(result.body.error, '无法加载接收人，请重新选择接收范围。');
       return;
     }
     for (const item of result.body.items || []) {
@@ -349,14 +365,15 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
       label.append(box, document.createTextNode(item.name));
       choices.append(label);
     }
-    feedback.textContent = choices.children.length ? '' : '这个会话中没有可选择的其他接收人。';
+    feedback.textContent = choices.children.length ? '' : audience.call_id
+      ? '这场通话没有可选择的其他参会人。' : '这个会话中没有可选择的其他接收人。';
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const state = view;
     if (!state || state.historyOnly || !isCurrent(state) || state.busy || !select.value || !state.selected.size) return;
-    const body = {revision: state.meeting.revision, conversation_id: select.value, recipient_ids: [...state.selected].sort()};
+    const body = {revision: state.meeting.revision, ...selectedAudience(state), recipient_ids: [...state.selected].sort()};
     const fingerprint = JSON.stringify([state.path, body]);
     if (fingerprint !== attempt?.fingerprint) attempt = {fingerprint, key: key()};
     state.busy = true;
@@ -393,7 +410,14 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
   }};
 }
 
-export function renderSharedMeeting(document, meeting) {
+function sharedActionLink(document, action) {
+  const link = document.createElement('a');
+  link.href = '/memory?' + new URLSearchParams({workspace:action.workspace_id, page:'todos', action:action.id});
+  link.textContent = '打开我的待办';
+  return link;
+}
+
+export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) {
   const title = document.getElementById('shared-meeting-title');
   title.textContent = meeting.title;
   document.getElementById('shared-meeting-meta').textContent = [
@@ -404,7 +428,7 @@ export function renderSharedMeeting(document, meeting) {
   const actions = meeting.action_items || [];
   const list = document.getElementById('shared-meeting-actions');
   list.replaceChildren();
-  for (const item of actions) {
+  for (const [index, item] of actions.entries()) {
     const li = document.createElement('li');
     const text = document.createElement('p');
     text.textContent = item.text;
@@ -414,6 +438,39 @@ export function renderSharedMeeting(document, meeting) {
       item.done ? '已完成' : '待完成']
       .filter(Boolean).join(' · ');
     li.append(text, state);
+    if (copy && !item.done) {
+      const controls = document.createElement('div');
+      controls.className = 'shared-meeting-action-controls';
+      const savedAction = saved.find(action => action.index === index);
+      if (savedAction) {
+        controls.append(sharedActionLink(document, savedAction));
+      } else {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = '存入我的待办';
+        const feedback = document.createElement('span');
+        feedback.className = 'note';
+        feedback.setAttribute('role', 'status');
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          feedback.textContent = '正在保存…';
+          const result = await copy(index);
+          if (!result) return;
+          if (result.action) {
+            const link = sharedActionLink(document, result.action);
+            button.replaceWith(link);
+            feedback.textContent = '已保存到个人空间。';
+            link.focus({preventScroll:true});
+          } else {
+            button.disabled = false;
+            feedback.textContent = result.error;
+          }
+        });
+        controls.append(button, feedback);
+      }
+      li.append(controls);
+    }
     list.append(li);
   }
   list.hidden = !actions.length;
@@ -463,6 +520,7 @@ function mount() {
   const native = servedByDsBot(document);
   let workspaceLoad = 0;
   let viewer = '';
+  let viewerId = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
   let callDraft = null;
@@ -475,6 +533,14 @@ function mount() {
       ? {workspace: workspaceId(), meeting: current} : null,
     historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
       ? workspaceId() : '',
+  });
+  const discussion = mountMeetingDiscussion(document, {
+    request,
+    context: () => native && meetingIdPattern.test(viewerId) && current?.id && current.workspace_id === workspaceId()
+      && !form.hidden && layout?.dataset.view !== 'catalogue'
+      ? {owner: viewerId, workspace: workspaceId(), meeting: current} : null,
+    isDirty: hasUnsavedChanges,
+    openChat: href => document.defaultView.location.assign(href),
   });
   let meetings = [];
   let listCursor = '';
@@ -722,6 +788,7 @@ function mount() {
   }
 
   function syncSavedActions(pending) {
+    discussion.sync(pending);
     const saved = native && Boolean(current?.id);
     for (const {button} of copyDestinations) {
       button.hidden = !saved;
@@ -1506,7 +1573,8 @@ function mount() {
   }
 
   async function openSharedMeeting(id, read) {
-    const workspace = workspaceId(), pendingSelection = ++selection;
+    selection += 1;
+    const target = scope();
     resetSave();
     current = null;
     callDraft = null;
@@ -1524,14 +1592,25 @@ function mount() {
     emptyDetail.hidden = true;
     show('', '正在加载共享纪要…');
     const result = read || await request('GET', `${base()}/shared/${id}`).catch(() => unavailable);
-    if (workspaceId() !== workspace || pendingSelection !== selection) return;
+    if (!active(target)) return;
     const meeting = result.body.meeting;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         meeting?.id !== id || meeting.shared !== true) {
       show('error', result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。' : '无法打开共享纪要，请重试。');
       return;
     }
-    renderSharedMeeting(document, meeting);
+    const copy = native && result.body.received === true ? async index => {
+      if (!active(target)) return;
+      const saved = await saveRequest('POST', `/v1/workspaces/${target.workspace}/meetings/shared/${id}/action`,
+        {revision:meeting.revision, index});
+      if (!active(target)) return;
+      const action = saved.body.action;
+      if ([200, 201].includes(saved.status) && saved.body.viewer_username === target.viewer &&
+          meetingIdPattern.test(action?.id) && meetingIdPattern.test(action?.workspace_id)) return {action};
+      return {error:saved.status === 404 ? '这份共享纪要已撤回或你没有查看权限。'
+        : messageFor(saved.body.error, '暂时无法保存待办，请重试。')};
+    } : null;
+    renderSharedMeeting(document, meeting, {copy, saved:result.body.saved_actions});
     show('', '');
   }
 
@@ -1617,6 +1696,7 @@ function mount() {
       current = null;
       callDraft = null;
       viewer = '';
+      viewerId = '';
       storedDraft = null;
       stopDraftPoll();
       search.value = '';
@@ -1634,6 +1714,7 @@ function mount() {
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     viewer = session.body.user.username;
+    viewerId = session.body.user.id || '';
     document.getElementById('whoami').textContent = viewer;
     const directory = readWorkspaceChoices(request, '/v1/workspaces?limit=100');
     const detail = eagerDetail ? await eagerDetail : null;

@@ -90,6 +90,10 @@ export function canChange(actor) {
   return actor === 'owner';
 }
 
+function canTransferOwnership(actor, item, self) {
+  return actor === 'owner' && (item?.role === 'admin' || item?.role === 'member') && !item.suspended && !samePerson(item, self);
+}
+
 export function canInvite(actor) {
   return actor === 'owner' || actor === 'admin';
 }
@@ -172,6 +176,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   let myRequests = [];
   let myRequestsReady = false;
   let joinItems = [];
+  const busyTransfers = new Set();
+  const transferKey = scope => `${scope.viewer?.id}/${scope.id}`;
   const busyJoins = new Set();
   const busyDirectoryJoins = new Set();
 
@@ -180,13 +186,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     try {
       const response = await fetcher(path, {
-        method, headers, credentials: 'same-origin',
+        method, headers, signal, credentials: 'same-origin',
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
       const parsed = await response.json().catch(() => null);
@@ -268,14 +274,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     const scope = workspaceScope();
     if (!scope.id || target.dataset.workspaceEpoch !== String(scope.epoch)) return;
-    if (target.dataset.rowAction === 'remove') {
+    if (target.dataset.rowAction === 'transfer' || target.dataset.rowAction === 'remove') {
+      const transfer = target.dataset.rowAction === 'transfer';
       const item = memberItems.find(entry => entry.user_id === target.dataset.userId);
-      if (!item) return;
+      if (!item || (transfer && !canTransferOwnership(actor, item, currentUser))) return;
       openConfirm({
         row: target.parentElement,
         trigger: target,
-        prompt: removalPrompt(item, currentUser),
-        action: () => removeMember(item, scope),
+        prompt: transfer ? {
+          question: `将工作区转让给 ${item.username}？转让后你将成为普通成员，可以退出工作区。原有管理员邀请链接会失效。`,
+          confirmLabel: '确认转让',
+        } : removalPrompt(item, currentUser),
+        action: () => transfer ? transferOwnership(item, scope) : removeMember(item, scope),
       });
       return;
     }
@@ -417,10 +427,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     for (const item of items) {
       const row = document.createElement('li');
       const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
-      row.appendChild(identity(item.username, roleText));
+      row.appendChild(identity(item.username));
       const role = document.createElement('span');
       role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
-      role.textContent = ROLE_LABELS[item.role] || item.role;
+      role.textContent = roleText;
       row.appendChild(role);
       if (!samePerson(item, selfId)) {
         const message = document.createElement('button');
@@ -444,6 +454,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
         change.textContent = item.role === 'admin' ? '改为成员' : '改为管理员';
         change.addEventListener('click', () => changeRole(item, item.role === 'admin' ? 'member' : 'admin', scope));
         row.appendChild(change);
+      }
+      if (canTransferOwnership(actor, item, selfId)) {
+        const transfer = document.createElement('button');
+        transfer.type = 'button';
+        transfer.textContent = '转让所有权';
+        transfer.dataset.rowAction = 'transfer';
+        transfer.dataset.userId = item.user_id;
+        transfer.dataset.workspaceEpoch = String(scope.epoch);
+        transfer.disabled = busyTransfers.has(transferKey(scope));
+        row.appendChild(transfer);
       }
       if (canRemove(actor, item, selfId)) {
         const remove = document.createElement('button');
@@ -506,6 +526,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     show('ok', '已更改角色。');
     await loadWorkspace();
+  }
+
+  async function transferOwnership(item, scope) {
+    const key = transferKey(scope);
+    if (!scope.id || !inWorkspace(scope) || !canTransferOwnership(actor, item, scope.viewer) ||
+        busyTransfers.has(key)) return;
+    busyTransfers.add(key);
+    for (const button of document.querySelectorAll('#member-list [data-row-action="transfer"]')) button.disabled = true;
+    show('loading', '正在转让工作区…');
+    const result = await request('POST', `/v1/workspaces/${scope.id}/members/${item.user_id}/transfer-ownership`,
+      {}, undefined, AbortSignal.timeout(20000));
+    busyTransfers.delete(key);
+    if (scope.id !== workspaceId() || scope.viewer !== currentUser) return;
+    await loadWorkspace();
+    if (!inWorkspace(scope)) return;
+
+    const newOwner = memberItems.find(member => member.role === 'owner');
+    if (result.body.transferred === true || (newOwner?.user_id === item.user_id && actor !== 'owner')) {
+      show('ok', `已转让给 ${item.username}。你现在可以退出工作区。`);
+      document.getElementById('members-heading').focus();
+    } else {
+      const errors = {
+        member_suspended: '请先恢复该成员的访问，再转让所有权。',
+        member_not_found: '对方已不在该工作区，请选择其他成员。',
+        quota: '对方已达到可拥有的团队数上限。',
+        forbidden: '你的工作区角色已变更，请查看最新成员列表。',
+        ownership_changed: '工作区所有权已变更，请查看最新成员列表。',
+      };
+      show('error', errors[result.body.error?.code] || '暂时无法确认转让结果。请查看最新成员列表。');
+    }
   }
 
   async function suspendMember(item, suspend, scope) {
@@ -1052,6 +1102,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     await load();
   });
 
+  const refreshMembers = document.getElementById('refresh-members');
+  refreshMembers?.addEventListener('click', async () => {
+    refreshMembers.disabled = true;
+    try { await loadWorkspace(); }
+    finally { refreshMembers.disabled = false; }
+  });
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
   view?.addEventListener?.('hashchange', event => {
     if (groupInviteFromHash(view.location.hash) || (event?.oldURL && groupInviteFromHash(new URL(event.oldURL).hash))) return load();

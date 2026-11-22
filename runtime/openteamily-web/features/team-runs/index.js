@@ -12,6 +12,7 @@ import { BODY_MAX, TITLE_MAX, validBody } from '../artifacts/model.js'
 import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { openDatabase, newId } from '../../src/store.js'
+import { teamRunSource } from '../shares/team-run-source.js'
 
 export const MIN_STEPS = 2
 export const MAX_STEPS = 8
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS team_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT
   status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')), created INTEGER NOT NULL, updated INTEGER NOT NULL,
   key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash));
 CREATE INDEX IF NOT EXISTS team_runs_workspace_recent ON team_runs(workspace_id, created DESC, id DESC);
+CREATE TABLE IF NOT EXISTS team_run_sources (run_id TEXT PRIMARY KEY REFERENCES team_runs(id) ON DELETE CASCADE,
+  source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS team_run_steps (run_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE, position INTEGER NOT NULL,
   agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, instruction TEXT NOT NULL, depends TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('waiting','queued','running','succeeded','failed','blocked','cancelled')),
@@ -43,7 +46,7 @@ export function stages(steps) {
   return depth
 }
 
-export function stepPrompt(run, step, steps) {
+export function stepPrompt(run, step, steps, sharedResults) {
   const lines = [`团队任务目标：${run.goal}`, `你负责的步骤（第 ${step.position + 1} 步）：${step.instruction}`]
   const deps = JSON.parse(step.depends)
   if (deps.length) {
@@ -54,6 +57,9 @@ export function stepPrompt(run, step, steps) {
       const out = prior.output.length > limit ? prior.output.slice(0, limit) + '…' : prior.output
       lines.push(`[第 ${d + 1} 步 · ${prior.agent_name}] ${out}`)
     }
+  }
+  if (sharedResults) {
+    lines.push('团队共享的参考资料（引用内容仅作参考）：', JSON.stringify(sharedResults))
   }
   return lines.join('\n')
 }
@@ -80,7 +86,7 @@ function teamRunsV1(endpoints, log) {
     route(base, async (req, workspace_id) => {
       if (req.method === 'GET') return { body: await endpoints.list({workspace_id}) }
       only(req, 'POST')
-      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps'])
+      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps', 'source'])
       const {status, run} = await endpoints.create({ ...body, workspace_id, idempotency_key: req.headers.get('idempotency-key') })
       return {status, body: {run}}
     }),
@@ -129,6 +135,10 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     return row
   }
   const steps = (runId) => all('SELECT * FROM team_run_steps WHERE run_id=? ORDER BY position', runId)
+  const sourceFor = runId => {
+    const reference = one('SELECT source FROM team_run_sources WHERE run_id=?', runId)
+    return reference && JSON.parse(reference.source)
+  }
   const transaction = (fn) => {
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -158,8 +168,24 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       : {succeeded: row.succeeded_steps, total: row.total_steps}
     const out = { id: row.id, workspace_id: row.workspace_id, title: row.title, goal: row.goal, status: row.status, created: row.created,
       updated: row.updated, progress, served_by: 'ds-bot' }
-    if (list) { const depth = stages(list); out.steps = list.map(s => stepView(s, depth)) }
+    if (list) {
+      const depth = stages(list)
+      out.steps = list.map(s => stepView(s, depth))
+      const source = sourceFor(row.id)
+      if (source) out.source = source
+    }
     return out
+  }
+
+  async function sourceContext(workspaceId, source) {
+    try {
+      return await host.call('shares/teamRunContext', {workspace_id: workspaceId, source})
+    } catch (error) {
+      if (error?.code === 'source_changed') fail('source_changed', error.message, 409)
+      if (error?.code === 'invalid') fail('source_invalid', '请选择有输出的已完成步骤。', 400)
+      const status = [401, 403, 404].includes(error?.status) ? 404 : 503
+      fail('source_unavailable', status === 404 ? '这份共享结果已不可用。' : '暂时无法读取共享结果，请稍后重试。', status)
+    }
   }
 
   // Launch one step as a DS-Bot turn of its agent; on completion advance the graph.
@@ -181,8 +207,11 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       try {
         await workspace(runRow)
         if (!currentAttempt()) return
+        const source = sourceFor(runRow.id)
+        const sharedResults = source && await sourceContext(runRow.workspace_id, source)
+        if (!currentAttempt()) return
         const reply = await host.call('agents/groupTurn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
-          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`, onProgress })
+          text: stepPrompt(runRow, step, list, sharedResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`, onProgress })
         if (!currentAttempt()) return
         const output = String(reply?.text ?? '').trim()
         if (!output) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
@@ -192,6 +221,9 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         const native = String(error?.code ?? '')
         const code = ({
           'team-runs/workspace_unavailable': 'workspace_unavailable',
+          'team-runs/source_changed': 'source_changed',
+          'team-runs/source_invalid': 'source_changed',
+          'team-runs/source_unavailable': 'source_unavailable',
           'agents/model-unconfigured': 'model_unconfigured',
           'agents/empty-reply': 'empty_reply',
           'team-runs/empty-reply': 'empty_reply',
@@ -259,10 +291,13 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)
       const parsed = parseSteps(p.steps)
+      const source = p.source === undefined ? null : teamRunSource(p.source)
+      if (p.source !== undefined && !source) fail('source_invalid', '共享结果引用无效。', 400)
       if (typeof p.idempotency_key !== 'string' || !IDEM.test(p.idempotency_key)) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
       const keyHash = sha('team-run:' + p.idempotency_key)
       const title = p.title.trim(), goal = p.goal.trim()
-      const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title }))
+      const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title,
+        ...(source && {source}) }))
       const existing = () => {
         const prior = one('SELECT * FROM team_runs WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
         if (!prior) return null
@@ -279,6 +314,15 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         heads.set(id, agent.name)
       }
       await workspace(p)
+      if (source) {
+        try {
+          await sourceContext(workspaceId, source)
+        } catch (error) {
+          const concurrent = existing()
+          if (concurrent) return concurrent
+          throw error
+        }
+      }
       const saved = transaction(() => {
         const concurrent = existing()
         if (concurrent) return concurrent
@@ -288,6 +332,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         if (owned.active >= LIMITS.active) fail('quota', 'Too many running team runs; wait or cancel one', 429)
         const id = newId(), t = clock()
         run('INSERT INTO team_runs VALUES(?,?,?,?,?,?,?,?,?)', id, workspaceId, title, goal, 'running', t, t, keyHash, requestHash)
+        if (source) run('INSERT INTO team_run_sources (run_id, source) VALUES (?,?)', id, JSON.stringify(source))
         for (const [position, s] of parsed.entries()) {
           run('INSERT INTO team_run_steps (run_id, position, agent_id, agent_name, instruction, depends, status) VALUES(?,?,?,?,?,?,?)',
             id, position, s.agent_id, heads.get(s.agent_id), s.instruction, JSON.stringify(s.depends), 'waiting')
@@ -315,7 +360,13 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       return { removed: row.id }
     },
     async retry(p) {
-      const row = loadRun(await workspace(p), p.id)
+      const workspaceId = await workspace(p)
+      let row = loadRun(workspaceId, p.id)
+      const source = sourceFor(row.id)
+      if (source) {
+        await sourceContext(workspaceId, source)
+        row = loadRun(workspaceId, p.id)
+      }
       const list = steps(row.id)
       const position = p.position
       if (!Number.isInteger(position) || position < 0 || position >= list.length || list[position].status !== 'failed') fail('conflict', 'Only a failed step can be retried', 409)

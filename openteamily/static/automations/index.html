@@ -207,6 +207,23 @@
     </section>
   </section>
   </main>
+  <dialog id="automation-studio-dialog" aria-labelledby="automation-studio-heading">
+    <div class="automation-studio-header">
+      <h2 id="automation-studio-heading">分享至团队协作</h2>
+      <button type="button" id="automation-studio-close" class="secondary">关闭</button>
+    </div>
+    <p id="automation-studio-team"></p>
+    <p id="automation-studio-status" class="note" role="status"></p>
+    <section id="automation-studio-review" hidden aria-labelledby="automation-studio-title">
+      <h3 id="automation-studio-title"></h3>
+      <pre id="automation-studio-body" tabindex="0"></pre>
+    </section>
+    <div class="automation-studio-actions">
+      <button type="button" id="automation-studio-refresh" class="secondary" hidden>重新读取</button>
+      <button type="button" id="automation-studio-confirm" hidden>确认分享结果</button>
+      <a id="automation-studio-link" hidden>打开团队文档</a>
+    </div>
+  </dialog>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

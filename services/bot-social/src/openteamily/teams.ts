@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS ot_join_requests (
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const RESERVED = new Set(["admin", "api", "automations", "docs", "health", "invite", "invites", "login", "logout", "me", "members", "new", "settings", "static", "team", "teams", "v1", "workspaces"]);
 const DAY = 86_400_000;
+const MAX_OWNED_TEAMS = 50;
 
 export function roleOf(ot: OtContext, teamId: string, ownerId: string): { role: string; suspended: boolean } | undefined {
   const row = ot.get<any>("SELECT role, suspended FROM ot_team_members WHERE team_id = ? AND owner_id = ?", teamId, ownerId);
@@ -156,7 +157,7 @@ function ensureTeamColumns(ot: OtContext) {
 
 function insertTeam(ot: OtContext, meOwnerId: string, { name, slug, summary, workspaceId }: { name: string; slug: string | null; summary: string; workspaceId: string | null }) {
   if (workspaceId) assert(!ot.get("SELECT 1 FROM ot_teams WHERE workspace_id = ?", workspaceId), 409, "workspace_bound", "that workspace already has a team");
-  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < 50, 429, "too_many_teams", "an account can own at most 50 teams");
+  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < MAX_OWNED_TEAMS, 429, "too_many_teams", "an account can own at most 50 teams");
   const id = newId("ott");
   const now = ot.now();
   ot.tx(() => {
@@ -338,6 +339,29 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     ot.notify(target, "team.membership_changed", { team_id: team.id, team_name: team.name });
     return memberView(ot, ot.get("SELECT * FROM ot_team_members WHERE team_id = ? AND owner_id = ?", team.id, target));
   });
+  app.post("/v1/ot/teams/:id/members/:handle/transfer-ownership", async (req) => {
+    const me = ot.me(req);
+    return ot.tx(() => {
+      const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner"]);
+      assert(team.owner_id === me.ownerId, 409, "ownership_changed", "team ownership has changed");
+      const target = ot.ownerByHandle(params(req).handle);
+      assert(target !== me.ownerId, 400, "invalid_request", "choose another team member");
+      const current = roleOf(ot, team.id, target);
+      assert(current, 404, "member_not_found", "not a member of this team");
+      assert(!current.suspended, 409, "member_suspended", "restore member access before transferring ownership");
+      assert(ot.get<{n: number}>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", target)!.n < MAX_OWNED_TEAMS,
+        409, "too_many_teams", "the new owner can own at most 50 teams");
+      ot.run("UPDATE ot_team_members SET role = 'member' WHERE team_id = ? AND owner_id = ?", team.id, me.ownerId);
+      ot.run("UPDATE ot_team_members SET role = 'owner' WHERE team_id = ? AND owner_id = ?", team.id, target);
+      const now = ot.now();
+      ot.run("UPDATE ot_teams SET owner_id = ?, updated_at = ? WHERE id = ?", target, now, team.id);
+      // Usable administrator grants should not become valid again if an owner returns.
+      ot.run(`UPDATE ot_invites SET revoked = 1 WHERE team_id = ? AND role = 'admin' AND revoked = 0
+        AND expires_at > ? AND use_count < max_uses`, team.id, now);
+      ot.notify(target, "team.owner_transferred", { team_id: team.id, team_name: team.name, workspace_id: team.workspace_id });
+      return { transferred: true };
+    });
+  });
   app.delete("/v1/ot/teams/:id/members/:handle", async (req) => {
     const me = ot.me(req);
     const teamId = params(req).id;
@@ -345,7 +369,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     if (target === me.ownerId) {
       const r = roleOf(ot, teamId, me.ownerId);
       assert(r, 404, "team_not_found", "no such team");
-      assert(r.role !== "owner", 409, "owner_cannot_leave", "the owner cannot leave; delete the team instead");
+      assert(r.role !== "owner", 409, "owner_cannot_leave", "transfer ownership to another member before leaving");
     } else {
       const { role } = requireMember(ot, teamId, me.ownerId, ["owner", "admin"]);
       const current = roleOf(ot, teamId, target);

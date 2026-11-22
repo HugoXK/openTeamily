@@ -169,6 +169,7 @@ test('discover v1 maps a work feed into the page card shape', async () => {
   assert.equal(feed.body.items[0].kind, 'document')
   assert.equal(feed.body.items[0].kind_label, '文档')
   assert.equal(feed.body.items[0].author, 'ann')
+  assert.deepEqual(feed.body.items[0].creator, {handle: 'ann.home', name: 'Ann'})
   assert.equal(feed.body.items[0].own_work, true)
 })
 

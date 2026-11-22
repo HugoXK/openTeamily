@@ -2355,6 +2355,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillPageSelect(actionEditor.elements.memory_page_id, currentAction.memory_page_id || '');
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
+    const source = currentAction.source;
+    const sourcePanel = document.getElementById('action-editor-source');
+    sourcePanel.hidden = source?.kind !== 'shared_meeting';
+    if (!sourcePanel.hidden) {
+      const link = document.getElementById('action-source-meeting');
+      link.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
+      link.textContent = `查看来源纪要 · 版本 ${source.revision}`;
+    }
     if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
     syncDirectorySelection();
     focusDetailBack('close-action-editor');

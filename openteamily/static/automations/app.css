@@ -790,3 +790,34 @@ body.app-workspace #main-panel {
     grid-column: 1 / -1;
   }
 }
+#automation-studio-dialog {
+  width: min(38rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  box-sizing: border-box;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+#automation-studio-dialog::backdrop { background: rgb(12 19 16 / 44%); }
+.automation-studio-header, .automation-studio-actions {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+.automation-studio-header { justify-content: space-between; }
+.automation-studio-header h2 { margin: 0; font-size: 1.1rem; }
+#automation-studio-body {
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  padding: .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+}
+.run-share-team { margin-inline-start: .55rem; }

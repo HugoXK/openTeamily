@@ -1,4 +1,6 @@
 // Persisted private model operations. Provider output is text, never executable markup.
+import { studioDocumentHref } from '../shell/studio-link.mjs';
+
 export function mountMessageUtilities(document, {request, context, composerContext = context, notify,
   stickersAvailable, activateStickers, closeStickers}) {
   const dialog = document.getElementById('message-assist-dialog');
@@ -95,31 +97,35 @@ export function mountMessageUtilities(document, {request, context, composerConte
   const picker = document.getElementById('resource-picker');
   const choices = document.getElementById('resource-picker-list');
   const pickerKind = document.getElementById('resource-picker-kind');
+  const studioOption = document.getElementById('resource-picker-studio');
   const pickerStatus = document.getElementById('resource-picker-status');
   const more = document.getElementById('resource-picker-more');
   let pickerContext = null, cursor = '', pickerGeneration = 0;
   const pickerSame = c => { const now = composerContext(); return now && c && now.wid === c.wid && now.cid === c.cid && now.source === c.source && now.scope === c.scope; };
   async function listResources(append = false) {
     const c = pickerContext, token = ++pickerGeneration, kind = pickerKind.value;
+    const studio = kind === 'studio/documents';
     if (!pickerSame(c)) { pickerStatus.textContent = '会话已切换，请重新打开。'; return; }
     if (!append) { cursor = ''; choices.replaceChildren(); }
     pickerStatus.textContent = '正在读取…'; more.hidden = true;
     try {
-      const query = '?limit=50' + (append && cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const query = studio ? '' : '?limit=50' + (append && cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
       const result = await request('GET', `/v1/workspaces/${c.wid}/${kind}${query}`);
       if (token !== pickerGeneration || !pickerSame(c)) return;
       if (result.status !== 200) throw new Error('资料读取失败。');
-      const rows = (result.body.items || []).filter(r => kind === 'memory' || r.kind === 'document');
+      const rows = (result.body.items || []).filter(r => studio || kind === 'memory' || r.kind === 'document');
       for (const row of rows) {
         const li = document.createElement('li'), button = document.createElement('button'); button.type = 'button'; button.textContent = row.title;
         button.addEventListener('click', async () => {
           button.disabled = true;
           try {
-            const seen = await request('GET', `/v1/workspaces/${c.wid}/${kind}/${row.id}`);
+            const seen = studio ? null : await request('GET', `/v1/workspaces/${c.wid}/${kind}/${row.id}`);
             if (token !== pickerGeneration || pickerContext !== c || !picker.open || !pickerSame(c) || pickerKind.value !== kind) return;
-            if (seen.status !== 200) throw new Error('这份资料已不可用。');
-            const item = seen.body.page || seen.body.artifact;
-            const fragment = `\n\n参考资料：${item.title}（修订 ${item.revision}）\n` + JSON.stringify(item.body || '');
+            const link = studio ? studioDocumentHref(c.wid, row.id) : '';
+            if (studio ? !link : seen.status !== 200) throw new Error('这份资料已不可用。');
+            const item = seen?.body.page || seen?.body.artifact;
+            const fragment = studio ? '\n\n' + new URL(link, document.defaultView.location.origin).href
+              : `\n\n参考资料：${item.title}（修订 ${item.revision}）\n` + JSON.stringify(item.body || '');
             const composer = document.getElementById('chat-body');
             if (composer.value.length + fragment.length > 4000) throw new Error('内容超过消息上限；未截断或插入。请打开原文选择较短片段。');
             composer.value += fragment; composer.dispatchEvent(new Event('input', {bubbles:true}));
@@ -130,11 +136,14 @@ export function mountMessageUtilities(document, {request, context, composerConte
         li.append(button); choices.append(li);
       }
       cursor = result.body.cursor || ''; more.hidden = !cursor;
-      pickerStatus.textContent = choices.children.length ? '选择一份资料，正文将放入输入框供你检查。' : '本页没有文档或记忆。';
+      pickerStatus.textContent = studio
+        ? (choices.children.length ? '选择一份团队文档，将链接放入输入框。只有团队成员能打开。' : '当前团队还没有协作文档。')
+        : (choices.children.length ? '选择一份资料，正文将放入输入框供你检查。' : '本页没有文档或记忆。');
     } catch(e) { if (token === pickerGeneration) pickerStatus.textContent = e.message || '网络错误。'; }
   }
   function openPicker(kind) {
     pickerContext = composerContext(); if (!pickerContext) { notify('error', '请先打开一个会话。'); return; }
+    if (studioOption) studioOption.hidden = studioOption.disabled = !pickerContext.studio;
     pickerKind.value = kind; picker.showModal(); listResources();
   }
   document.getElementById('composer-resource-open')?.addEventListener('click', () => openPicker('artifacts'));
