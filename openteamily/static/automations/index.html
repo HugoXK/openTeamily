@@ -118,6 +118,13 @@
         <p id="meeting-action-source-owner" class="note" hidden></p>
         <a id="meeting-action-source-link">查看会议</a>
       </section>
+      <section id="memory-action-source" aria-labelledby="memory-action-source-heading" hidden>
+        <h2 id="memory-action-source-heading">记忆行动项</h2>
+        <p id="memory-action-source-title"></p>
+        <p id="memory-action-source-notes" hidden></p>
+        <p id="memory-action-source-revision" class="note"></p>
+        <a id="memory-action-source-link">查看原行动项</a>
+      </section>
       <fieldset class="task-details">
         <legend>任务</legend>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
@@ -183,6 +190,7 @@
       <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
+        <button type="submit" id="save-and-sample" class="secondary" hidden>保存并试运行</button>
         <button type="button" id="remove-automation" hidden>删除</button>
       </div>
     </form>

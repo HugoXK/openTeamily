@@ -283,7 +283,7 @@ body.app-workspace #main-panel {
   display: none;
 }
 
-#meeting-action-source {
+:is(#meeting-action-source, #memory-action-source) {
   padding: .8rem 1rem;
   margin-bottom: .8rem;
   border: 1px solid var(--ot-line);
@@ -292,20 +292,24 @@ body.app-workspace #main-panel {
   overflow-wrap: anywhere;
 }
 
-#meeting-action-source h2,
-#meeting-action-source p {
+:is(#meeting-action-source, #memory-action-source) :is(h2, p) {
   margin: 0 0 .35rem;
 }
 
-#meeting-action-source h2 {
+:is(#meeting-action-source, #memory-action-source) h2 {
   font-size: .85rem;
 }
 
-#meeting-action-source-title {
+#meeting-action-source-title,
+#memory-action-source-title {
   font-weight: 650;
 }
 
-#meeting-action-source a {
+#memory-action-source-notes {
+  white-space: pre-wrap;
+}
+
+:is(#meeting-action-source, #memory-action-source) a {
   display: inline-flex;
   align-items: center;
   min-height: 2.75rem;
@@ -394,6 +398,13 @@ body.app-workspace #main-panel {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+.run-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block: .75rem;
 }
 
 #manual-run-note { margin: 0 0 .75rem; }

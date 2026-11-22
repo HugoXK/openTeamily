@@ -575,9 +575,11 @@ test('chat attachments export the selected saved version and require an internal
   const historical = await bot.call('artifacts','GET',base('/'+artifact.id+'/versions/1/export?format=docx'))
   assert.deepEqual(Buffer.from(snapshot.attachment.data,'base64'),Buffer.from(historical.download.data,'base64'))
   assert.equal(snapshot.body,'发给群聊 · 版本 1')
+  assert.equal(snapshot.context_excerpt,'Saved version one')
   assert.equal(snapshot.attachment.title,'发给群聊-v1.docx')
   assert.deepEqual(snapshot.attachment.resource,{kind:'document',title:'发给群聊',revision:1})
-  const updated = (await resolve({...input,revision:2})).attachment
+  const {attachment:updated,context_excerpt:excerpt} = await resolve({...input,revision:2})
+  assert.equal(excerpt,'Saved version two')
   assert.deepEqual(updated.resource,{kind:'document',title:'新标题',revision:2})
   assert.notEqual(updated.data,snapshot.attachment.data)
   await assert.rejects(resolve({...input,workspace_id:'f'.repeat(32)}),error=>error.status===404)
@@ -592,11 +594,14 @@ test('chat attachments export the selected saved version and require an internal
   for (const [payload, suffix, mime] of examples) {
     const result = await bot.call('artifacts','POST',base(),payload,key())
     assert.equal(result.status,201,JSON.stringify(result.body))
-    const {attachment} = await resolve({...input,artifact_id:result.body.artifact.id})
+    const {attachment,context_excerpt} = await resolve({...input,artifact_id:result.body.artifact.id})
     assert.ok(attachment.title.endsWith('.' + suffix))
     assert.match(attachment.mime,mime)
     assert.deepEqual(attachment.resource,{kind:result.body.artifact.kind,title:result.body.artifact.title,revision:1})
     if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
+    if (suffix === 'pptx') assert.equal(context_excerpt,'开场 计划')
+    if (suffix === 'xlsx') assert.equal(context_excerpt?.trim(),'参会人数 3')
+    if (suffix === 'png') assert.equal(context_excerpt,undefined)
   }
 })
 

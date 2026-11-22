@@ -10,6 +10,38 @@ import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
 
+test('meeting catalogue searches saved transcript passages with bounded private excerpts and normal paging', async () => {
+  const bot = await boot()
+  const term = 'Build [4.2]'
+  const transcript = 'unrelated preface ' + '背景。'.repeat(40) + term + '，这周发布。' + '尾部。'.repeat(40)
+  const create = (title, started_at, workspace = WS) => bot.call('meetings', 'POST', base('', workspace),
+    {...body, title, started_at, transcript}, key())
+  const latest = (await create('发布讨论', 200)).body.meeting
+  const older = (await create('之前的讨论', 100)).body.meeting
+  const otherWorkspace = 'b'.repeat(32)
+  await create('另一工作区', 300, otherWorkspace)
+  const query = new URLSearchParams({q:'build [4.2]', order:'recent', limit:'1'})
+  const first = (await bot.call('meetings', 'GET', base() + '?' + query)).body
+  assert.equal(first.items.length, 1)
+  assert.equal(first.items[0].id, latest.id)
+  const {before, match, after} = first.items[0].transcript_match
+  assert.equal(match, term)
+  assert.ok(before.startsWith('…') && before.length <= 43)
+  assert.ok(after.startsWith('，这周发布。') && after.length <= 43)
+  assert.equal(first.items[0].transcript, undefined)
+  assert.equal(first.items[0].summary, undefined)
+  assert.equal(first.cursor, latest.id)
+  query.set('cursor', first.cursor)
+  const second = (await bot.call('meetings', 'GET', base() + '?' + query)).body
+  assert.deepEqual(second.items.map(row => row.id), [older.id])
+  assert.equal(second.cursor, null)
+  const ordinary = (await bot.call('meetings', 'GET', base())).body
+  assert.ok(ordinary.items.every(row => row.transcript_match === undefined && row.transcript === undefined))
+  const summarySearch = (await bot.call('meetings', 'GET', base() + '?q=' + encodeURIComponent(body.summary))).body
+  assert.equal(summarySearch.items.length, 2)
+  assert.ok(summarySearch.items.every(row => row.transcript_match === undefined))
+})
+
 test('calendar deadlines survive the saved action, list search, completion and Markdown export', async () => {
   const bot = await boot()
   const due_date = '2032-02-29'
@@ -321,7 +353,8 @@ test('meeting list filters all saved metadata before paging in start-time order'
   assert.deepEqual(ids(await list('order=recent&open=1')), [old])
   assert.deepEqual(ids(await list('order=recent&open=1&q=' + encodeURIComponent('äpfel %'))), [old])
   assert.deepEqual(ids(await list('q=ravi')), [old])
-  assert.deepEqual(ids(await list('q=' + encodeURIComponent('仅正文出现的词'))), [])
+  assert.deepEqual(ids(await list('order=recent&open=1&q=' + encodeURIComponent('仅正文出现的词'))), [old])
+  assert.deepEqual(ids(await list('q=' + encodeURIComponent('未出现的词'))), [])
   assert.deepEqual(ids(await list('order=recent&cursor=' + other)), [])
   for (const query of ['order=wrong','open=0','open=1&open=1','q=' + 'a'.repeat(81)]) {
     assert.equal((await list(query)).status, 400)

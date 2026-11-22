@@ -249,6 +249,19 @@ export function markdown(row) {
 
 const load = (store, workspaceId, id) => store.get('SELECT * FROM meetings WHERE id=? AND workspace_id=?', id, workspaceId)
 
+function transcriptExcerpt(text, pattern) {
+  const found = pattern?.exec(text)
+  if (!found) return null
+  const end = found.index + found[0].length
+  const start = Math.max(0, found.index - 42)
+  const stop = Math.min(text.length, end + 42)
+  return {
+    before: (start ? '…' : '') + text.slice(start, found.index).toWellFormed(),
+    match: found[0],
+    after: text.slice(end, stop).toWellFormed() + (stop < text.length ? '…' : ''),
+  }
+}
+
 function meetingPage(req, workspaceId) {
   const { limit, cursor, args } = pagination(req.query, ['q', 'open', 'order'])
   const query = (args.get('q') ?? '').trim()
@@ -272,20 +285,22 @@ function meetingPage(req, workspaceId) {
     bindings.push(cursor)
   }
   const order = recent ? ' ORDER BY started_at DESC,id' : ' ORDER BY id'
-  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by,source_call_id${query ? ',summary' : ''}`
+  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by,source_call_id${query ? ',summary,transcript' : ''}`
   const select = `SELECT ${fields} FROM meetings ` + boundary + order
   const rows = query || open ? req.store.all(select, ...bindings) : req.store.all(select + ' LIMIT ?', ...bindings, limit + 1)
   const needle = casefold(query)
+  const transcriptPattern = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu') : null
   const page = []
   for (const row of rows) {
     const actions = open || needle ? parse(row.action_items) : []
     if (open && !actions.some(item => !item.done)) continue
-    if (needle && ![row.title, row.summary, ...parse(row.attendees), ...actions.flatMap(item => [item.text, item.owner, item.due_date])]
+    const excerpt = transcriptExcerpt(row.transcript, transcriptPattern)
+    if (needle && !excerpt && ![row.title, row.summary, ...parse(row.attendees), ...actions.flatMap(item => [item.text, item.owner, item.due_date])]
       .some(value => casefold(value ?? '').includes(needle))) continue
-    page.push(row)
+    page.push({...view(row, false), ...(excerpt ? {transcript_match: excerpt} : {})})
     if (page.length > limit) break
   }
-  return { body: { items: page.slice(0, limit).map(row => view(row, false)),
+  return { body: { items: page.slice(0, limit),
     cursor: page.length > limit ? page[limit - 1].id : null, ...activity } }
 }
 

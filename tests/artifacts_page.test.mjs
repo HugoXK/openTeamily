@@ -773,12 +773,108 @@ test('Space sends the saved version to the selected private or group conversatio
 
     const choices = await open();
     await choices.find(button => button.textContent === groupChoice.textContent).dispatch('click');
+    page.elements.get('send-to-chat-note').value = '请先核对清单。';
     await confirm.dispatch('click');
     assert.equal(dialog.hidden, true);
     assert.equal(sends[2].path, socialPath);
     assert.equal(sends[2].body.artifact_revision, 5);
+    assert.equal(sends[2].body.body, '请先核对清单。');
     assert.notEqual(sends[2].key, sends[1].key);
   } finally { page.close(); }
+});
+
+test('Space starts an agent thread only on confirmation and links to the exact versioned send', async () => {
+  const agent = 'b'.repeat(32);
+  const thread = 'c'.repeat(32);
+  const message = 'd'.repeat(32);
+  const item = {id:'a1', title:'交付原件', kind:'document', revision:4, created_by:'alice'};
+  const collection = '/v1/workspaces/w1/agents/' + agent + '/conversations';
+  const sent = [];
+  const page = await openArtifactsPage({items:[item],native:true,extraRequest(path,options) {
+    if (path === '/v1/workspaces/w1/social/conversations?limit=100') return reply({body:{items:[]}});
+    if (path === '/v1/workspaces/w1/agents?limit=100&include=conversations') {
+      return reply({body:{items:[{id:agent,name:'资料助手'},{id:'e'.repeat(32),name:'已删除',native_deleted:true}],conversations:[]}});
+    }
+    if (path === collection || path === collection + '/' + thread + '/messages') {
+      sent.push({path,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+      if (path === collection) {
+        return sent.length === 1 ? reply({status:503})
+          : reply({status:200,body:{conversation:{id:thread,workspace_id:'w1',agent_id:agent}}});
+      }
+      return sent.length === 3 ? reply({status:503}) : reply({status:202,body:{message:{id:message}}});
+    }
+  }});
+  try {
+    const dialog = page.elements.get('send-to-chat-dialog');
+    const select = page.elements.get('send-to-chat-agent');
+    const confirm = page.elements.get('send-to-chat-confirm');
+    page.elements.get('send-to-chat-list').querySelectorAll = () => [];
+    await page.created.find(node=>node.className === 'artifact-menu-send').dispatch('click');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(page.elements.get('send-to-chat-new').hidden,false);
+    assert.deepEqual(select.children.map(option=>option.value),['',agent]);
+    select.value = agent;
+    await select.dispatch('change');
+    page.elements.get('send-to-chat-note').value = '这个版本缺哪些交付项？';
+    assert.deepEqual(sent,[]);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,false);
+    assert.equal(page.elements.get('send-to-chat-note').value,'这个版本缺哪些交付项？');
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,false);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,true);
+    assert.deepEqual(sent[1],sent[0]);
+    assert.deepEqual(sent[3],sent[2]);
+    assert.deepEqual(sent[3].body,{artifact_id:item.id,artifact_revision:4,body:'这个版本缺哪些交付项？'});
+    assert.equal(page.elements.get('status').children.at(-1).href,
+      '/chat#workspace=w1&agent=' + agent + '&conversation=' + thread + '&message=' + message);
+  } finally { page.close(); }
+});
+
+test('Space enables creation when the workspace resolves even if its catalogue is still loading', {timeout:3000}, async () => {
+  const {doc,form} = fakeDocument();
+  const el = id => doc.getElementById(id);
+  form.hidden = true;
+  const workspaceStarted = deferred();
+  const workspace = deferred();
+  const catalogueStarted = deferred();
+  const catalogue = deferred();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const loading = mount(doc,{fetcher:async path => {
+    if (path === '/v1/auth/session') return reply({body:{user:{id:'u1',username:'alice'}}});
+    if (path === '/v1/workspaces?limit=100') {
+      workspaceStarted.finish();
+      return workspace.promise;
+    }
+    if (path === '/v1/workspaces/w1/artifacts') {
+      catalogueStarted.finish();
+      return catalogue.promise;
+    }
+    return reply();
+  }});
+  try {
+    await workspaceStarted.promise;
+    assert.equal(el('main-panel').hidden,false);
+    assert.equal(el('workspace-pending').hidden,false);
+    assert.equal(el('new-menu-button').disabled,true);
+    assert.equal(el('new-artifact').disabled,true);
+    await el('new-artifact').dispatch('click');
+    assert.equal(form.hidden,true);
+    workspace.finish(reply({body:{items:[{id:'w1',name:'Desk'}]}}));
+    await catalogueStarted.promise;
+    assert.equal(el('workspace-pending').hidden,true);
+    assert.equal(el('new-menu-button').disabled,false);
+    await el('new-artifact').dispatch('click');
+    await new Promise(setImmediate);
+    assert.equal(form.hidden,false);
+  } finally {
+    workspace.finish(reply());
+    catalogue.finish(reply({body:{items:[]}}));
+    await loading;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
 });
 
 test('artifactDeletePrompt names the artifact and never echoes an empty title', () => {

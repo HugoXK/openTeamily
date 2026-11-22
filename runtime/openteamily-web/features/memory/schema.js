@@ -86,6 +86,15 @@ CREATE TABLE memory_shared_meeting_action_sources (
   workspace_id TEXT NOT NULL, share_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL);
 CREATE INDEX memory_shared_meeting_action_receipt
   ON memory_shared_meeting_action_sources(workspace_id, share_id, revision);
+`, `
+CREATE TABLE IF NOT EXISTS memory_chat_action_sources (
+  action_id TEXT PRIMARY KEY REFERENCES memory_actions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('agent','social')),
+  workspace_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  agent_id TEXT,
+  revision INTEGER);
 `]
 
 export const IMPORT_TABLES = {

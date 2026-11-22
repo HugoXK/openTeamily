@@ -1,5 +1,6 @@
 import {mountMeetingAudio} from './audio.mjs';
 import {mountMeetingDiscussion} from './discussion.mjs';
+import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
@@ -569,6 +570,7 @@ function mount() {
   let selection = 0;
   const titleInput = document.getElementById('meeting-title');
   const transcript = document.getElementById('meeting-transcript');
+  const transcriptSearch = mountTranscriptSearch(document, transcript);
   const audio = mountMeetingAudio(document, {request, base, transcript, onPendingChange: syncLeaveProtection});
   const summary = document.getElementById('meeting-summary');
   const draftPanel = document.getElementById('meeting-draft');
@@ -1362,6 +1364,12 @@ function mount() {
       meta.textContent = formatTime(meeting.started_at) + ' · ' + (meeting.attendees || []).length + ' 人 · ' +
         meeting.done_count + '/' + meeting.action_count + ' 行动项';
       button.append(title, meta);
+      if (meeting.transcript_match) {
+        const source = document.createElement('span');
+        source.className = 'meeting-source-hit';
+        renderTranscriptMatch(document, source, meeting.transcript_match, '转写 · ');
+        button.append(source);
+      }
       li.append(button);
       list.append(li);
     }
@@ -1428,6 +1436,7 @@ function mount() {
     syncLibraryLink();
     audio.reset();
     hideAttendees();
+    const sameMeeting = meeting?.id === current?.id && meeting?.workspace_id === current?.workspace_id && Boolean(meeting?.id);
     current = meeting;
     callDraft = source;
     const draftContext = savedDraftContext();
@@ -1448,6 +1457,8 @@ function mount() {
     attendeeInput.value = (details?.attendees || []).join(', ');
     document.getElementById('meeting-summary').value = meeting ? (meeting.summary || '') : '';
     document.getElementById('meeting-transcript').value = meeting ? (meeting.transcript || '') : '';
+    if (sameMeeting) transcriptSearch.refresh();
+    else transcriptSearch.reset();
     syncDraft();
     actions = meeting ? (meeting.action_items || []).map((item, savedIndex) => ({...item, savedIndex})) : [];
     savedDraft = draftContents();
@@ -1474,6 +1485,7 @@ function mount() {
     hideAttendees();
     form.hidden = true;
     form.inert = false;
+    transcriptSearch.reset();
     emptyDetail.hidden = false;
     if (layout) layout.dataset.view = 'catalogue';
     renderList();
@@ -1535,7 +1547,7 @@ function mount() {
     else fill(null);
   }
 
-  async function openMeeting(id, read) {
+  async function openMeeting(id, read, transcriptQuery) {
     const pendingSave = writing?.kind === 'save' && active(writing) ? writing
       : saveRetry && active(saveRetry) ? saveRetry : null;
     const owner = viewer;
@@ -1568,6 +1580,7 @@ function mount() {
       const focus = draftTop.hidden ? document.getElementById('meeting-editor-pane') : draftTop;
       focus?.focus({preventScroll: true});
     }
+    if (transcriptQuery) transcriptSearch.open(transcriptQuery);
     show('', '');
     return true;
   }
@@ -1585,6 +1598,7 @@ function mount() {
     showDraft();
     hideAttendees();
     form.hidden = true;
+    transcriptSearch.reset();
     savedDraft = null;
     syncLeaveProtection();
     setReceiptMode(true);
@@ -1789,6 +1803,7 @@ function mount() {
         if (source) {
           titleInput.value = source.title;
           transcript.value = source.transcript;
+          transcriptSearch.refresh();
           syncDraft();
           syncLeaveProtection();
           show('ok', '已填入所选聊天消息。可编辑正文，再生成纪要。');
@@ -2052,8 +2067,13 @@ function mount() {
 
   document.getElementById('meeting-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-meeting]');
-    if (button && !resume.hidden && current?.id === button.dataset.meeting) resume.click();
-    else if (button) await confirmNavigation(() => openMeeting(button.dataset.meeting));
+    if (!button) return;
+    const id = button.dataset.meeting;
+    const transcriptQuery = meetings.find(meeting => meeting.id === id)?.transcript_match ? search.value.trim() : '';
+    if (!resume.hidden && current?.id === id) {
+      resume.click();
+      if (transcriptQuery) transcriptSearch.open(transcriptQuery);
+    } else await confirmNavigation(() => openMeeting(id, undefined, transcriptQuery));
   });
 
   function filterMeetings(debounce = false) {

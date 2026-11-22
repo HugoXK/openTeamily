@@ -300,6 +300,18 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   background: var(--ot-bg-accent);
 }
 
+#action-list-filters { display: flex; flex-wrap: wrap; gap: .5rem .75rem; margin: .6rem 0; }
+#action-list-filters label { display: grid; gap: .25rem; min-width: 0; }
+#action-list-filters label:first-child { flex: 1 1 11rem; }
+#action-list-filters :is(input,select) { min-height: 2.75rem; width: 100%; min-width: 0; box-sizing: border-box; }
+#action-list button { min-height: 2.75rem; overflow-wrap: anywhere; }
+#action-list-count, #action-empty, #action-follow-up-status { margin: .35rem 0; }
+#action-list-count:empty, #action-follow-up-status:empty, .action-list-navigation:not(:has(button:not([hidden]))) { display: none; }
+.action-list-navigation { margin: .45rem 0; }
+.action-list-navigation button { min-height: 2.75rem; }
+#action-follow-up { color: var(--ot-accent-hover); padding-block: .5rem; }
+#action-follow-up[aria-disabled="true"] { color: var(--ot-muted); text-decoration: none; }
+
 #memory-list [aria-current="page"] {
   background: var(--ot-accent-soft);
 }

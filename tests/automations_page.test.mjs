@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -18,11 +18,15 @@ test('listQuery encodes tab and search', () => {
 test('an onboarding link must name exactly one saved automation and its workspace', () => {
   const workspace = 'a'.repeat(32);
   const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&runs=failed`),
     {workspace, automation});
   assert.equal(automationTargetFromSearch('?template=daily_brief'), null);
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&automation=${automation}`), {invalid: true});
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=missing`), {invalid: true});
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&run=${run}`), {workspace, automation, run});
+  assert.deepEqual(automationTargetFromSearch(`?run=${run}`), {invalid: true});
+  assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&run=${run}&run=${run}`), {invalid: true});
 });
 
 test('meeting follow-up links carry a bounded action index, exact revision and no content', () => {
@@ -37,6 +41,17 @@ test('meeting follow-up links carry a bounded action index, exact revision and n
     path.replace('revision=3', 'revision=0'), path.replace('revision=3', 'revision=9007199254740992'),
     path.replace('meeting=' + meeting, 'meeting=missing'),
   ]) assert.deepEqual(meetingTargetFromSearch(invalid), {invalid: true});
+});
+
+test('memory action follow-up links accept exactly an opaque action and its reviewed revision', () => {
+  const workspace = 'a'.repeat(32), memoryAction = 'b'.repeat(32);
+  const search = `?workspace=${workspace}&memory_action=${memoryAction}&revision=4`;
+  assert.deepEqual(memoryActionTargetFromSearch(search), {workspace, memoryAction, revision: 4});
+  assert.equal(memoryActionTargetFromSearch('?revision=4'), null);
+  for (const invalid of [search + '&title=private', search + '&revision=5', search.replace('4', '0'),
+    search.replace(memoryAction, 'wrong-id'), search.replace('4', '9007199254740992')]) {
+    assert.deepEqual(memoryActionTargetFromSearch(invalid), {invalid: true});
+  }
 });
 
 test('scheduleFromForm and namesFromList map editor fields', () => {
@@ -434,6 +449,98 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
   }
 });
 
+test('save and sample submits one stable creation request and opens the exact exportable result', async t => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const done = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded', result: {text: '今日运行结果'}};
+  const clipboard = [];
+  const view = {location: {search: '?template=daily_brief', pathname: '/automations', origin: 'https://test.local'},
+    navigator: {clipboard: {writeText: async text => clipboard.push(text)}},
+    history: {replaceState(_state, _title, url) { view.location.search = new URL(url, 'https://test.local').search; }}};
+  doc.defaultView = view;
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const saved = globalThis.document;
+  const priorFormData = globalThis.FormData;
+  globalThis.document = doc;
+  globalThis.FormData = class {
+    constructor(form) { this.elements = form.elements; }
+    get(name) { return this.elements[name]?.value || ''; }
+    has(name) { return Boolean(this.elements[name]?.checked); }
+  };
+  t.after(() => { globalThis.document = saved; globalThis.FormData = priorFormData; });
+  const posts = [];
+  const path = `/v1/workspaces/${workspace}/automations`;
+  const attempt = async (target, options = {}) => {
+    if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
+    if (target === '/v1/automation-templates') return respond({items: [{id: 'daily_brief', title: '工作日报', category: 'work'}]});
+    if (target === path && options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      posts.push({body, key: options.headers['Idempotency-Key']});
+      if (posts.length === 1) throw Error('Lost response fixture');
+      return respond({automation: {...body, id: automation, workspace_id: workspace, revision: 1}, sample_run: {...done, status:'queued', result: undefined}}, 201);
+    }
+    if (target.startsWith(path + '/' + automation + '/runs?')) return respond({items: [done], has_pending: false});
+    assert.fail(`Unexpected request ${options.method || 'GET'} ${target}`);
+  };
+  await mount(doc, {fetcher: attempt});
+  const form = elements.get('editor-form');
+  const sample = elements.get('save-and-sample');
+  assert.equal(sample.hidden, true);
+  form.elements.kind.value = 'daily';
+  elements.get('automation-schedule-settings').handlers.change[0]();
+  assert.equal(sample.hidden, false);
+  await form.handlers.submit[0]({preventDefault() {}, submitter: sample});
+  await form.handlers.submit[0]({preventDefault() {}, submitter: sample});
+  assert.equal(posts.length, 2);
+  assert.deepEqual(posts[0], posts[1]);
+  assert.equal(posts[0].body.run_sample, true);
+  assert.equal(posts[0].body.enabled, false);
+  assert.equal(posts[0].body.schedule.kind, 'daily');
+  assert.equal(sample.hidden, true);
+  assert.equal(view.location.search, `?workspace=${workspace}&automation=${automation}&run=${run}`);
+  const detail = elements.get('run-list').children[0].children[1];
+  assert.equal(detail.hidden, false);
+  assert.match(detail.textContent, /今日运行结果/);
+  const controls = detail.children.find(child => child.className === 'run-result-actions');
+  await controls.children.find(child => child.dataset.runControl === 'copy-result').handlers.click[0]();
+  await controls.children.find(child => child.dataset.runControl === 'copy-run-link').handlers.click[0]();
+  assert.deepEqual(clipboard, ['今日运行结果', 'https://test.local/automations' + view.location.search]);
+});
+
+test('an exact linked run stays visible when older than the first page of history', async t => {
+  const {doc, elements} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+  doc.defaultView = {location: {search: `?workspace=${workspace}&automation=${automation}&run=${run}`}};
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = saved; });
+  const calls = [];
+  const savedRun = {id: run, workspace_id: workspace, automation_id: automation, status: 'succeeded', result: {text: '历史样例'}};
+  await mount(doc, {fetcher: async target => {
+    calls.push(target);
+    if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
+    if (target === path) return respond({automation: {id: automation, workspace_id: workspace, title: '日报', enabled: false}});
+    if (target === path + '/runs/' + run) return respond({run: savedRun});
+    if (target.startsWith(path + '/runs?')) return respond({items: [{...savedRun, id: 'd'.repeat(32), result: {text:'最新运行'}}]});
+    assert.fail('Unexpected request ' + target);
+  }});
+  await flush();
+  const [exact, newest] = elements.get('run-list').children;
+  assert.equal(exact.dataset.runId, run);
+  assert.equal(exact.children[1].hidden, false);
+  assert.equal(newest.children[1].hidden, true);
+  assert.match(exact.textContent, /历史样例/);
+  assert.equal(calls.filter(target => target === path + '/runs/' + run).length, 1);
+});
+
 const SOURCE_WORKSPACE = 'a'.repeat(32);
 const SOURCE_MEETING = 'b'.repeat(32);
 const FOLLOW_UP = 'c'.repeat(32);
@@ -447,6 +554,83 @@ const SOURCE = {
 };
 const respond = (body, status = 200) => ({status, json: async () => body});
 const SAVED_SOURCE = {meeting_id: SOURCE_MEETING, revision: 4, action_index: 1, title: SOURCE.meeting.title, text: SOURCE.action.text, owner: SOURCE.action.owner};
+
+function mountMemoryFollowup(t, {changed = false, otherViewer = false} = {}) {
+  const {doc, elements} = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const actionId = 'd'.repeat(32);
+  const action = {id: actionId, workspace_id: SOURCE_WORKSPACE, revision: 2, status: 'open',
+    title: '核对客户需求', notes: '只整理已经确认的事实。', due_at: null};
+  const entry = `?workspace=${SOURCE_WORKSPACE}&memory_action=${actionId}&revision=2`;
+  const view = {location: {search: entry, pathname: '/automations'}, history: {
+    replaceState(_state, _title, url) { view.location.search = new URL(url, 'https://test.local').search; },
+  }};
+  doc.defaultView = view;
+  const savedDocument = globalThis.document;
+  const savedFormData = globalThis.FormData;
+  globalThis.document = doc;
+  globalThis.FormData = class {
+    constructor(form) { this.elements = form.elements; }
+    get(name) { return this.elements[name]?.value || ''; }
+    has(name) { return Boolean(this.elements[name]?.checked); }
+  };
+  t.after(() => { globalThis.document = savedDocument; globalThis.FormData = savedFormData; });
+  const calls = [];
+  const path = `/v1/workspaces/${SOURCE_WORKSPACE}/automations`;
+  const mounted = mount(doc, {fetcher: async (target, {method, body, headers} = {}) => {
+    calls.push({target, method, body: body && JSON.parse(body), headers});
+    if (target === '/v1/auth/session') return respond({user: {username:'alice'}});
+    if (target.startsWith('/v1/workspaces?')) return respond({items:[{id:SOURCE_WORKSPACE, name:'个人工作区', kind:'personal'}]});
+    if (target === path + `?memory_action=${actionId}&revision=2`) {
+      return respond({automation:null, action:{...action, revision: changed ? 3 : 2}, viewer_username: otherViewer ? 'carol' : 'alice'});
+    }
+    if (target === path && method === 'POST') {
+      return respond({automation:{...JSON.parse(body), id:FOLLOW_UP, workspace_id:SOURCE_WORKSPACE, enabled:false,
+        source_memory_action:{action_id:actionId, revision:2, title:action.title, notes:action.notes, due_at:null}}}, 201);
+    }
+    if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items:[]});
+    assert.fail('Unexpected request ' + method + ' ' + target);
+  }});
+  return {mounted, elements, calls, action, view};
+}
+
+test('the memory action drafts a paused, editable follow-up and saves the exact reviewed reference', async t => {
+  const {mounted, elements, calls, action, view} = mountMemoryFollowup(t);
+  await mounted;
+  const form = elements.get('editor-form');
+  assert.equal(form.hidden, false);
+  assert.equal(elements.get('memory-action-source').hidden, false);
+  assert.match(elements.get('memory-action-source-revision').textContent, /2/);
+  assert.match(form.elements.prompt.value, /只整理已经确认的事实/);
+  assert.equal(elements.get('memory-action-source-link').href,
+    `/memory?workspace=${SOURCE_WORKSPACE}&page=todos&action=${action.id}`);
+  assert.equal(elements.get('tick-automation').hidden, true);
+  assert.equal(elements.get('save-and-sample').hidden, true);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  form.elements.prompt.value = '用户明确编辑的跟进指令';
+  form.elements.enabled.checked = true;
+  await form.handlers.submit[0]({preventDefault() {}});
+  const posts = calls.filter(({method}) => method === 'POST');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].body.source_memory_action, {action_id: action.id, revision: 2});
+  assert.equal(posts[0].body.prompt, '用户明确编辑的跟进指令');
+  assert.equal(posts[0].body.enabled, false);
+  assert.equal(elements.get('memory-action-source-notes').textContent, action.notes);
+  assert.equal(elements.get('tick-automation').hidden, false);
+  assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
+});
+
+test('a different viewer or changed memory action never populates the editor', async t => {
+  for (const options of [{otherViewer:true}, {changed:true}]) {
+    await t.test(Object.keys(options)[0], async sub => {
+      const {mounted, elements, calls} = mountMemoryFollowup(sub, options);
+      await mounted;
+      assert.equal(elements.get('editor-form').hidden, true);
+      assert.match(elements.get('status').textContent, /记忆行动项已更新/);
+      assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+    });
+  }
+});
 
 function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, saveStatus = 201,
   workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {

@@ -429,6 +429,7 @@ export function createAgents({ db, host }) {
     if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Attachment send key required', 400)
     const stickerId = reference?.sticker_id
     let files = reference ? undefined : privateFiles(p.attachments)
+    let savedExcerpt
     const hash = stickerId ? sha(JSON.stringify(['sticker',stickerId,text,p.reply_language || '']))
       : reference ? sha(JSON.stringify(['saved-work',reference.artifact_id,reference.revision,text,p.reply_language || '']))
       : fingerprintAttachments(text, p.reply_language, files)
@@ -464,7 +465,10 @@ export function createAgents({ db, host }) {
       const concurrent = replay()
       if (concurrent) return concurrent
       files = privateFiles([snapshot.attachment], {savedWork:!stickerId})
-      if (!stickerId) text ||= snapshot.body
+      if (!stickerId) {
+        text ||= snapshot.body
+        if (typeof snapshot.context_excerpt === 'string') savedExcerpt = snapshot.context_excerpt.slice(0, 12_000).toWellFormed()
+      }
     }
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
@@ -478,8 +482,8 @@ export function createAgents({ db, host }) {
     } catch (error) { db.exec('ROLLBACK'); throw error }
     return trackSend(convo.id, userId, replyId, async (onProgress, onPhase) => {
       let staged = []
-      let remaining = 12_000
-      const excerpts = []
+      let remaining = 12_000 - (savedExcerpt?.length || 0)
+      const excerpts = savedExcerpt ? [{filename:files[0].title,text:savedExcerpt}] : []
       for (const file of files) {
         if (remaining <= 0 || !(file.mime.startsWith('text/') || file.mime === 'application/json')) continue
         const part = file.data.toString('utf8').slice(0,remaining)
@@ -594,6 +598,27 @@ export function createAgents({ db, host }) {
         const profile = await privateProfile(row)
         return profile ? {...agent,memory_recall_default:profile.recall !== 'off'} : agent
       })) }
+    },
+    async templateRoles(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      if (!Array.isArray(p.names) || p.names.length > 3 || p.names.some(name => !validName(name))) {
+        fail('invalid', 'Invalid template roles', 400)
+      }
+      const names = new Set(p.names)
+      const {rt} = await host.runtime()
+      const rows = all(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
+        FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id WHERE a.workspace_id=?`, workspaceId)
+      const items = []
+      for (const row of rows) {
+        const observed = observeAgent(row, rt.botOf(row.native_bot_id), true)
+        if (!names.has(row.name) && !names.has(observed.name)) continue
+        const agent = await native.ensure(row)
+        if (names.has(agent.name)) items.push({
+          id: agent.id, name: agent.name, category: agent.category, archived: agent.archived, native_deleted: !!agent.native_deleted,
+        })
+      }
+      return {items}
     },
     get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
     async create(p, inheritCapabilities = true, source = null) {
@@ -809,6 +834,15 @@ export function createAgents({ db, host }) {
       if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || await conversationMemoryMode(convo, agent) === 'off'))) return null
       const row = one("SELECT text FROM agent_messages WHERE id=? AND conversation_id=? AND role='user' AND status IN ('sent','succeeded')",p.message_id,convo.id)
       return row ? {title:convo.title,text:row.text} : null
+    },
+    async actionSource(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const agent = load(ws(p), p.agent_id)
+      const row = messageForWork(conversation(agent,p.conversation_id), p.message_id)
+      if (!['sent','succeeded'].includes(row.status) || !row.text.trim() || JSON.parse(row.meta).files?.length) {
+        fail('conflict', 'Only completed text messages can be saved', 409)
+      }
+      return true
     },
     async captureHistory(p) {
       const agent = load(ws(p), p.id)
@@ -1164,6 +1198,8 @@ export default async function agents(host) {
   }
   wrapped.startupEntry = endpoints.startupEntry
   wrapped.createRemix = endpoints.createRemix
+  wrapped.actionSource = endpoints.actionSource
+  wrapped.templateRoles = endpoints.templateRoles
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)

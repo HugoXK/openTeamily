@@ -14,6 +14,7 @@ import { sniffMime } from './render.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
+import { artifactContextExcerpt } from './catalog-search.js'
 
 function generatedMedia(ctx, input, call, type, mime, extension, limit) {
   if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
@@ -141,8 +142,14 @@ export default defineFeature({
         : current
       if (!row) refuse(404, 'not_found', '该版本已不可发送，请刷新作品列表。')
       let kind = fromVersion ? row.kind : publicKind(row)
-      if (fromVersion && kind === 'document') kind = decodeStructured(row.body)[0] || kind
+      let structure
+      if (fromVersion && kind === 'document') {
+        const [savedKind, savedStructure] = decodeStructured(row.body)
+        kind = savedKind || kind
+        structure = savedStructure
+      }
       const officeFormat = {document:'docx', slides:'pptx', dashboard:'xlsx', spreadsheet:'xlsx'}[kind]
+      const contextExcerpt = officeFormat ? artifactContextExcerpt(row, kind, structure) : ''
       let file
       if (officeFormat) {
         const result = exportOffice(row, officeFormat, fromVersion)
@@ -160,7 +167,7 @@ export default defineFeature({
       const bytes = Buffer.from(file.payload)
       if (bytes.length > 8 * 1024 * 1024) refuse(413, 'attachment_too_large', '附件不能超过 8 MB。')
       const title = row.title.replace(/[.\/\\]/g, '_').trim()
-      return {body: `${row.title} · 版本 ${revision}`, attachment: {
+      return {body: `${row.title} · 版本 ${revision}`, ...(contextExcerpt ? {context_excerpt:contextExcerpt} : {}), attachment: {
         title: `${title}-v${revision}.${file.extension}`, mime: file.mime, data: bytes.toString('base64'),
         resource: {kind,title:row.title,revision},
       }}

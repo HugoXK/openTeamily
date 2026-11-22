@@ -219,6 +219,7 @@
           </fieldset>
         </div>
         <div class="compose-dialog-actions">
+          <p id="compose-dialog-error" role="alert" tabindex="-1" hidden></p>
           <button type="button" id="compose-dialog-cancel"><span data-ui-text="chat.cancel">取消</span></button>
           <button type="submit" id="compose-dialog-submit" disabled><span data-ui-text="chat.create">创建</span></button>
         </div>
@@ -293,6 +294,8 @@
         </div>
         <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
         <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
+        <button type="button" class="group-info-link" id="group-info-add-agent" aria-haspopup="dialog" aria-controls="group-info-add-agent-dialog" data-ui-text="chat.group.add_agent" hidden>添加我的智能体</button>
+        <p id="group-info-add-agent-feedback" class="note" role="status" hidden></p>
         <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
         <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog" data-ui-text="chat.group.add_members">添加成员</button>
         <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
@@ -342,6 +345,20 @@
       <span id="chat-call-incoming-label"></span>
       <button type="button" id="chat-call-join" data-ui-text="chat.call.join">加入通话</button>
     </aside>
+    <dialog id="group-info-add-agent-dialog" aria-labelledby="group-info-add-agent-heading" aria-describedby="group-info-add-agent-context">
+      <form id="group-info-add-agent-form">
+        <h2 id="group-info-add-agent-heading" data-ui-text="chat.group.add_agent">添加我的智能体</h2>
+        <p id="group-info-add-agent-context" class="note"></p>
+        <label><span data-ui-text="chat.nav.agents">智能体</span> <select id="group-info-add-agent-select" required disabled></select></label>
+        <p id="group-info-add-agent-status" role="status" tabindex="-1"></p>
+        <a id="group-info-add-agent-directory" href="/agents" hidden data-ui-text="chat.group.open_agent_directory">打开智能体目录</a>
+        <div class="actions">
+          <button type="button" id="group-info-add-agent-cancel" data-ui-text="chat.cancel" autofocus>取消</button>
+          <button type="button" id="group-info-add-agent-retry" data-ui-text="chat.retry" hidden>重试</button>
+          <button type="submit" id="group-info-add-agent-submit" data-ui-text="chat.add" disabled>添加</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="group-invite-dialog" aria-labelledby="group-invite-heading">
       <form id="group-invite-form">
         <h2 id="group-invite-heading" data-ui-text="chat.group.add_group_members">添加群成员</h2>
@@ -370,6 +387,7 @@
       <button type="button" role="menuitem" data-menu="reply" data-ui-text="chat.messages.reply">回复</button>
       <button type="button" role="menuitem" data-menu="ask-group" data-ui-text="chat.group.ask_agents" hidden>请智能体回复</button>
       <button type="button" role="menuitem" data-menu="save" data-ui-text="chat.messages.save_to_space">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="save-action" data-ui-text="chat.messages.save_as_action" hidden>转为行动</button>
       <button type="button" role="menuitem" data-menu="translate" title="使用配置的模型和自己的在线运行时" data-ui-title="chat.translate.model_help" data-ui-text="chat.translate.translate">翻译</button>
       <button type="button" role="menuitem" data-menu="ask" data-ui-text="chat.messages.ask_ai">问 AI</button>
       <button type="button" role="menuitem" data-menu="copy" data-ui-text="chat.copy">复制</button>
@@ -635,6 +653,19 @@
         <div class="actions">
           <button type="button" id="selection-memory-cancel" data-ui-text="chat.cancel">取消</button>
           <button type="submit" id="selection-memory-submit"><span data-ui-text="chat.save_confirm">确认保存</span></button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="save-action-dialog" aria-labelledby="save-action-heading">
+      <form id="save-action-form">
+        <h2 id="save-action-heading" data-ui-text="chat.messages.save_as_action">转为行动</h2>
+        <p class="note" data-ui-text="chat.messages.action_scope">将保存到个人记忆的「下一步行动」。</p>
+        <label><span data-ui-text="chat.messages.action_title">行动标题</span> <input id="save-action-title" maxlength="80" required></label>
+        <label><span data-ui-text="chat.messages.action_notes">备注</span> <textarea id="save-action-notes" rows="5" maxlength="2000"></textarea></label>
+        <p id="save-action-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" id="save-action-cancel" data-ui-text="chat.cancel">取消</button>
+          <button type="submit" id="save-action-submit" data-ui-text="chat.messages.action_confirm">保存行动</button>
         </div>
       </form>
     </dialog>

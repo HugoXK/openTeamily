@@ -16,7 +16,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const flush = () => new Promise((r) => setImmediate(r))
 
-function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction) {
+function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction, readMemoryAction) {
   const clock = { now: at }
   const calls = []
   const dbPath = join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')
@@ -24,6 +24,7 @@ function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction) {
     personalBinding: async () => ({workspace_id: W}),
     saveArtifact,
     readMeetingAction,
+    readMemoryAction,
     db: new DatabaseSync(dbPath), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
@@ -62,6 +63,84 @@ test('meeting follow-up verifies exact source, coalesces concurrent saves, and r
   assert.deepEqual(e['automations/meetingFollowup']({workspace_id:'c'.repeat(32), ...reference}), {automation:null})
   await assert.rejects(create({workspace_id:'c'.repeat(32)}), {status:404, code:'automations/meeting_source_unavailable'})
   assert.equal(calls.length, 0)
+})
+
+test('a scoped memory action prepares one durable follow-up for its reviewed revision and runs only on request', async () => {
+  const actionId = 'b'.repeat(32)
+  const otherWorkspace = 'c'.repeat(32)
+  const memoryCalls = []
+  const firstAction = {id: actionId, workspace_id: W, revision: 2, status: 'open',
+    title: '核对简报', notes: '核对发布日期和来源。', due_at: 1_800_001_000}
+  let action = firstAction
+  let concurrentRead = null
+  const {calls, e, feature} = fixture(undefined, undefined, undefined, undefined, async (workspace, id) => {
+    memoryCalls.push({workspace, id})
+    assert.equal(workspace, W)
+    assert.equal(id, actionId)
+    return concurrentRead ? concurrentRead.promise : {status: 200, body: {action}}
+  })
+  const context = username => ({request: new Request('https://example.test', {headers: {'x-ot-owner-username': username}})})
+  const collection = workspace => `/v1/workspaces/${workspace}/automations`
+  const lookup = (revision, workspace = W, username = 'alice') => e['automations/v1']({
+    method: 'GET', path: collection(workspace) + `?memory_action=${actionId}&revision=${revision}`,
+  }, context(username))
+  const post = (revision, {workspace = W, key = 'save-memory-followup-001', changes = {}, username = 'alice'} = {}) =>
+    e['automations/v1']({
+      method: 'POST', path: collection(workspace), idempotency_key: key,
+      body: {title: '准备已检查的简报', prompt: '只输出两条检查建议。', template_id: 'custom',
+        participants: ['alice'], enabled: true, schedule: {kind: 'now', time_zone: 'UTC'},
+        source_memory_action: {action_id: actionId, revision}, ...changes},
+    }, context(username))
+
+  assert.equal((await lookup(2, W, '')).status, 403)
+  assert.equal((await lookup(2, otherWorkspace)).status, 403)
+  assert.equal((await post(2, {workspace: otherWorkspace})).status, 403)
+  assert.equal((await post(2, {username: ''})).status, 403)
+  assert.equal((await post(2, {changes: {run_sample: true}})).body.error.code, 'invalid_sample')
+  assert.equal((await post(2, {changes: {source_memory_action: {action_id: actionId, revision: 2, notes: 'forged'}}})).status, 400)
+  assert.equal(memoryCalls.length, 0)
+  assert.deepEqual((await lookup(2)).body, {automation: null, action: firstAction, viewer_username: 'alice'})
+  action = {...firstAction, revision: 3, notes: '本次更新的原始内容。'}
+  const stale = await post(2)
+  assert.equal(stale.status, 409)
+  assert.equal(stale.body.error.code, 'memory_source_unavailable')
+
+  concurrentRead = Promise.withResolvers()
+  const first = post(3)
+  const second = post(3, {key: 'save-memory-followup-tab-2', changes: {title: '另一标签页的标题'}})
+  await flush()
+  assert.equal(memoryCalls.length, 4)
+  concurrentRead.resolve({status: 200, body: {action}})
+  const completed = await Promise.all([first, second])
+  concurrentRead = null
+  assert.deepEqual(completed.map(result => result.status).sort(), [200, 201])
+  const saved = completed.find(result => result.status === 201).body.automation
+  assert.equal(completed.find(result => result.status === 200).body.automation.id, saved.id)
+  assert.deepEqual(saved.source_memory_action, {
+    action_id: actionId, revision: 3, title: action.title, notes: action.notes, due_at: action.due_at,
+  })
+  assert.equal(saved.enabled, false)
+  assert.deepEqual(feature.tick(W), [])
+  assert.equal(calls.length, 0)
+
+  action = {...action, revision: 4, status: 'done', notes: 'New private notes'}
+  const receipt = await lookup(3)
+  assert.deepEqual(receipt.body, {automation: saved, action: null, viewer_username: 'alice'})
+  assert.equal((await lookup(4)).status, 409)
+  assert.equal((await post(4)).status, 409)
+  assert.equal((await post(3)).body.automation.id, saved.id)
+  assert.equal(calls.length, 0)
+  const items = (await e['automations/v1']({method: 'GET', path: collection(W)}, context('alice'))).body.items
+  assert.deepEqual(items.map(item => item.source_memory_action), [saved.source_memory_action])
+
+  const manual = await e['automations/v1']({
+    method: 'POST', path: collection(W) + '/' + saved.id + '/run', idempotency_key: 'run-memory-followup-001',
+  }, context('alice'))
+  assert.equal(manual.status, 202)
+  await flush()
+  assert.deepEqual(calls.map(call => call.prompt), [`[OpenTeamily 自动化 · ${saved.title}]\n${saved.prompt}`])
+  assert.deepEqual(e['automations/run']({workspace_id: W, id: saved.id, run_id: manual.body.run.id}).run.result,
+    {text: 'DS-Bot did it', model: 'm'})
 })
 
 test('next recurring slot follows local weekdays, month lengths and DST', () => {
@@ -257,6 +336,48 @@ test('creating a scheduled automation can save it enabled in the same request', 
   assert.equal(retried.status, 200)
   assert.equal(retried.body.automation.id, created.body.automation.id)
   assert.equal((await e['automations/v1']({...request, body: {...request.body, enabled: false}})).status, 409)
+})
+
+test('saving a recurring routine atomically starts one sample and keeps its recurring slot independent', async () => {
+  const now = Date.parse('2027-02-26T08:30:00Z') / 1000
+  const { e, feature, clock, calls } = fixture(undefined, now)
+  const collection = `/v1/workspaces/${W}/automations`
+  const payload = {title:'Daily sample', template_id:'daily_brief', participants:['alice'], scope:'ongoing', enabled:true,
+    schedule:{kind:'daily', time:'09:00', time_zone:'UTC'}, run_sample:true}
+  const save = (body, idempotency_key = 'routine-sample-exact-001') =>
+    e['automations/v1']({method:'POST', path:collection, body, idempotency_key})
+  const first = await save(payload)
+  assert.equal(first.status, 201)
+  const {automation, sample_run} = first.body
+  assert.equal(sample_run.automation_id, automation.id)
+  assert.equal(sample_run.workspace_id, W)
+  assert.equal(automation.schedule_status.at, now + 1800)
+  const replay = await save(payload)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.body.sample_run.id, sample_run.id)
+  assert.equal((await save({...payload, run_sample:false})).status, 409)
+  await flush()
+  const exact = e['automations/run']({workspace_id:W, id:automation.id, run_id:sample_run.id}).run
+  assert.equal(exact.status, 'succeeded')
+  assert.equal(exact.result.text, 'DS-Bot did it')
+  assert.equal(calls.length, 1)
+
+  const invalid = await save({...payload, title:'Unscheduled sample', schedule:{kind:'now', time_zone:'UTC'}}, 'routine-sample-invalid-001')
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.body.error.code, 'invalid_sample')
+  const paused = await save({...payload, title:'Paused sample', enabled:false}, 'routine-sample-paused-001')
+  assert.equal(paused.status, 201)
+  assert.deepEqual(paused.body.automation.schedule_status, {state:'paused'})
+  assert.equal(paused.body.sample_run.automation_id, paused.body.automation.id)
+  await flush()
+  clock.now += 1800
+  const [scheduled] = feature.tick(W)
+  assert.equal(scheduled.trigger, 'scheduled')
+  assert.equal(scheduled.automation_id, automation.id)
+  assert.notEqual(scheduled.id, sample_run.id)
+  assert.equal(feature.tick(W).length, 0)
+  await flush()
+  assert.equal(calls.length, 3)
 })
 
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {

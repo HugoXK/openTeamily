@@ -673,6 +673,84 @@ function sessionRows(el) {
   return el('conversation-list').children.map((li) => li.children[0]);
 }
 
+for (const preset of [true,false]) {
+  test(`group creation shows an inline retry for ${preset ? 'team presets' : 'custom groups'}`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.documentElement = {lang:preset ? 'zh-CN' : 'en'};
+    const restore = installChatGlobals({narrow:preset});
+    const {fetcher:original} = sessionFetcher();
+    const mode = el('compose-mode-team');
+    mode.dataset.groupMode = 'team';
+    const memberChoices = el('member-choices');
+    const templateChoices = el('team-template-choices');
+    const members = () => memberChoices.children.map(label=>label.children[0]);
+    const templates = () => templateChoices.children.map(label=>label.children[0]);
+    const originalAll = doc.querySelectorAll;
+    doc.querySelectorAll = selector => {
+      if (selector === '#compose-mode-switch [data-group-mode]') return [mode];
+      if (selector === '#team-template-choices input:checked') return templates().filter(box=>box.checked);
+      if (selector === '#member-choices label') return memberChoices.children;
+      if (selector === '#member-choices input:checked') return members().filter(box=>box.checked);
+      if (selector === '#member-choices input[name="member"]:checked') return members().filter(box=>box.checked&&box.name==='member');
+      if (selector === '#member-choices input[name="agent-member"]:checked') return [];
+      return originalAll(selector);
+    };
+    doc.querySelector = selector => selector === '#team-template-choices input:checked' ? templates().find(box=>box.checked) : null;
+    const attempts = [];
+    const path = '/v1/workspaces/ws-1/' + (preset ? 'team-templates/product-squad' : 'social/conversations');
+    const created = {id:'new-group',kind:'group',title:'调研协作群',members:[{user_id:alice,username:'alice'}]};
+    try {
+      await mount(doc,{fetcher:async (url,options={})=>{
+        if (url === '/v1/team-templates') return json(200,{items:[{slug:'product-squad',name:'产品研发小队',agents:[{name:'产品经理'}]}]});
+        if (url.endsWith('/members')) return json(200,{items:[{user_id:bob,username:'bob'}]});
+        if (url === path && options.method === 'POST') {
+          attempts.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+          if (attempts.length === 1) return json(500,{error:{code:'internal_error',message:'Internal service error'}});
+          if (preset && attempts.length === 2) return json(409,{error:{code:'team_template_role_conflict',
+            message:'「产品经理助理」已归档。请在智能体中恢复后重试。'}});
+          if (preset && attempts.length === 3) return json(429,{error:{code:'team_template_agent_quota'}});
+          return json(201,{conversation:created});
+        }
+        if (url.endsWith('/new-group')) return json(200,{conversation:created,items:[]});
+        return original(url,options);
+      }});
+      await fire(el('compose-new-group'),'click',{detail:1});
+      if (preset) {
+        await fire(el('compose-mode-switch'),'click',{target:mode});
+        await settle();
+      } else el('compose-title').value = '调研协作群';
+      const choice = preset ? templates()[0] : members()[0];
+      choice.checked = true;
+      await fire(preset ? templateChoices : memberChoices,'change');
+      const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
+      await submit();
+      const error = el('compose-dialog-error');
+      assert.equal(error.hidden,false);
+      assert.equal(error.focused,true);
+      assert.match(error.textContent,preset ? /所选模板已保留.*重试/ : /Your selections are saved\. Try again/);
+      assert.doesNotMatch(el('status').textContent,/Internal service error/);
+      assert.equal(el('compose-dialog').hidden,false);
+      assert.equal(el('compose-dialog-submit').disabled,false);
+      assert.equal(choice.checked,true);
+      if (!preset) assert.equal(el('compose-title').value,'调研协作群');
+      assert.deepEqual(attempts[0].body,preset ? {} : {kind:'group',member_ids:[bob],title:'调研协作群'});
+      if (preset) {
+        await submit();
+        assert.match(error.textContent,/产品经理助理.*在智能体中恢复/);
+        await submit();
+        assert.match(error.textContent,/智能体数量已达上限.*切换到有可用名额的工作区/);
+        assert.equal(choice.checked,true);
+        assert.equal(el('compose-dialog-submit').disabled,false);
+      }
+      await submit();
+      for (const retry of attempts.slice(1)) assert.deepEqual(retry,attempts[0]);
+      assert.equal(error.hidden,true);
+      assert.equal(el('compose-dialog').hidden,true);
+      assert.match(el('status').textContent,preset ? /智能体团队已创建/ : /会话已创建/);
+    } finally {restore();}
+  });
+}
+
 test('a slow send moves the draft into the conversation and submits only once', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher, requests} = sessionFetcher();
@@ -3547,6 +3625,74 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(
+    `#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const settingsAdd = id => el('group-info-add-agent' + (id ? `-${id}` : ''));
+  const dialog = settingsAdd('dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
+  const base = linkBase(linkTeam);
+  const groupPath = base + linkSocialPath;
+  const cataloguePath = base + '/agents?limit=100';
+  const mine = {id:'mine', name:'Already added', owner_id:alice, mine:true};
+  const peer = {id:'shared-id', name:'Teammate agent', owner_id:bob, mine:false};
+  const selected = {id:peer.id, name:'My workspace agent', owner_id:alice, mine:true};
+  const roster = [mine, peer];
+  let reads = 0;
+  let writes = 0;
+  routes.set(groupPath, () => json(200, {conversation:{id:linkSocial, kind:'group', workspace_id:linkTeam,
+    title:'Release group', members:[linkMember], agent_members:roster, group_agent_requests:true,
+    group_management:{role:'owner', revision:1}}, items:[]}));
+  routes.set(cataloguePath, () => ++reads === 1 ? json(503, {}) : json(200,
+    {items:[mine,{id:'archived',name:'Archived',archived:true}], cursor:'more'}));
+  routes.set(cataloguePath + '&cursor=more', () => json(200, {items:[selected]}));
+  routes.set(groupPath + '/agents', ({method}) => {
+    assert.equal(method, 'POST');
+    if (++writes === 1) return json(503, {});
+    roster.push(selected);
+    return json(201, {});
+  });
+  try {
+    await mount(doc, {fetcher});
+    assert.equal(reads, 0);
+    await fire(el('group-info-toggle'), 'click');
+    await fire(el('group-info-tab-people'), 'click');
+    assert.equal(settingsAdd().hidden, true);
+    await fire(el('group-info-tab-agents'), 'click');
+    assert.equal(settingsAdd().hidden, false);
+    assert.equal(reads, 0);
+    await fire(settingsAdd(), 'click');
+    await settle();
+    assert.equal(dialog.open, true);
+    assert.match(settingsAdd('status').textContent, /无法读取/);
+    await fire(settingsAdd('retry'), 'click');
+    await settle();
+    assert.deepEqual(settingsAdd('select').options.map(option => option.value), ['', selected.id]);
+    assert.equal(settingsAdd('submit').disabled, true);
+    settingsAdd('select').value = selected.id;
+    await fire(settingsAdd('select'), 'change');
+    assert.equal(settingsAdd('submit').disabled, false);
+    const submit = () => fire(settingsAdd('form'), 'submit', {preventDefault() {}});
+    await submit();
+    assert.equal(dialog.open, true);
+    assert.match(settingsAdd('status').textContent, /当前选择重试/);
+    assert.equal(settingsAdd('select').value, selected.id);
+    assert.equal(settingsAdd('submit').disabled, false);
+    await submit();
+    assert.equal(dialog.open, false);
+    assert.equal(el('group-info-panel').hidden, false);
+    assert.equal(settingsAdd().focused, true);
+    assert.match(settingsAdd('feedback').textContent, /已添加/);
+    assert.equal(el('group-info-agents').children.length, 3);
+    assert.deepEqual(calls.filter(call => call.path === groupPath + '/agents').map(call => call.body),
+      [{agent_ids:[peer.id]}, {agent_ids:[peer.id]}]);
+  } finally {
+    restore();
+  }
+});
+
 test('named team group replies explicitly pin what was previewed and keep drafts across stale versions', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
@@ -4201,6 +4347,32 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
     initialized.resolve(json(201, {personal_agent: {workspace: {id:linkWork}, agent:fixture.agent}}));
     fixture.restore();
   }
+});
+
+test('a link to the latest native send highlights it and keeps its pending reply live', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const {agent,nativeThread,nativeRows,routes,restore} = fixture;
+  const key = 'artifact-receipt-reply';
+  let items = [nativeRows[0],{...nativeRows[1],body:'',status:'running',client_key:key}];
+  routes.set(scope + linkNativeLatest,()=>json(200,{agent,conversation:nativeThread,items}));
+  const progress = scope + linkNativePath + '/reply-progress?key=' + key + '&after=0';
+  routes.set(progress,()=> {
+    items = [nativeRows[0],{...nativeRows[1],body:'Live reply from the receipt'}];
+    return json(200,{state:'succeeded'});
+  });
+  try {
+    await mount(fixture.doc,{fetcher:fixture.fetcher});
+    assert.deepEqual(fixture.messages(),[linkAgentOlder,linkAgentLatest]);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump,'true');
+    assert.equal(fixture.el('message-scroller').dataset.readingHistory,undefined);
+    t.mock.timers.tick(400);
+    await settle();
+    assert.ok(fixture.calls.some(call=>call.path === progress));
+    assert.match(fixture.el('message-list').children[1].children[1].textContent,/Live reply from the receipt/);
+  } finally { restore(); }
 });
 
 test('a linked native history and message jump render while settings and the Social directory load', async t => {

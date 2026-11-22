@@ -26,6 +26,18 @@ export function actionQuery(needle, status, cursor, limit) {
   return query ? `?${query}` : '';
 }
 
+function actionChatHref(source) {
+  if (!['agent', 'social'].includes(source?.kind)) return '';
+  return sourceHref(source.workspace_id, source.kind === 'social' ? {...source, kind:'group'} : source);
+}
+
+function actionFollowupHref(workspace, action) {
+  if (action?.status !== 'open' || action.workspace_id !== workspace ||
+      ![workspace, action.id].every(id => /^[0-9a-f]{32}$/.test(id || '')) ||
+      !Number.isInteger(action.revision) || action.revision < 1 || action.revision > 2 ** 31) return '';
+  return '/automations?' + new URLSearchParams({workspace, memory_action:action.id, revision:action.revision});
+}
+
 export function dueDateValue(dueAt) {
   if (dueAt == null || dueAt === '') return '';
   const date = new Date(Number(dueAt) * 1000);
@@ -383,6 +395,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const directoryRetry = document.getElementById('memory-directory-retry');
   const editor = document.getElementById('editor-form');
   const actionEditor = document.getElementById('action-editor-form');
+  const actionSearch = document.getElementById('action-search');
+  const actionFilter = document.getElementById('action-filter');
+  const actionMore = document.getElementById('action-list-more');
+  const actionRetry = document.getElementById('action-list-retry');
+  const actionFollowup = document.getElementById('action-follow-up');
+  let personalWorkspaces = new Set();
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
   const mobileGraph = document.getElementById('memory-mobile-graph');
@@ -1194,7 +1212,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderActions(items) {
     const list = document.getElementById('action-list');
-    const empty = document.getElementById('action-empty');
     const focused = list.contains?.(document.activeElement) ? document.activeElement.dataset.id : undefined;
     list.replaceChildren();
     for (const item of items) {
@@ -1210,50 +1227,99 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.appendChild(li);
       if (focused === item.id) button.focus({preventScroll: true});
     }
-    empty.hidden = items.length > 0;
     syncActionComposer(items.length > 0);
   }
 
   function syncActionComposer(hasItems) {
     const form = document.getElementById('new-action-form');
     const opener = document.getElementById('new-action-open');
-    const filter = document.getElementById('action-filter-label');
     if (!form) return;
     const keep = form.dataset.open === 'true';
     form.hidden = !(hasItems || keep);
     if (opener) opener.hidden = hasItems || keep;
-    if (filter) filter.hidden = !(hasItems || keep);
   }
 
-  let actionListRequest = 0;
-  let actionListWorkspace, actionListOwner;
-  async function loadActions() {
-    const id = workspaceId();
-    const owner = currentUser;
-    const token = ++actionListRequest;
+  let actionListing;
+  let actionSearchTimer;
+
+  function renderActionListing(state) {
     const list = document.getElementById('action-list');
     const empty = document.getElementById('action-empty');
-    if (id !== actionListWorkspace || owner !== actionListOwner) {
-      actionListWorkspace = id;
-      actionListOwner = owner;
-      renderActions([]);
-      if (id && empty) empty.hidden = true;
-    }
-    if (!id) {
-      renderActions([]);
+    const count = state?.items.length || 0;
+    list.setAttribute('aria-busy', String(Boolean(state?.busy)));
+    empty.hidden = !state || Boolean(count || state.busy || state.error);
+    empty.textContent = state?.needle ? '没有符合搜索条件的行动。'
+      : state?.status === 'done' ? '暂无已完成的行动。'
+        : state?.status === 'open' ? '暂无未完成的行动。' : '暂无行动。';
+    document.getElementById('action-list-count').textContent = state?.error ? '无法读取行动，请重试。'
+      : state?.busy ? '正在读取行动…' : count ? `已显示 ${count} 项行动` : '';
+    actionMore.hidden = !state?.cursor || Boolean(state.error);
+    actionMore.disabled = Boolean(state?.busy);
+    actionRetry.hidden = !state?.error;
+    actionRetry.disabled = Boolean(state?.busy);
+  }
+
+  function stopActionListing() {
+    clearTimeout(actionSearchTimer);
+    actionSearchTimer = undefined;
+    actionListing?.controller?.abort();
+  }
+
+  const ownsActionListing = state => actionListing === state && state.owner === currentUser && state.workspace === workspaceId();
+
+  async function readActionPage(state, cursor, focusResults = false) {
+    if (!ownsActionListing(state) || state.controller) return;
+    const controller = state.controller = new AbortController();
+    state.busy = true;
+    state.error = false;
+    renderActionListing(state);
+    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor)}`;
+    const listed = await request('GET', path, undefined, undefined, controller.signal).catch(() => ({status:0, body:{}}));
+    if (!ownsActionListing(state)) return;
+    state.controller = null;
+    state.busy = false;
+    if (listed.status !== 200 || !Array.isArray(listed.body.items)) {
+      state.error = true;
+      state.retryCursor = cursor;
+      renderActionListing(state);
       return;
     }
-    const status = document.getElementById('action-filter').value;
-    const listed = await request('GET', `/v1/workspaces/${id}/memory/actions${actionQuery('', status)}`)
-      .catch(() => ({status:0, body:{}}));
-    if (token !== actionListRequest || owner !== currentUser || workspaceId() !== id) return;
-    if (listed.status !== 200) {
-      if (list) list.replaceChildren();
-      if (empty) empty.hidden = true;
-      show('error', messageFor(listed.body.error, '无法加载下一步行动。'));
-      return;
+    const seen = new Set(cursor ? state.items.map(item => item.id) : []);
+    const items = listed.body.items.filter(item => {
+      if (!item?.id || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+    state.items = cursor ? [...state.items, ...items] : items;
+    const next = listed.body.cursor;
+    state.cursor = next !== cursor && /^[0-9a-f]{32}$/.test(next || '') ? next : '';
+    renderActions(state.items);
+    renderActionListing(state);
+    if (focusResults) {
+      const row = [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
+        .find(button => button.dataset.id === items[0]?.id);
+      (row || actionSearch).focus?.();
     }
-    renderActions(listed.body.items || []);
+  }
+
+  function loadActions({delay = 0} = {}) {
+    stopActionListing();
+    const workspace = workspaceId();
+    const owner = currentUser;
+    const previous = actionListing;
+    const sameScope = previous && previous.workspace === workspace && previous.owner === owner;
+    if (!sameScope) actionSearch.value = '';
+    const needle = actionSearch.value.trim(), status = actionFilter.value;
+    const keep = sameScope && previous.needle === needle && previous.status === status;
+    const state = actionListing = workspace ? {workspace, owner, needle, status, items:keep ? previous.items : [], busy:true} : null;
+    if (!keep) renderActions([]);
+    renderActionListing(state);
+    if (!state) return;
+    if (!delay) return readActionPage(state, '');
+    actionSearchTimer = setTimeout(() => {
+      actionSearchTimer = undefined;
+      void readActionPage(state, '');
+    }, delay);
   }
 
 
@@ -1461,6 +1527,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillWorkspaces(items) {
     const previous = workspaceId();
+    personalWorkspaces = new Set(items.filter(space => space.kind === 'personal').map(space => space.id));
     workspaceSelect.replaceChildren();
     for (const space of items) {
       const option = document.createElement('option');
@@ -1470,6 +1537,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
     if (!workspaceSelect.value && items[0]) workspaceSelect.value = items[0].id;
+    if (currentAction) syncActionFollowup();
   }
 
   async function loadSession() {
@@ -1481,6 +1549,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       persistPageDraft();
       currentUser = null;
       currentPage = null;
+      currentAction = null;
+      stopActionListing();
+      actionListing = null;
       setCitation(null);
       cancelDirectorySearch();
       browseDirectory?.controller?.abort();
@@ -1606,7 +1677,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     showView(currentView, {sync:syncView});
     renderDirectory();
-    if (!id) return;
+    if (!id) return loadActions();
     searchDirectory();
     await Promise.allSettled([loadDirectoryPage(browseDirectory), loadActions(), loadGraph()]);
   }
@@ -2323,6 +2394,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
 
+  function syncActionFollowup() {
+    const workspace = workspaceId();
+    const href = personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
+    actionFollowup.hidden = !href;
+    const note = document.getElementById('action-follow-up-status');
+    if (!href) {
+      actionFollowup.removeAttribute('href');
+      note.textContent = '';
+      return;
+    }
+    const fields = actionEditor.elements;
+    const dirty = fields.title.value.trim() !== currentAction.title || fields.notes.value !== (currentAction.notes || '') ||
+      fields.status.value !== currentAction.status || fields.due.value !== dueDateValue(currentAction.due_at) ||
+      (fields.memory_page_id.value || null) !== (currentAction.memory_page_id || null);
+    if (dirty) {
+      actionFollowup.removeAttribute('href');
+      actionFollowup.setAttribute('aria-disabled', 'true');
+      note.textContent = '保存修改后可准备跟进。';
+    } else {
+      actionFollowup.href = href;
+      actionFollowup.removeAttribute('aria-disabled');
+      note.textContent = '';
+    }
+  }
+
+  function renderActionDetail() {
+    document.getElementById('action-editor-meta').textContent =
+      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
+    const source = currentAction.source;
+    const meeting = document.getElementById('action-source-meeting');
+    meeting.hidden = source?.kind !== 'shared_meeting';
+    if (!meeting.hidden) {
+      meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
+      meeting.textContent = `查看来源纪要 · 版本 ${source.revision}`;
+    } else meeting.removeAttribute('href');
+    const chat = document.getElementById('action-source-chat');
+    const chatLink = actionChatHref(currentAction.source_chat);
+    chat.hidden = !chatLink;
+    if (chatLink) chat.href = chatLink;
+    else chat.removeAttribute('href');
+    document.getElementById('action-editor-source').hidden = meeting.hidden && chat.hidden;
+    syncActionFollowup();
+  }
+
   async function openAction(actionId) {
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
@@ -2353,16 +2468,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actionEditor.elements.status.value = currentAction.status;
     actionEditor.elements.due.value = dueDateValue(currentAction.due_at);
     fillPageSelect(actionEditor.elements.memory_page_id, currentAction.memory_page_id || '');
-    document.getElementById('action-editor-meta').textContent =
-      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
-    const source = currentAction.source;
-    const sourcePanel = document.getElementById('action-editor-source');
-    sourcePanel.hidden = source?.kind !== 'shared_meeting';
-    if (!sourcePanel.hidden) {
-      const link = document.getElementById('action-source-meeting');
-      link.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
-      link.textContent = `查看来源纪要 · 版本 ${source.revision}`;
-    }
+    renderActionDetail();
     if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
     syncDirectorySelection();
     focusDetailBack('close-action-editor');
@@ -2582,7 +2688,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = activeDirectory;
     if (state?.error) return loadDirectoryPage(state, state.cursor, document.activeElement === directoryRetry);
   });
-  document.getElementById('action-filter').addEventListener('change', () => loadActions());
+  actionFilter.addEventListener('change', () => loadActions());
+  actionSearch.addEventListener('input', event => {
+    if (!event?.isComposing) void loadActions({delay:180});
+  });
+  actionSearch.addEventListener('compositionend', () => loadActions({delay:180}));
+  document.getElementById('action-list-filters').addEventListener('submit', event => {
+    event.preventDefault();
+    return loadActions();
+  });
+  actionMore.addEventListener('click', () => {
+    if (actionListing?.cursor && !actionListing.busy) return readActionPage(actionListing, actionListing.cursor,
+      document.activeElement === actionMore);
+  });
+  actionRetry.addEventListener('click', () => {
+    if (actionListing?.error) return readActionPage(actionListing, actionListing.retryCursor,
+      document.activeElement === actionRetry);
+  });
 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
     button.addEventListener('click', (event) => {
@@ -2931,6 +3053,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
   const newActionOpen = document.getElementById('new-action-open');
+  document.getElementById('new-action-form').addEventListener('input', event => {
+    event.currentTarget.dataset.open = 'true';
+  });
   if (newActionOpen) {
     newActionOpen.addEventListener('click', () => {
       const form = document.getElementById('new-action-form');
@@ -2977,6 +3102,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openAction(parsed.action.id);
   });
 
+  actionEditor.addEventListener('input', syncActionFollowup);
+  actionEditor.addEventListener('change', syncActionFollowup);
   actionEditor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
@@ -3002,8 +3129,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentAction = saved.body.action;
-    document.getElementById('action-editor-meta').textContent =
-      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
+    renderActionDetail();
     show('ok', '已保存。');
   });
 

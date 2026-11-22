@@ -24,6 +24,12 @@ export function actionView(store, row, includeNotes = true, user = usernames(sto
     const source = store.get(`SELECT workspace_id, share_id, revision, action_index
       FROM memory_shared_meeting_action_sources WHERE action_id=?`, row.id)
     if (source) data.source = {kind:'shared_meeting', ...source}
+    const chat = store.get(`SELECT kind,workspace_id,conversation_id,message_id,agent_id,revision
+      FROM memory_chat_action_sources WHERE action_id=?`, row.id)
+    if (chat) {
+      const {agent_id,revision,...reference} = chat
+      data.source_chat = {...reference, ...(agent_id ? {agent_id} : {}), ...(revision ? {revision} : {})}
+    }
   }
   return data
 }

@@ -15,6 +15,7 @@ import { dueAt, nextScheduledSlot, normalizeSchedule, validSchedule } from './sc
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
+import { validLongText } from '../../featurekit/http.js'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 export function refuse(status, code, message, details) {
@@ -40,6 +41,7 @@ export function dsBotTurn(host) {
 export const MAX_AUTOMATIONS = 100
 export const TICK_MS = 15_000
 const SCOPES = new Set(['once', 'ongoing'])
+const RECURRING = new Set(['daily', 'weekdays', 'weekly', 'monthly'])
 const REMINDER = 'reminder'
 const RESULT_TEXT = 8000
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
@@ -61,6 +63,11 @@ CREATE TABLE IF NOT EXISTS ot_automation_meeting_sources (
  workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL,
  title TEXT NOT NULL, text TEXT NOT NULL, owner TEXT NOT NULL,
  UNIQUE(workspace_id, meeting_id, revision, action_index));
+CREATE TABLE IF NOT EXISTS ot_automation_memory_action_sources (
+ automation_id TEXT PRIMARY KEY REFERENCES ot_automations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL, action_id TEXT NOT NULL, revision INTEGER NOT NULL,
+ title TEXT NOT NULL, notes TEXT NOT NULL, due_at INTEGER,
+ UNIQUE(workspace_id, action_id, revision));
 CREATE TABLE IF NOT EXISTS ot_automation_runs (
  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
@@ -156,7 +163,8 @@ export function runView(row) {
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact, readMeetingAction, studioRequest }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
+  readMeetingAction, readMemoryAction, studioRequest }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -233,9 +241,13 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
   const meetingSourceFor = (id) => one(`SELECT meeting_id, revision, action_index, title, text, owner
     FROM ot_automation_meeting_sources WHERE automation_id=?`, id)
+  const memorySourceFor = (id) => one(`SELECT action_id, revision, title, notes, due_at
+    FROM ot_automation_memory_action_sources WHERE automation_id=?`, id)
   function detail(row, at) {
-    const source = meetingSourceFor(row.id)
-    return projected({ ...view(row), ...(source ? { source_meeting: {...source} } : {}) }, row.schedule_active_at, at)
+    const meeting = meetingSourceFor(row.id)
+    const memoryAction = memorySourceFor(row.id)
+    return projected({ ...view(row), ...(meeting ? {source_meeting: {...meeting}} : {}),
+      ...(memoryAction ? {source_memory_action: {...memoryAction}} : {}) }, row.schedule_active_at, at)
   }
   function meetingReference(value) {
     const { meeting_id, revision, action_index } = value ?? {}
@@ -251,6 +263,55 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       WHERE source.workspace_id=? AND source.meeting_id=? AND source.revision=? AND source.action_index=?`,
     workspaceId, meeting_id, revision, action_index)
     return row ? detail(row) : null
+  }
+
+  function memoryActionReference({action_id, revision} = {}) {
+    if (typeof action_id !== 'string' || !HEX32.test(action_id) || !Number.isSafeInteger(revision) || revision < 1) {
+      refuse(400, 'invalid', '请选择已保存的记忆行动项。')
+    }
+    return {action_id, revision}
+  }
+
+  async function requirePersonalMemory(workspaceId) {
+    const binding = await personalBinding?.()
+    if (!binding?.workspace_id) refuse(503, 'memory_source_unavailable', '个人工作区还在准备，请稍后重试。')
+    if (binding.workspace_id !== workspaceId) refuse(403, 'forbidden', '请在个人工作区准备记忆行动项的跟进。')
+  }
+
+  function existingMemoryFollowup(workspaceId, {action_id, revision}) {
+    const row = one(`SELECT a.* FROM ot_automation_memory_action_sources s JOIN ot_automations a
+      ON a.id=s.automation_id AND a.workspace_id=s.workspace_id WHERE s.workspace_id=? AND s.action_id=? AND s.revision=?`,
+    workspaceId, action_id, revision)
+    return row ? detail(row) : null
+  }
+
+  async function checkedMemoryAction(workspaceId, ref) {
+    let result
+    try { result = await readMemoryAction?.(workspaceId, ref.action_id) } catch {
+      refuse(503, 'memory_source_unavailable', '暂时无法读取记忆行动项，请重试。')
+    }
+    const action = result?.body?.action
+    if ([403, 404, 409].includes(result?.status)) {
+      refuse(result.status, 'memory_source_unavailable', '记忆行动项已更新、已完成或不可访问。请返回记忆重新选择。')
+    }
+    if (result?.status !== 200 || action?.id !== ref.action_id || action.workspace_id !== workspaceId ||
+      !validTitle(action.title) || !validLongText(action.notes, 2000) ||
+      (action.due_at !== null && (!Number.isInteger(action.due_at) || action.due_at < 0 || action.due_at > 2 ** 31))) {
+      refuse(503, 'memory_source_unavailable', '暂时无法读取记忆行动项，请重试。')
+    }
+    if (action.revision !== ref.revision || action.status !== 'open') {
+      refuse(409, 'memory_source_unavailable', '记忆行动项已更新或已完成。请返回记忆重新选择。')
+    }
+    return {id: action.id, workspace_id: workspaceId, revision: action.revision, title: action.title,
+      notes: action.notes, due_at: action.due_at, status: action.status}
+  }
+
+  async function memoryFollowup(payload) {
+    const workspaceId = workspaceOf(payload)
+    const ref = memoryActionReference(payload)
+    await requirePersonalMemory(workspaceId)
+    const automation = existingMemoryFollowup(workspaceId, ref)
+    return {automation, action: automation ? null : await checkedMemoryAction(workspaceId, ref)}
   }
   const loadRun = (row, runId) => {
     const item = typeof runId === 'string' && HEX32.test(runId)
@@ -350,6 +411,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   function createInTransaction(payload, source) {
     const workspaceId = workspaceOf(payload)
+    const memoryAction = source?.action_id ? source : null
+    const meeting = memoryAction ? null : source
     const { title, template_id: templateId, schedule, participants: names } = payload
     const intent = payload.intent ?? ''
     const scope = payload.scope ?? 'once'
@@ -360,6 +423,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
     if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
+    if (payload.run_sample !== undefined && (typeof payload.run_sample !== 'boolean' ||
+      (payload.run_sample && (source || !RECURRING.has(schedule.kind))))) {
+      refuse(400, 'invalid_sample', '请先选定重复运行时间，然后试运行。')
+    }
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const sched = normalizeSchedule(schedule)
@@ -371,13 +438,18 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
     const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
-      ...(payload.enabled === undefined ? {} : { enabled }), ...(source ? { source_meeting: meetingReference(source) } : {}) }))
+      ...(payload.enabled === undefined ? {} : { enabled }), ...(meeting ? { source_meeting: meetingReference(meeting) } : {}),
+      ...(memoryAction ? {source_memory_action: memoryActionReference(memoryAction)} : {}),
+      ...(payload.run_sample ? { run_sample: true } : {}) }))
     const keyHash = sha(key)
+    const sampleKey = 'automation-sample:' + key
     const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (existing) {
-      const replay = !source && !meetingSourceFor(existing.id) && existing.template_id === REMINDER && templateId === REMINDER
+      const sample = submittedRun(existing.id, sampleKey)
+      const replay = !source && !sample && !payload.run_sample && !meetingSourceFor(existing.id) && !memorySourceFor(existing.id) &&
+        existing.template_id === REMINDER && templateId === REMINDER
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, automation: detail(existing) }
+      return { status: 200, automation: detail(existing), ...(sample ? { sample_run: runView(sample) } : {}) }
     }
     if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
       refuse(409, 'conflict', 'An automation with this title already exists')
@@ -389,12 +461,59 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
       intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0, enabled ? now : null)
-    if (source) {
+    if (meeting) {
       run(`INSERT INTO ot_automation_meeting_sources (automation_id, workspace_id, meeting_id, revision, action_index, title, text, owner)
-        VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, source.meeting_id, source.revision, source.action_index,
-      source.title, source.text, source.owner)
+        VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, meeting.meeting_id, meeting.revision, meeting.action_index,
+        meeting.title, meeting.text, meeting.owner)
     }
-    return { status: 201, automation: detail(one('SELECT * FROM ot_automations WHERE id=?', id), now) }
+    if (memoryAction) {
+      run(`INSERT INTO ot_automation_memory_action_sources (automation_id,workspace_id,action_id,revision,title,notes,due_at)
+        VALUES (?,?,?,?,?,?,?)`, id, workspaceId, memoryAction.action_id, memoryAction.revision,
+        memoryAction.title, memoryAction.notes, memoryAction.due_at)
+    }
+    const row = one('SELECT * FROM ot_automations WHERE id=?', id)
+    if (!payload.run_sample) return { status: 201, automation: detail(row, now) }
+    const sampleId = insertRun(row, nextAdHocSlot(id))
+    run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', id, sha(sampleKey), sampleId)
+    return { status: 201, automation: detail(row, now), sample_run: runView(loadRun(row, sampleId)) }
+  }
+
+  function create(payload) {
+    if (payload && Object.hasOwn(payload, 'source_memory_action')) {
+      if (Object.hasOwn(payload, 'source_meeting')) refuse(400, 'invalid', '每条跟进只能关联一个行动项。')
+      if (payload.run_sample !== undefined && payload.run_sample !== false) {
+        refuse(400, 'invalid_sample', '请先保存记忆跟进，再手动运行。')
+      }
+      return createMemoryFollowup(payload)
+    }
+    if (payload && Object.hasOwn(payload, 'source_meeting')) {
+      if (payload.run_sample !== undefined && payload.run_sample !== false) {
+        refuse(400, 'invalid_sample', '会议跟进需要先保存，再手动运行。')
+      }
+      return createMeetingFollowup(payload)
+    }
+    const result = tx(db, () => createInTransaction(payload))
+    if (result.sample_run) void execute(result.sample_run.id)
+    return result
+  }
+
+  async function createMemoryFollowup(payload) {
+    const workspaceId = workspaceOf(payload)
+    const value = payload.source_memory_action
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 2) {
+      refuse(400, 'invalid', '请选择已保存的记忆行动项。')
+    }
+    const ref = memoryActionReference(value)
+    if (!IDEM.test(String(payload.idempotency_key ?? ''))) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    await requirePersonalMemory(workspaceId)
+    const existing = existingMemoryFollowup(workspaceId, ref)
+    if (existing) return {status: 200, automation: existing}
+    const {title, notes, due_at} = await checkedMemoryAction(workspaceId, ref)
+    return tx(db, () => {
+      const prior = existingMemoryFollowup(workspaceId, ref)
+      if (prior) return {status: 200, automation: prior}
+      return createInTransaction({...payload, enabled: false}, {...ref, title, notes, due_at})
+    })
   }
 
   async function createMeetingFollowup(payload) {
@@ -500,8 +619,11 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const items = []
     const at = clock()
     for (const row of all(`SELECT automation.*, source.meeting_id, source.revision AS source_revision,
-      source.action_index, source.title AS source_title, source.text AS source_text, source.owner AS source_owner
+      source.action_index, source.title AS source_title, source.text AS source_text, source.owner AS source_owner,
+      mem.action_id AS memory_action, mem.revision AS memory_revision, mem.title AS memory_title,
+      mem.notes AS memory_notes, mem.due_at AS memory_due
       FROM ot_automations automation LEFT JOIN ot_automation_meeting_sources source ON source.automation_id=automation.id
+      LEFT JOIN ot_automation_memory_action_sources mem ON mem.automation_id=automation.id
       WHERE automation.workspace_id=? ORDER BY automation.id`, workspaceId)) {
       const item = view(row)
       if (needle && !item.title.toLowerCase().includes(needle) && !item.prompt.toLowerCase().includes(needle)) continue
@@ -510,6 +632,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       else if (category && template.category !== category) continue
       if (row.meeting_id) item.source_meeting = {meeting_id:row.meeting_id, revision:row.source_revision, action_index:row.action_index,
         title:row.source_title, text:row.source_text, owner:row.source_owner}
+      if (row.memory_action) item.source_memory_action = {action_id:row.memory_action, revision:row.memory_revision,
+        title:row.memory_title, notes:row.memory_notes, due_at:row.memory_due}
       items.push(projected(item, row.schedule_active_at, at))
     }
     return { items }
@@ -702,7 +826,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/list': list,
     'automations/get': (p) => ({ automation: detail(load(workspaceOf(p), p?.id)) }),
     'automations/meetingFollowup': (p) => ({ automation: existingFollowup(workspaceOf(p), meetingReference(p)) }),
-    'automations/create': (p) => p && Object.hasOwn(p, 'source_meeting') ? createMeetingFollowup(p) : tx(db, () => createInTransaction(p)),
+    'automations/memoryFollowup': memoryFollowup,
+    'automations/create': create,
     'automations/createOnboarding': createOnboarding,
     'automations/update': update,
     'automations/remove': (p) => {
@@ -742,14 +867,18 @@ export default async function automations(host) {
     studioRequest: payload => host.call('studio/v1', payload),
     readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
       method: 'GET', path: `/v1/workspaces/${workspace}/meetings/${meeting_id}/action?index=${action_index}&revision=${revision}`,
-    }) })
+    }),
+    readMemoryAction: (workspace, id) => host.call('memory/v1', {
+      method: 'GET', path: `/v1/workspaces/${workspace}/memory/actions/${id}`,
+    }),
+  })
   const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.
   if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) {
-    if (name !== 'createOnboarding') ops[name] = async (payload) => handler(payload ?? {})
+    if (!['createOnboarding', 'memoryFollowup'].includes(name)) ops[name] = async (payload) => handler(payload ?? {})
   }
   ops.v1 = feature.ops.v1
   ops.importRuns = feature.ops.importRuns
