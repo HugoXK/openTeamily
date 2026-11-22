@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { startOpenPart, threadOf, threadOfPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { splitRef } from '../ds-bot-upstream/ds-bot/src/host/text.js'
 import { request as httpsRequest } from 'node:https'
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
@@ -174,12 +175,36 @@ function turnProgress(onProgress) {
   }
 }
 
+function ownsLiveChat(rt, botId, sessionId) {
+  return threadOf(rt.botOf(botId), sessionId) !== undefined
+    && rt.chatOwners?.get(sessionId) === botId && !rt.pastOwners?.has(sessionId)
+}
+
+export async function prepareNativeChat(rt, botId, sessionId) {
+  const bot = rt.botOf(botId)
+  if (!threadOfPart(bot, sessionId)) throw new Error('Mapped native chat no longer belongs to this Bot')
+  // Live background parts accept messages directly. Reopening them via
+  // switchPart would reselect the model for every part of the Bot.
+  if (!ownsLiveChat(rt, botId, sessionId)) await rt.switchPart(botId, sessionId)
+  if (!ownsLiveChat(rt, botId, sessionId)) throw new Error('Mapped native chat is no longer active')
+  const ref = await rt.applyModel(bot)
+  const route = splitRef(ref)
+  if (route) {
+    // A session's own composer can select a different model independently.
+    // Reapply the Bot's route only to the part receiving this message.
+    const effort = bot.appliedEffort
+    await rt.selectSessionModel(sessionId, {...route, ...(effort === undefined ? {} : {reasoningEffort:effort})})
+  }
+  if (rt.chatOf(botId) !== sessionId) await rt.applyPermission(bot, sessionId, undefined)
+}
+
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId } = {}) {
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
+  if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
+  sessionId ??= rt.chatOf(botId)
   return new Promise((resolve, reject) => {
-    const sessionId = rt.chatOf(botId)
     const progress = turnProgress(onProgress)
     let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
     let revision = 0
@@ -374,10 +399,15 @@ export function createBridge(rt, { env = process.env, port } = {}) {
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
 
-  async function prepareModel() {
-    await ensureSetup()
-    const input = effectiveInput()
-    if (input.includes('image') !== hasImageInput) await saveInput(input)
+  let modelUpdates = Promise.resolve()
+  function prepareModel() {
+    const update = modelUpdates.then(async () => {
+      await ensureSetup()
+      const input = effectiveInput()
+      if (input.includes('image') !== hasImageInput) await saveInput(input)
+    })
+    modelUpdates = update.catch(() => {})
+    return update
   }
 
   function requireModel(botId) {
@@ -389,11 +419,22 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     }
   }
 
-  // Native turns share a queue because they switch the active DS-Bot part.
-  let turnQueue = Promise.resolve()
-  function exclusive(fn) {
-    const run = turnQueue.then(() => fn())
-    turnQueue = run.catch(() => {})
+  // Switching parts can only affect turns for the same Bot. Operations that
+  // move a thread between Bots still wait for the whole roster to be idle.
+  const botTurns = new Map()
+  let rosterWork = Promise.resolve()
+  function exclusive(fn, botId) {
+    const pending = botId ? [botTurns.get(botId)] : [...botTurns.values()]
+    const run = Promise.all([rosterWork, ...pending]).then(() => fn())
+    const wait = run.catch(() => {})
+    if (botId) {
+      botTurns.set(botId, wait)
+      void wait.then(() => {
+        if (botTurns.get(botId) === wait) botTurns.delete(botId)
+      })
+    } else {
+      rosterWork = wait
+    }
     return run
   }
   return {

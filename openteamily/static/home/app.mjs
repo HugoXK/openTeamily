@@ -78,6 +78,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const feedback = document.getElementById('login-feedback');
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
+  const whoami = document.getElementById('whoami');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
   const view = document.defaultView ?? globalThis;
@@ -345,6 +346,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
+        if (whoami) whoami.textContent = '';
         document.body?.classList.remove('home-signed-in');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
@@ -416,6 +418,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         return;
       }
       currentUser = session.body.user;
+      if (whoami) whoami.textContent = currentUser.username;
       document.body?.classList.add('home-signed-in');
       loginPanel.hidden = true;
       personal = await initializePersonalAgent();
