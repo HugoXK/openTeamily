@@ -111,16 +111,19 @@ export function nativeAgents({ host, db }) {
     run('UPDATE native_agent_objects SET last_name=? WHERE agent_id=?', bot.name, row.id)
     return { native_bot_id: bot.id, native_name: bot.name }
   }
-  async function bindSession(s, row, key, title) {
+  function legacySessionIds(s, row, key) {
+    const conversationId = key.slice(('agent:' + row.id + ':').length)
+    const privateConversation = one('SELECT id FROM agent_conversations WHERE id=? AND agent_id=?', conversationId, row.id)
+    const personal = privateConversation && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?', row.id, row.workspace_id)
+    return [...new Set([s.legacySession?.(key), privateConversation ? s.legacySession?.(conversationId) : undefined, personal ? s.legacySession?.('plugin:' + conversationId) : undefined].filter(Boolean))]
+  }
+  async function bindSession(s, row, key, title, legacyIds) {
     const mapped = await ensure(row)
     if (mapped.native_deleted) throw Object.assign(new Error('Native Bot was deleted'), { status: 409, code: 'agents/native-deleted' })
     const { rt } = s
     const bot = rt.botOf(mapped.native_bot_id)
     let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
     const conversationId = key.slice(('agent:' + row.id + ':').length)
-    const privateConversation = one('SELECT id FROM agent_conversations WHERE id=? AND agent_id=?', conversationId, row.id)
-    const personal = privateConversation && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?', row.id, row.workspace_id)
-    const legacyIds = [...new Set([s.legacySession?.(key), privateConversation ? s.legacySession?.(conversationId) : undefined, personal ? s.legacySession?.('plugin:' + conversationId) : undefined].filter(Boolean))]
     const adopted = []
     for (const legacyId of legacyIds) adopted.push(await adoptThread({ rt, source: rt.botOf(await s.mainBot()), target: bot, sessionId: legacyId }))
     bot.openteamily.sessionKeys ??= {}
@@ -139,9 +142,12 @@ export function nativeAgents({ host, db }) {
   }
   async function session(row, key, title) {
     const s = await services()
-    // Never hold the roster queue while waiting for an unrelated model turn.
-    const bind = () => serial(() => bindSession(s, row, key, title))
-    return s.exclusive ? s.exclusive(bind) : bind()
+    const legacyIds = legacySessionIds(s, row, key)
+    const botId = legacyIds.length === 0 ? one('SELECT bot_id FROM native_agent_objects WHERE agent_id=?', row.id)?.bot_id : undefined
+    // Never hold the roster write queue while waiting for the Bot. Adopting
+    // an old thread may affect both the Main Bot and its new owner.
+    const bind = () => serial(() => bindSession(s, row, key, title, legacyIds))
+    return s.exclusive ? s.exclusive(bind, botId) : bind()
   }
   function mappedSession(row, key) {
     // An established conversation can show its durable messages while a model

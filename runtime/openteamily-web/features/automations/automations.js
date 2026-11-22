@@ -549,14 +549,31 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     })
   }
 
+  function submittedRun(automationId, key, source) {
+    if (source) {
+      return one(`SELECT r.* FROM ot_automation_retries t JOIN ot_automation_runs r ON r.id=t.new_run_id
+        WHERE t.run_id=? AND t.key_hash=? AND r.automation_id=?`, source, sha('automation-retry:' + key), automationId)
+    }
+    return one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
+      WHERE m.automation_id=? AND m.key_hash=?`, automationId, sha(key))
+  }
+
+  function receipt(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const key = String(payload.idempotency_key ?? '')
+    if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const source = payload.run_id === undefined ? undefined : loadRun(row, payload.run_id).id
+    const found = submittedRun(row.id, key, source)
+    return { run: found ? runView(found) : null }
+  }
+
   function runNow(payload) {
     const row = load(workspaceOf(payload), payload.id)
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const keyHash = sha(key)
     const outcome = tx(db, () => {
-      const prior = one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
-        WHERE m.automation_id=? AND m.key_hash=?`, row.id, keyHash)
+      const prior = submittedRun(row.id, key)
       if (prior) return { status: 200, run: runView(prior) }
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       // Keep manual runs and scheduled slots distinct.
@@ -586,11 +603,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const item = loadRun(row, payload.run_id)
     const keyHash = sha('automation-retry:' + key)
     const outcome = tx(db, () => {
-      const prior = one('SELECT * FROM ot_automation_retries WHERE run_id=? AND key_hash=?', item.id, keyHash)
-      if (prior) {
-        const again = one('SELECT * FROM ot_automation_runs WHERE id=?', prior.new_run_id)
-        if (again) return { status: 200, run: runView(again) }
-      }
+      const prior = submittedRun(row.id, key, item.id)
+      if (prior) return { status: 200, run: runView(prior) }
       if (item.status !== 'failed') refuse(409, 'conflict', 'Only a failed run can be retried')
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       const id = insertRun(row, nextAdHocSlot(row.id), item.id)
@@ -648,6 +662,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/runs': runs,
     'automations/saveRun': saveRun,
     'automations/runNow': runNow,
+    'automations/receipt': receipt,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
     'automations/cancel': cancel,
     'automations/retry': retry,

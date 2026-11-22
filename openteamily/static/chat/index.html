@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="referrer" content="no-referrer">
   <title data-ui-text="chat.page.title">聊天 · OpenTeamily</title>
   <script type="module" src="/chat/startup.mjs" async fetchpriority="high"></script>
@@ -761,7 +761,7 @@
               </section>
             </div>
           </details>
-          <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1" aria-controls="chat-agent-mention-options" aria-autocomplete="list" data-ui-placeholder="chat.compose.placeholder"></textarea>
+          <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1" aria-label="输入消息" aria-controls="chat-agent-mention-options" aria-autocomplete="list" data-ui-label="chat.compose.placeholder" data-ui-placeholder="chat.compose.placeholder"></textarea>
         </div>
         <div id="chat-agent-mention-options" class="chat-agent-mention-options" role="listbox" aria-label="提及群智能体" hidden data-ui-label="chat.group.mention_agents"></div>
         <div id="chat-agent-mentions" class="chat-agent-mentions" aria-label="将提及的智能体" hidden data-ui-label="chat.group.agents_to_mention"></div>

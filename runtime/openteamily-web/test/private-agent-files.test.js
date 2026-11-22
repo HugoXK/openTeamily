@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createAgents } from '../features/agents/index.js'
 import { digest } from '../featurekit/http.js'
@@ -408,6 +411,89 @@ test('private agent files survive reconnect, with one native turn and workspace-
   assert.equal((await request(path,{},'kind=other')).status,400)
   assert.equal((await request(path.replace(workspace,'b'.repeat(32)),{},'kind=file')).status,404)
   db.close()
+})
+
+test('private text accepts stable receipts before generation and keeps turn order across overlapping sends', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  const directory = mkdtempSync(join(tmpdir(), 'ot-private-accepted-'))
+  const restartedFile = join(directory, 'restart.sqlite')
+  const runtime = createRuntime()
+  const turns = []
+  const nativeHistory = []
+  const started = [Promise.withResolvers(), Promise.withResolvers()]
+  const finish = [Promise.withResolvers(), Promise.withResolvers()]
+  runtime.rt.eventsBackwards = async function* () { yield* nativeHistory }
+  runtime.nativeTurn = async (_bot, sessionId, prompt, requestId) => {
+    const position = turns.length
+    turns.push(requestId)
+    started[position].resolve()
+    const text = await finish[position].promise
+    const seq = 2 * position + 1
+    nativeHistory.unshift(
+      {type:'assistant/message',seq:seq+1,time:seq+1,data:{message:{content:[{type:'text',text}]}}},
+      {type:'user/message',seq,time:seq,data:{content:[{type:'text',text:prompt}],source:{rpcId:requestId}}},
+    )
+    return {text,sessionId,turnId:position+1}
+  }
+  const host = {runtime:async () => runtime, call:async () => null}
+  const {endpoints:e} = createAgents({db,host})
+  const {agent} = await e.create({workspace_id:workspace,name:'Ordered turns',idempotency_key:'ordered-turns-agent-key'})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id,memory_recall:false})
+  const path = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(e)
+  const first = ['first-text-receipt', 'Original message']
+  const second = ['second-text-receipt', 'Follow-up message']
+  const send = ([key,text], {accept = true, handler = request} = {}) =>
+    handler(path+'/messages',jsonPost(key,{body:text,...(accept ? {accept_pending:true} : {})}))
+  const read = (handler, key) => handler(path+'/reply-progress',{},'receipt=1&key='+key)
+  let restartedDb
+  t.after(async () => {
+    finish[0].resolve('first reply')
+    finish[1].resolve('second reply')
+    await Promise.allSettled([send(first,{accept:false}),send(second,{accept:false})])
+    db.close()
+    restartedDb?.close()
+    rmSync(directory,{recursive:true,force:true})
+  })
+
+  const one = await send(first)
+  assert.equal(one.status,202,await one.clone().text())
+  await started[0].promise
+  const [two,replay,conflict] = await Promise.all([send(second),send(first),send([first[0],'Changed text'])])
+  assert.deepEqual([one.status,two.status,replay.status,conflict.status],[202,202,202,409])
+  const [a,b,duplicate] = await Promise.all([one.json(),two.json(),replay.json()])
+  assert.deepEqual(duplicate,a)
+  assert.deepEqual(turns,[`ot-agent:${a.message.id}`])
+  for (const [original,pair] of [[first,a],[second,b]]) {
+    assert.equal(pair.message.body,original[1])
+    assert.equal(pair.reply.status,'running')
+    assert.deepEqual(await (await read(request,original[0])).json(),{state:'running',text:'',...pair})
+  }
+
+  // Open a persisted copy exactly as a fresh DS-Bot would after an interruption.
+  db.prepare('VACUUM INTO ?').run(restartedFile)
+  restartedDb = new DatabaseSync(restartedFile)
+  const {endpoints:afterRestart} = createAgents({db:restartedDb,host})
+  const reopened = legacyRequest(afterRestart)
+  for (const [original,pair] of [[first,a],[second,b]]) {
+    const result = await send(original,{handler:reopened})
+    assert.equal(result.status,201)
+    const interrupted = await result.json()
+    assert.deepEqual([interrupted.message.id,interrupted.message.body,interrupted.reply.id],
+      [pair.message.id,original[1],pair.reply.id])
+    assert.deepEqual([interrupted.reply.status,interrupted.reply.error_code,interrupted.reply.can_retry],
+      ['failed','interrupted',true])
+  }
+  assert.deepEqual(turns,[`ot-agent:${a.message.id}`])
+
+  finish[0].resolve('first reply')
+  await started[1].promise
+  assert.deepEqual(turns,[`ot-agent:${a.message.id}`,`ot-agent:${b.message.id}`])
+  finish[1].resolve('second reply')
+  const [finishedA,finishedB] = await Promise.all([send(first,{accept:false}),send(second,{accept:false})])
+  assert.deepEqual([finishedA.status,finishedB.status],[201,201])
+  assert.equal((await finishedA.json()).reply.body,'first reply')
+  assert.equal((await finishedB.json()).reply.body,'second reply')
 })
 
 test('private text replies retry the same durable pair, fence stale attempts and expose the exact receipt', {timeout:3000}, async t => {

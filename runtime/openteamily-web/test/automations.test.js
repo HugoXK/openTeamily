@@ -382,10 +382,16 @@ test('manual execution queues only the named automation and leaves its scheduled
   const {automation: other} = e['automations/create']({...draft, title: '其他', idempotency_key: 'o'.repeat(16)})
   const req = {method: 'POST', path: `/v1/workspaces/${W}/automations/${target.id}/run`,
     body: {}, idempotency_key: 'q'.repeat(16)}
+  const receipt = {...req, method: 'GET', body: undefined}
+  assert.deepEqual((await e['automations/v1'](receipt)).body, {run: null})
+  assert.equal(calls.length, 0, 'checking the receipt cannot queue a run')
   const accepted = await e['automations/v1'](req)
   assert.equal(accepted.status, 202)
   assert.equal(accepted.body.run.trigger, 'manual')
   assert.equal(accepted.body.run.status, 'running')
+  assert.deepEqual((await e['automations/v1'](receipt)).body.run, accepted.body.run)
+  assert.deepEqual((await e['automations/v1']({...receipt, path: receipt.path.replace(target.id, other.id)})).body, {run: null})
+  assert.equal((await e['automations/v1']({...receipt, path: receipt.path.replace(W, 'b'.repeat(32))})).status, 404)
   const runsPath = `/v1/workspaces/${W}/automations/${target.id}/runs`
   const detail = await e['automations/v1']({method: 'GET', path: runsPath + '/' + accepted.body.run.id})
   assert.equal(detail.body.run.status, 'running')
@@ -430,10 +436,14 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   assert.equal(failed.error_code, 'runtime_unavailable')
   fail = false
   const retry = {workspace_id: W, id: automation.id, run_id: failed.id, idempotency_key: 'x'.repeat(16)}
+  const receipt = {method: 'GET', path: `/v1/workspaces/${W}/automations/${automation.id}/runs/${failed.id}/retry`,
+    idempotency_key: retry.idempotency_key}
+  assert.deepEqual((await e['automations/v1'](receipt)).body, {run: null})
   const retried = e['automations/retry'](retry)
   assert.equal(retried.status, 201)
   assert.equal(retried.run.status, 'running')
   assert.equal(retried.run.trigger, 'retry')
+  assert.equal((await e['automations/v1'](receipt)).body.run.id, retried.run.id)
   assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
   const anotherRetry = {...retry, idempotency_key: 'y'.repeat(16)}
   assert.throws(() => e['automations/retry'](anotherRetry), error => error.code === 'automations/already_running')
@@ -447,6 +457,7 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   release()
   await Promise.all(feature.inflight.values())
   assert.equal(e['automations/run'](running).run.status, 'succeeded')
+  assert.equal((await e['automations/v1'](receipt)).body.run.status, 'succeeded')
   assert.equal(e['automations/runs'](running).has_pending, false)
 })
 

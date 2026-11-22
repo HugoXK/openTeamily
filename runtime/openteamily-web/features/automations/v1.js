@@ -35,13 +35,16 @@ export function automationsV1({ endpoints, log, personalBinding }) {
       return { status: 200, body: await call('tick', { workspace_id: workspaceId }) }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/run$`), handle: wrap(async (req, workspaceId, id) => {
+      const key = req.headers.get('idempotency-key')
+      if (req.method === 'GET' && !req.query.size) return { status: 200, body: await call('receipt', { workspace_id: workspaceId, id, idempotency_key: key }) }
       if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
-      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: req.headers.get('idempotency-key') })
+      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: key })
       return { status: result.status, body: { run: result.run } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {
-      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
       const payload = { workspace_id: workspaceId, id, run_id: runId, idempotency_key: req.headers.get('idempotency-key') }
+      if (action === 'retry' && req.method === 'GET' && !req.query.size) return { status: 200, body: await call('receipt', payload) }
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
       if (action === 'artifact') {
         const {status, artifact} = await call('saveRun', payload)
         return {status, body: {artifact}}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import {withSpeechOverlay} from '../speech-overlay.mjs'
+import { applyNativeOverlay, assertNativeConsentOverlay } from '../native-ds-bot-overlay.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = join(root, '..', '..')
@@ -108,6 +109,7 @@ test('wrapper plugin boots upstream createRuntime and the social façade once', 
 test('recipe does not edit the vendored upstream tree', () => {
   const docker = read('Dockerfile')
   assert.match(docker, /COPY ds-bot-upstream\/ds-bot /)
+  assert.match(docker, /RUN node \/opt\/openteamily\/runtime\/flybot-image\/native-ds-bot-overlay\.mjs \/opt\/openteamily\/runtime\/ds-bot-upstream\/ds-bot/)
   assert.match(docker, /npm ci --omit=dev/)
   assert.match(docker, /COPY ds-bot-upstream\/LICENSE \/opt\/licenses\/ds-bot\/LICENSE/)
   assert.match(docker, /COPY ds-bot-upstream\/NOTICE \/opt\/licenses\/ds-bot\/NOTICE/)
@@ -122,6 +124,31 @@ test('recipe does not edit the vendored upstream tree', () => {
   assert.match(docker, /warm-native-bindings\.cjs/)
   assert.doesNotMatch(docker, /sk-[A-Za-z0-9]/)
   assert.doesNotMatch(docker, /api_key\s*=/)
+})
+
+test('the image overlay checks pinned inputs before adding native group and skill integration', t => {
+  const copy = mkdtempSync(join(tmpdir(), 'ot-native-overlay-'))
+  t.after(() => rmSync(copy, {recursive:true, force:true}))
+  const upstream = join(repo, 'runtime', 'ds-bot-upstream', 'ds-bot')
+  for (const path of ['client.js', 'src/client/group-settings.js', 'src/host/capabilities.js', 'src/host/channel.js']) {
+    mkdirSync(dirname(join(copy, path)), {recursive:true})
+    copyFileSync(join(upstream, path), join(copy, path))
+  }
+  const clientPath = join(copy, 'client.js')
+  const channelPath = join(copy, 'src/host/channel.js')
+  const originalClient = readFileSync(clientPath)
+  const originalChannel = readFileSync(channelPath, 'utf8')
+  assert.throws(() => assertNativeConsentOverlay(copy), /native skill consent/)
+  writeFileSync(channelPath, originalChannel + '\n')
+  assert.throws(() => applyNativeOverlay(copy), /Unexpected pinned DS-Bot source: src\/host\/channel.js/)
+  assert.deepEqual(readFileSync(clientPath), originalClient)
+  writeFileSync(channelPath, originalChannel)
+  applyNativeOverlay(copy)
+  assertNativeConsentOverlay(copy)
+  assert.match(readFileSync(clientPath, 'utf8'), /Shared human participants/)
+  assert.match(readFileSync(channelPath, 'utf8'), /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)
+  applyNativeOverlay(copy)
+  assert.deepEqual(readFileSync(join(upstream, 'client.js')), originalClient)
 })
 
 test('image recipe does not bake a model API key', () => {

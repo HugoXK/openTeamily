@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {memoryCitationFromSearch, mount} from '../openteamily/static/memory/app.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview} from '../openteamily/static/memory/action-review.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -25,6 +26,27 @@ test('directory and action queries encode filters and omit empty values', () => 
   assert.equal(actionQuery('', 'open'), '?status=open');
   assert.equal(actionQuery('跟进', 'done'), '?q=%E8%B7%9F%E8%BF%9B&status=done');
   assert.equal(actionQuery('', ''), '');
+});
+
+test('recovered action review retains the original request and only resends the previously selected actions', () => {
+  const source = {id:'a'.repeat(32), title:'Older note', revision:3};
+  const otherSource = {id:'b'.repeat(32), title:'Current note', revision:9};
+  const selected = new Map([[source.id,source], [otherSource.id,otherSource]]);
+  const items = [
+    {title:' Rewritten next step ', memory_page_id:otherSource.id, selected:true},
+    {title:'Skipped next step', memory_page_id:source.id, selected:false},
+  ];
+  const state = {selected, sources:[source,otherSource], items, open:true};
+  const generation = {key:'c'.repeat(32), sources:[{id:source.id, revision:2},{id:otherSource.id, revision:9}]};
+  assert.deepEqual(decodeActionReview(encodeActionReview({...state, generateAttempt:generation})).generateAttempt, generation);
+  const saved = actionSaveAttempt(state, 'd'.repeat(32));
+  const restored = decodeActionReview(encodeActionReview({...state, saveAttempt:saved}));
+  assert.deepEqual(restored.selected, selected);
+  assert.equal(restored.open, true);
+  assert.equal(restored.saveAttempt.key, saved.key);
+  assert.deepEqual(restored.saveAttempt.items, [{title:'Rewritten next step', memory_page_id:otherSource.id, source_revision:9}]);
+  assert.equal(restored.saveAttempt.chosen[0], restored.items[0]);
+  assert.equal(decodeActionReview(encodeActionReview({...state, sources:[source]})), null);
 });
 
 test('due date helpers convert UTC calendar days', () => {

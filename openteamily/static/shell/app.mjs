@@ -216,7 +216,7 @@ function syncAccountSlot(doc) {
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
   const button = doc.getElementById('account-menu-button');
-  if (button) button.textContent = accountInitials(name);
+  if (button && !button.hasAttribute('data-account-icon')) button.textContent = accountInitials(name);
   for (const node of doc.querySelectorAll('.rail-signed-in')) {
     if (visible) node.removeAttribute('hidden');
     else node.setAttribute('hidden', '');
@@ -429,6 +429,18 @@ function bindAppearanceToggle(doc) {
   });
 }
 
+function arrangeRail(doc) {
+  const rail = doc.querySelector('body.app-workspace > .app-rail');
+  const account = rail?.querySelector(':scope > .account-slot');
+  if (!account || rail.querySelector(':scope > .rail-actions')) return;
+  const actions = doc.createElement('div');
+  actions.className = 'rail-actions';
+  for (const child of [...rail.children]) {
+    if (child !== account && !child.classList.contains('brand-mark')) actions.append(child);
+  }
+  rail.insertBefore(actions, account);
+}
+
 function enhanceChrome() {
   document.body.classList.add('app');
   if (!document.querySelector('.skip-link')) {
@@ -441,6 +453,7 @@ function enhanceChrome() {
   for (const nav of document.querySelectorAll('nav')) {
     if (!nav.getAttribute('aria-label')) nav.setAttribute('aria-label', '管理导航');
   }
+  arrangeRail(document);
   bindMobileNavigation(document);
   markNavigation();
   decorateStatus(document.getElementById('status'));

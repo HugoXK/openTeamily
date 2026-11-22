@@ -955,8 +955,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchFromSessionList = true;
   let composeMode = 'group';
   let groupMode = 'custom';
-  let groupReplyAttempt = null;
-  let groupReplyBusy = false;
+  const groupReplyDrafts = new Map();
+  const groupReplyBusy = new Set();
   let groupReplyFormScope = '';
   let searchSeq = 0;
   let resourceCursor = '';
@@ -1448,6 +1448,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result.body;
   });
 
+  function groupReplyDraft(scope) {
+    if (groupReplyDrafts.has(scope)) return groupReplyDrafts.get(scope);
+    const validAgentIds = ids => Array.isArray(ids) && ids.length <= 50
+      && ids.every(id => typeof id === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(id));
+    try {
+      const saved = JSON.parse(document.defaultView.sessionStorage.getItem('openteamily.group-reply-draft:' + scope) || 'null');
+      if (saved && typeof saved.prompt === 'string' && saved.prompt.length <= 4000 && validAgentIds(saved.agentIds)) {
+        const attempt = saved.attempt;
+        if (!attempt || typeof attempt.key !== 'string' || !/^[a-zA-Z0-9_-]{16,64}$/.test(attempt.key)
+          || typeof attempt.prompt !== 'string' || !validMessage(attempt.prompt)
+          || !validAgentIds(attempt.agentIds) || !attempt.agentIds.length || attempt.agentIds.length > 5) saved.attempt = null;
+        groupReplyDrafts.set(scope, saved);
+        return saved;
+      }
+    } catch {}
+    return {prompt: '', agentIds: [], attempt: null};
+  }
+
+  function saveGroupReplyDraft(scope, draft) {
+    const hasDraft = Boolean(draft.prompt || draft.agentIds.length || draft.attempt);
+    if (hasDraft) groupReplyDrafts.set(scope, draft);
+    else groupReplyDrafts.delete(scope);
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const key = 'openteamily.group-reply-draft:' + scope;
+      if (hasDraft) storage.setItem(key, JSON.stringify(draft));
+      else storage.removeItem(key);
+    } catch {}
+  }
+
+  const groupReplyAgentIds = () => [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
+    .map(box => box.value).sort();
+  const sameGroupReplyRequest = (attempt, prompt, agentIds) => attempt?.prompt === prompt
+    && attempt.agentIds.join(',') === agentIds.join(',');
+
+  function rememberGroupReplyDraft() {
+    if (!groupReplyFormScope || groupReplyFormScope !== sendScope()) return;
+    saveGroupReplyDraft(groupReplyFormScope, {...groupReplyDraft(groupReplyFormScope),
+      prompt: document.getElementById('group-agent-prompt').value,
+      agentIds: groupReplyAgentIds()});
+  }
+
+  function confirmGroupReplyDraft(scope, key) {
+    const draft = groupReplyDraft(scope);
+    if (!key || draft.attempt?.key !== key) return false;
+    const clearPrompt = sameGroupReplyRequest(draft.attempt, draft.prompt.trim(), draft.agentIds);
+    saveGroupReplyDraft(scope, {...draft, prompt: clearPrompt ? '' : draft.prompt, attempt: null});
+    if (clearPrompt && groupReplyFormScope === scope && sendScope() === scope) {
+      document.getElementById('group-agent-prompt').value = '';
+    }
+    return true;
+  }
+
+  function syncGroupReplySubmit(scope) {
+    const button = document.getElementById('group-agent-submit');
+    const busy = groupReplyBusy.has(scope);
+    button.disabled = busy || !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
+    const label = button.firstElementChild || button;
+    label.textContent = busy ? uiLabel('发送中…', 'Sending…') : uiLabel('发送并请求回复', 'Send and request a reply');
+  }
+
   function renderGroupReplyAction(requests) {
     const panel = document.getElementById('group-agent-action');
     const isGroup = currentSource === 'social' && currentConversation
@@ -1486,15 +1547,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-agent-add-submit').disabled = !available.length;
     const holder = document.getElementById('group-agent-choices');
     const scope = sendScope();
-    const checked = new Set();
+    let checked;
     if (groupReplyFormScope === scope) {
+      checked = new Set();
       for (const label of holder.children) {
         const box = label.children[0];
         if (box?.checked) checked.add(box.value);
       }
     } else {
       groupReplyFormScope = scope;
-      document.getElementById('group-agent-prompt').value = '';
+      const draft = groupReplyDraft(scope);
+      document.getElementById('group-agent-prompt').value = draft.prompt;
+      checked = new Set(draft.agentIds);
     }
     holder.replaceChildren();
     for (const agent of saved.filter(item => !item.archived && item.mine !== false)) {
@@ -1516,8 +1580,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       item.dataset.replyStatus = request.status;
       list.append(item);
     }
-    document.getElementById('group-agent-submit').disabled = groupReplyBusy
-      || !holder.querySelector('input:not(:disabled)');
+    syncGroupReplySubmit(scope);
   }
 
   function stopPolling() {
@@ -2283,7 +2346,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const heading = document.createElement('p');
       heading.className = 'reply-state';
       heading.setAttribute('role', 'status');
-      heading.textContent = item.status === 'running' ? uiLabel('正在生成回复', 'Writing a reply') : uiLabel('正在准备回复', 'Preparing a reply');
+      heading.textContent = item.status === 'running' && !partial ? uiLabel('正在生成回复', 'Writing a reply')
+        : uiLabel('正在准备回复', 'Preparing a reply');
       bubble.append(heading);
       if (partial) replyView = {bubble, heading, body};
     }
@@ -2315,6 +2379,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pendingKeys = pendingMessageKeys();
     for (const item of lastAgentItems) {
       if (pendingKeys.has(item.client_key)) continue;
+      if (waitingAgentReply(item) && item.client_key && replyWatch?.scope === sendScope() && replyWatch.key === item.client_key) {
+        // Keep the visible preview when the pending message gets its stored ID.
+        const view = replyWatch.view;
+        view.bubble.dataset.messageId = item.id;
+        delete view.bubble.dataset.sendPending;
+        agentReplyViews.set(item.client_key, view);
+        list.append(view.bubble);
+        continue;
+      }
       const {bubble, replyView} = makeAgentMessage(item);
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
@@ -2463,20 +2536,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncReplyProgress() {
     const scope = sendScope();
     const job = pendingSends.get(scope)?.replying;
-    const [key, view] = job ? [job.key, job.replyView] : (agentReplyViews.entries().next().value || []);
+    const activeKey = replyWatch?.scope === scope ? replyWatch.key : null;
+    const activeView = agentReplyViews.get(activeKey) ?? (job?.key === activeKey ? job.replyView : null);
+    const [key, view] = activeView ? [activeKey, activeView]
+      : agentReplyViews.entries().next().value ?? (job ? [job.key, job.replyView] : []);
     if (!servedByDsbot || currentSource !== 'agent' || !currentConversation || !canWatchReply() || readingPrivateContext() || !view) {
       stopReplyProgress();
       return false;
     }
+    const posting = job?.key === key;
     if (replyWatch?.scope === scope && replyWatch.key === key) {
       replyWatch.view = view;
-      replyWatch.posting = Boolean(job);
+      replyWatch.posting = posting;
       if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
       return true;
     }
     stopReplyProgress();
     const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
-    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0, revision:0};
+    replyWatch = {scope, key, view, path, posting, failures: 0, revision:0};
     if (!startReplyStream(replyWatch)) scheduleReplyProgress(replyWatch);
     return true;
   }
@@ -3660,6 +3737,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
+      const attempt = groupReplyDraft(scope).attempt;
+      if (attempt && lastSocialItems.some(item => item.client_key === attempt.key) && confirmGroupReplyDraft(scope, attempt.key)) {
+        show('ok', uiLabel('已发送到群聊。', 'Sent to the group.'), {announceOnly: true});
+      }
+    }
     const durableGroupReplies = new Set(lastSocialItems
       .filter(item => item.role === 'agent' && item.reply_job_id)
       .map(item => item.reply_job_id));
@@ -6891,52 +6974,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatCalls.openMeeting(action);
     });
   }
+  document.getElementById('group-agent-prompt').addEventListener('input', rememberGroupReplyDraft);
+  document.getElementById('group-agent-choices').addEventListener('change', rememberGroupReplyDraft);
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (groupReplyBusy || currentSource !== 'social' || currentConversation?.kind !== 'group'
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group'
       || currentConversation.public_agent) return;
     const cid = currentConversation.id;
     const scope = sendScope();
-    const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
-      .map(box => box.value);
-    const field = document.getElementById('group-agent-prompt');
-    const prompt = field.value;
-    if (!agentIds.length) {
-      show('error', '请选择至少一个群内智能体。');
+    if (groupReplyBusy.has(scope) || groupReplyFormScope !== scope) return;
+    const agentIds = groupReplyAgentIds();
+    const prompt = document.getElementById('group-agent-prompt').value.trim();
+    if (!agentIds.length || agentIds.length > 5) {
+      show('error', uiLabel('请选择 1 至 5 个群内智能体。', 'Select 1 to 5 group agents.'));
       return;
     }
-    if (!prompt.trim()) return;
-    const fingerprint = JSON.stringify([scope, agentIds.slice().sort(), prompt]);
-    if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
-      groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
-    }
-    groupReplyBusy = true;
-    const button = document.getElementById('group-agent-submit');
-    const label = button.textContent;
-    button.disabled = true;
-    button.textContent = '发送中…';
+    if (!validMessage(prompt)) return;
+    rememberGroupReplyDraft();
+    const draft = groupReplyDraft(scope);
+    const attempt = sameGroupReplyRequest(draft.attempt, prompt, agentIds) ? draft.attempt
+      : {prompt, agentIds, key: idempotencyKey('group-reply-')};
+    saveGroupReplyDraft(scope, {...draft, attempt});
+    groupReplyBusy.add(scope);
+    syncGroupReplySubmit(scope);
     try {
       const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
-        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key})
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': attempt.key}, AbortSignal.timeout(15000))
         .catch(() => ({status: 0, body: {}}));
       if (result.status !== 202 || !result.body.message?.id) {
-        if (scope === sendScope()) show('error', messageFor(result.body.error, '发送未确认，请重试。'));
+        if (scope === sendScope() && groupReplyDraft(scope).attempt?.key === attempt.key) {
+          show('error', messageFor(result.body.error, uiLabel('发送未确认，请重试。', 'Delivery is unconfirmed. Try again.')));
+        }
         return;
       }
-      groupReplyAttempt = null;
+      confirmGroupReplyDraft(scope, attempt.key);
       if (scope === sendScope()) {
-        if (field.value === prompt) field.value = '';
         if (socialHistory?.readingHistory) void openSocialConversation(cid);
         else {
           renderDeliveredSocialMessage(scope, result.body.message);
           scheduleSocialPoll(currentConversation);
         }
-        show('ok', '已发送到群聊。', {announceOnly: true});
+        show('ok', uiLabel('已发送到群聊。', 'Sent to the group.'), {announceOnly: true});
       }
     } finally {
-      groupReplyBusy = false;
-      button.textContent = label;
-      button.disabled = !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
+      groupReplyBusy.delete(scope);
+      if (scope === sendScope()) syncGroupReplySubmit(scope);
     }
   });
 
@@ -7187,6 +7269,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           let result;
           let anchor;
           const nativePrivate = servedByDsbot && !queue.social;
+          const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
           const receipt = nativePrivate ? Promise.withResolvers() : null;
           job.acceptReceipt = receipt?.resolve;
           try {
@@ -7200,7 +7283,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                     feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
                     beginReply();
                   }
-                }) : request('POST', path, job.message, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+                }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
             if (!progress) beginReply();
             result = receipt
               ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
@@ -7218,7 +7301,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               if (isCurrent()) {
                 const scroller = document.getElementById('message-scroller');
                 anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
-                if (replyWatch?.key === job.key) stopReplyProgress();
+                if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
               }
               queue.replying = null;
               job.replyView?.bubble.remove();
