@@ -1,4 +1,5 @@
-import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
+import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
+import { csrfCookie } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';

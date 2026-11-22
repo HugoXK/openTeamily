@@ -86,6 +86,7 @@ class SettingsPage:
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
