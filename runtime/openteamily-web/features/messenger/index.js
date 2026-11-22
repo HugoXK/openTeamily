@@ -14,7 +14,7 @@ export default function messenger(host) {
   const automaticReplies = typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0'
   if (automaticReplies) agentReplier().start()
   const wakeReplies = () => {
-    if (automaticReplies) void agentReplier().once().catch(error => host.log?.(`agent inbox: ${error?.code ?? 'error'}`))
+    if (automaticReplies) agentReplier().wake()
   }
   return {
     pages: ['messenger'],

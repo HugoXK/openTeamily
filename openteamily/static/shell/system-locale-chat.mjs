@@ -254,6 +254,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.direct.agents_help": ["双方都可以添加自己的个人智能体。在输入框用 @ 选择智能体，它只会收到这条文字和你明确引用的一条消息。", "Both people can add their personal agents. Use @ in the composer to choose an agent. It receives only this text and one message you explicitly quote."],
   "chat.group.request_reply_help": ["请求会作为一条消息发送到群聊，并请选中的智能体回复。", "Send a message to the group and ask the selected agents to reply."],
   "chat.group.add_agent": ["添加我的智能体", "Add one of my agents"],
+  "chat.group.open_agent_directory": ["打开智能体目录", "Open agent directory"],
   "chat.group.select_reply_agents": ["请求哪些智能体回复", "Choose agents to ask"],
   "chat.group.no_reply_agents": ["群里还没有可请求的智能体。", "There are no agents to ask in this group yet."],
   "chat.group.message": ["群消息", "Group message"],
