@@ -1,0 +1,306 @@
+{
+  "slug": "ev131before",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-22T08:39:59.984Z",
+  "sides": [
+    {
+      "name": "before",
+      "url": "http://127.0.0.1:8832"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 64336
+      },
+      "sha256": "f0645711c0173f15910ee5bf643efb4b0af24fa9884b3adfe933aabd18bea0c8",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 63294
+      },
+      "sha256": "88176336e70c08d475e85f2623e7d8ada532a2088196fee3382fabe07e722ca3",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 64336
+      },
+      "sha256": "f0645711c0173f15910ee5bf643efb4b0af24fa9884b3adfe933aabd18bea0c8",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 63294
+      },
+      "sha256": "88176336e70c08d475e85f2623e7d8ada532a2088196fee3382fabe07e722ca3",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55582
+      },
+      "sha256": "d8888349d943ed28d0d64f6b481b282111fc23b07435fea6a6f88d1ef7f8c2fc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55908
+      },
+      "sha256": "a2679f8345ca29a041dd534aa5f4902e97fc6bcc52dad367fcaf152b661b9ff0",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55582
+      },
+      "sha256": "d8888349d943ed28d0d64f6b481b282111fc23b07435fea6a6f88d1ef7f8c2fc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55908
+      },
+      "sha256": "a2679f8345ca29a041dd534aa5f4902e97fc6bcc52dad367fcaf152b661b9ff0",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 300
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。 Agents 你的 agent 还没有向本实例之外开放。 已授权的 AI 客户端 那些被授权使用你的 agen",
+        "textLength": 300,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}

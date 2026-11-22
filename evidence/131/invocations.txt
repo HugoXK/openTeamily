@@ -1,0 +1,4 @@
+invoke1 POST=202 id=0f86f7cb4f584287801df8a9a359d9b4
+{"invocation":{"id":"0f86f7cb4f584287801df8a9a359d9b4","agent_id":"c88b2c9ba4c9414f9449bbde4505e9e1","status":"succeeded","error_code":null,"created":1795336684,"updated":1795336685,"reply":"\u5916\u90e8\u8c03\u7528\u5df2\u5904\u7406\uff1a\u8bc1\u636e\u5de5\u4f5c\u533a \u00b7 \u5916\u90e8\u52a9\u624b"}}
+invoke2 POST=202 id=b1c394bf010844758aaef98dbe17f9e9
+{"invocation":{"id":"b1c394bf010844758aaef98dbe17f9e9","agent_id":"c88b2c9ba4c9414f9449bbde4505e9e1","status":"succeeded","error_code":null,"created":1795336688,"updated":1795336690,"reply":"\u5916\u90e8\u8c03\u7528\u5df2\u5904\u7406\uff1a\u8bc1\u636e\u5de5\u4f5c\u533a \u00b7 \u5916\u90e8\u52a9\u624b"}}

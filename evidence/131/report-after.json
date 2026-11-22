@@ -1,0 +1,594 @@
+{
+  "slug": "ev131after",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-22T08:39:31.603Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8831"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 95190
+      },
+      "sha256": "a6670678174423a30f5989f472de60b046ecb210339ab2e7d2ee55cb5e47e820",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 70342
+      },
+      "sha256": "0310cab734bb4e35d9f7cda2a130e49fdd51ee513c161e5706b312ffec5aff59",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 94769
+      },
+      "sha256": "7766394caf4ec88e9ea97e95982f471d7c1854ecf412b1275724cadce8644254",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 69147
+      },
+      "sha256": "08ba684312a0156025309f16e25c0362718572e059eeecdbb6b15f68b1ec5cef",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 95190
+      },
+      "sha256": "a6670678174423a30f5989f472de60b046ecb210339ab2e7d2ee55cb5e47e820",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "gateway-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 70358
+      },
+      "sha256": "d8f0b6af45e195231d089dd67c570494a18b14e24b808c40054318d917951e10",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 94769
+      },
+      "sha256": "7766394caf4ec88e9ea97e95982f471d7c1854ecf412b1275724cadce8644254",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "gateway-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 69147
+      },
+      "sha256": "08ba684312a0156025309f16e25c0362718572e059eeecdbb6b15f68b1ec5cef",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 82776
+      },
+      "sha256": "5950dcff7bbed3d0f6e4f274cc54e06362467e5a956a2e0c1a9c8dc7a03f0cb2",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 60155
+      },
+      "sha256": "6bcb09320cc22784a6a9e1fa7a46dc2814a9aae1ba0555717c7410aacacce6bc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 83375
+      },
+      "sha256": "2d50e1bdce40b587e4b7d430a6eba54e6c5946fbe34c29ad6cf0fe60261cdc55",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59690
+      },
+      "sha256": "8647c284e16371c77da9e97f1a7ad798fa84c9f41ffdab890433bc947393f2b6",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 82776
+      },
+      "sha256": "5950dcff7bbed3d0f6e4f274cc54e06362467e5a956a2e0c1a9c8dc7a03f0cb2",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "gateway-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 60155
+      },
+      "sha256": "6bcb09320cc22784a6a9e1fa7a46dc2814a9aae1ba0555717c7410aacacce6bc",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__settings-agent-access__gateway-default.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 83391
+      },
+      "sha256": "c942411fcd879076b153d3e1c4c8ac04b533ff28dc1c10a1ff3089bf68e768fd",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 外部助手 · 站点 scope invoke · 10 次/分 · 创",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__settings-agent-access__gateway-empty.png",
+      "route": "/settings/agent-access",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "gateway-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 59690
+      },
+      "sha256": "8647c284e16371c77da9e97f1a7ad798fa84c9f41ffdab890433bc947393f2b6",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 326
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent API 你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在智能体页的「API 密钥」里。 工作区 证据工作区 空工作区 调用密钥 你的 agent 还没有向本实例之外开放。 最近调用 还没有外部调用。",
+        "textLength": 326,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}
