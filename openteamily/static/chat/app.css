@@ -1456,6 +1456,9 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 #compose-dialog .member-choices label:hover { background: var(--ot-surface-2); }
 #compose-dialog .member-choices input { flex: 0 0 auto; margin: 0; }
 #compose-dialog .compose-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; padding-top: .5rem; border-top: 1px solid var(--ot-line); }
+#compose-dialog-progress { margin: 0; }
+#compose-dialog-progress:not(:empty) { flex: 1 0 100%; color: var(--ot-muted); font-size: .8125rem; }
+#compose-dialog-progress:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 #compose-dialog-error { flex: 1 0 100%; box-sizing: border-box; margin: 0; padding: .625rem .75rem; border-radius: .55rem; color: var(--ot-danger); background: var(--ot-danger-bg); font-size: .8125rem; overflow-wrap: anywhere; }
 #compose-dialog .compose-dialog-actions button { min-height: 2.125rem; padding: 0 1rem; border-radius: 999px; }
 #compose-dialog-submit { background: var(--ot-accent); color: var(--ot-on-accent, #fff); border: 0; }

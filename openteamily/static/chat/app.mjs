@@ -5591,7 +5591,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -5607,7 +5607,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
     const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = await request('GET', path).catch(() => ({status: 0, body: {}}));
+    const result = initialRead || await request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -5619,14 +5619,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         scheduleSocialPoll(currentConversation);
         return false;
       }
-      show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
+      if (!quiet) show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
         : messageFor(result.body?.error, '无法打开会话。'));
       if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
     const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
-    if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
+    if (updated?.id !== conversationId || ((link || initialRead) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
     }
@@ -5870,8 +5870,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return document.querySelectorAll('#member-choices input:checked').length;
   }
 
-  let composing = false;
+  let composePhase = '';
   let composeAttempt = null;
+  let composeReceipt = null;
   let composeView = 0;
   const composeError = document.getElementById('compose-dialog-error');
   function setComposeError(text = '') {
@@ -5908,7 +5909,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncComposeCreate() {
     const button = document.getElementById('compose-dialog-submit');
-    button.disabled = composing || !composeCreateEnabled({
+    const cancel = document.getElementById('compose-dialog-cancel');
+    const progress = document.getElementById('compose-dialog-progress');
+    const busy = Boolean(composePhase);
+    button.disabled = busy || (!composeReceipt && !composeCreateEnabled({
       composeMode,
       groupMode,
       personal: inPersonalWorkspace(),
@@ -5916,7 +5920,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
       templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
-    });
+    }));
+    button.textContent = composePhase === 'opening' ? uiLabel('打开中…', 'Opening…')
+      : busy ? uiLabel('创建中…', 'Creating…')
+        : composeReceipt ? uiLabel('重新打开', 'Reopen') : uiLabel('创建', 'Create');
+    cancel.disabled = busy;
+    cancel.textContent = composeReceipt ? uiLabel('关闭', 'Close') : uiLabel('取消', 'Cancel');
+    progress.textContent = composePhase === 'opening' ? uiLabel('已创建，正在打开会话…', 'Created. Opening the conversation…')
+      : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
+    const locked = busy || Boolean(composeReceipt);
+    for (const id of ['compose-mode-switch', 'compose-team-templates', 'compose-title-label', 'compose-member-picker']) {
+      document.getElementById(id).inert = locked;
+    }
   }
 
   function applyMemberFilter() {
@@ -5995,6 +6010,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let composeOpener;
   function closeComposeDialog({focus = false} = {}) {
     composeView += 1;
+    const saved = composeReceipt;
+    composeReceipt = null;
+    composePhase = '';
     const opener = composeOpener;
     composeOpener = null;
     document.getElementById('compose-dialog').hidden = true;
@@ -6003,6 +6021,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyMemberFilter();
     syncSelectedCount();
     if (focus && opener?.isConnected !== false) opener?.focus({preventScroll: true});
+    if (focus && saved) void loadSessions();
   }
 
   function renderMemberChoices(single, preserveSelection = false) {
@@ -6044,6 +6063,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openComposeDialog(mode, {keyboard = false} = {}) {
+    if (composePhase || composeReceipt) return;
     composeView += 1;
     composeMenu.close({focus: true});
     composeOpener = document.activeElement || composeMenuButton;
@@ -6077,6 +6097,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openSearchPanel(tab, conversationId = '', {fromSessionList = true} = {}) {
+    if (composePhase) return;
+    if (!document.getElementById('compose-dialog').hidden) {
+      const saved = composeReceipt;
+      closeComposeDialog();
+      if (saved) void loadSessions();
+    }
     searchFromSessionList = fromSessionList;
     searchConversation = conversationId;
     searchConversationTitle = document.getElementById('chat-title').textContent;
@@ -6084,7 +6110,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('search-close').hidden = false;
     document.getElementById('conversation-group').hidden = true;
     document.getElementById('pinned-group').hidden = true;
-    document.getElementById('compose-dialog').hidden = true;
     composeMenu.close();
     setFilterOpen(false, {focus: false});
     setNotificationsOpen(false);
@@ -7870,10 +7895,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
-  document.getElementById('compose-dialog-cancel').addEventListener('click', () => closeComposeDialog({focus: true}));
+  document.getElementById('compose-dialog-cancel').addEventListener('click', () => {
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
   document.getElementById('compose-mode-switch').addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
-    if (!button || composeMode !== 'group') return;
+    if (!button || composeMode !== 'group' || composePhase || composeReceipt) return;
     setGroupMode(button.dataset.groupMode);
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
@@ -7891,50 +7918,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
     const submit = document.getElementById('compose-dialog-submit');
-    if (composing || submit.disabled) return;
+    if (composePhase || submit.disabled) return;
     const wid = workspaceId();
     const owner = currentUser;
     const view = composeView;
     const current = () => wid === workspaceId() && owner === currentUser && view === composeView &&
       !document.getElementById('compose-dialog').hidden;
-    const template = composeMode === 'group' && groupMode === 'team';
-    const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
-    const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
-    const title = document.getElementById('compose-title').value.trim();
-    const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
-    if (template && !picked) return;
-    const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
-    const body = template ? {} : composeMode === 'contact'
-      ? {kind:'dm', member_ids:memberIds}
-      : composeGroupPayload(memberIds, title, agentIds);
-    const fingerprint = JSON.stringify([owner?.id, path, body]);
-    if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
-    const cancel = document.getElementById('compose-dialog-cancel');
+    const template = composeReceipt?.template ?? (composeMode === 'group' && groupMode === 'team');
     setComposeError();
-    composing = true;
-    cancel.disabled = true;
-    submit.textContent = uiLabel('创建中…', 'Creating…');
-    syncComposeCreate();
     try {
-      const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key});
+      let initialRead;
+      if (!composeReceipt) {
+        const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
+        const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
+        const title = document.getElementById('compose-title').value.trim();
+        const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
+        if (template && !picked) return;
+        const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
+        const body = template ? {} : composeMode === 'contact'
+          ? {kind:'dm', member_ids:memberIds} : composeGroupPayload(memberIds, title, agentIds);
+        const fingerprint = JSON.stringify([owner?.id, path, body]);
+        if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
+        composePhase = 'creating';
+        syncComposeCreate();
+        const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key},
+          AbortSignal.timeout(template ? 60000 : 20000));
+        if (!current()) return;
+        const conversation = result.body.conversation;
+        if (![200,201].includes(result.status) || !conversation?.id) {
+          setComposeError(composeCreateError(result.status, template, result.body.error));
+          return;
+        }
+        composeAttempt = null;
+        composeReceipt = {id:conversation.id, template};
+        if (!template && result.status === 201 && conversation.kind === 'group' && conversation.last_seq === 0 &&
+            conversation.workspace_id === wid && Array.isArray(conversation.members) && Array.isArray(conversation.agent_members)) {
+          initialRead = {status:200, body:{conversation, items:[]}};
+        }
+      }
+      composePhase = 'opening';
+      syncComposeCreate();
+      const opened = await openSocialConversation(composeReceipt.id,
+        {quiet:true, initialRead, signal:AbortSignal.timeout(12000)}).catch(() => false);
       if (!current()) return;
-      if (![200,201].includes(result.status) || !result.body.conversation?.id) {
-        setComposeError(composeCreateError(result.status, template, result.body.error));
+      if (!opened) {
+        setComposeError(uiLabel('会话已创建。暂时无法打开，请重试。', 'The conversation is saved. Try opening it again.'));
         return;
       }
-      composeAttempt = null;
       closeComposeDialog();
-      if (await openSocialConversation(result.body.conversation.id)) {
-        void loadSessions();
-        show('ok', template ? '智能体团队已创建。' : '会话已创建。');
-      }
+      void loadSessions();
+      show('ok', template ? '智能体团队已创建。' : '会话已创建。');
     } catch {
       if (current()) setComposeError(composeCreateError(0, template));
     } finally {
-      composing = false;
-      cancel.disabled = false;
-      submit.textContent = uiLabel('创建', 'Create');
-      syncComposeCreate();
+      if (current()) {
+        composePhase = '';
+        syncComposeCreate();
+      }
     }
   });
 
@@ -8273,7 +8313,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatMore.focus();
       return;
     }
-    if (!document.getElementById('compose-dialog').hidden && !composing) {
+    if (!document.getElementById('compose-dialog').hidden && !composePhase) {
       event.preventDefault();
       closeComposeDialog({focus: true});
       return;

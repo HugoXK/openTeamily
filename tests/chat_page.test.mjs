@@ -698,20 +698,29 @@ for (const preset of [true,false]) {
     doc.querySelector = selector => selector === '#team-template-choices input:checked' ? templates().find(box=>box.checked) : null;
     const attempts = [];
     const path = '/v1/workspaces/ws-1/' + (preset ? 'team-templates/product-squad' : 'social/conversations');
-    const created = {id:'new-group',kind:'group',title:'调研协作群',members:[{user_id:alice,username:'alice'}]};
+    const created = {id:'new-group',kind:'group',workspace_id:'ws-1',title:'调研协作群',
+      members:[{user_id:alice,username:'alice'}], agent_members:[], last_seq:0};
+    const createFailure = Promise.withResolvers();
+    const openFailure = Promise.withResolvers();
+    let opens = 0;
     try {
       await mount(doc,{fetcher:async (url,options={})=>{
         if (url === '/v1/team-templates') return json(200,{items:[{slug:'product-squad',name:'产品研发小队',agents:[{name:'产品经理'}]}]});
         if (url.endsWith('/members')) return json(200,{items:[{user_id:bob,username:'bob'}]});
         if (url === path && options.method === 'POST') {
           attempts.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
-          if (attempts.length === 1) return json(500,{error:{code:'internal_error',message:'Internal service error'}});
+          if (attempts.length === 1) return createFailure.promise;
           if (preset && attempts.length === 2) return json(409,{error:{code:'team_template_role_conflict',
             message:'「产品经理助理」已归档。请在智能体中恢复后重试。'}});
           if (preset && attempts.length === 3) return json(429,{error:{code:'team_template_agent_quota'}});
-          return json(201,{conversation:created});
+          const {agent_members:_, ...raw} = created;
+          return json(201,{conversation:preset ? raw : created});
         }
-        if (url.endsWith('/new-group')) return json(200,{conversation:created,items:[]});
+        if (url.endsWith('/new-group')) {
+          opens += 1;
+          if (opens === 1) return openFailure.promise;
+          return json(200,{conversation:created,items:[]});
+        }
         return original(url,options);
       }});
       await fire(el('compose-new-group'),'click',{detail:1});
@@ -723,7 +732,18 @@ for (const preset of [true,false]) {
       choice.checked = true;
       await fire(preset ? templateChoices : memberChoices,'change');
       const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
+      const createdAttempt = submit();
+      await settle();
+      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建会话/ : /Creating the conversation/);
+      assert.equal(el('compose-dialog-submit').disabled,true);
+      assert.equal(el('compose-mode-switch').inert,true);
+      await fire(el('session-search'),'focus');
+      assert.equal(el('compose-dialog').hidden,false);
+      assert.equal(el('search-panel').hidden,true);
       await submit();
+      assert.equal(attempts.length,1);
+      createFailure.resolve(json(500,{error:{code:'internal_error',message:'Internal service error'}}));
+      await createdAttempt;
       const error = el('compose-dialog-error');
       assert.equal(error.hidden,false);
       assert.equal(error.focused,true);
@@ -742,7 +762,30 @@ for (const preset of [true,false]) {
         assert.equal(choice.checked,true);
         assert.equal(el('compose-dialog-submit').disabled,false);
       }
-      await submit();
+      const lastAttempt = submit();
+      if (preset) {
+        await settle();
+        assert.equal(opens,1);
+        assert.equal(el('compose-dialog').hidden,false);
+        assert.match(el('compose-dialog-progress').textContent,/已创建，正在打开会话/);
+        await submit();
+        assert.equal(attempts.length,4);
+        openFailure.resolve(json(500,{error:{code:'internal_error',message:'Internal service error'}}));
+        await lastAttempt;
+        assert.match(error.textContent,/会话已创建。暂时无法打开/);
+        assert.equal(el('compose-dialog-submit').disabled,false);
+        assert.equal(el('compose-dialog-submit').textContent,'重新打开');
+        assert.equal(el('compose-dialog-cancel').textContent,'关闭');
+        assert.equal(el('compose-dialog').hidden,false);
+        assert.equal(choice.checked,true);
+        assert.doesNotMatch(el('status').textContent,/Internal service error/);
+        await submit();
+        assert.equal(attempts.length,4);
+        assert.equal(opens,2);
+      } else {
+        await lastAttempt;
+        assert.equal(opens,0);
+      }
       for (const retry of attempts.slice(1)) assert.deepEqual(retry,attempts[0]);
       assert.equal(error.hidden,true);
       assert.equal(el('compose-dialog').hidden,true);
