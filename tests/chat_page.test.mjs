@@ -2406,6 +2406,9 @@ test('notification badge and summary text', () => {
     '小林 发布了新智能体「日程助手」');
   assert.equal(notificationSummary({kind: 'artifact.shared', actor_username: '小林', title: '排期表'}),
     '小林 分享了作品「排期表」');
+  for (const [status, phrase] of [['succeeded','已完成'], ['failed','失败'], ['timeout','已超时'], ['interrupted','已中断']]) {
+    assert.equal(notificationSummary({kind:'automation.run_finished', title:'每日摘要', status}), '「每日摘要」运行' + phrase);
+  }
 });
 
 test('notification targets only resolve exact receipt scope and safe public listing slugs', () => {
@@ -2427,6 +2430,13 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationTarget({kind: 'follow_work', path: '/w/legacy-slug'}), '/w/legacy-slug');
   assert.equal(notificationTarget({kind: 'follow_work', path: 'https://outside.example/w/legacy-slug'}), null);
   assert.equal(notificationTarget({kind: 'automation_reminder', path: '/wrong'}), '/automations');
+  const run = {kind:'automation.run_finished', workspace_id:workspace, automation_id:other, run_id:share};
+  const runPath = `/automations?workspace=${workspace}&automation=${other}&run=${share}`;
+  assert.equal(notificationTarget(run, workspace), runPath);
+  assert.equal(notificationTarget({...run, path:runPath}, workspace), runPath);
+  assert.equal(notificationTarget(run, other), null);
+  assert.equal(notificationTarget({...run, run_id:'../settings'}, workspace), null);
+  assert.equal(notificationTarget({...run, path:'https://outside.example' + runPath}, workspace), null);
   const conversation = 'otc_' + 'A'.repeat(26);
   const message = 'otm_' + 'B'.repeat(26);
   const work = {kind: 'artifact.shared', workspace_id: workspace, conversation_id: conversation, message_id: message};
@@ -2493,6 +2503,46 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.equal(el('notification-count').hidden, true);
     assert.equal(el('notifications-empty').textContent, '暂无未读提及。');
   } finally { restore(); }
+});
+
+test('automation notification opens only the exact run, keeps raw output out of the inbox and marks all workspace notices read', async () => {
+  const fixture = linkedChatFixture('');
+  const {doc, el, routes, restore} = fixture;
+  const automation = 'a'.repeat(32), run = 'b'.repeat(32), id = 'c'.repeat(32);
+  const base = `${linkBase(linkWork)}/notifications`;
+  const route = `/automations?workspace=${linkWork}&automation=${automation}&run=${run}`;
+  const navigation = [], reads = [];
+  globalThis.location.assign = href => navigation.push(href);
+  const task = {id, kind:'automation.run_finished', workspace_id:linkWork, automation_id:automation, run_id:run,
+    status:'timeout', title:'每周总结', created:10, read:false, excerpt:'不应出现在通知的运行结果'};
+  const others = {id:'other', kind:'mention', actor_username:'小林', read:false, created:5};
+  let unread = 2;
+  routes.set(base, () => json(200, {unread_count:unread, items:[{...task, read:unread < 2}, {...others, read:unread === 0}]}));
+  routes.set(base + '/read', ({body}) => {
+    reads.push(body);
+    unread = body.all ? 0 : 1;
+    return json(200, {unread_count:unread});
+  });
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    await fire(el('notifications-toggle'),'click');
+    el('notifications-kind').value = 'automation';
+    await fire(el('notifications-kind'),'change');
+    const list = el('notification-list');
+    assert.equal(list.children.length, 1);
+    const notice = list.children[0].children[0];
+    assert.equal(notice.dataset.notificationKind, task.kind);
+    assert.equal(notice.href, route);
+    assert.deepEqual(notice.children.map(node => node.tagName), ['STRONG','TIME']);
+    assert.equal(notice.children[0].textContent, '「每周总结」运行已超时');
+    await fire(notice,'click',{preventDefault() {}});
+    assert.deepEqual(navigation, [route]);
+    assert.deepEqual(reads, [{notification_id:id}]);
+    await fire(el('notifications-toggle'),'click');
+    await fire(el('notifications-read-all'),'click');
+    assert.deepEqual(reads, [{notification_id:id},{all:true}]);
+    assert.equal(el('notification-count').hidden, true);
+  } finally {restore();}
 });
 
 test('native notification links bound the read wait, fetch newest unread, and ignore stale workspace actions', async t => {
@@ -3782,7 +3832,7 @@ test('group reply policy readback updates the settings and composer from the sam
     assert.equal(dialog.open, false);
     assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
     assert.match(el('group-reply-policy-summary').textContent, /优先.*文案助手.*小周/);
-    assert.match(el('group-composer-routing-text').textContent, /文案助手.*优先回复/);
+    assert.match(el('group-composer-routing-text').textContent, /文案助手.*优先判断是否回复/);
   } finally {restore();}
 });
 
@@ -3995,7 +4045,17 @@ test('group chat keeps roster tools near the header and shows the authority for 
     agent_members:[reviewer, designer], group_agent_requests:true, group_agent_routing:{mode:'personal',default:'all'}};
   const reply = {id:linkSocialLatest, role:'agent', agent_id:designer.id, agent_name:designer.name, agent_owner_id:bob,
     reply_job_id:'design-reply', body:'已核对设计稿', created:1, seq:1};
-  routes.set(linkBase(linkTeam) + linkSocialPath, () => json(200, {conversation, items:[reply]}));
+  const path = linkBase(linkTeam) + linkSocialPath;
+  const items = [reply];
+  const sends = [];
+  routes.set(path, () => json(200, {conversation, items}));
+  routes.set(path + '/messages', ({body}) => {
+    sends.push(body);
+    const message = {id:'later-message', user_id:alice, body:body.body, created:5, seq:2,
+      reply_jobs:[{id:'passed-job', status:'passed', agent_id:reviewer.id, agent_name:reviewer.name}]};
+    items.push(message);
+    return json(201, {message});
+  });
   try {
     await mount(doc, {fetcher:fixture.fetcher});
     assert.equal(el('main-panel').dataset.chatKind, 'group');
@@ -4008,7 +4068,7 @@ test('group chat keeps roster tools near the header and shows the authority for 
     await fire(el('group-agent-manage'), 'click');
     assert.equal(el('group-info-panel').hidden, false);
     assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
-    assert.match(el('group-composer-routing-text').textContent, /群内智能体会回复/);
+    assert.match(el('group-composer-routing-text').textContent, /按内容决定是否回复.*@所有人/);
     const agentRow = el('message-list').children.find(row => row.dataset.replyJobId === 'design-reply');
     assert.equal(agentRow.dataset.chatAuthor, 'agent');
     await fire(agentRow.children.find(child => child.getAttribute('aria-label') === '回复 设计助理'), 'click');
@@ -4021,6 +4081,65 @@ test('group chat keeps roster tools near the header and shows the authority for 
     await fire(el('chat-agent-mention-options').children[0], 'click');
     assert.match(el('group-composer-routing-text').textContent, /已指定 1 位智能体/);
     assert.equal(el('group-composer-routing').dataset.kind, 'targeted');
+    composer.value = '@所有智能体 @all 保留的草稿 @产品';
+    composer.setSelectionRange(composer.value.length,composer.value.length);
+    await fire(composer,'input');
+    assert.match(el('group-composer-routing-text').textContent, /将提及所有人/);
+    await fire(el('chat-agent-mention-options').children[0],'click');
+    assert.equal(composer.value,'保留的草稿 ');
+    assert.match(el('group-composer-routing-text').textContent, /已指定 1 位智能体/);
+    composer.value = '请 @所核对这个设计';
+    composer.setSelectionRange(4, 4);
+    await fire(composer,'input');
+    const all = el('chat-agent-mention-options').children.find(option => Object.hasOwn(option.dataset,'mentionEveryone'));
+    assert.ok(all);
+    await fire(all,'click');
+    assert.equal(composer.value, '请 @所有人 核对这个设计');
+    assert.equal(el('chat-agent-mentions').hidden, true);
+    assert.match(el('group-composer-routing-text').textContent, /将提及所有人/);
+    assert.deepEqual(sends, []);
+    await fire(el('chat-form'),'submit',{preventDefault() {}});
+    await settle();
+    assert.deepEqual(sends, [{body:'请 @所有人 核对这个设计', reply_to:reply.id}]);
+    assert.equal(el('message-list').children.some(row => row.dataset.replyJobId === 'passed-job'), false);
+  } finally {restore();}
+});
+
+test('a human-only group can select Everyone in the picker without sending or losing the draft', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, restore, calls} = fixture;
+  const {view, saved} = publicOpeningView();
+  doc.defaultView = view;
+  const path = linkBase(linkTeam) + linkSocialPath;
+  routes.set(path, () => json(200, {conversation:{id:linkSocial, workspace_id:linkTeam, title:'好友群', kind:'group',
+    members:[linkMember], agent_members:[]}, items:[]}));
+  const picker = el('chat-agent-picker');
+  picker.showModal = () => { picker.open = true; };
+  picker.close = () => { picker.open = false; picker.dispatchEvent({type:'close'}); };
+  const results = el('chat-agent-picker-results');
+  results.querySelectorAll = selector => descendants(results).filter(node => matchesSelector(node, selector));
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    const launcher = el('chat-agent-picker-open');
+    assert.equal(launcher.hidden, false);
+    const composer = el('chat-body');
+    composer.value = '请确认明天的时间';
+    await fire(composer,'input');
+    await fire(launcher,'click');
+    assert.equal(picker.open,true);
+    assert.equal(results.children.length,1);
+    const row = results.children[0];
+    assert.ok(Object.hasOwn(row.dataset,'mentionEveryone'));
+    const checkbox = row.children[0];
+    checkbox.checked = true;
+    await fire(checkbox,'change');
+    await fire(el('chat-agent-picker-form'),'submit',{preventDefault() {}});
+    assert.equal(picker.open,false);
+    assert.equal(composer.value,'@所有人 请确认明天的时间');
+    t.mock.timers.tick(250);
+    assert.ok([...saved.values()].some(value => value.includes(composer.value)));
+    assert.equal(calls.some(call => call.method === 'POST' && call.path === path + '/messages'), false);
   } finally {restore();}
 });
 

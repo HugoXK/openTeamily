@@ -126,10 +126,10 @@
     <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
       <div class="notifications-head">
         <h2 id="notifications-heading" data-ui-text="chat.inbox.notifications">通知</h2>
-        <button type="button" id="notifications-read-all" disabled data-ui-text="chat.inbox.mark_all_read">全部已读</button>
+        <button type="button" id="notifications-read-all" disabled data-ui-text="chat.inbox.mark_all_read" data-ui-title="chat.inbox.mark_workspace_read" data-ui-label="chat.inbox.mark_workspace_read" title="将当前工作区的所有通知标为已读" aria-label="将当前工作区的所有通知标为已读">全部已读</button>
       </div>
       <div class="inbox-notification-filters">
-        <label><span data-ui-text="chat.kind">类型</span> <select id="notifications-kind"><option value="all" data-ui-text="chat.inbox.all">所有通知</option><option value="mention" data-ui-text="chat.inbox.mentions">提及我的消息</option></select></label>
+        <label><span data-ui-text="chat.kind">类型</span> <select id="notifications-kind"><option value="all" data-ui-text="chat.inbox.all">所有通知</option><option value="mention" data-ui-text="chat.inbox.mentions">提及我的消息</option><option value="automation" data-ui-text="chat.inbox.automation_runs">自动化运行</option></select></label>
         <label><input type="checkbox" id="notifications-unread"> <span data-ui-text="chat.inbox.unread_only">仅未读</span></label>
       </div>
       <p id="notifications-status" class="note" role="status" hidden></p>

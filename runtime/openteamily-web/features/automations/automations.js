@@ -15,7 +15,8 @@ import { dueAt, nextScheduledSlot, normalizeSchedule, validSchedule } from './sc
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
-import { validLongText } from '../../featurekit/http.js'
+import { FeatureError, validLongText } from '../../featurekit/http.js'
+import { requireMemoryWorkspace } from '../memory/access.js'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 export function refuse(status, code, message, details) {
@@ -46,6 +47,8 @@ const REMINDER = 'reminder'
 const RESULT_TEXT = 8000
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const HEX32 = /^[0-9a-f]{32}$/
+const NOTICE_ID = /^automation-run-([0-9a-f]{32})$/
+const NOTICE_POLICIES = new Set(['scheduled', 'all', 'off'])
 const USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 
@@ -57,6 +60,7 @@ CREATE TABLE IF NOT EXISTS ot_automations (
  created INTEGER NOT NULL, updated INTEGER NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
  intent TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT 'once', agents TEXT NOT NULL DEFAULT '[]',
  compiled INTEGER NOT NULL DEFAULT 0, imported_from TEXT, schedule_active_at INTEGER,
+ notification_policy TEXT NOT NULL DEFAULT 'scheduled' CHECK(notification_policy IN ('scheduled','all','off')),
  UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
 CREATE TABLE IF NOT EXISTS ot_automation_meeting_sources (
  automation_id TEXT PRIMARY KEY REFERENCES ot_automations(id) ON DELETE CASCADE,
@@ -87,6 +91,30 @@ CREATE TABLE IF NOT EXISTS ot_automation_manual_runs (
 CREATE TABLE IF NOT EXISTS ot_automation_studio_runs (
  run_id TEXT PRIMARY KEY REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
  title TEXT NOT NULL, document_id TEXT);
+CREATE TABLE IF NOT EXISTS ot_automation_run_notices (
+ run_id TEXT PRIMARY KEY REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL, automation_id TEXT NOT NULL, title TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('succeeded','failed','timeout','interrupted')),
+ created INTEGER NOT NULL, read_at INTEGER);
+CREATE INDEX IF NOT EXISTS ot_automation_notices_recent ON ot_automation_run_notices(workspace_id,created DESC,run_id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_notices_unread ON ot_automation_run_notices(workspace_id,created DESC,run_id DESC)
+ WHERE read_at IS NULL;
+`
+
+const NOTICE_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS ot_automation_notice_on_finish AFTER UPDATE OF status ON ot_automation_runs
+WHEN OLD.status='queued' AND OLD.claimed_at IS NOT NULL AND NEW.status IN ('succeeded','failed')
+ AND NEW.finished IS NOT NULL AND COALESCE(NEW.error_code,'') NOT IN ('cancelled','migrated')
+ AND (CASE WHEN json_valid(OLD.dispatch) THEN json_extract(OLD.dispatch,'$.backend') END)='ds-bot'
+BEGIN
+ INSERT INTO ot_automation_run_notices(run_id,workspace_id,automation_id,title,status,created)
+ SELECT NEW.id,NEW.workspace_id,a.id,a.title,
+   CASE WHEN NEW.error_code IN ('timeout','interrupted') THEN NEW.error_code ELSE NEW.status END,
+   NEW.finished
+ FROM ot_automations a WHERE a.id=NEW.automation_id AND a.workspace_id=NEW.workspace_id
+  AND (a.notification_policy='all' OR (a.notification_policy='scheduled' AND NEW.due_at>=0 AND NEW.attempt_of IS NULL))
+ ON CONFLICT(run_id) DO NOTHING;
+END;
 `
 
 const sha = (text) => createHash('sha256').update(String(text)).digest('hex')
@@ -141,6 +169,7 @@ function view(row) {
     id: row.id, workspace_id: row.workspace_id, title: row.title, prompt: row.prompt, template_id: row.template_id,
     schedule: JSON.parse(row.schedule), participants: JSON.parse(row.participants), enabled: row.enabled === 1,
     revision: row.revision, created: row.created, updated: row.updated, intent: row.intent, scope: row.scope,
+    notification_policy: row.notification_policy,
     agents: JSON.parse(row.agents), compiled: row.compiled === 1, served_by: 'ds-bot',
   }
 }
@@ -164,7 +193,7 @@ export function runView(row) {
 }
 
 export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact,
-  readMeetingAction, readMemoryAction, studioRequest }) {
+  readMeetingAction, readMemoryAction, studioRequest, requireWorkspace }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -216,14 +245,19 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (!all('PRAGMA table_info(ot_automations)').some(column => column.name === 'schedule_active_at')) {
       run('ALTER TABLE ot_automations ADD COLUMN schedule_active_at INTEGER')
     }
-    if (!all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')) {
+    if (!all('PRAGMA table_info(ot_automations)').some(column => column.name === 'notification_policy')) {
+      run("ALTER TABLE ot_automations ADD COLUMN notification_policy TEXT NOT NULL DEFAULT 'scheduled' CHECK(notification_policy IN ('scheduled','all','off'))")
+    }
+    const legacyPending = !all('PRAGMA table_info(ot_automation_runs)').some(column => column.name === 'claimed_at')
+    if (legacyPending) {
       run('ALTER TABLE ot_automation_runs ADD COLUMN claimed_at INTEGER')
       // Older pending rows combined queued and running; their delivery is uncertain.
       run("UPDATE ot_automation_runs SET claimed_at=started WHERE status='queued'")
-    }
+    } else db.exec(NOTICE_TRIGGER)
     const dispatch = { backend: 'ds-bot', result: { error: '上次运行因 DS-Bot 重启而中断。请检查已有结果，再决定是否重试。' } }
     run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='interrupted', dispatch=?
       WHERE status='queued' AND claimed_at IS NOT NULL`, clock(), JSON.stringify(dispatch))
+    if (legacyPending) db.exec(NOTICE_TRIGGER)
   })
   const activeRunFor = db.prepare(`SELECT id, automation_id, workspace_id, claimed_at FROM ot_automation_runs
     WHERE automation_id=? AND status='queued' ORDER BY started DESC, id DESC LIMIT 1`)
@@ -233,6 +267,58 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (typeof id !== 'string' || !HEX32.test(id)) refuse(400, 'invalid', 'workspace_id required')
     return id
   }
+
+  async function noticeWorkspace(payload, call) {
+    if (!call?.internal || typeof requireWorkspace !== 'function') {
+      throw new FeatureError(404, 'not_found', 'Automation notices are unavailable')
+    }
+    const workspaceId = payload?.workspace_id
+    if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) {
+      throw new FeatureError(400, 'invalid', 'workspace_id required')
+    }
+    await requireWorkspace(workspaceId)
+    return workspaceId
+  }
+
+  function noticePage(workspaceId, limit = 20, unread = false) {
+    const items = all(`SELECT run_id,workspace_id,automation_id,title,status,created,read_at FROM ot_automation_run_notices
+      WHERE workspace_id=? ${unread ? 'AND read_at IS NULL' : ''} ORDER BY created DESC,run_id DESC LIMIT ?`, workspaceId, limit)
+      .map(({read_at, ...row}) => ({...row, id:'automation-run-' + row.run_id, kind:'automation.run_finished', read:read_at !== null}))
+    const {n:unread_count} = one('SELECT COUNT(*) AS n FROM ot_automation_run_notices WHERE workspace_id=? AND read_at IS NULL', workspaceId)
+    return {items, unread_count}
+  }
+
+  async function notifications(payload, call) {
+    const workspaceId = await noticeWorkspace(payload, call)
+    const {limit = 20, unread = false} = payload
+    if (Object.keys(payload).some(key => !['workspace_id', 'limit', 'unread'].includes(key)) ||
+        !Number.isInteger(limit) || limit < 1 || limit > 200 || typeof unread !== 'boolean') {
+      throw new FeatureError(400, 'invalid', 'Invalid automation notification query')
+    }
+    return noticePage(workspaceId, limit, unread)
+  }
+
+  async function readNotifications(payload, call) {
+    const workspaceId = await noticeWorkspace(payload, call)
+    const {notification_id, all: markAll} = payload
+    const exact = typeof notification_id === 'string' ? NOTICE_ID.exec(notification_id) : null
+    if (Object.keys(payload).some(key => !['workspace_id', 'notification_id', 'all'].includes(key)) ||
+        !(markAll === true ? notification_id === undefined : markAll === undefined && exact)) {
+      throw new FeatureError(400, 'invalid', 'Choose an exact automation notification or mark all as read')
+    }
+    return tx(db, () => {
+      if (markAll) {
+        run('UPDATE ot_automation_run_notices SET read_at=? WHERE workspace_id=? AND read_at IS NULL', clock(), workspaceId)
+      } else {
+        const runId = exact[1]
+        const row = one('SELECT read_at FROM ot_automation_run_notices WHERE workspace_id=? AND run_id=?', workspaceId, runId)
+        if (!row) throw new FeatureError(404, 'not_found', 'Automation notification not found')
+        if (row.read_at === null) run('UPDATE ot_automation_run_notices SET read_at=? WHERE workspace_id=? AND run_id=?', clock(), workspaceId, runId)
+      }
+      return noticePage(workspaceId)
+    })
+  }
+
   const load = (workspaceId, id) => {
     if (typeof id !== 'string' || !HEX32.test(id)) refuse(404, 'not_found', 'Automation not found')
     const row = one('SELECT * FROM ot_automations WHERE id=? AND workspace_id=?', id, workspaceId)
@@ -418,11 +504,13 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const scope = payload.scope ?? 'once'
     const agents = payload.agents ?? []
     const enabled = payload.enabled === undefined ? templateId === REMINDER : payload.enabled
+    const notificationPolicy = payload.notification_policy === undefined ? 'scheduled' : payload.notification_policy
     if (!validTitle(title) || !Object.hasOwn(TEMPLATES, templateId) || !validSchedule(schedule) || !validUsernames(names)
       || !validIntent(intent) || !SCOPES.has(scope) || !validAgents(agents)) {
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
     if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
+    if (!NOTICE_POLICIES.has(notificationPolicy)) refuse(400, 'invalid', 'Invalid automation notification policy')
     if (payload.run_sample !== undefined && (typeof payload.run_sample !== 'boolean' ||
       (payload.run_sample && (source || !RECURRING.has(schedule.kind))))) {
       refuse(400, 'invalid_sample', '请先选定重复运行时间，然后试运行。')
@@ -440,6 +528,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
       ...(payload.enabled === undefined ? {} : { enabled }), ...(meeting ? { source_meeting: meetingReference(meeting) } : {}),
       ...(memoryAction ? {source_memory_action: memoryActionReference(memoryAction)} : {}),
+      ...(notificationPolicy === 'scheduled' ? {} : {notification_policy: notificationPolicy}),
       ...(payload.run_sample ? { run_sample: true } : {}) }))
     const keyHash = sha(key)
     const sampleKey = 'automation-sample:' + key
@@ -447,7 +536,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (existing) {
       const sample = submittedRun(existing.id, sampleKey)
       const replay = !source && !sample && !payload.run_sample && !meetingSourceFor(existing.id) && !memorySourceFor(existing.id) &&
-        existing.template_id === REMINDER && templateId === REMINDER
+        existing.template_id === REMINDER && templateId === REMINDER && notificationPolicy === 'scheduled' &&
+        existing.notification_policy === 'scheduled'
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
       return { status: 200, automation: detail(existing), ...(sample ? { sample_run: runView(sample) } : {}) }
     }
@@ -457,10 +547,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (one('SELECT COUNT(*) AS n FROM ot_automations WHERE workspace_id=?', workspaceId).n >= MAX_AUTOMATIONS) refuse(429, 'quota', 'Automation capacity reached')
     const id = newId()
     const now = clock()
-    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled, schedule_active_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)',
+    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled, schedule_active_at, notification_policy) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)',
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
-      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0, enabled ? now : null)
+      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0, enabled ? now : null, notificationPolicy)
     if (meeting) {
       run(`INSERT INTO ot_automation_meeting_sources (automation_id, workspace_id, meeting_id, revision, action_index, title, text, owner)
         VALUES (?,?,?,?,?,?,?,?)`, id, workspaceId, meeting.meeting_id, meeting.revision, meeting.action_index,
@@ -575,7 +665,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if (!Number.isInteger(revision) || revision < 1 || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) {
         refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
       }
-      const allowed = new Set(['title', 'prompt', 'schedule', 'participants', 'enabled', 'intent', 'scope', 'agents'])
+      const allowed = new Set(['title', 'prompt', 'schedule', 'participants', 'enabled', 'intent', 'scope', 'agents', 'notification_policy'])
       if (Object.keys(changes).some((k) => !allowed.has(k))) refuse(400, 'invalid', 'Unknown automation field')
       const current = view(row)
       if (revision !== current.revision) refuse(409, 'conflict', 'Automation changed elsewhere; reload and retry', { automation: current })
@@ -589,6 +679,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if ('scope' in changes) { if (!SCOPES.has(changes.scope)) bad(); next.scope = changes.scope }
       if ('agents' in changes) { if (!validAgents(changes.agents)) bad(); next.agents = changes.agents.map((n) => n.trim()) }
       if ('enabled' in changes) { if (typeof changes.enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean'); next.enabled = changes.enabled }
+      if ('notification_policy' in changes) {
+        if (!NOTICE_POLICIES.has(changes.notification_policy)) refuse(400, 'invalid', 'Invalid automation notification policy')
+        next.notification_policy = changes.notification_policy
+      }
       let compiled = current.compiled
       if ('prompt' in changes) compiled = false
       else if (compiled) next.prompt = compilePrompt(current.template_id, next.intent, next.scope, next.schedule, next.participants, next.agents)
@@ -601,10 +695,10 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       // Establish eligibility only when the rule changes or resumes. A prompt
       // edit and a DS-Bot restart must leave an eligible overdue slot intact.
       const activeAt = next.enabled && (!current.enabled || schedule !== row.schedule) ? now : row.schedule_active_at
-      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=?, schedule_active_at=? WHERE id=?',
+      run('UPDATE ot_automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, enabled=?, intent=?, scope=?, agents=?, compiled=?, revision=revision+1, updated=?, schedule_active_at=?, notification_policy=? WHERE id=?',
         next.title, sha(next.title.toLowerCase()), next.prompt, schedule,
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
-        JSON.stringify(next.agents), compiled ? 1 : 0, now, activeAt, row.id)
+        JSON.stringify(next.agents), compiled ? 1 : 0, now, activeAt, next.notification_policy, row.id)
       return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id), now) }
     })
   }
@@ -837,6 +931,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     },
     'automations/runs': runs,
     'automations/saveRun': saveRun,
+    'automations/notifications': notifications,
+    'automations/readNotifications': readNotifications,
     'automations/studioPreview': studioCopy,
     'automations/studioPublish': (p) => studioCopy(p, true),
     'automations/runNow': runNow,
@@ -863,6 +959,7 @@ export default async function automations(host) {
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
     personalBinding: () => host.call('agents/personal-binding', {}),
+    requireWorkspace: workspace => requireMemoryWorkspace(host, workspace),
     saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
     studioRequest: payload => host.call('studio/v1', payload),
     readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
@@ -882,5 +979,7 @@ export default async function automations(host) {
   }
   ops.v1 = feature.ops.v1
   ops.importRuns = feature.ops.importRuns
+  ops.notifications = feature.ops.notifications
+  ops.readNotifications = feature.ops.readNotifications
   return { pages: ['automations'], endpoints: ops, migrate: feature.migrate }
 }

@@ -62,9 +62,13 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   assert.equal((await owner.ok("GET",queue)).items.some((item: any) => item.message.id === ordinary.id),false);
   const leadJob = ordinary.reply_jobs[0];
   const claim_id = randomUUID();
-  assert.equal((await teammate.ok("POST","/v1/ot/agent-reply-jobs/"+leadJob.id,{
+  const claimLead = {
     action:"start",attempt:1,source_revision:ordinary.revision,claim_id,accept_group_text_turn:true,
-  })).group_text_only,true);
+  };
+  assert.equal((await teammate.call("POST","/v1/ot/agent-reply-jobs/"+leadJob.id,claimLead)).status,409);
+  assert.deepEqual(await teammate.ok("POST","/v1/ot/agent-reply-jobs/"+leadJob.id,{
+    ...claimLead,accept_discretionary_reply:true,
+  }),{ok:true,group_text_only:true,discretionary:true,prior_replies:[]});
   const reply = await teammate.ok("POST",room+"/agent-messages",{
     agent_ref:"shared",body:"当前进展已核对",mode:"mention",reply_to:ordinary.id,job_id:leadJob.id,attempt:1,claim_id,
   });

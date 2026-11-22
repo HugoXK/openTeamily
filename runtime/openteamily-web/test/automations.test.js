@@ -665,6 +665,8 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   await Promise.all(restored.inflight.values())
   assert.deepEqual(calls.map(item => item.requestId), [`ot-automation:${queuedId}`])
   assert.equal(restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run.status, 'succeeded')
+  assert.deepEqual(restored.db.prepare('SELECT run_id,status FROM ot_automation_run_notices ORDER BY run_id').all()
+    .map(row => [row.run_id, row.status]), [[claimedId, 'interrupted'], [queuedId, 'succeeded']])
 })
 
 test('older pending native rows have unknown delivery and become interrupted after migration', t => {
@@ -672,7 +674,7 @@ test('older pending native rows have unknown delivery and become interrupted aft
   const {automation} = e['automations/create']({workspace_id: W, title: 'Previous owner runtime', template_id: 'custom',
     prompt: 'Check once', participants: ['alice'], schedule: {kind: 'now', time_zone: 'UTC'}, idempotency_key: 'r'.repeat(16)})
   const id = 'f'.repeat(32)
-  feature.db.exec('ALTER TABLE ot_automation_runs DROP COLUMN claimed_at')
+  feature.db.exec('DROP TRIGGER ot_automation_notice_on_finish; ALTER TABLE ot_automation_runs DROP COLUMN claimed_at')
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()
@@ -681,6 +683,7 @@ test('older pending native rows have unknown delivery and become interrupted aft
     turn: () => assert.fail('old pending work must not be dispatched')})
   t.after(() => { restored.stop(); restored.db.close() })
   assert.equal(restored.ops.run({workspace_id: W, id: automation.id, run_id: id}).run.error_code, 'interrupted')
+  assert.equal(restored.db.prepare('SELECT COUNT(*) AS n FROM ot_automation_run_notices').get().n, 0)
   restored.start()
   assert.equal(restored.inflight.size, 0)
 })

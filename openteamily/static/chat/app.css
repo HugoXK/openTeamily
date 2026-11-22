@@ -2423,6 +2423,8 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 #chat-agent-picker-results { display: grid; grid-auto-rows: minmax(2.75rem, auto); overflow-y: auto; max-height: min(17rem, 34dvh); }
 .chat-agent-picker-choice { display: flex; align-items: center; gap: .625rem; padding: .375rem .5rem; border-radius: .5rem; overflow-wrap: anywhere; }
 .chat-agent-picker-choice:hover, .chat-agent-picker-choice:focus-within { background: var(--ot-surface-2); }
+.chat-agent-picker-choice[data-mention-everyone] { background: var(--ot-bg-accent); }
+.chat-agent-mention-options [data-mention-everyone] { color: var(--ot-accent-hover); font-weight: 650; }
 .chat-agent-picker-choice small { display: block; color: var(--ot-muted); }
 .chat-agent-picker-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .5rem; }
 #chat-agent-picker-count { margin-inline-end: auto; }

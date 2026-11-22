@@ -22,7 +22,7 @@ async function answer(actor: Actor, room: string, request: any, job: Job, isolat
   const claim_id = randomUUID();
   const attempt = 1;
   const receipt = await actor.ok("POST", "/v1/ot/agent-reply-jobs/" + job.id, {
-    action: "start", attempt, source_revision: request.revision, claim_id, accept_group_text_turn: true,
+    action: "start", attempt, source_revision: request.revision, claim_id, accept_group_text_turn: true, accept_discretionary_reply: true,
   });
   assert.equal(receipt.group_text_only === true, isolated);
   const reply = await actor.ok("POST", room + "/agent-messages", {
@@ -58,7 +58,8 @@ test("an existing single-member agent group answers naturally without creating f
   const requested = await send("都回复我一下");
   assert.deepEqual(targets(requested), targets(hello));
   const inbox = await owner.ok("GET", queue);
-  assert.ok(inbox.jobs.some((row: any) => row.message.id === hello.id));
+  assert.ok(inbox.jobs.some((row: any) => row.message.id === hello.id && row.discretionary === true));
+  assert.ok(inbox.jobs.some((row: any) => row.message.id === requested.id && !row.discretionary));
   assert.deepEqual((await owner.ok("GET", "/v1/ot/agent-inbox")).items, []);
   const replies = await Promise.all(hello.reply_jobs.map((job: Job) => answer(owner, room, hello, job)));
   assert.deepEqual((await owner.ok("GET", queue)).jobs.filter((row: any) => replies.some(reply => reply.id === row.message.id)), []);
@@ -93,6 +94,66 @@ test("an existing single-member agent group answers naturally without creating f
   assert.equal((await owner.ok("GET", queue)).items.some((item: any) => item.message.id === copy.id), false);
 });
 
+test("ordinary agents can remain silent using a scoped claim and see only visible earlier replies to that exact message", async () => {
+  const [owner, stranger] = await Promise.all([home(service.base, "judgment-owner"), home(service.base, "judgment-other")]);
+  const group = await owner.ok("POST", "/v1/ot/conversations", {
+    kind: "group", account_group: true, title: "Native judgment", agents: [lead, engineer, reviewer],
+  });
+  const room = roomPath(group);
+  const send = (body: string) => owner.ok("POST", room + "/messages", {body});
+  const source = await send("hello everyone");
+  const [first, second, third] = source.reply_jobs;
+  const start = (job: Job, revision = source.revision) => ({action: "start", attempt: 1, source_revision: revision,
+    claim_id: randomUUID(), accept_discretionary_reply: true});
+  const path = (job: Job) => "/v1/ot/agent-reply-jobs/" + job.id;
+  const claimFirst = start(first);
+  assert.equal((await owner.call("POST", path(first), {...claimFirst, accept_discretionary_reply: undefined})).status, 409);
+  assert.equal((await owner.call("POST", room + "/agent-messages", {
+    agent_ref: first.agent_id, body: "Unclaimed legacy response", mode: "mention", reply_to: source.id,
+  })).status, 409);
+  assert.deepEqual(await owner.ok("POST", path(first), claimFirst), {ok: true, discretionary: true, prior_replies: []});
+  const delivered = await owner.ok("POST", room + "/agent-messages", {
+    agent_ref: first.agent_id, body: "I can review this release.", mode: "mention", reply_to: source.id,
+    job_id: first.id, claim_id: claimFirst.claim_id, attempt: 1,
+  });
+  const unrelated = await send("@z-manager another question");
+  await answer(owner, room, unrelated, unrelated.reply_jobs[0]);
+
+  const claimSecond = start(second);
+  const secondStart = await owner.ok("POST", path(second), claimSecond);
+  assert.deepEqual(secondStart, {ok: true, discretionary: true,
+    prior_replies: [{name: lead.name, text: "I can review this release."}]});
+  assert.deepEqual(await owner.ok("POST", path(second), claimSecond), secondStart);
+  const pass = {action: "pass", attempt: 1, claim_id: claimSecond.claim_id};
+  assert.equal((await stranger.call("POST", path(second), pass)).status, 404);
+  assert.equal((await owner.call("POST", path(second), {...pass, claim_id: randomUUID()})).status, 409);
+  assert.equal((await owner.call("POST", path(second), {...pass, body: "No stored text"})).status, 400);
+  assert.deepEqual(await owner.ok("POST", path(second), pass), {ok: true});
+  assert.deepEqual(await owner.ok("POST", path(second), pass), {ok: true});
+  assert.equal((await owner.call("POST", room + "/agent-messages", {
+    agent_ref: second.agent_id, body: "Phantom after pass", mode: "mention", reply_to: source.id,
+    job_id: second.id, claim_id: pass.claim_id, attempt: 1,
+  })).status, 409);
+  const rows = (await owner.ok("GET", room + "/messages")).messages;
+  assert.deepEqual(rows.filter((message: any) => message.reply_to === source.id).map((message: any) => message.id), [delivered.id]);
+  const current = rows.find((message: any) => message.id === source.id);
+  assert.equal(current.reply_jobs[1].status, "passed");
+  assert.equal(current.reply_jobs[1].can_retry, false);
+  assert.equal((await owner.call("POST", room + "/messages/" + source.id + "/agent-retry", {job_id: second.id, attempt: 1})).status, 409);
+
+  await owner.ok("POST", "/v1/ot/messages/" + delivered.id + "/hide", {conversation_id: group.id});
+  const claimThird = start(third);
+  assert.deepEqual(await owner.ok("POST", path(third), claimThird), {ok: true, discretionary: true, prior_replies: []});
+  await owner.ok("DELETE", room + "/agents/" + third.agent_id);
+  assert.equal((await owner.call("POST", path(third), {action: "pass", attempt: 1, claim_id: claimThird.claim_id})).status, 409);
+
+  const required = await send("都回复我一下");
+  const only = required.reply_jobs[0];
+  const oldStart = {...start(only, required.revision), accept_discretionary_reply: undefined};
+  assert.deepEqual(await owner.ok("POST", path(only), oldStart), {ok: true});
+  assert.equal((await owner.call("POST", path(only), {action: "pass", attempt: 1, claim_id: oldStart.claim_id})).status, 409);
+});
+
 test("shared conversation uses natural fanout only for explicit all-agent language and isolates other owners", async () => {
   const [author, colleague, outsider] = await Promise.all([
     home(service.base, "natural-author"), home(service.base, "natural-peer"), home(service.base, "natural-other"),
@@ -115,6 +176,16 @@ test("shared conversation uses natural fanout only for explicit all-agent langua
   assert.deepEqual(targets(command), [lead.agent_ref, engineer.agent_ref]);
   const alias = await author.ok("POST", room + "/messages", {body: "@all 请都检查一下"});
   assert.deepEqual(targets(alias), targets(command));
+  const chinese = await author.ok("POST", room + "/messages", {
+    body: `@所有人 @${colleague.handle} 都看一下`, client_key: "whole-room-exact-notice",
+  });
+  assert.deepEqual(targets(chinese), targets(command));
+  assert.equal((await author.ok("POST", room + "/messages", {body: chinese.body, client_key: "whole-room-exact-notice"})).id, chinese.id);
+  const mentioned = await colleague.ok("GET", "/v1/ot/notifications");
+  assert.equal(mentioned.notifications.filter((notice: any) => notice.kind === "messenger.mention" && notice.data.message_id === chinese.id).length, 1);
+  for (const actor of [author, outsider]) {
+    assert.equal((await actor.ok("GET", "/v1/ot/notifications")).notifications.some((notice: any) => notice.data.message_id === chinese.id), false);
+  }
   const handle = await author.ok("POST", room + "/messages", {body: "@all.home 请检查一下"});
   assert.deepEqual(targets(handle), []);
   const colleagueId = await ownerId(colleague);

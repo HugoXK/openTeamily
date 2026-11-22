@@ -33,6 +33,10 @@ export function scheduleFromForm(data) {
   return schedule;
 }
 
+function notificationPolicy(value) {
+  return value === 'all' || value === 'off' ? value : 'scheduled';
+}
+
 function editorFields(data) {
   return {
     title: (data.get('title') || '').trim(),
@@ -44,6 +48,7 @@ function editorFields(data) {
     schedule: scheduleFromForm(data),
     prompt: data.get('prompt') || '',
     enabled: data.has('enabled'),
+    notification_policy: notificationPolicy(data.get('notification_policy')),
   };
 }
 
@@ -433,6 +438,7 @@ function fillEditor(form, item, username) {
   form.elements.time_zone.value = schedule.time_zone || 'Asia/Shanghai';
   form.elements.prompt.value = (item && item.prompt) || '';
   form.elements.enabled.checked = Boolean(item && item.enabled);
+  form.elements.notification_policy.value = notificationPolicy(item?.notification_policy);
   form.elements.title.value = item?.title || '';
   syncScheduleFields(form);
 }
@@ -589,6 +595,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const nextRun = document.getElementById('automation-next-run');
   const scheduleSettings = document.getElementById('automation-schedule-settings');
   const native = servedByDsBot(document);
+  document.getElementById('automation-notification-settings').hidden = !native;
   let currentUser = null;
   let loadRequest = 0;
   let templates = [];
@@ -1939,6 +1946,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     event.preventDefault();
     if (saveButton.disabled) return;
     const values = readEditor(form);
+    if (!native) delete values.notification_policy;
     const workspace = workspaceId();
     if (!workspace) {
       show('error', '先选择一个工作区。');

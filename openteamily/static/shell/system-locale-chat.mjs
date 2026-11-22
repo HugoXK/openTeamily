@@ -65,6 +65,8 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.kind": ["类型", "Type"],
   "chat.inbox.all": ["所有通知", "All notifications"],
   "chat.inbox.mentions": ["提及我的消息", "Mentions"],
+  "chat.inbox.automation_runs": ["自动化运行", "Automation runs"],
+  "chat.inbox.mark_workspace_read": ["将当前工作区的所有通知标为已读", "Mark all workspace notifications as read"],
   "chat.inbox.unread_only": ["仅未读", "Unread only"],
   "chat.inbox.empty": ["暂无通知。", "No notifications yet."],
   "chat.search.scope": ["搜索范围", "Search scope"],

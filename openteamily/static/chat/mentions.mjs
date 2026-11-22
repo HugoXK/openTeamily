@@ -1,12 +1,33 @@
 import {readChatDraftMentions, writeChatDraftMentions} from '../home/runtime-readiness.mjs';
 
 const MAX_MENTIONS = 20;
+const EVERYONE = Symbol('everyone');
+const GROUP_ALL_TOKEN_PATTERN = /(^|[\s(（\[，。！？、,:：;；])[@＠](all|所有智能体|所有人)(?=$|[\s)）\]，。！？、,:：;；!?]|\.(?=$|\s))/giu;
 const mentionsLimit = room => room?.direct ? 5 : MAX_MENTIONS;
 const agentKey = agent => JSON.stringify([agent.owner_id, agent.id]);
 const availableAgent = agent => Boolean(agent?.name && agent.owner_id && agent.id && !agent.archived);
 
+export function hasGroupAllMention(body) {
+  return Boolean(body?.match(GROUP_ALL_TOKEN_PATTERN));
+}
+
+export function hasEveryoneMention(body) {
+  return [...String(body ?? '').matchAll(GROUP_ALL_TOKEN_PATTERN)].some(match => match[2] !== '所有智能体');
+}
+
+function withoutGroupAllMention(body) {
+  let text = '';
+  let cursor = 0;
+  for (const match of body.matchAll(GROUP_ALL_TOKEN_PATTERN)) {
+    text += body.slice(cursor, match.index + match[1].length);
+    const end = match.index + match[0].length;
+    cursor = body[end] === ' ' ? end + 1 : end;
+  }
+  return text + body.slice(cursor);
+}
+
 export function activeMentionQuery(text, caret) {
-  const match = /(?:^|[\s(（、，。])@([^\s@]{0,40})$/u.exec(text.slice(0, caret));
+  const match = /(?:^|[\s(（\[，。！？、,:：;；])[@＠]([^\s@＠]{0,40})$/u.exec(text.slice(0, caret));
   return match ? {start: caret - match[1].length - 1, query: match[1]} : null;
 }
 
@@ -21,18 +42,21 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   };
   const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
   const launcher = pickerNode('open');
+  const launcherLabel = launcher?.querySelector('.chat-agent-picker-label');
   const picker = doc.getElementById('chat-agent-picker');
   const results = pickerNode('results');
   const queryField = pickerNode('search');
   const applyButton = pickerNode('confirm');
   const selectedLabel = pickerNode('count');
   const text = (zh, en) => doc.documentElement?.lang?.startsWith('en') ? en : zh;
+  const everyoneToken = () => text('@所有人 ', '@all ');
 
   let scope = null;
   let roster;
   let available = new Map();
   let options = [];
   let active = 0;
+  let groupAllMention = false;
   const selected = new Map();
   const savedSelections = new Map();
   let picking = null;
@@ -45,10 +69,12 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   }
 
   function renderSelected({preserveFocus = false} = {}) {
+    const group = context();
+    groupAllMention = Boolean(group && !group.direct && hasGroupAllMention(input.value));
     const focusedKey = preserveFocus && doc.activeElement?.dataset?.agentMentionKey;
     let stale = false;
     let nextFocus;
-    chips.replaceChildren(...Array.from(selected, ([key]) => {
+    chips.replaceChildren(...Array.from(groupAllMention ? [] : selected, ([key]) => {
       const agent = available.get(key);
       const button = doc.createElement('button');
       button.type = 'button';
@@ -72,12 +98,12 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       });
       return button;
     }));
-    chips.hidden = selected.size === 0;
+    chips.hidden = groupAllMention || selected.size === 0;
     if (staleStatus) staleStatus.hidden = !stale;
     if (stale) input.setAttribute('aria-describedby', 'chat-agent-mention-status');
     else input.removeAttribute('aria-describedby');
     nextFocus?.focus({preventScroll: true});
-    onSelectionChange([...selected.values()], stale);
+    onSelectionChange(groupAllMention ? [] : [...selected.values()], stale);
   }
 
   function remember() {
@@ -105,31 +131,52 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       close();
       if (picker?.open) picker.close();
       list.setAttribute('aria-label', group?.direct ? text('提及私聊智能体', 'Mention chat agents')
-        : text('提及群智能体', 'Mention group agents'));
+        : text('选择群聊提及对象', 'Choose group mentions'));
+      const action = group?.direct ? text('请智能体回复', 'Ask agents to reply') : text('选择提及对象', 'Choose mentions');
+      if (launcherLabel) launcherLabel.textContent = group?.direct ? text('智能体', 'Agents') : text('提及', 'Mention');
+      launcher?.setAttribute('aria-label', action);
+      launcher?.setAttribute('title', action);
       const searchLabel = pickerNode('search-label');
       if (searchLabel) searchLabel.textContent = group?.direct ? text('搜索私聊智能体', 'Search chat agents')
-        : text('搜索群智能体', 'Search group agents');
+        : text('搜索提及对象', 'Search mentions');
+      if (queryField) queryField.placeholder = group?.direct ? text('搜索智能体名称或所有者', 'Search agent names or owners')
+        : text('搜索所有人、智能体或所有者', 'Search everyone, agent names or owners');
     }
     if (changedScope || roster !== group?.agents) {
       roster = group?.agents;
       available = new Map((roster || []).filter(availableAgent).map(agent => [agentKey(agent), agent]));
       renderSelected({preserveFocus: !changedScope});
     }
-    if (launcher) launcher.hidden = available.size === 0;
+    if (launcher) launcher.hidden = !group || (group.direct && available.size === 0);
     return group;
   }
 
   function choose(agent) {
     const group = refresh();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!query || !available.has(agentKey(agent)) || selected.size >= mentionsLimit(group)) {
+    if (!query || !group || (agent === EVERYONE ? group.direct
+      : !available.has(agentKey(agent)) || (!groupAllMention && selected.size >= mentionsLimit(group)))) {
       close();
       return;
     }
-    const end = input.selectionStart;
-    input.value = input.value.slice(0, query.start) + input.value.slice(end);
-    input.setSelectionRange(query.start, query.start);
-    selected.set(agentKey(agent), {owner_id: agent.owner_id, agent_id: agent.id});
+    const before = input.value.slice(0, query.start);
+    const after = input.value.slice(input.selectionStart);
+    let caret = query.start;
+    if (agent === EVERYONE) {
+      if (hasEveryoneMention(before + after)) input.value = before + after;
+      else {
+        const prefix = withoutGroupAllMention(before) + everyoneToken();
+        input.value = prefix + withoutGroupAllMention(after);
+        caret = prefix.length;
+      }
+      selected.clear();
+    } else {
+      input.value = group.direct ? before + after : withoutGroupAllMention(before + after);
+      if (!group.direct) caret = withoutGroupAllMention(before).length;
+      if (groupAllMention) selected.clear();
+      selected.set(agentKey(agent), {owner_id: agent.owner_id, agent_id: agent.id});
+    }
+    input.setSelectionRange(caret, caret);
     remember();
     renderSelected();
     close();
@@ -145,11 +192,14 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   function suggest(event) {
     if (event?.isComposing) return;
     const group = refresh();
+    if (groupAllMention !== Boolean(group && !group.direct && hasGroupAllMention(input.value))) renderSelected();
     const query = activeMentionQuery(input.value, input.selectionStart);
-    if (!group || !query || selected.size >= mentionsLimit(group)) { close(); return; }
+    if (!group || !query) { close(); return; }
     const needle = query.query.toLowerCase();
-    options = group.agents.filter(agent => availableAgent(agent) && !selected.has(agentKey(agent))
-      && agent.name.toLowerCase().includes(needle)).slice(0, 8);
+    const matches = !groupAllMention && selected.size >= mentionsLimit(group) ? [] : group.agents.filter(agent =>
+      availableAgent(agent) && (groupAllMention || !selected.has(agentKey(agent))) && agent.name.toLowerCase().includes(needle));
+    if (!group.direct && '所有人 所有智能体 全员 everyone all'.includes(needle)) matches.unshift(EVERYONE);
+    options = matches.slice(0, 8);
     if (!options.length) { close(); return; }
     active = 0;
     list.replaceChildren(...options.map((agent, index) => {
@@ -157,7 +207,9 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       option.type = 'button';
       option.id = `chat-agent-mention-option-${index}`;
       option.setAttribute('role', 'option');
-      option.textContent = agent.owner_name ? `${agent.name} · ${agent.owner_name}` : agent.name;
+      if (agent === EVERYONE) option.dataset.mentionEveryone = '';
+      option.textContent = agent === EVERYONE ? text('所有人', 'Everyone')
+        : agent.owner_name ? `${agent.name} · ${agent.owner_name}` : agent.name;
       option.addEventListener('pointerdown', event => event.preventDefault());
       option.addEventListener('click', () => choose(agent));
       return option;
@@ -172,34 +224,51 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
 
   function setPickerCount() {
     const size = picking.choices.size;
-    selectedLabel.textContent = picking.direct ? text(`已选 ${size} / ${picking.limit}`, `${size} of ${picking.limit} selected`)
+    selectedLabel.textContent = picking.everyone ? text('已选所有人', 'Everyone selected')
+      : picking.direct ? text(`已选 ${size} / ${picking.limit}`, `${size} of ${picking.limit} selected`)
       : text(`已选 ${size}`, `${size} selected`);
-    applyButton.disabled = Boolean(picking.reply && !size);
-    for (const box of results.querySelectorAll('input')) box.disabled = !box.checked && size >= picking.limit;
+    applyButton.disabled = Boolean(picking.reply && !size && !picking.everyone);
+    for (const box of results.querySelectorAll('input')) {
+      const everyone = Object.hasOwn(box.dataset, 'mentionEveryone');
+      box.checked = everyone ? picking.everyone : picking.choices.has(box.dataset.mentionKey);
+      box.disabled = !everyone && !box.checked && size >= picking.limit;
+    }
   }
 
   function renderPicker() {
     const view = picking;
     const filter = queryField.value.trim().toLocaleLowerCase();
     const people = [...view.roster].filter(([, agent]) => `${agent.name} ${agent.owner_name || ''}`.toLocaleLowerCase().includes(filter));
+    if (!view.direct && '所有人 所有智能体 全员 everyone all'.includes(filter)) people.unshift([EVERYONE]);
     results.replaceChildren(...people.map(([key, agent]) => {
+      const everyone = key === EVERYONE;
       const label = doc.createElement('label');
       label.className = 'chat-agent-picker-choice';
       const box = doc.createElement('input');
       box.type = 'checkbox';
-      box.checked = view.choices.has(key);
+      if (everyone) {
+        label.dataset.mentionEveryone = '';
+        box.dataset.mentionEveryone = '';
+      } else box.dataset.mentionKey = key;
+      box.checked = everyone ? view.everyone : view.choices.has(key);
       const name = doc.createElement('span');
-      name.textContent = agent.name;
-      if (agent.owner_name) {
+      name.textContent = everyone ? text('所有人', 'Everyone') : agent.name;
+      if (everyone || agent.owner_name) {
         const owner = doc.createElement('small');
-        owner.textContent = agent.owner_name;
+        owner.textContent = everyone ? (view.roster.size ? text('提及群成员，并请群内智能体回复', 'Notify the group and ask its agents to reply')
+          : text('提及群内所有成员', 'Mention everyone in the group')) : agent.owner_name;
         name.append(owner);
       }
       label.append(box, name);
       box.addEventListener('change', () => {
         if (view !== picking || !picker.open) return;
-        if (box.checked) view.choices.add(key);
-        else view.choices.delete(key);
+        if (everyone) {
+          view.everyone = box.checked;
+          if (box.checked) view.choices.clear();
+        } else if (box.checked) {
+          view.everyone = false;
+          view.choices.add(key);
+        } else view.choices.delete(key);
         setPickerCount();
       });
       return label;
@@ -212,9 +281,15 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     const group = refresh();
     if (!picker || picker.open || !group || input.disabled) return false;
     const roster = new Map(group.agents.filter(availableAgent).map(agent => [agentKey(agent), agent]));
-    if (!roster.size) return false;
-    picking = {scope: group.scope, roster, choices: new Set([...selected.keys()].filter(key => roster.has(key))),
-      direct: group.direct, limit: mentionsLimit(group), reply, onApply};
+    if (group.direct && !roster.size) return false;
+    const everyone = !group.direct && hasEveryoneMention(input.value);
+    picking = {scope:group.scope, roster, choices:new Set(groupAllMention ? [] : [...selected.keys()].filter(key => roster.has(key))),
+      everyone, direct:group.direct, limit:mentionsLimit(group), reply, onApply};
+    pickerNode('title').textContent = group.direct ? text('请智能体回复', 'Ask agents to reply') : text('选择提及对象', 'Choose mentions');
+    pickerNode('help').textContent = group.direct ? text('选中的智能体会在你发送消息后回复。', 'Selected agents reply after you send the message.')
+      : text('选择智能体或所有人，确认后把提及加到草稿。', 'Choose agents or everyone to add a mention to your draft.');
+    pickerNode('empty').textContent = group.direct ? text('没有匹配的智能体。', 'No matching agents.')
+      : text('没有匹配的提及对象。', 'No matching mentions.');
     queryField.value = '';
     pickerNode('quote').hidden = !reply;
     pickerNode('quote-author').textContent = reply?.author || '';
@@ -258,9 +333,15 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
       const agent = roster.get(key);
       selected.set(key, {owner_id: agent.owner_id, agent_id: agent.id});
     }
+    const before = input.value;
+    if (!group.direct) {
+      if (view.everyone && !hasEveryoneMention(before)) input.value = everyoneToken() + withoutGroupAllMention(before);
+      if (!view.everyone && (choices.length || hasEveryoneMention(before))) input.value = withoutGroupAllMention(before);
+    }
     remember();
     renderSelected();
     picker.close();
+    if (input.value !== before) input.dispatchEvent?.(new Event('input', {bubbles:true}));
     view.onApply?.();
     input.focus({preventScroll: true});
   });
@@ -268,7 +349,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   return {
     refresh,
     openPicker,
-    canPick: () => Boolean(picker && refresh()?.agents.some(availableAgent) && !input.disabled),
+    canPick: () => { const group = refresh(); return Boolean(picker && group && (!group.direct || group.agents.some(availableAgent)) && !input.disabled); },
     clear() {
       scope = null;
       roster = undefined;
@@ -321,6 +402,7 @@ export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
     },
     message(body) {
       const group = refresh();
+      if (group && !group.direct && hasGroupAllMention(body)) return {body};
       if (!group || !selected.size) return {body};
       if (selected.size > mentionsLimit(group) || [...selected.keys()].some(key => !available.has(key))) return null;
       return {body, agent_mentions: [...selected.values()], ...(group.direct ? {direct_agent_request: true} : {})};

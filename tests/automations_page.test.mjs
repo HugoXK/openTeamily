@@ -84,7 +84,7 @@ test('readEditor collects tag fields', () => {
       title: 'Brief', template_id: 'daily_brief', intent: '晨报', scope: 'ongoing',
       participants: ['alice', 'bob'], agents: ['brief-bot'],
       schedule: {kind: 'weekdays', time: '09:00', time_zone: 'Asia/Shanghai'},
-      prompt: 'hello', enabled: true,
+      prompt: 'hello', enabled: true, notification_policy:'scheduled',
     });
   } finally {
     globalThis.FormData = original;
@@ -163,6 +163,7 @@ class FakeNode {
     }
     this._elements.template_id = new FakeNode('select');
     this._elements.kind = new FakeNode('select');
+    this._elements.notification_policy = new FakeNode('select');
     return this._elements;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
@@ -471,7 +472,9 @@ test('save and sample submits one stable creation request and opens the exact ex
   };
   t.after(() => { globalThis.document = saved; globalThis.FormData = priorFormData; });
   const posts = [];
+  const updates = [];
   const path = `/v1/workspaces/${workspace}/automations`;
+  let savedAutomation;
   const attempt = async (target, options = {}) => {
     if (target === '/v1/auth/session') return respond({user: {id: 'owner', username: 'alice'}});
     if (target.startsWith('/v1/workspaces?')) return respond({items: [{id: workspace, name: '个人工作区', kind: 'personal'}]});
@@ -480,7 +483,14 @@ test('save and sample submits one stable creation request and opens the exact ex
       const body = JSON.parse(options.body);
       posts.push({body, key: options.headers['Idempotency-Key']});
       if (posts.length === 1) throw Error('Lost response fixture');
-      return respond({automation: {...body, id: automation, workspace_id: workspace, revision: 1}, sample_run: {...done, status:'queued', result: undefined}}, 201);
+      savedAutomation = {...body, id:automation, workspace_id:workspace, revision:1};
+      return respond({automation:savedAutomation, sample_run:{...done, status:'queued', result:undefined}}, 201);
+    }
+    if (target === path + '/' + automation && options.method === 'POST') {
+      const update = JSON.parse(options.body);
+      updates.push(update);
+      savedAutomation = {...savedAutomation, ...update.changes, revision:2};
+      return respond({automation:savedAutomation});
     }
     if (target.startsWith(path + '/' + automation + '/runs?')) return respond({items: [done], has_pending: false});
     assert.fail(`Unexpected request ${options.method || 'GET'} ${target}`);
@@ -488,6 +498,9 @@ test('save and sample submits one stable creation request and opens the exact ex
   await mount(doc, {fetcher: attempt});
   const form = elements.get('editor-form');
   const sample = elements.get('save-and-sample');
+  assert.equal(elements.get('automation-notification-settings').hidden, false);
+  assert.equal(form.elements.notification_policy.value, 'scheduled');
+  form.elements.notification_policy.value = 'all';
   assert.equal(sample.hidden, true);
   form.elements.kind.value = 'daily';
   elements.get('automation-schedule-settings').handlers.change[0]();
@@ -499,6 +512,8 @@ test('save and sample submits one stable creation request and opens the exact ex
   assert.equal(posts[0].body.run_sample, true);
   assert.equal(posts[0].body.enabled, false);
   assert.equal(posts[0].body.schedule.kind, 'daily');
+  assert.equal(posts[0].body.notification_policy, 'all');
+  assert.equal(form.elements.notification_policy.value, 'all');
   assert.equal(sample.hidden, true);
   assert.equal(view.location.search, `?workspace=${workspace}&automation=${automation}&run=${run}`);
   const detail = elements.get('run-list').children[0].children[1];
@@ -508,6 +523,11 @@ test('save and sample submits one stable creation request and opens the exact ex
   await controls.children.find(child => child.dataset.runControl === 'copy-result').handlers.click[0]();
   await controls.children.find(child => child.dataset.runControl === 'copy-run-link').handlers.click[0]();
   assert.deepEqual(clipboard, ['今日运行结果', 'https://test.local/automations' + view.location.search]);
+  form.elements.notification_policy.value = 'off';
+  await form.handlers.submit[0]({preventDefault() {}});
+  assert.equal(updates[0].revision, 1);
+  assert.equal(updates[0].changes.notification_policy, 'off');
+  assert.equal(form.elements.notification_policy.value, 'off');
 });
 
 test('an exact linked run stays visible when older than the first page of history', async t => {
@@ -533,6 +553,7 @@ test('an exact linked run stays visible when older than the first page of histor
     assert.fail('Unexpected request ' + target);
   }});
   await flush();
+  assert.equal(elements.get('editor-form').elements.notification_policy.value, 'scheduled');
   const [exact, newest] = elements.get('run-list').children;
   assert.equal(exact.dataset.runId, run);
   assert.equal(exact.children[1].hidden, false);

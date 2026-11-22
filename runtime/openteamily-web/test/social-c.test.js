@@ -378,6 +378,9 @@ test('the native inbox requests recent scoped notices and constructs safe meetin
   setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
   t.after(() => setSharedBotSocial(undefined))
   const endpoint = social({async call(name) {
+    if (name === 'automations/notifications') {
+      throw Object.assign(new Error('Unknown OpenTeamily endpoint'), {code:'openteamily/not-found'})
+    }
     assert.equal(name,'agents/personal-binding')
     return {workspace_id:personal}
   }}).endpoints.v1
