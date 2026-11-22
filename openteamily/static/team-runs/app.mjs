@@ -778,7 +778,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   function ask(action) {
     question = action;
     const cancelling = action === 'cancel';
-    node('team-run-confirm-label').textContent = cancelling ? '取消后会停止安排后续步骤，已完成的结果会保留。'
+    node('team-run-confirm-label').textContent = cancelling ? '取消后会请求停止正在执行的步骤，已完成的结果会保留。'
       : action === 'reuse' ? '复用会替换本工作区未保存的任务草稿。' : '删除这条任务记录？';
     node('team-run-confirm-action').textContent = cancelling ? '确认取消' : action === 'reuse' ? '替换草稿' : '确认删除';
     confirm.hidden = false;

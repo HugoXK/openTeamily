@@ -927,6 +927,90 @@ test('a cold clock leaves due slots and manual runs unclaimed until a native run
   assert.equal(feature.ops.runs({workspace_id:W,id:daily.id}).items[0].status,'succeeded')
 })
 
+test('pausing cancels only accepted scheduled work that has not started', async () => {
+  const calls = []
+  const held = Promise.withResolvers()
+  const {feature, e} = fixture(async invocation => {
+    calls.push(invocation)
+    if (calls.length === 1) await held.promise
+    return {text:'Finished'}
+  })
+  const draft = {workspace_id:W, template_id:'custom', prompt:'Run once', participants:['alice'],
+    schedule:{kind:'now',time_zone:'UTC'}, enabled:true, notification_policy:'all'}
+  const create = (title, key) => e['automations/create']({...draft,title,idempotency_key:key}).automation
+  const pause = item => e['automations/update']({workspace_id:W,id:item.id,revision:item.revision,changes:{enabled:false}})
+  const lookup = (item, run) => e['automations/run']({workspace_id:W,id:item.id,run_id:run.id}).run
+  const blocker = create('Already started', 'pause-blocker-fixture')
+  const [running] = feature.tick()
+  await flush()
+  const scheduled = create('Automatic queued run', 'pause-scheduled-fixture')
+  const manual = create('Explicit queued run', 'pause-manual-fixture')
+  const explicit = e['automations/runNow']({workspace_id:W,id:manual.id,idempotency_key:'pause-explicit-fixture'}).run
+  const [waiting] = feature.tick()
+  assert.equal(waiting.automation_id,scheduled.id)
+  assert.equal(waiting.status,'queued')
+  assert.equal(waiting.trigger,'scheduled')
+  assert.equal(pause(blocker).automation.active_run.status,'running')
+  assert.equal(pause(manual).automation.active_run.status,'queued')
+  const paused = pause(scheduled)
+  const cancelled = lookup(scheduled,waiting)
+  assert.equal(cancelled.status,'cancelled')
+  assert.equal(cancelled.automation_revision,1)
+  assert.equal(cancelled.result.cancelled,true)
+  assert.match(cancelled.result.error,/暂停/)
+  assert.equal(paused.cancelled_scheduled_runs,1)
+  assert.equal(paused.automation.active_run,undefined)
+  assert.equal(feature.db.prepare('SELECT queued_prompt FROM ot_automation_runs WHERE id=?').get(waiting.id).queued_prompt,null)
+
+  const resumed = e['automations/update']({workspace_id:W,id:scheduled.id,revision:paused.automation.revision,changes:{enabled:true}})
+  assert.deepEqual(resumed.automation.schedule_status,{state:'once_cancelled'})
+  assert.deepEqual(feature.tick(),[])
+  held.resolve()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.deepEqual(calls.map(call=>call.requestId),[`ot-automation:${running.id}`,`ot-automation:${explicit.id}`])
+  assert.equal(lookup(blocker,running).status,'succeeded')
+  assert.equal(lookup(manual,explicit).status,'succeeded')
+  assert.equal(lookup(scheduled,waiting).status,'cancelled')
+  assert.equal(feature.db.prepare('SELECT COUNT(*) AS n FROM ot_automation_run_notices WHERE run_id=?').get(waiting.id).n,0)
+})
+
+test('a resumed recurring automation advances to the next slot after cancelling a queued slot', async () => {
+  const before = zonedEpoch('UTC',2027,1,4,8,55)
+  const due = zonedEpoch('UTC',2027,1,4,9,0)
+  const tomorrow = zonedEpoch('UTC',2027,1,5,9,0)
+  const held = Promise.withResolvers()
+  const calls = []
+  const {feature, e, clock} = fixture(async call => {
+    calls.push(call)
+    if (calls.length === 1) await held.promise
+    return {text:'Finished'}
+  },before)
+  const draft = {workspace_id:W,template_id:'custom',prompt:'Keep future recurring slots',participants:['alice'],
+    schedule:{kind:'daily',time:'09:00',time_zone:'UTC'}}
+  const create = (title, key, enabled) => e['automations/create']({...draft,title,enabled,idempotency_key:key}).automation
+  const blocker = create('Blocks first slot','recurring-blocker-fixture',false)
+  const daily = create('Daily workflow','recurring-paused-fixture',true)
+  const running = e['automations/runNow']({workspace_id:W,id:blocker.id,idempotency_key:'recurring-blocker-run'}).run
+  clock.now = due
+  const [waiting] = feature.tick()
+  assert.equal(waiting.status,'queued')
+  const change = (revision, enabled) => e['automations/update']({workspace_id:W,id:daily.id,revision,changes:{enabled}})
+  assert.equal(change(1,false).cancelled_scheduled_runs,1)
+  clock.now++
+  assert.deepEqual(change(2,true).automation.schedule_status,{state:'scheduled', at:tomorrow})
+  held.resolve()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.deepEqual(feature.tick(),[])
+  clock.now = tomorrow
+  const [next] = feature.tick()
+  while (feature.inflight.size) await Promise.all(feature.inflight.values())
+  assert.equal(next.due_at,tomorrow)
+  assert.deepEqual(calls.map(call=>call.requestId),[`ot-automation:${running.id}`,`ot-automation:${next.id}`])
+  assert.deepEqual(e['automations/runs']({workspace_id:W,id:daily.id}).items.map(run=>[run.id,run.status]),[
+    [next.id,'succeeded'],[waiting.id,'cancelled'],
+  ])
+})
+
 test('older pending native rows have unknown delivery and become interrupted after migration', t => {
   const {e, feature, dbPath, clock} = fixture()
   const {automation} = e['automations/create']({workspace_id: W, title: 'Previous owner runtime', template_id: 'custom',

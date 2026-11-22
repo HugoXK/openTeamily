@@ -320,17 +320,21 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
   }
   if (!shareId && req.method === 'POST' && !req.queryString) {
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
-    const body = requireBodyKeys(await req.json(), ['expires_in'])
-    const created = createShare(req.store, row, req.owner, req.now, body.expires_in)
+    const {expires_in, revision} = requireBodyKeys(await req.json(), ['expires_in','revision'])
+    const source = mustLoad(req, workspaceId, artifactId)
+    if (revision !== undefined && (!Number.isSafeInteger(revision) || revision !== source.revision)) {
+      refuse(409, 'artifact_changed', '已保存的作品版本已更新，请查看后再创建分享链接。')
+    }
+    const created = createShare(req.store, source, req.owner, req.now, expires_in)
     // Public /share/<token> pages are served by the dedicated Bot Social from this
     // read-only snapshot; only the token hash leaves this DS-Bot.
     const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', created.body.share.id)
     publishingShares.add(item.id)
     try {
-      const workbook = row.spreadsheet_json && decodeWorkbook(row.spreadsheet_json)
-      const body = workbook ? workbookText(workbook) : String(row.body ?? '')
+      const workbook = source.spreadsheet_json && decodeWorkbook(source.spreadsheet_json)
+      const body = workbook ? workbookText(workbook) : String(source.body ?? '')
       await sharedBotSocial(req.host).put('/v1/ot/public-shares', {
-        token_hash: item.token_hash, ref: row.id, title: row.title, kind: publicKind(row),
+        token_hash: item.token_hash, ref: source.id, title: source.title, kind: publicKind(source),
         body: body.slice(0,200000), expires_at: item.expires ? item.expires * 1000 : null,
       })
     } catch {

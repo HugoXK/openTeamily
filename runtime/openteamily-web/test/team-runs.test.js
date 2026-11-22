@@ -35,7 +35,7 @@ async function fixture(reply, {runWorkspace = W, database = ':memory:'} = {}) {
     async nativeTurn(bot, session, text, rid, options) {
       const [key] = Object.entries(bots[bot].openteamily.sessionKeys).find(([,id]) => id === session)
       turns.push({key, text, rid, bot, session})
-      const out = reply ? await reply(key, text, options?.onProgress) : {text: `out:${key.split(':')[4]}`}
+      const out = reply ? await reply(key, text, options?.onProgress, options?.signal) : {text: `out:${key.split(':')[4]}`}
       return {...out, sessionId:session, turnId:'turn-' + turns.length}
     },
   }
@@ -54,7 +54,7 @@ async function fixture(reply, {runWorkspace = W, database = ':memory:'} = {}) {
   table['agents/groupTurn'] = (payload, call) => {
     assert.equal(call.internal, true)
     assert.equal(typeof payload.onProgress, 'function')
-    return agents.turn(payload, {onProgress:payload.onProgress})
+    return agents.turn(payload, {onProgress:payload.onProgress, signal:payload.signal})
   }
   const dataDir = mkdtempSync(join(tmpdir(), 'ot-tr-works-'))
   registerFeature(table, 'artifacts', artifacts(featureHost({name:'artifacts', identity, dataDir, table})))
@@ -202,7 +202,7 @@ test('only the authorized live attempt can expose an ephemeral preview', async (
   assert.doesNotMatch(turns.at(-1).text, /preview|discarded|stale/)
 })
 
-test('cancel stops pending steps and ignores late replies; validation refuses bad graphs', async () => {
+test('cancel aborts active native steps, skips their dependants and ignores late replies', async () => {
   const pending = []
   const release = () => {
     for (const {resolve, preview} of pending.splice(0)) {
@@ -210,8 +210,8 @@ test('cancel stops pending steps and ignores late replies; validation refuses ba
       resolve({text:'late'})
     }
   }
-  const { feature, e, a, b, agents, turns } = await fixture((_key, _text, preview) =>
-    new Promise(resolve => { pending.push({resolve, preview}) }))
+  const { feature, e, a, b, agents, turns } = await fixture((_key, _text, preview, signal) =>
+    new Promise(resolve => { pending.push({resolve, preview, signal}) }))
   const { run } = await e.create(body(a, b))
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(turns.length, 2)
@@ -219,6 +219,8 @@ test('cancel stops pending steps and ignores late replies; validation refuses ba
   assert.equal((await e.get({workspace_id:W, id:run.id})).run.steps[0].preview, 'visible before cancel')
   const cancelled = (await e.cancel({ workspace_id: W, id: run.id })).run
   assert.equal(cancelled.status, 'cancelled')
+  assert.equal(pending.length, 2)
+  assert.ok(pending.every(item => item.signal?.aborted))
   await new Promise((r) => setImmediate(r))
   release()
   await settle(feature)

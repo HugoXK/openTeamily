@@ -1,6 +1,7 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles,
+  ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, unclearSocialDelivery } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -1640,6 +1641,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.receipt ||= privateSendReceipt(queue, job.key, () => queue.owner === currentUser?.id &&
       pendingSends.get(queue.scope) === queue && queue.jobs.includes(job)).finally(() => { job.receipt = null; });
     return job.receipt;
+  }
+
+  async function socialSendReceipt(target, key, current, isExpected = () => true) {
+    const active = () => target.owner === currentUser?.id && current();
+    if (!active()) return null;
+    const path = `/v1/workspaces/${target.wid}/social/conversations/${target.conversationId}/messages?limit=50`;
+    const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(4000)).catch(() => null);
+    if (!active() || result?.status !== 200 || !Array.isArray(result.body?.items)) return null;
+    return result.body.items.find(message => ownSocialReceipt(message, target, key) && isExpected(message)) || null;
   }
 
   async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
@@ -4567,6 +4577,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    const queue = pendingSends.get(scope);
+    if (servedByDsbot && queue?.social) {
+      for (const job of queue.jobs) {
+        if (lastSocialItems.some(item => ownSocialReceipt(item, queue, job.key))) removeSendJob(queue, job);
+      }
+    }
     if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
       const attempt = groupReplyDraft(scope).attempt;
       if (attempt && lastSocialItems.some(item => item.client_key === attempt.key) && confirmGroupReplyDraft(scope, attempt.key)) {
@@ -8042,9 +8058,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   inChatMore.addEventListener('click', () => searchCurrentConversation(true));
   inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
-    if (message && scope === sendScope() && !socialHistory?.readingHistory) {
-      const without = lastSocialItems.filter(item => item.id !== message.id);
-      renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
+    if (message && scope === sendScope()) {
+      if (socialHistory?.readingHistory) liveBanner.hidden = false;
+      else {
+        const without = lastSocialItems.filter(item => item.id !== message.id);
+        renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq), {refresh:true});
+      }
     }
     void loadSessions();
   }
@@ -8057,11 +8076,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const wid = workspaceId(), cid = currentConversation.id;
       const scope = sendScope();
       if (quoteBlocksSend(scope)) return null;
-      return {scope, owner:currentUser.id, reply:replyDrafts.get(scope), path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+      return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
+        path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
     ownerId: () => currentUser?.id,
     csrfToken: () => csrfCookie(document.cookie),
     createKey: () => idempotencyKey('chat-file-'),
+    confirmDelivery: (target, key, current) =>
+      socialSendReceipt(target, key, current, message => message.attachment || message.retracted),
     sent(destination, message) {
       consumeReplyDraft(destination.scope, destination.reply);
       if (message) renderDeliveredSocialMessage(destination.scope, message);
@@ -8730,6 +8752,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
             const receipt = nativePrivate ? Promise.withResolvers() : null;
             job.acceptReceipt = receipt?.resolve;
+            const nativeSocial = servedByDsbot && queue.social;
+            const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
             try {
               const response = progress
                 ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
@@ -8741,11 +8765,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                       feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
                       beginReply();
                     }
-                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
+                  }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
+                  : nativeSocial ? AbortSignal.timeout(15000) : undefined);
               if (!progress) beginReply();
-              result = receipt
-                ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
-                : await response;
+              const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;
+              result = await (receipt ? Promise.race([posted, receipt.promise]) : posted);
+              if (nativeSocial && !currentJob()) continue;
+              if (nativeSocial && !result.body?.message?.id && unclearSocialDelivery(result.status)) {
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const confirmed = await socialSendReceipt(queue, job.key, currentJob);
+                if (!currentJob()) continue;
+                if (confirmed) result = {status:200, body:{message:confirmed}};
+              }
               if (nativePrivate && uncertainPrivateWrite(result)) {
                 if (progress) progress.hidden = true;
                 feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
@@ -8812,8 +8843,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             if (!isCurrent()) return;
             const append = (items, ...added) => [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
             if (queue.social) {
-              if (socialHistory?.readingHistory) void openSocialConversation(queue.conversationId);
-              else renderSocialMessages(append(lastSocialItems, result.body.message).sort((a,b) => a.seq - b.seq), {refresh:true});
+              renderDeliveredSocialMessage(queue.scope, result.body.message);
               if (currentConversation.public_agent?.open) {
                 showPublicChatState({open: true, pending: true});
                 schedulePoll(servedByDsbot ? 8000 : 2000);
@@ -8844,7 +8874,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback(uiLabel('已发送。', 'Sent.'));
             void restoring.then(finish, () => finish());
           } else finish();
-          if (queue.owner === currentUser?.id) void loadSessions();
+          if ((!queue.social || !isCurrent()) && queue.owner === currentUser?.id) void loadSessions();
         } catch (error) {
           job.failed = true;
           feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);

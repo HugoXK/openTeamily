@@ -407,13 +407,19 @@ export function scheduleSummary(schedule, enabled, includeState = true) {
   return `已安排${state ? ` ${state}` : ''}`;
 }
 
+function oneTimeScheduleLabel(state) {
+  if (state === 'once_cancelled') return '单次计划已取消';
+  if (state === 'once_triggered') return '单次计划已触发';
+  return '';
+}
+
 function renderNextRun(node, item) {
   const status = item?.schedule_status;
   node.textContent = '';
   node.hidden = true;
   if (!status) return;
   if (status.state === 'due') node.textContent = '已到计划运行时间';
-  if (status.state === 'once_triggered') node.textContent = '单次计划已触发';
+  if (oneTimeScheduleLabel(status.state)) node.textContent = oneTimeScheduleLabel(status.state);
   const clockChange = status.clock_change === 'forward' ? '时钟跳转后顺延'
     : status.clock_change === 'first' ? '按第一次出现的时间运行' : '';
   const pausedPreview = status.state === 'paused' && clockChange;
@@ -530,7 +536,7 @@ function renderList(items, list, empty, onOpen) {
       pill.textContent = runStatusLabel(running);
       copy.appendChild(pill);
     }
-    const consumed = item.schedule_status?.state === 'once_triggered';
+    const consumed = oneTimeScheduleLabel(item.schedule_status?.state);
     if (item.schedule_status && !consumed) {
       const next = document.createElement('span');
       next.className = 'item-schedule item-next-run';
@@ -544,7 +550,7 @@ function renderList(items, list, empty, onOpen) {
     const state = document.createElement('span');
     state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
     state.id = 'automation-state-' + item.id;
-    state.textContent = consumed ? '单次计划已触发' : item.enabled ? '已启用' : '未启用';
+    state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
     description.push(state.id);
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
@@ -1527,7 +1533,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!manualRunNote) return;
     manualRunNote.hidden = !current?.id && !followupSource;
     manualRunNote.textContent = followupSource ? '保存为暂停的自动化。保存后可手动运行一次。'
-      : current?.schedule_status?.state === 'once_triggered' ? '可以用已保存的设置手动运行一次。' : current?.enabled
+      : oneTimeScheduleLabel(current?.schedule_status?.state) ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
   }
@@ -2152,6 +2158,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderManualRunNote();
     show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'
+      : result.body.cancelled_scheduled_runs > 0 ? '已暂停自动运行，排队中的计划运行已取消。'
       : current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns({focus: Boolean(startedSample)});
   });

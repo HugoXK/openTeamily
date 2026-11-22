@@ -210,8 +210,8 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
-  const existingSlot = db.prepare('SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
-  function hasScheduledSlot(id, slot) {
+  const existingSlot = db.prepare('SELECT error_code FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
+  function scheduledRun(id, slot) {
     // A stored run from the other side of a clock change already used this local slot.
     return existingSlot.get(id, slot.at) ||
       (slot.alternateAt !== undefined && existingSlot.get(id, slot.alternateAt))
@@ -234,7 +234,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   function scheduleStatus(item, activeAt, at = clock()) {
     if (!item.enabled) {
       const preview = item.schedule?.kind === 'once' ? nextSlot(item.schedule, at) : null
-      if (preview?.clockChange && !hasScheduledSlot(item.id, preview)) {
+      if (preview?.clockChange && !scheduledRun(item.id, preview)) {
         return {state:'paused', at:preview.at, clock_change:preview.clockChange}
       }
       return {state:'paused'}
@@ -242,15 +242,18 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     if (!validSchedule(item.schedule)) return null
     const schedule = normalizeSchedule(item.schedule)
     const once = schedule.kind === 'now' || schedule.kind === 'once'
+    const onceState = saved => ({state:saved.error_code === 'cancelled' ? 'once_cancelled' : 'once_triggered'})
     const due = eligibleSlot(schedule, at, activeAt)
     if (due !== null) {
-      if (!hasScheduledSlot(item.id, due)) return {state:'due'}
-      if (once) return {state:'once_triggered'}
+      const saved = scheduledRun(item.id, due)
+      if (!saved) return {state:'due'}
+      if (once) return onceState(saved)
     }
     const after = once || activeAt == null ? at : Math.max(at, activeAt - 1)
     const next = nextSlot(schedule, after)
     if (next === null) return null
-    if (once && hasScheduledSlot(item.id, next)) return {state:'once_triggered'}
+    const saved = once && scheduledRun(item.id, next)
+    if (saved) return onceState(saved)
     return {state:'scheduled', at:next.at, ...(next.clockChange ? {clock_change:next.clockChange} : {})}
   }
 
@@ -535,7 +538,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
       const due = eligibleSlot(JSON.parse(row.schedule), now, row.schedule_active_at)
       if (due === null) continue
       const id = tx(db, () => {
-        if (hasActiveRun(row.id) || hasScheduledSlot(row.id, due)) return null
+        if (hasActiveRun(row.id) || scheduledRun(row.id, due)) return null
         return insertRun(row, due.at)
       })
       if (!id) continue
@@ -760,7 +763,17 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
         next.title, sha(next.title.toLowerCase()), next.prompt, schedule,
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
         JSON.stringify(next.agents), compiled ? 1 : 0, now, activeAt, next.notification_policy, row.id)
-      return { automation: detail(one('SELECT * FROM ot_automations WHERE id=?', row.id), now) }
+      let cancelled = 0
+      if (current.enabled && !next.enabled) {
+        // Keep the consumed slot and history, but discard pending automatic work.
+        // Negative slots are explicit manual, sample, or retry requests.
+        const dispatch = JSON.stringify({backend:'ds-bot', result:{cancelled:true, error:'自动运行已暂停。这次计划运行尚未开始，已取消。'}})
+        cancelled = run(`UPDATE ot_automation_runs SET finished=?, status='failed', error_code='cancelled',
+          dispatch=?, queued_prompt=NULL WHERE workspace_id=? AND automation_id=? AND due_at>=0
+          AND attempt_of IS NULL AND status='queued' AND claimed_at IS NULL`, now, dispatch, workspaceId, row.id).changes
+      }
+      return { automation: detail(load(workspaceId, row.id), now),
+        ...(cancelled ? {cancelled_scheduled_runs:cancelled} : {}) }
     })
   }
 

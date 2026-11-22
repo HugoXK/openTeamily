@@ -213,7 +213,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     if (!claim.changes) return
     const currentAttempt = () => one(`SELECT 1 FROM team_run_steps
       WHERE run_id=? AND position=? AND status='running' AND attempts=?`, runRow.id, step.position, attempt)
-    const live = {attempt, text:''}
+    const live = {attempt, text:'', controller:new AbortController()}
     previews.set(key, live)
     const onProgress = snapshot => {
       if (previews.get(key) === live && typeof snapshot === 'string') live.text = snapshot.slice(0, PREVIEW_MAX).toWellFormed()
@@ -226,7 +226,8 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         const sharedResults = source && await sourceContext(runRow.workspace_id, source)
         if (!currentAttempt()) return
         const reply = await host.call('agents/groupTurn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
-          text: stepPrompt(runRow, step, list, sharedResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`, onProgress })
+          text: stepPrompt(runRow, step, list, sharedResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`,
+          onProgress, signal:live.controller.signal })
         if (!currentAttempt()) return
         const output = String(reply?.text ?? '').trim()
         if (!output) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
@@ -364,7 +365,12 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
             WHERE run_id=? AND status IN ('waiting','queued','running')`, clock(), row.id)
           run("UPDATE team_runs SET status='cancelled', updated=? WHERE id=?", clock(), row.id)
         })
-        for (const {position} of steps(row.id)) previews.delete(stepKey(row.id, position))
+        for (const {position} of steps(row.id)) {
+          const key = stepKey(row.id, position)
+          const live = previews.get(key)
+          previews.delete(key)
+          live?.controller.abort()
+        }
       }
       return withSavedWorks({run: view(one('SELECT * FROM team_runs WHERE id=?', row.id))})
     },
