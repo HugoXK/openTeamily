@@ -2672,6 +2672,83 @@ test('a selected group mention sends the chosen owner and agent together', async
   } finally { restore(); }
 });
 
+test('composer mention drafts restore by group and owner, and hold send for a removed teammate', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const restore = installChatGlobals({narrow: true});
+  const {view} = publicOpeningView();
+  const {fetcher: original} = sessionFetcher();
+  const own = {id:'same', name:'研究助手', owner_id:alice, owner_name:'小林'};
+  const peer = {id:'same', name:'研究助手', owner_id:bob, owner_name:'小周'};
+  const posts = [];
+  let peerRemoved = false;
+  async function boot(owner = alice) {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.defaultView = view;
+    const composer = el('chat-body');
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    await mount(doc, {fetcher: async (path, options) => {
+      if (path === '/v1/auth/session') return json(200, {user: {id:owner, username:'account'}});
+      if (path.endsWith('/conv-1/messages') && options.method === 'POST') {
+        posts.push(JSON.parse(options.body));
+        return json(201, {});
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (/\/conv-[12]$/.test(path)) {
+        return json(200, {...body, conversation: {...body.conversation, kind:'group',
+          agent_members: peerRemoved ? [own] : [own, peer]}});
+      }
+      return json(result.status, body);
+    }});
+    const open = id => fire(el('conversation-list'), 'click', {
+      target: sessionRows(el).find(button => button.dataset.conversation === id),
+    });
+    await open('conv-1');
+    return {el, composer, open};
+  }
+  try {
+    const first = await boot();
+    const chips = el => el('chat-agent-mentions').children;
+    for (let index = 0; index < 2; index += 1) {
+      first.composer.value = '@研究';
+      first.composer.setSelectionRange(3, 3);
+      await fire(first.composer, 'input');
+      await fire(first.el('chat-agent-mention-options').children[0], 'click');
+    }
+    first.composer.value = '请一起复查';
+    await fire(first.composer, 'input');
+    t.mock.timers.tick(200);
+    await first.open('conv-2');
+    assert.equal(first.composer.value, '');
+    assert.deepEqual(chips(first.el), []);
+    await first.open('conv-1');
+    assert.equal(first.composer.value, '请一起复查');
+    assert.deepEqual(chips(first.el).map(button => button.textContent), ['@研究助手 · 小林 ×', '@研究助手 · 小周 ×']);
+
+    const otherAccount = await boot(bob);
+    assert.equal(otherAccount.composer.value, '');
+    assert.deepEqual(chips(otherAccount.el), []);
+
+    peerRemoved = true;
+    const reopened = await boot();
+    assert.equal(reopened.composer.value, '请一起复查');
+    assert.deepEqual(chips(reopened.el).map(button => button.textContent), ['@研究助手 · 小林 ×', '智能体已不可用 ×']);
+    assert.equal(reopened.el('chat-agent-mention-status').hidden, false);
+    const send = () => fire(reopened.el('chat-form'), 'submit', {preventDefault() {}});
+    await send();
+    assert.deepEqual(posts, []);
+    assert.equal(reopened.composer.value, '请一起复查');
+    await fire(chips(reopened.el)[1], 'click');
+    assert.equal(reopened.el('chat-agent-mention-status').hidden, true);
+    await send();
+    await settle();
+    assert.deepEqual(posts, [{body:'请一起复查', agent_mentions:[{owner_id:alice, agent_id:own.id}]}]);
+    assert.equal(reopened.composer.value, '');
+    assert.deepEqual(chips(reopened.el), []);
+    assert.equal(reopened.el('chat-agent-picker-open').hidden, false);
+  } finally { restore(); }
+});
+
 test('in-chat search highlights every case-insensitive match without HTML', async () => {
   const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
   assert.deepEqual(highlightParts('Test a test', 'test'), [

@@ -4773,6 +4773,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       replyDrafts.delete(exactScope);
       publicDraft.forget(exactScope);
+      agentMentions.forget(exactScope);
       attachmentSender?.forget?.(exactScope);
       voiceRecorder.clear();
       lastSocialItems = [];
@@ -7543,6 +7544,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const message = social ? agentMentions.message(field.value) : messagePayload(field.value, chatLanguage);
+    if (!message) {
+      show('error', uiLabel('请先移除不可用的智能体。', 'Remove unavailable agents before sending.'));
+      return;
+    }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
     if (social && !validMessage(message.body)) {
@@ -7586,7 +7591,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       field.value = '';
       publicDraft.persist({now: false});
       field.focus({preventScroll: true});
-      if (social) agentMentions.clear();
+      if (social && message.agent_mentions?.length) agentMentions.forget(scope);
     }
     consumeReplyDraft(scope, reply);
     if (files.length) attachmentSender.clearDraft(scope, files);

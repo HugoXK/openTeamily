@@ -323,6 +323,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.group.no_reply_targets": ["没有匹配的智能体。", "No matching agents."],
   "chat.group.use_reply_targets": ["确认选择", "Confirm selection"],
   "chat.group.agents_to_mention": ["将提及的智能体", "Agents to mention"],
+  "chat.group.unavailable_mentions": ["部分智能体已不可用。请移除或重新选择后发送。", "Some agents are no longer available. Remove or reselect them before sending."],
   "chat.voice.draft": ["语音草稿", "Voice draft"],
   "chat.voice.preview": ["试听录音", "Preview recording"],
   "chat.voice.stop": ["停止录音", "Stop recording"],
