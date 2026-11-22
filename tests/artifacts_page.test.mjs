@@ -832,6 +832,51 @@ test('Space starts an agent thread only on confirmation and links to the exact v
   } finally { page.close(); }
 });
 
+test('Space enables creation when the workspace resolves even if its catalogue is still loading', {timeout:3000}, async () => {
+  const {doc,form} = fakeDocument();
+  const el = id => doc.getElementById(id);
+  form.hidden = true;
+  const workspaceStarted = deferred();
+  const workspace = deferred();
+  const catalogueStarted = deferred();
+  const catalogue = deferred();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const loading = mount(doc,{fetcher:async path => {
+    if (path === '/v1/auth/session') return reply({body:{user:{id:'u1',username:'alice'}}});
+    if (path === '/v1/workspaces?limit=100') {
+      workspaceStarted.finish();
+      return workspace.promise;
+    }
+    if (path === '/v1/workspaces/w1/artifacts') {
+      catalogueStarted.finish();
+      return catalogue.promise;
+    }
+    return reply();
+  }});
+  try {
+    await workspaceStarted.promise;
+    assert.equal(el('main-panel').hidden,false);
+    assert.equal(el('workspace-pending').hidden,false);
+    assert.equal(el('new-menu-button').disabled,true);
+    assert.equal(el('new-artifact').disabled,true);
+    await el('new-artifact').dispatch('click');
+    assert.equal(form.hidden,true);
+    workspace.finish(reply({body:{items:[{id:'w1',name:'Desk'}]}}));
+    await catalogueStarted.promise;
+    assert.equal(el('workspace-pending').hidden,true);
+    assert.equal(el('new-menu-button').disabled,false);
+    await el('new-artifact').dispatch('click');
+    await new Promise(setImmediate);
+    assert.equal(form.hidden,false);
+  } finally {
+    workspace.finish(reply());
+    catalogue.finish(reply({body:{items:[]}}));
+    await loading;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
+
 test('artifactDeletePrompt names the artifact and never echoes an empty title', () => {
   assert.deepEqual(artifactDeletePrompt({title: 'Doc'}), {
     question: '删除「Doc」？', detail: '删除后不能恢复。', cancelLabel: '取消', confirmLabel: '确认',

@@ -116,6 +116,7 @@
           <button type="button" id="studio-open" aria-haspopup="dialog" aria-controls="studio-dialog" hidden>团队协作</button>
         </div>
         <div class="workspace-recovery">
+          <span id="workspace-pending" class="note" role="status" hidden>正在读取工作区…</span>
           <span id="workspace-events-status" class="note" role="status"></span>
           <button type="button" id="workspace-events-retry" aria-label="检查更新" title="检查更新">
             <span class="workspace-retry-label">检查更新</span><span class="workspace-retry-icon" aria-hidden="true">↻</span>
@@ -209,7 +210,7 @@
           </button>
         </div>
         <div class="new-menu-wrap">
-          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu">
+          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu" disabled>
             <span class="new-menu-label">+ 新建</span>
             <span class="new-menu-caret" aria-hidden="true">▾</span>
           </button>

@@ -542,6 +542,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save', 'mobile-editor-save']
     .map(id => document.getElementById(id)).filter(Boolean);
   const workspaceSelect = document.getElementById('workspace');
+  const workspacePending = document.getElementById('workspace-pending');
+  const createButtons = [newMenuButton, ...[
+    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
+    'resume-draft-document', 'resume-draft-website',
+  ].map(id => document.getElementById(id))].filter(Boolean);
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('clear-artifact-search');
   const nativeCatalog = servedByDsBot(document);
@@ -564,6 +570,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const duplicateSubmit = document.getElementById('duplicate-artifact-submit');
   let duplicateState = null;
   let currentUser = null;
+  let workspaceResolved = false;
   let studioWorkspaces = [];
   let workspaceLoad = 0;
   let current = null;
@@ -623,6 +630,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function canCreateInWorkspace() {
+    return Boolean(currentUser && workspaceResolved && workspaceId());
+  }
+
+  function syncWorkspaceCreation() {
+    const enabled = canCreateInWorkspace();
+    for (const button of createButtons) button.disabled = !enabled;
+    if (!enabled) newMenu.close();
   }
 
   const notifications = mountArtifactNotifications(document, {
@@ -2437,7 +2454,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
-    if (!currentUser || !workspace || workspaceId() !== workspace) return;
+    if (!canCreateInWorkspace() || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
     const catalogView = !listPanel.hidden && !target?.artifact ? {
@@ -3172,6 +3189,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceSelect.appendChild(option);
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    workspaceResolved = true;
+    workspacePending.hidden = true;
+    syncWorkspaceCreation();
     notifications.setWorkspace(workspaceId());
     studioWorkspaces = items;
     syncStudioWorkspace();
@@ -3179,6 +3199,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   async function load() {
     const seq = ++workspaceLoad;
+    workspaceResolved = false;
+    workspacePending.hidden = false;
+    syncWorkspaceCreation();
     activity.setScope('');
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
@@ -3198,6 +3221,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const session = await sessionRequest;
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
+      workspacePending.hidden = true;
       hideEditor();
       currentUser = null;
       syncStudioWorkspace();
@@ -3213,6 +3237,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     if (session.status !== 200) {
+      workspacePending.hidden = true;
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
@@ -3239,6 +3264,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
+      workspacePending.hidden = true;
       show('error', '无法读取工作区。');
       return;
     }
@@ -3272,6 +3298,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      syncWorkspaceCreation();
       notifications.setWorkspace('');
       meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
       renderCatalog();
@@ -3279,6 +3306,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
+      syncWorkspaceCreation();
       notifications.setWorkspace('');
       show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
       return;
@@ -3335,6 +3363,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     workspaceLoad += 1;
+    syncWorkspaceCreation();
     closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
     syncStudioWorkspace();
@@ -3444,7 +3473,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function bindCreate(id, start) {
     const button = document.getElementById(id);
-    if (button) button.addEventListener('click', start);
+    button?.addEventListener('click', event => {
+      if (canCreateInWorkspace()) start(event);
+    });
   }
 
   for (const [id, kind] of [
