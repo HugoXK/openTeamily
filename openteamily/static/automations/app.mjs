@@ -196,8 +196,22 @@ export function meetingTargetFromSearch(search) {
   return {workspace, meeting, action: Number(index), revision: Number(version)};
 }
 
+export function memoryActionTargetFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  if (!params.has('memory_action')) return null;
+  const fields = ['workspace', 'memory_action', 'revision'];
+  if (params.size !== fields.length || fields.some(name => params.getAll(name).length !== 1)) return {invalid: true};
+  const workspace = params.get('workspace');
+  const memoryAction = params.get('memory_action');
+  const version = params.get('revision');
+  const id = /^[0-9a-f]{32}$/;
+  if (!id.test(workspace) || !id.test(memoryAction) || !/^[1-9][0-9]*$/.test(version) ||
+      !Number.isSafeInteger(Number(version))) return {invalid: true};
+  return {workspace, memoryAction, revision: Number(version)};
+}
+
 function editorTargetFromSearch(search) {
-  return meetingTargetFromSearch(search) || automationTargetFromSearch(search);
+  return memoryActionTargetFromSearch(search) || meetingTargetFromSearch(search) || automationTargetFromSearch(search);
 }
 
 function ownedPersonalCatalogue(result, user) {
@@ -225,6 +239,19 @@ function savedMeetingSource(item) {
       source.action_index < 0 || source.action_index >= 50 || typeof source.title !== 'string' || typeof source.text !== 'string') return null;
   return {target: {workspace: item.workspace_id, meeting: source.meeting_id, action: source.action_index, revision: source.revision},
     title: source.title, text: source.text, owner: typeof source.owner === 'string' ? source.owner : ''};
+}
+
+function savedMemoryActionSource(item) {
+  const source = item?.source_memory_action;
+  if (!source || !/^[0-9a-f]{32}$/.test(source.action_id) || !/^[0-9a-f]{32}$/.test(item.workspace_id) ||
+      !Number.isSafeInteger(source.revision) || source.revision < 1 ||
+      typeof source.title !== 'string' || !source.title.trim() || typeof source.notes !== 'string') return null;
+  return {target: {workspace: item.workspace_id, memoryAction: source.action_id, revision: source.revision},
+    title: source.title, notes: source.notes, due_at: source.due_at};
+}
+
+function savedFollowupSource(item) {
+  return savedMeetingSource(item) || savedMemoryActionSource(item);
 }
 
 // `/automations?runs=failed` keeps the run-history filter across refresh,
@@ -292,6 +319,17 @@ function meetingActionDraft(source, username) {
   return draftFromTemplate({id: 'custom', title, prompt}, username);
 }
 
+function memoryActionDraft(source, username) {
+  const suffix = source.target.revision > 1 ? ` · 第 ${source.target.revision} 版` : '';
+  const topic = source.title.replace(/[\p{Cc}\s]+/gu, ' ').trim();
+  const title = ('行动跟进：' + topic).slice(0, 80 - suffix.length).replace(/[\uD800-\uDBFF]$/u, '') + suffix;
+  const prompt = [
+    '依据下方记忆行动项整理跟进计划。列出可由人工确认的下一步、所需信息和完成标准，把外部操作列为待确认事项。',
+    '行动项：' + JSON.stringify(source.title),
+    ...(source.notes ? ['备注：\n' + source.notes] : []),
+  ].join('\n');
+  return draftFromTemplate({id: 'custom', title, prompt}, username);
+}
 export function listQuery(category, search) {
   const params = new URLSearchParams();
   const tab = tabCategory(category);
@@ -557,7 +595,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let templateState = 'idle';
   let templateRequest = null;
   let current = null;
-  let meetingSource = null;
+  let followupSource = null;
   let draftSave = null;
   let category = 'mine';
   let runTimer = 0;
@@ -1296,15 +1334,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const {workspace, meeting} = source.target;
       link.href = '/meetings#' + new URLSearchParams({workspace, meeting});
     } else link.removeAttribute?.('href');
-    form.elements.enabled.disabled = Boolean(meetingSource);
   }
 
-  function discardMeetingDraft() {
-    if (!meetingSource) return;
-    meetingSource = null;
+  function renderFollowupSource(source) {
+    const memory = source?.target.memoryAction ? source : null;
+    renderMeetingSource(memory ? null : source);
+    const panel = document.getElementById('memory-action-source');
+    if (panel) {
+      panel.hidden = !memory;
+      document.getElementById('memory-action-source-title').textContent = memory?.title || '';
+      const notes = document.getElementById('memory-action-source-notes');
+      notes.hidden = !memory?.notes;
+      notes.textContent = memory?.notes || '';
+      const revision = document.getElementById('memory-action-source-revision');
+      revision.textContent = memory ? `行动项版本 ${memory.target.revision}` : '';
+      const link = document.getElementById('memory-action-source-link');
+      if (memory) {
+        link.href = '/memory?' + new URLSearchParams({workspace: memory.target.workspace, page: 'todos', action: memory.target.memoryAction});
+      } else link.removeAttribute?.('href');
+    }
+    form.elements.enabled.disabled = Boolean(followupSource);
+  }
+
+  function discardFollowupDraft() {
+    if (!followupSource) return;
+    followupSource = null;
     current = null;
     fillEditor(form, null, '');
-    renderMeetingSource(null);
+    renderFollowupSource(null);
     form.hidden = true;
     watchEditorExit();
     listPanel.hidden = false;
@@ -1324,7 +1381,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     saveButton.textContent = '保存';
     backButton.disabled = false;
     current = item;
-    meetingSource = source;
+    followupSource = source;
     draftSave = null;
     recentRuns = [];
     selectedRun = run;
@@ -1352,12 +1409,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.classList.add('is-editing');
     fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
-    renderMeetingSource(source || savedMeetingSource(item));
+    renderFollowupSource(source || savedFollowupSource(item));
     renderEditorSchedule();
     form.elements.template_id.disabled = Boolean(item?.id);
     rememberEditorSettings();
     const heading = document.getElementById('editor-heading');
-    if (heading) heading.textContent = item?.id ? item.title : source ? '创建会议跟进' : '新建自动化';
+    if (heading) heading.textContent = item?.id ? item.title
+      : source?.target.memoryAction ? '准备行动跟进' : source ? '创建会议跟进' : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
     runButton.hidden = !item?.id;
     syncRunControls();
@@ -1370,8 +1428,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderManualRunNote() {
     if (!manualRunNote) return;
-    manualRunNote.hidden = !current?.id && !meetingSource;
-    manualRunNote.textContent = meetingSource ? '保存为暂停的自动化。保存后可手动运行一次。'
+    manualRunNote.hidden = !current?.id && !followupSource;
+    manualRunNote.textContent = followupSource ? '保存为暂停的自动化。保存后可手动运行一次。'
       : current?.schedule_status?.state === 'once_triggered' ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
@@ -1379,7 +1437,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderEditorSchedule() {
     if (sampleButton) {
-      sampleButton.hidden = !native || Boolean(current?.id || meetingSource) || !RECURRING_KINDS.has(form.elements.kind.value);
+      sampleButton.hidden = !native || Boolean(current?.id || followupSource) || !RECURRING_KINDS.has(form.elements.kind.value);
       sampleButton.disabled = saveButton.disabled;
     }
     if (!nextRun) return;
@@ -1461,6 +1519,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return true;
     }
     const obsolete = showMeetingSourceError(result.status);
+    if (linkRetry) {
+      linkRetry.textContent = '重新打开行动项';
+      linkRetry.hidden = obsolete;
+    }
+  }
+
+  function showMemorySourceError(status) {
+    const obsolete = [200, 403, 404, 409].includes(status);
+    show('error', obsolete ? '记忆行动项已更新、已完成或不可访问。请返回记忆重新选择。' : '暂时无法读取记忆行动项，请重试。');
+    return obsolete;
+  }
+
+  async function openMemoryActionDraft(target, loadSeq) {
+    const seq = ++editorRequest;
+    const user = currentUser;
+    show('', '正在读取记忆行动项…');
+    const query = new URLSearchParams({memory_action: target.memoryAction, revision: target.revision});
+    const result = await runRequestWithTimeout('GET', `/v1/workspaces/${target.workspace}/automations?${query}`);
+    if (seq !== editorRequest || loadSeq !== loadRequest || currentUser !== user ||
+        workspaceId() !== target.workspace || !form.hidden) return;
+    if (result.status === 200 && result.body.viewer_username === user.username) {
+      const item = result.body.automation;
+      const saved = savedMemoryActionSource(item);
+      if (/^[0-9a-f]{32}$/.test(item?.id || '') && saved?.target.workspace === target.workspace &&
+          saved.target.memoryAction === target.memoryAction && saved.target.revision === target.revision) {
+        show('', '');
+        replaceAutomationLink(item);
+        openEditor(item);
+        return true;
+      }
+      const action = result.body.action;
+      if (action?.id === target.memoryAction && action.workspace_id === target.workspace && action.revision === target.revision &&
+          action.status === 'open' && typeof action.title === 'string' && action.title.trim() && typeof action.notes === 'string') {
+        const source = {target, title: action.title, notes: action.notes, due_at: action.due_at};
+        show('', '');
+        openEditor(memoryActionDraft(source, user.username), source);
+        return true;
+      }
+    }
+    const obsolete = showMemorySourceError(result.status);
     if (linkRetry) {
       linkRetry.textContent = '重新打开行动项';
       linkRetry.hidden = obsolete;
@@ -1575,7 +1673,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
     const wantedTemplate = !target && templateFromSearch(readSearch());
-    discardMeetingDraft();
+    discardFollowupDraft();
     newButton.disabled = true;
     workspaceStatus.textContent = '';
     if (linkRetry) linkRetry.hidden = true;
@@ -1651,11 +1749,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     if (target?.workspace && items.some(item => item.id === target.workspace)) {
       workspaceSelect.value = target.workspace;
-      const opening = target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq);
+      const opening = target.memoryAction ? openMemoryActionDraft(target, seq)
+        : target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq);
       const selected = editorRequest;
       if (await opening || seq !== loadRequest || selected !== editorRequest || !form.hidden) return;
     } else if (target) {
-      show('error', meetingTargetFromSearch(readSearch()) ? '会议行动项链接已不可用。' : '这条自动化链接已不可用。');
+      show('error', memoryActionTargetFromSearch(readSearch()) ? '记忆行动项链接已不可用。'
+        : meetingTargetFromSearch(readSearch()) ? '会议行动项链接已不可用。' : '这条自动化链接已不可用。');
     }
     if (catalog) {
       const selected = editorRequest;
@@ -1693,7 +1793,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editorRequest += 1;
     clearEditorLink();
     closeConfirm({restoreFocus: false});
-    discardMeetingDraft();
+    discardFollowupDraft();
     current = null;
     form.hidden = true;
     watchEditorExit();
@@ -1766,7 +1866,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       editorRequest += 1;
       clearEditorLink();
       selectCategory(tabCategory(tab.dataset.category));
-      discardMeetingDraft();
+      discardFollowupDraft();
       form.hidden = true;
       watchEditorExit();
       listPanel.hidden = false;
@@ -1793,7 +1893,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listReturn = null;
     clearEditorLink();
     closeConfirm({restoreFocus: false});
-    discardMeetingDraft();
+    discardFollowupDraft();
     current = null;
     form.hidden = true;
     watchEditorExit();
@@ -1849,7 +1949,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const item = current?.id ? current : null;
-    const source = meetingSource;
+    const source = followupSource;
     const sample = Boolean(sampleButton && event.submitter === sampleButton && !sampleButton.hidden &&
       !item && !source && native && RECURRING_KINDS.has(values.schedule.kind));
     const editor = editorRequest;
@@ -1870,8 +1970,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (item) {
         result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
       } else {
-        const source_meeting = source && {meeting_id: source.target.meeting, revision: source.target.revision, action_index: source.target.action};
-        const body = {...changes, template_id, ...(source ? {source_meeting} : {}), ...(sample ? {run_sample: true} : {})};
+        const ref = source?.target;
+        const provenance = ref?.memoryAction ? {source_memory_action: {action_id: ref.memoryAction, revision: ref.revision}}
+          : ref ? {source_meeting: {meeting_id: ref.meeting, revision: ref.revision, action_index: ref.action}} : {};
+        const body = {...changes, template_id, ...provenance, ...(sample ? {run_sample: true} : {})};
         const content = JSON.stringify([workspace, body]);
         if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
         result = await request('POST', path, body, {'Idempotency-Key': draftSave.key});
@@ -1896,6 +1998,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       showMeetingSourceError(result.status);
       return;
     }
+    if (source && result.body.error?.code === 'memory_source_unavailable') {
+      showMemorySourceError(result.status);
+      return;
+    }
     if (result.status === 409) {
       show('error', '自动化已在别处更新，请重新打开后再保存。');
       await loadList();
@@ -1918,10 +2024,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       replaceAutomationLink(current, startedSample);
     }
     if (source) {
-      meetingSource = null;
+      followupSource = null;
       replaceAutomationLink(current);
     }
-    renderMeetingSource(savedMeetingSource(current));
+    renderFollowupSource(savedFollowupSource(current));
     if (!item) {
       selectCategory('mine');
       search.value = '';
@@ -2004,7 +2110,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     closeConfirm({restoreFocus: false});
-    discardMeetingDraft();
+    discardFollowupDraft();
     current = null;
     savedRunResults.clear();
     runSubmissions.clear();

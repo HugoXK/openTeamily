@@ -387,6 +387,7 @@
       <button type="button" role="menuitem" data-menu="reply" data-ui-text="chat.messages.reply">回复</button>
       <button type="button" role="menuitem" data-menu="ask-group" data-ui-text="chat.group.ask_agents" hidden>请智能体回复</button>
       <button type="button" role="menuitem" data-menu="save" data-ui-text="chat.messages.save_to_space">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="save-action" data-ui-text="chat.messages.save_as_action" hidden>转为行动</button>
       <button type="button" role="menuitem" data-menu="translate" title="使用配置的模型和自己的在线运行时" data-ui-title="chat.translate.model_help" data-ui-text="chat.translate.translate">翻译</button>
       <button type="button" role="menuitem" data-menu="ask" data-ui-text="chat.messages.ask_ai">问 AI</button>
       <button type="button" role="menuitem" data-menu="copy" data-ui-text="chat.copy">复制</button>
@@ -652,6 +653,19 @@
         <div class="actions">
           <button type="button" id="selection-memory-cancel" data-ui-text="chat.cancel">取消</button>
           <button type="submit" id="selection-memory-submit"><span data-ui-text="chat.save_confirm">确认保存</span></button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="save-action-dialog" aria-labelledby="save-action-heading">
+      <form id="save-action-form">
+        <h2 id="save-action-heading" data-ui-text="chat.messages.save_as_action">转为行动</h2>
+        <p class="note" data-ui-text="chat.messages.action_scope">将保存到个人记忆的「下一步行动」。</p>
+        <label><span data-ui-text="chat.messages.action_title">行动标题</span> <input id="save-action-title" maxlength="80" required></label>
+        <label><span data-ui-text="chat.messages.action_notes">备注</span> <textarea id="save-action-notes" rows="5" maxlength="2000"></textarea></label>
+        <p id="save-action-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" id="save-action-cancel" data-ui-text="chat.cancel">取消</button>
+          <button type="submit" id="save-action-submit" data-ui-text="chat.messages.action_confirm">保存行动</button>
         </div>
       </form>
     </dialog>

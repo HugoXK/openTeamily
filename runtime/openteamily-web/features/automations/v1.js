@@ -73,6 +73,17 @@ export function automationsV1({ endpoints, log, personalBinding }) {
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
+        if (req.query.has('memory_action')) {
+          const fields = ['memory_action', 'revision']
+          if (req.query.size !== fields.length || fields.some(name => req.query.getAll(name).length !== 1)
+            || !/^[1-9][0-9]*$/.test(req.query.get('revision'))) {
+            throw new FeatureError(400, 'invalid', '请选择已保存的记忆行动项。')
+          }
+          if (!req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
+          const body = await call('memoryFollowup', {workspace_id: workspaceId, action_id: req.query.get('memory_action'),
+            revision: Number(req.query.get('revision'))})
+          return {status: 200, body: {...body, viewer_username: req.ownerUsername}}
+        }
         const fields = ['meeting', 'revision', 'action']
         if (fields.some(name => req.query.has(name))) {
           if (req.query.size !== fields.length || fields.some(name => req.query.getAll(name).length !== 1)
@@ -88,7 +99,9 @@ export function automationsV1({ endpoints, log, personalBinding }) {
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()
-        if (Object.hasOwn(body, 'source_meeting') && !req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
+        if (['source_meeting', 'source_memory_action'].some(name => Object.hasOwn(body, name)) && !req.ownerUsername) {
+          throw new FeatureError(403, 'forbidden', 'Follow-up requires an authenticated owner')
+        }
         const result = await call('create', { ...body, workspace_id: workspaceId, idempotency_key: req.headers.get('idempotency-key') })
         return { status: result.status ?? 201, body: { automation: result.automation, ...(result.sample_run ? {sample_run: result.sample_run} : {}) } }
       }

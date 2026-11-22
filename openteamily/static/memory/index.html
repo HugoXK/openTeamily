@@ -178,16 +178,24 @@
           </div>
           <p id="action-draft-status" class="note" role="status"></p>
         </section>
-        <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
         <button type="button" id="new-action-open">新建行动</button>
-        <label id="action-filter-label">筛选
-          <select id="action-filter">
-            <option value="open" selected>未完成</option>
-            <option value="done">已完成</option>
-            <option value="">全部</option>
-          </select>
-        </label>
+        <form id="action-list-filters" role="search" aria-label="筛选行动">
+          <label>搜索行动 <input id="action-search" type="search" maxlength="80" placeholder="按标题搜索"></label>
+          <label>状态
+            <select id="action-filter">
+              <option value="open" selected>未完成</option>
+              <option value="done">已完成</option>
+              <option value="">全部</option>
+            </select>
+          </label>
+        </form>
+        <p id="action-list-count" class="note" role="status"></p>
+        <p id="action-empty" class="note" hidden>暂无行动。</p>
         <ul id="action-list"></ul>
+        <div class="actions action-list-navigation">
+          <button type="button" id="action-list-more" hidden>加载更多行动</button>
+          <button type="button" id="action-list-retry" hidden>重试</button>
+        </div>
         <form id="new-action-form" hidden>
           <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
           <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
@@ -396,11 +404,13 @@
         </select>
       </label>
       <p id="action-editor-meta" class="note"></p>
-      <p id="action-editor-source" class="note" hidden><a id="action-source-meeting"></a></p>
+      <p id="action-editor-source" class="note" hidden><a id="action-source-meeting" hidden></a><a id="action-source-chat" hidden>查看来源消息</a></p>
       <div class="actions">
         <button type="submit" id="save-action">保存</button>
+        <a id="action-follow-up" class="secondary" target="_blank" rel="noopener" aria-describedby="action-follow-up-status" hidden>跟进自动化</a>
         <button type="button" id="delete-action">删除</button>
       </div>
+      <p id="action-follow-up-status" class="note" role="status"></p>
       <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
         <p id="action-delete-question"></p>
         <div class="actions">

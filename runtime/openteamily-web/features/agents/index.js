@@ -835,6 +835,15 @@ export function createAgents({ db, host }) {
       const row = one("SELECT text FROM agent_messages WHERE id=? AND conversation_id=? AND role='user' AND status IN ('sent','succeeded')",p.message_id,convo.id)
       return row ? {title:convo.title,text:row.text} : null
     },
+    async actionSource(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const agent = load(ws(p), p.agent_id)
+      const row = messageForWork(conversation(agent,p.conversation_id), p.message_id)
+      if (!['sent','succeeded'].includes(row.status) || !row.text.trim() || JSON.parse(row.meta).files?.length) {
+        fail('conflict', 'Only completed text messages can be saved', 409)
+      }
+      return true
+    },
     async captureHistory(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
@@ -1189,6 +1198,7 @@ export default async function agents(host) {
   }
   wrapped.startupEntry = endpoints.startupEntry
   wrapped.createRemix = endpoints.createRemix
+  wrapped.actionSource = endpoints.actionSource
   wrapped.templateRoles = endpoints.templateRoles
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)

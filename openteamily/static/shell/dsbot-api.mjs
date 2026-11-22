@@ -34,6 +34,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings\/from-call\/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/draft(?:\/save)?$/, 'memory'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/from-chat$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:candidates(?:\/[0-9a-f]{32})?|profile(?:\/dream)?|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/studio\/documents(?:\/[0-9a-f]{32}(?:\/(?:remove|restore|live|versions(?:\/[1-9][0-9]{0,15})?))?)?$/, 'studio'],

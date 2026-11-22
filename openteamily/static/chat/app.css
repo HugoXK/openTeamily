@@ -2060,14 +2060,16 @@ html[data-theme-resolved="dark"] #message-list li.agent{
 #message-list li > .message-more:focus-visible { opacity: 1; }
 #message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { bottom: .125rem; right: -1.875rem; }
 #message-list li.mine .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { right: auto; left: -1.875rem; }
-#save-message-dialog, #group-invite-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
-#save-message-dialog::backdrop, #group-invite-dialog::backdrop { background: rgb(0 0 0 / 25%); }
-#save-message-dialog form, #group-invite-form { border: 0; padding: 0; box-shadow: none; background: transparent; }
-#save-message-dialog h2, #group-invite-heading { margin: 0; font-size: 1.125rem; }
-#save-message-dialog p, #group-invite-dialog p { font-size: .875rem; line-height: 1.65; }
-#save-message-dialog label { display: grid; gap: .5rem; font-size: .875rem; }
-#save-message-dialog .actions, #group-invite-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
-#save-message-dialog [role="alert"] { color: var(--ot-danger); }
+:is(#save-message-dialog, #save-action-dialog, #group-invite-dialog) { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
+:is(#save-message-dialog, #save-action-dialog, #group-invite-dialog)::backdrop { background: rgb(0 0 0 / 25%); }
+:is(#save-message-dialog, #save-action-dialog) form, #group-invite-form { border: 0; padding: 0; box-shadow: none; background: transparent; }
+:is(#save-message-dialog, #save-action-dialog) h2, #group-invite-heading { margin: 0; font-size: 1.125rem; }
+:is(#save-message-dialog, #save-action-dialog, #group-invite-dialog) p { font-size: .875rem; line-height: 1.65; }
+:is(#save-message-dialog, #save-action-dialog) label { display: grid; gap: .5rem; font-size: .875rem; }
+:is(#save-message-dialog, #save-action-dialog, #group-invite-dialog) .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+:is(#save-message-dialog, #save-action-dialog) [role="alert"] { color: var(--ot-danger); }
+#message-list li > .save-chat-action { margin: .25rem 0 0; padding: .25rem .5rem; min-height: 2.25rem; }
+#status .chat-action-receipt { margin-inline-start: .5rem; color: inherit; text-decoration: underline; }
 #group-invite-dialog { box-sizing: border-box; max-height: calc(100dvh - 2rem); }
 #group-invite-form { display: grid; gap: .75rem; }
 #group-invite-dialog p { margin: 0; }

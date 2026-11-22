@@ -2719,6 +2719,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const link = savedAgentWorkLink(item.saved_work);
       bubble.append(link || saveMessageButton(item, currentAgent.id));
     }
+    if (canSaveChatAction(item, currentAgent?.id)) {
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'save-chat-action';
+      save.dataset.saveAction = item.id;
+      save.textContent = uiLabel('转为行动', 'Create action');
+      const agentId = currentAgent.id;
+      save.addEventListener('click', () => openSaveChatAction(item, agentId));
+      bubble.append(save);
+    }
     if (failed) addPrivateReplyRetry(bubble, item);
     return {bubble, replyView};
   }
@@ -3211,6 +3221,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       menu.querySelector(`[data-menu="${action}"]`).hidden = publicThread;
     }
     menu.querySelector('[data-menu="save"]').hidden = publicThread || !saveableSocialMessage(item);
+    const saveAction = menu.querySelector('[data-menu="save-action"]');
+    if (saveAction) saveAction.hidden = !canSaveChatAction(item);
     menu.querySelector('[data-menu="copy-link"]').hidden = !shareableMessageHref(item);
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
@@ -3246,6 +3258,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         messageUtilities.open(item, action);
       } else if (action === 'save') {
         openSaveMessage(item);
+      } else if (action === 'save-action' && scope === sendScope()) {
+        openSaveChatAction(item);
       } else if (action === 'edit') {
         const edit = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '编辑');
         if (edit) edit.click();
@@ -3294,6 +3308,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let saveMessageTarget = null;
   const saveMessageDialog = document.getElementById('save-message-dialog');
+  let saveActionTarget;
+  const saveActionDialog = document.getElementById('save-action-dialog');
+  const saveActionTitle = document.getElementById('save-action-title');
+  const saveActionNotes = document.getElementById('save-action-notes');
+  const saveActionError = document.getElementById('save-action-error');
+  const saveActionSubmit = document.getElementById('save-action-submit');
+  const saveActionCancel = document.getElementById('save-action-cancel');
+
+  function canSaveChatAction(item, agentId) {
+    if (!servedByDsbot || !/^[0-9a-f]{32}$/.test(personalWorkspaceId) || !currentConversation ||
+        typeof item?.body !== 'string' || !item.body.trim() || item.retracted || item.attachment || item.voice || item.attachments?.length) return false;
+    return agentId ? /^[0-9a-f]{32}$/.test(agentId) && /^[0-9a-f]{32}$/.test(item.id) &&
+        ['sent','succeeded'].includes(item.status)
+      : !currentConversation.public_agent && /^otm_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/.test(item.id);
+  }
+
+  function openSaveChatAction(item, agentId) {
+    if (!canSaveChatAction(item, agentId) || saveActionDialog.open) return;
+    const source = {kind:agentId ? 'agent' : 'social', workspace_id:workspaceId(),
+      conversation_id:currentConversation.id, message_id:item.id,
+      ...(agentId ? {agent_id:agentId} : {revision:item.revision || 1})};
+    saveActionTarget = {source, personal:personalWorkspaceId, scope:sendScope(), key:idempotencyKey('chat-action-')};
+    saveActionTitle.value = defaultSaveTitle(item.body);
+    saveActionNotes.value = item.body.trim().slice(0, 2000).toWellFormed();
+    saveActionError.hidden = true;
+    saveActionSubmit.disabled = saveActionCancel.disabled = false;
+    saveActionDialog.showModal();
+    saveActionTitle.focus();
+  }
+
+  saveActionDialog?.addEventListener('close', () => {
+    if (!saveActionDialog.open) saveActionTarget = null;
+  });
+  saveActionDialog?.addEventListener('cancel', event => {
+    if (saveActionSubmit.disabled) event.preventDefault();
+  });
+  saveActionCancel?.addEventListener('click', () => saveActionDialog.close());
+  document.getElementById('save-action-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = saveActionTarget;
+    const current = () => saveActionTarget === target && saveActionDialog.open && sendScope() === target.scope;
+    if (!target || !current() || saveActionSubmit.disabled) return;
+    const {source,personal,key} = target;
+    const title = saveActionTitle.value.trim();
+    if (!title) { saveActionTitle.focus(); return; }
+    saveActionError.hidden = true;
+    saveActionSubmit.disabled = saveActionCancel.disabled = true;
+    try {
+      const result = await request('POST', `/v1/workspaces/${personal}/memory/actions/from-chat`,
+        {source,title,notes:saveActionNotes.value}, {'Idempotency-Key':key}, AbortSignal.timeout(12000))
+        .catch(() => ({status:0,body:{}}));
+      if (!current()) return;
+      const saved = result.body.action;
+      if (![200,201].includes(result.status) || saved?.workspace_id !== personal || !/^[0-9a-f]{32}$/.test(saved?.id || '')) {
+        saveActionError.textContent = result.status === 409
+          ? uiLabel('原消息已经变化，请关闭后重新选择。', 'The original message changed. Close and select it again.')
+          : uiLabel('无法确认行动已保存，请重试。', 'Could not confirm the action was saved. Try again.');
+        saveActionError.hidden = false;
+        return;
+      }
+      saveActionDialog.close();
+      saveActionTarget = null;
+      show('ok', result.status === 201 ? uiLabel('已保存到下一步行动。', 'Saved to Next Actions.')
+        : uiLabel('这条消息已有行动。', 'This message already has an action.'));
+      const link = document.createElement('a');
+      link.className = 'chat-action-receipt';
+      link.href = '/memory?' + new URLSearchParams({workspace:personal,page:'todos',action:saved.id});
+      link.textContent = uiLabel('打开行动', 'Open action');
+      status.append(link);
+      link.focus({preventScroll:true});
+    } finally {
+      if (saveActionTarget === target) saveActionSubmit.disabled = saveActionCancel.disabled = false;
+    }
+  });
 
   // One click on a message becomes a real one-shot automation in this workspace; the
   // idempotency key is the message id, so setting it twice answers "already set".

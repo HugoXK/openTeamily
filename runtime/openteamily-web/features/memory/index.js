@@ -13,6 +13,7 @@ import { actionDraftRoutes } from './action-drafts.js'
 import { requireMemoryWorkspace } from './access.js'
 import { saveMeetingNote } from './meeting-notes.js'
 import { saveSharedMeetingAction, sharedMeetingActions } from './shared-meeting-actions.js'
+import { chatActionRoutes } from './chat-action.js'
 
 const routes = [...extraRoutes, ...pageRoutes, ...captureRoutes].map(route => ({
   pattern: route.pattern,
@@ -27,7 +28,7 @@ export default defineFeature({
   pages: ['memory'],
   migrations: MIGRATIONS,
   importTables: IMPORT_TABLES,
-  routes: [...actionDraftRoutes, ...routes],
+  routes: [...actionDraftRoutes, ...chatActionRoutes, ...routes],
   endpoints: ({ store, owner, host }) => ({
     ...captureWorker({store,host}),
     saveMeetingNote: (payload, call) => saveMeetingNote({store, owner, host}, payload, call),
