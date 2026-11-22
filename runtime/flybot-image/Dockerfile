@@ -3,7 +3,7 @@
 # OpenTeamily FlyBot runtime image. Build context is the repository's runtime/ directory:
 #   docker build -f runtime/flybot-image/Dockerfile -t openteamily-flybot:local runtime
 #
-# Layers the unmodified vendored DS-Bot v0.3.6 tree and the FlyBot social plugin onto
+# Layers the pinned DS-Bot runtime, OpenTeamily integration and FlyBot social plugin onto
 # DeepSeek Harness, with @openteamily/flybot-runtime as the single DSH plugin entry
 # (it calls createRuntime + the social façade). Matches the compose manager contract:
 # USER 1000:1000, EXPOSE 8080, HEALTHCHECK, writable /data, no root entrypoint.
@@ -67,6 +67,7 @@ COPY third_party/anthropic-sdk /opt/licenses/anthropic-sdk
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image
+RUN node /opt/openteamily/runtime/flybot-image/native-ds-bot-overlay.mjs /opt/openteamily/runtime/ds-bot-upstream/ds-bot
 COPY openteamily-web /opt/openteamily/runtime/openteamily-web
 COPY --from=openteamily-static / /opt/openteamily/runtime/openteamily-web/pages/
 RUN node --input-type=module -e 'import {writeChatAssetManifest} from "/opt/openteamily/runtime/openteamily-web/src/pages.js"; await writeChatAssetManifest("/opt/openteamily/runtime/openteamily-web/pages")'

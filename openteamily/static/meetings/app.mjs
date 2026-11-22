@@ -503,7 +503,7 @@ function mount() {
   let selection = 0;
   const titleInput = document.getElementById('meeting-title');
   const transcript = document.getElementById('meeting-transcript');
-  const audio = mountMeetingAudio(document, {request, base, transcript});
+  const audio = mountMeetingAudio(document, {request, base, transcript, onPendingChange: syncLeaveProtection});
   const summary = document.getElementById('meeting-summary');
   const draftPanel = document.getElementById('meeting-draft');
   const draftButton = document.getElementById('generate-meeting-draft');
@@ -1729,7 +1729,7 @@ function mount() {
   }
 
   function hasUnsavedChanges() {
-    return savedDraft !== null && !form.hidden && draftContents() !== savedDraft;
+    return savedDraft !== null && !form.hidden && (audio.hasPendingWork() || draftContents() !== savedDraft);
   }
 
   function beforeLeaving(event) {
@@ -1760,7 +1760,9 @@ function mount() {
       ? '保存请求仍在处理。离开后可重新打开原会议，核对保存结果。'
       : saveRetry && active(saveRetry)
         ? '上次保存结果尚未确认。离开后可重新打开原会议，核对保存结果。'
-        : '尚未保存的会议内容会丢失。';
+        : audio.hasPendingWork()
+          ? '本页的音频、转写进度和尚未保存的修改会丢失。'
+          : '尚未保存的会议内容会丢失。';
     continueNavigation = leave;
     unsavedDialog.showModal();
   }
@@ -1859,7 +1861,7 @@ function mount() {
     }
     if (!native) meetings = [meeting, ...meetings.filter(item => item.id !== meeting.id)];
     else meetings = meetings.map(item => item.id === meeting.id ? meeting : item);
-    if (!newerDraft && layout?.dataset.view !== 'catalogue') fill(meeting);
+    if (!newerDraft && !audio.hasPendingWork() && layout?.dataset.view !== 'catalogue') fill(meeting);
     else {
       current = meeting;
       callDraft = null;

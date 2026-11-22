@@ -644,6 +644,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const runPath = ({workspace, automation}) => `/v1/workspaces/${workspace}/automations/${automation}`;
+  const submissionAction = source => source ? `/runs/${source}/retry` : '/run';
+
+  function submissionStorageKey(target) {
+    const id = /^[a-f0-9]{32}$/;
+    if (native && target.viewer && id.test(target.workspace) && id.test(target.automation)) return 'ot-automation-run:' + target.key;
+  }
+
+  function storeRunSubmission(target, submission) {
+    if (submission) runSubmissions.set(target.key, submission);
+    else runSubmissions.delete(target.key);
+    const key = submissionStorageKey(target);
+    if (!key) return;
+    try {
+      if (submission) {
+        const {source, idempotency} = submission;
+        view.sessionStorage.setItem(key, JSON.stringify({source, idempotency}));
+      } else view.sessionStorage.removeItem(key);
+    } catch { /* The in-page retry still works when tab storage is unavailable. */ }
+  }
+
+  function restoreRunSubmission(target) {
+    const key = submissionStorageKey(target);
+    if (!key || runSubmissions.has(target.key)) return;
+    try {
+      const saved = JSON.parse(view.sessionStorage.getItem(key));
+      if (!saved || typeof saved.idempotency !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(saved.idempotency) ||
+          (saved.source !== undefined && (typeof saved.source !== 'string' || !/^[a-f0-9]{32}$/.test(saved.source)))) return;
+      runSubmissions.set(target.key, {source: saved.source, idempotency: saved.idempotency, state: 'uncertain'});
+    } catch { /* Ignore unavailable or invalid tab data. */ }
+  }
 
   async function runRequestWithTimeout(method, path, body, headers) {
     const signal = globalThis.AbortSignal?.timeout?.(12000);
@@ -979,26 +1009,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  async function recoverRunReceipt(target, stillCurrent) {
+    if (!submissionStorageKey(target)) return;
+    const submission = runSubmissions.get(target.key);
+    if (submission?.state !== 'uncertain') return;
+    const result = await runRequestWithTimeout('GET', runPath(target) + submissionAction(submission.source), undefined,
+      {'Idempotency-Key': submission.idempotency});
+    const item = result.body?.run;
+    if (!stillCurrent() || runSubmissions.get(target.key) !== submission || submission.state !== 'uncertain') return;
+    if (result.status !== 200 || !/^[a-f0-9]{32}$/.test(item?.id || '') ||
+        item.workspace_id !== target.workspace || item.automation_id !== target.automation) return;
+    return {item, submission};
+  }
+
   async function submitRun(target, source) {
     if (!target.workspace || !target.automation || !currentRunScope(target)) return;
     let submission = runSubmissions.get(target.key);
     if (submission ? submission.state !== 'uncertain' || submission.source !== source : activeRun) return;
     if (!submission) submission = {source, idempotency: idempotencyKey()};
     submission.state = 'pending';
-    runSubmissions.set(target.key, submission);
+    storeRunSubmission(target, submission);
+    if (submissionStorageKey(target)) replaceAutomationLink({workspace_id: target.workspace, id: target.automation});
     const intent = runIntent;
     show('', '');
     syncRunControls();
     if (!runPanel?.hidden) renderRuns(recentRuns);
-    const action = source ? `/runs/${source}/retry` : '/run';
-    const result = await runRequestWithTimeout('POST', runPath(target) + action, {}, {'Idempotency-Key': submission.idempotency});
+    const result = await runRequestWithTimeout('POST', runPath(target) + submissionAction(source), {}, {'Idempotency-Key': submission.idempotency});
     if (runSubmissions.get(target.key) !== submission) return;
     const accepted = result.status === 200 || result.status === (source ? 201 : 202);
     const item = result.body.run;
     const confirmed = accepted && watchMatches(item, target);
     const uncertain = !confirmed && (accepted || result.status === 0 || result.status === 408 || result.status >= 500);
     if (uncertain) submission.state = 'uncertain';
-    else runSubmissions.delete(target.key);
+    else storeRunSubmission(target, null);
     if (confirmed) watchedRuns.set(target.key, item);
     if (!currentRunScope(target)) return;
     if (!confirmed) {
@@ -1048,8 +1091,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const cursor = cursors.at(-1);
     setRunPageControls(true);
     const path = `${runPath(target)}/runs`;
-    const listed = await runRequestWithTimeout('GET', `${path}?limit=20${wanted}${cursor ? '&cursor=' + cursor : ''}`);
     const stillCurrent = () => seq === runRequest && currentRunScope(target);
+    const receipt = recoverRunReceipt(target, stillCurrent);
+    const listed = await runRequestWithTimeout('GET', `${path}?limit=20${wanted}${cursor ? '&cursor=' + cursor : ''}`);
     if (!stillCurrent()) return;
     pendingRunCursors = null;
     const ok = listed.status === 200 && Array.isArray(listed.body.items);
@@ -1076,6 +1120,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (historyError) historyError.hidden = ok;
     syncRunControls();
+    const recovered = await receipt;
+    if (!stillCurrent()) return;
+    if (recovered && runSubmissions.get(target.key) === recovered.submission && recovered.submission.state === 'uncertain') {
+      storeRunSubmission(target, null);
+      const shown = items.find(item => item.id === recovered.item.id && !runActive(item)) || recovered.item;
+      watchedRuns.set(target.key, shown);
+      expandedRuns.add(shown.id);
+      activeRun ||= runActive(shown);
+      if (!cursor && matchesRunFilter(shown, runFilter)) {
+        runFingerprint = '';
+        renderRuns([shown, ...items.filter(item => item.id !== shown.id)].slice(0, 20));
+      }
+    }
     const watched = watchedRuns.get(target.key);
     let updated = watched && items.find(item => item.id === watched.id && watchMatches(item, target));
     const reportedActive = ok && scopedActiveRun(listed.body.active_run, target.workspace, target.automation);
@@ -1194,6 +1251,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     draftSave = null;
     recentRuns = [];
     const target = runScope();
+    restoreRunSubmission(target);
     const pending = scopedActiveRun(item?.active_run, target.workspace, target.automation);
     if (pending) watchedRuns.set(target.key, pending);
     activeRun = Boolean(pending);
@@ -1318,6 +1376,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function replaceAutomationLink(item) {
     const params = new URLSearchParams({workspace: item.workspace_id, automation: item.id});
+    if (runFilter !== 'all') params.set('runs', runFilter);
     view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + '?' + params);
   }
 
@@ -1794,6 +1853,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
     }
+    storeRunSubmission(target, null);
     current = null;
     clearEditorLink();
     form.hidden = true;
@@ -1810,7 +1870,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeButton.addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) return;
     // Bind the question to the automation and workspace it names right now.
-    const target = {workspace: workspaceId(), automation: current.id};
+    const target = runScope();
     openConfirm({
       parent: removeButton.parentNode || form,
       trigger: removeButton,

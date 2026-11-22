@@ -337,9 +337,7 @@ export function install(rt) {
   }
   const reconcileAgent = async (agent, bot) => {
     const sessionId = agent.session.id
-    const names = bot ? expandCapabilityNames(bot.capabilities, library()) : new Set()
-    const desired = bot && rt.config?.filterNativeCapabilities
-      ? rt.config.filterNativeCapabilities(bot, names, library()) : names
+    const desired = bot ? expandCapabilityNames(bot.capabilities, library()) : new Set()
     const agentMounts = mounts.get(agent) ?? new Map()
     if (desired.size > 0) mounts.set(agent, agentMounts)
     if (bot) {

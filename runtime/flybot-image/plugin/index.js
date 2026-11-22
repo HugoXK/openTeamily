@@ -1,5 +1,5 @@
 // DSH plugin entry for the OpenTeamily FlyBot runtime image.
-// Boots the unmodified upstream ds-bot runtime, then attaches the FlyBot social
+// Boots the pinned DS-Bot runtime with the image's OpenTeamily integration and attaches the FlyBot social
 // façade. This file must keep living at runtime/flybot-image/plugin/ so the
 // relative imports into the vendored trees resolve. Do not copy it out of this
 // layout; the image profile uses a link: dependency to this directory.
@@ -12,6 +12,7 @@ import { normalizeImportedSession } from '../../openteamily-web/features/agents/
 import { attachRuntime } from '../../openteamily-web/src/host.js'
 import { boundName } from '../../openteamily-web/features/skills/index.js'
 import { nativeSkillFilter, reconcileStartupSkills } from '../../openteamily-web/features/skills/library.js'
+import { assertNativeConsentOverlay } from '../native-ds-bot-overlay.mjs'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -19,6 +20,7 @@ export const name = 'openteamily-flybot'
 export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'sessions', 'sessionTitle', 'workspaceRegistry', 'connection']
 
 export function apply(ctx, config = {}) {
+  assertNativeConsentOverlay()
   // Prepare is detached/read-only: no Session is entered, persisted or announced.
   // Install before core agent restoration, whose projections read old imports.
   normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))

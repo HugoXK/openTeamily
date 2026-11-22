@@ -143,7 +143,7 @@
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
           <details id="meeting-audio" class="meeting-draft">
             <summary>音频转写</summary>
-            <p class="note">可录音或上传音频，最长 10 分钟。请先征得参会人同意。</p>
+            <p class="note">可录音或上传音频，最长 10 分钟。请先征得参会人同意。音频和转写进度保留在当前编辑页面。</p>
             <div class="meeting-actions">
               <button type="button" id="meeting-audio-prepare" hidden>准备语音识别</button>
               <button type="button" id="meeting-audio-record" disabled>录音</button>
@@ -153,6 +153,7 @@
             <audio id="meeting-audio-preview" controls preload="metadata" hidden></audio>
             <div class="meeting-actions">
               <button type="button" id="meeting-audio-start" disabled>开始转写</button>
+              <button type="button" class="secondary" id="meeting-audio-add-partial" hidden>加入已识别片段</button>
               <button type="button" class="secondary" id="meeting-audio-discard" disabled>移除音频</button>
             </div>
             <p class="note" id="meeting-audio-status" role="status"></p>

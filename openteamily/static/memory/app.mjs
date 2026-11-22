@@ -1,4 +1,5 @@
 import {mountCandidates, sourceHref} from './candidates.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 export function csrfCookie(source) {
@@ -490,14 +491,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function actionDraftState() {
-    return actionDrafts.get(actionDraftScope());
+    const scope = actionDraftScope();
+    if (!scope) return null;
+    if (!actionDrafts.has(scope)) {
+      let restored;
+      try { restored = decodeActionReview(document.defaultView.sessionStorage.getItem('openteamily.memory-action-review:' + scope)); } catch {}
+      actionDrafts.set(scope, restored || null);
+    }
+    return actionDrafts.get(scope);
+  }
+
+  function persistActionDraft(scope, state) {
+    if (!scope || actionDrafts.get(scope) !== state) return;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const key = 'openteamily.memory-action-review:' + scope;
+      if (state.open || state.selected.size || state.items.length || state.generateAttempt || state.saveAttempt) {
+        storage.setItem(key, encodeActionReview(state));
+      } else storage.removeItem(key);
+    } catch {}
   }
 
   function updateActionDraftControls(state) {
     const blocked = Boolean(state.busy || state.saveAttempt);
     const choices = Array.from(actionDraftSources.children).map(label => label.children[0]);
     for (const box of choices) box.disabled = blocked || (!box.checked && state.selected.size >= 5);
-    actionDraftGenerate.disabled = blocked || !choices.some(box => box.checked);
+    actionDraftGenerate.disabled = blocked || (!state.generateAttempt && !choices.some(box => box.checked));
+    actionDraftGenerate.textContent = state.generateAttempt && !state.busy ? '继续生成建议' : '生成建议';
     actionDraftSave.disabled = Boolean(state.busy) ||
       (!state.saveAttempt && (!state.items.some(item => item.selected)
         || state.items.some(item => item.selected && (!item.title.trim() || item.title.trim().length > 80))));
@@ -507,7 +527,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderActionDrafts() {
     if (!actionDraftPanel) return;
     const scope = actionDraftScope();
-    const state = actionDrafts.get(scope);
+    const state = actionDraftState();
     const pagesReady = scope && actionDraftPageScope === scope;
     const opened = currentView === 'actions' && Boolean(state?.open);
     actionDraftOpener.disabled = !pagesReady && !state;
@@ -517,13 +537,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actionDraftItems.replaceChildren();
     if (!opened) return;
 
-    const pages = pagesReady ? pageChoices : [];
-    if (pagesReady) {
-      const available = new Set(pages.map(page => page.id));
-      for (const id of state.selected) if (!available.has(id)) state.selected.delete(id);
+    const pages = new Map((pagesReady ? pageChoices : []).map(page => [page.id, page]));
+    for (const [id, selected] of state.selected) {
+      if (pages.has(id)) state.selected.set(id, pages.get(id));
+      else pages.set(id, selected);
     }
-    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.length > 0;
-    for (const page of [...pages].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
+    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.size > 0;
+    for (const page of [...pages.values()].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
       const label = document.createElement('label');
       const pick = document.createElement('input');
       pick.type = 'checkbox';
@@ -531,8 +551,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       pick.checked = state.selected.has(page.id);
       pick.addEventListener('change', () => {
         if (actionDraftState() !== state || pick.disabled) return;
-        if (pick.checked) state.selected.add(page.id);
+        if (pick.checked) state.selected.set(page.id, page);
         else state.selected.delete(page.id);
+        if (state.generateAttempt) {
+          state.generateAttempt = null;
+          state.message = '';
+          document.getElementById('action-draft-status').textContent = '';
+        }
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       label.append(pick, document.createTextNode(page.title));
@@ -550,6 +576,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       pick.addEventListener('change', () => {
         if (actionDraftState() !== state || pick.disabled) return;
         item.selected = pick.checked;
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       include.append(pick, document.createTextNode('保存此行动'));
@@ -562,6 +589,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.addEventListener('input', () => {
         if (actionDraftState() !== state || title.disabled) return;
         item.title = title.value;
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       heading.append(document.createTextNode('标题'), title);
@@ -576,7 +604,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       source.value = item.memory_page_id;
       source.addEventListener('change', () => {
-        if (actionDraftState() === state && !source.disabled) item.memory_page_id = source.value;
+        if (actionDraftState() !== state || source.disabled) return;
+        item.memory_page_id = source.value;
+        persistActionDraft(scope, state);
       });
       label.append(document.createTextNode('关联记忆页'), source);
       row.append(include, heading, label);
@@ -590,28 +620,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   actionDraftOpener?.addEventListener('click', () => {
     const scope = actionDraftScope();
     if (!scope) return;
-    let state = actionDrafts.get(scope);
-    if (!state) actionDrafts.set(scope, state = {selected:new Set(), items:[], sources:[], message:''});
+    let state = actionDraftState();
+    if (!state) actionDrafts.set(scope, state = {selected:new Map(), items:[], sources:[], message:''});
     state.open = !state.open;
+    persistActionDraft(scope, state);
     renderActionDrafts();
   });
   document.getElementById('action-draft-close')?.addEventListener('click', () => {
     const state = actionDraftState();
-    if (state) state.open = false;
+    if (state) {
+      state.open = false;
+      persistActionDraft(actionDraftScope(), state);
+    }
     renderActionDrafts();
     actionDraftOpener.focus?.();
   });
   document.getElementById('action-draft-form')?.addEventListener('submit', async event => {
     event.preventDefault();
     const state = actionDraftState();
+    const scope = actionDraftScope();
     const workspace = workspaceId();
-    if (!state?.open || actionDraftGenerate.disabled || actionDraftPageScope !== actionDraftScope()) return;
-    const sources = pageChoices.filter(page => state.selected.has(page.id)).map(({id, revision}) => ({id, revision}));
+    if (!state?.open || actionDraftGenerate.disabled) return;
+    const sources = state.generateAttempt?.sources || [...state.selected.values()].map(({id, revision}) => ({id, revision}));
     if (!sources.length || sources.length > 5) return;
-    const fingerprint = JSON.stringify(sources);
-    if (state.generateAttempt?.fingerprint !== fingerprint) state.generateAttempt = {fingerprint, key:randomKey()};
+    state.generateAttempt ??= {sources, key:randomKey()};
     state.busy = true;
     state.message = '正在根据所选记忆页生成行动建议…';
+    persistActionDraft(scope, state);
     renderActionDrafts();
     const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft`, {sources},
       {'Idempotency-Key':state.generateAttempt.key}).catch(() => ({status:0, body:{}}));
@@ -622,26 +657,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state.items = result.body.suggestions.map(item => ({...item, selected:true}));
       state.message = state.items.length ? '' : '所选记忆页中没有明确的下一步行动。';
     } else {
-      if (result.status >= 400 && result.status < 500 && result.status !== 429) state.generateAttempt = null;
+      if ([400, 404, 409].includes(result.status)) state.generateAttempt = null;
       state.message = messageFor(result.body.error, '无法生成行动建议，请重试。');
     }
+    persistActionDraft(scope, state);
     if (actionDraftState() === state) renderActionDrafts();
   });
   actionDraftSave?.addEventListener('click', async () => {
     const state = actionDraftState();
+    const scope = actionDraftScope();
     const workspace = workspaceId();
     if (!state?.open || actionDraftSave.disabled) return;
-    if (!state.saveAttempt) {
-      const chosen = state.items.filter(item => item.selected);
-      const revisions = new Map(state.sources.map(page => [page.id, page.revision]));
-      const items = chosen.map(({title, memory_page_id}) => ({
-        title:title.trim(), memory_page_id, source_revision:revisions.get(memory_page_id),
-      }));
-      state.saveAttempt = {chosen, items, key:randomKey()};
-    }
+    state.saveAttempt ??= actionSaveAttempt(state, randomKey());
     const attempt = state.saveAttempt;
+    if (!attempt) return;
     state.busy = true;
     state.message = '正在保存所选行动…';
+    persistActionDraft(scope, state);
     renderActionDrafts();
     const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft/save`, {items:attempt.items},
       {'Idempotency-Key':attempt.key}).catch(() => ({status:0, body:{}}));
@@ -652,9 +684,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state.items = state.items.filter(item => !attempt.chosen.includes(item));
       state.message = `已保存 ${attempt.items.length} 条行动。`;
     } else {
-      if (result.status >= 400 && result.status < 500) state.saveAttempt = null;
+      if ([400, 404, 409].includes(result.status)) state.saveAttempt = null;
       state.message = messageFor(result.body.error, '无法确认保存结果，请重试保存。');
     }
+    persistActionDraft(scope, state);
     if (actionDraftState() !== state) return;
     renderActionDrafts();
     if (confirmed) await loadActions();
