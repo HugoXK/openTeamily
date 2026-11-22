@@ -1045,6 +1045,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let attachmentSender;
   const pendingSends = new Map();
   const privateReplyRetries = new Map();
+  const stoppingPrivateReplies = new Set();
+  const replyStopButton = document.getElementById('chat-reply-stop');
   const privateThreadWrites = new Map();
   const privateThreadReceipts = new Map();
   let privateThreadReceipt = 0;
@@ -1376,6 +1378,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncPrivateReplyStop();
     agentMentions.refresh();
     syncStickers();
     syncPrivateThreadControls();
@@ -1487,6 +1490,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pendingSends.clear();
     privateReplyRetries.clear();
+    stoppingPrivateReplies.clear();
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
     groupManagementReceipts.clear();
@@ -2712,6 +2716,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return scroller.scrollHeight - scroller.scrollTop - viewportHeight < 48;
   }
 
+  function activeStoppableReply() {
+    if (!servedByDsbot || currentSource !== 'agent' || !currentConversation?.id || !currentAgent?.id ||
+        sendClosed() || readingPrivateContext()) return null;
+    const wid = workspaceId(), agentId = currentAgent.id, conversationId = currentConversation.id;
+    const item = lastAgentItems.find(row => row.role === 'assistant' && row.status === 'running' &&
+      row.can_stop === true && typeof row.client_key === 'string' && /^[a-f0-9]{32}$/.test(row.id) &&
+      Number.isSafeInteger(row.attempt) && row.attempt > 0 &&
+      row.workspace_id === wid && row.agent_id === agentId && row.conversation_id === conversationId);
+    if (!item) return null;
+    const scope = sendScope(), key = item.client_key;
+    return {wid, agentId, conversationId, replyId:item.id, attempt:item.attempt, key, scope,
+      base:`${agentBase()}/conversations`, operation:JSON.stringify([scope, key, item.attempt])};
+  }
+
+  function syncPrivateReplyStop() {
+    if (!replyStopButton) return;
+    const target = activeStoppableReply();
+    const stopping = target && stoppingPrivateReplies.has(target.operation);
+    const label = stopping ? uiLabel('正在停止生成…', 'Stopping reply…') : uiLabel('停止生成', 'Stop generating');
+    if (!target && document.activeElement === replyStopButton) document.getElementById('chat-body').focus({preventScroll:true});
+    replyStopButton.hidden = !target;
+    replyStopButton.disabled = Boolean(stopping);
+    replyStopButton.setAttribute('aria-label', label);
+    replyStopButton.title = label;
+  }
+
+  replyStopButton?.addEventListener('click', async () => {
+    const target = activeStoppableReply();
+    if (!target || stoppingPrivateReplies.has(target.operation)) return;
+    stoppingPrivateReplies.add(target.operation);
+    syncPrivateReplyStop();
+    const current = () => target.scope === sendScope() && stoppingPrivateReplies.has(target.operation);
+    const cancelled = reply => reply.id === target.replyId && reply.attempt === target.attempt && reply.status === 'cancelled';
+    try {
+      const result = await request('POST', `${target.base}/${target.conversationId}/reply-stop`,
+        {key:target.key, attempt:target.attempt}, undefined, AbortSignal.timeout(10000)).catch(() => ({status:0}));
+      if (!current()) return;
+      let pair = result.status === 200 && privateReplyPair(result.body, target, target.key);
+      if (!pair || !cancelled(pair.reply)) {
+        pair = result.status === 409 ? null : await privateSendReceipt(target, target.key, current, cancelled);
+      }
+      if (!current()) return;
+      if (!pair) {
+        await openAgentConversation(target.agentId, target.conversationId, {refresh:true});
+        if (current() && activeStoppableReply()?.operation === target.operation) {
+          show('error', uiLabel('暂时无法停止这条回复，请重试。', 'Couldn’t stop this reply. Try again.'));
+        }
+        return;
+      }
+      privateRefresh += 1;
+      const items = lastAgentItems.map(row => row.id === pair.reply.id ? pair.reply : row.id === pair.message.id ? pair.message : row);
+      if (renderAgentMessages(items, {followLatest:false})) schedulePoll();
+      show('ok', uiLabel('已停止生成。', 'Reply stopped.'), {announceOnly:true});
+    } finally {
+      stoppingPrivateReplies.delete(target.operation);
+      syncPrivateReplyStop();
+    }
+  });
+
   function addPrivateReplyRetry(bubble, item) {
     if (!servedByDsbot || item.status !== 'failed' || item.can_retry !== true ||
         !item.client_key || !Number.isSafeInteger(item.attempt) || item.attempt < 1 ||
@@ -2797,7 +2860,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
     const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
-    const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+    const failed = item.role === 'assistant' && item.status === 'failed';
+    const cancelled = item.role === 'assistant' && item.status === 'cancelled';
     const partial = waiting && servedByDsbot && item.client_key;
     body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
     if (partial) {
@@ -2815,10 +2879,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
         : uiLabel('回复未完成。', 'The reply didn’t finish.');
     } else {
-      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
-      if (item.attachments?.length && !item.body) body.hidden = true;
+      renderMessageBody(document, body, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item), chatPreferences);
+      if ((cancelled || item.attachments?.length) && !item.body) body.hidden = true;
     }
-    if (waiting || failed) bubble.dataset.state = waiting ? item.status : 'failed';
+    if (waiting || failed || cancelled) bubble.dataset.state = item.status;
     bubble.append(role);
     let replyView;
     if (waiting) {
@@ -2831,6 +2895,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (partial) replyView = {bubble, heading, body};
     }
     bubble.append(body);
+    if (cancelled) {
+      const label = document.createElement('p');
+      label.className = 'reply-stopped';
+      label.textContent = uiLabel('已停止生成', 'Reply stopped');
+      bubble.append(label);
+    }
     for (const attachment of item.attachments || []) bubble.append(renderMessageFile(attachment));
     const sources = memorySources(item);
     if (sources) bubble.append(sources);

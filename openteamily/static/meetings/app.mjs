@@ -103,6 +103,14 @@ async function request(method, path, body, extra, signal) {
 const meetingKey = prefix => prefix + (globalThis.crypto?.randomUUID
   ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
 const meetingIdPattern = /^[a-f0-9]{32}$/;
+
+function linkedMeetingAction(params) {
+  const index = params.get('action'), revision = params.get('revision');
+  if (params.getAll('action').length !== 1 || params.getAll('revision').length !== 1 ||
+      !/^(?:[0-9]|[1-4][0-9])$/.test(index ?? '') || !/^[1-9][0-9]*$/.test(revision ?? '') ||
+      !Number.isSafeInteger(Number(revision))) return null;
+  return {index:Number(index), revision:Number(revision)};
+}
 const unavailable = {status: 0, body: {}};
 const SAVE_TIMEOUT_MS = 12000;
 const DRAFT_WAIT_MS = 185000;
@@ -496,6 +504,14 @@ function mount() {
   const saveStatus = document.getElementById('meeting-save-status');
   const remove = document.getElementById('remove-meeting');
   const deleteDialog = document.getElementById('meeting-delete-dialog');
+  const actionCopyDialog = document.getElementById('meeting-action-copy-dialog');
+  const actionCopyTitle = document.getElementById('meeting-action-copy-title');
+  const actionCopyNotes = document.getElementById('meeting-action-copy-notes');
+  const actionCopyDate = document.getElementById('meeting-action-copy-date');
+  const actionCopyLink = document.getElementById('meeting-action-copy-link');
+  const actionCopySubmit = document.getElementById('meeting-action-copy-submit');
+  const actionCopyClose = document.getElementById('meeting-action-copy-close');
+  const actionCopyStatus = document.getElementById('meeting-action-copy-status');
   const unsavedDialog = document.getElementById('meeting-unsaved-dialog');
   const unsavedMessage = document.getElementById('meeting-unsaved-message');
   const filters = document.getElementById('meeting-list-filters');
@@ -555,6 +571,7 @@ function mount() {
   let actions = [];
   let actionBoxes = [];
   let actionFollowups = [];
+  let actionCopy = null;
   let copyingNotes = null;
   let writing = null;
   let saveRetry = null;
@@ -797,11 +814,14 @@ function mount() {
       button.hidden = !saved;
       button.disabled = !saved || pending || Boolean(copyingNotes && active(copyingNotes));
     }
-    for (const {link, action} of actionFollowups) {
+    for (const {link, copy, action} of actionFollowups) {
       const item = saved && current.action_items?.[action.savedIndex];
       link.hidden = !item || item.done || action.done;
-      if (link.hidden || pending || action.text !== item.text || (action.owner || '') !== (item.owner || '') ||
-          (action.due_date || '') !== (item.due_date || '')) {
+      const available = !link.hidden && !pending && action.text === item.text && (action.owner || '') === (item.owner || '') &&
+        (action.due_date || '') === (item.due_date || '');
+      copy.hidden = link.hidden || !actionCopyDialog;
+      copy.disabled = !available;
+      if (!available) {
         link.removeAttribute('href');
         link.setAttribute('aria-disabled', 'true');
         link.title = '请先保存行动项';
@@ -814,6 +834,86 @@ function mount() {
       link.title = '';
     }
   }
+
+  function openActionCopy(action, button) {
+    const item = current?.action_items?.[action.savedIndex];
+    if (!item || button.disabled || actionCopyDialog.open) return;
+    actionCopy = {...scope(), id:current.id, revision:current.revision, index:action.savedIndex,
+      key:meetingKey('meeting-action-'), busy:false, button};
+    const text = item.text.trim();
+    const title = text.replace(/\s+/g, ' ');
+    actionCopyTitle.value = title.length <= 80 ? title : title.slice(0, 79).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + '…';
+    const date = item.due_date || '';
+    actionCopyDate.value = date >= actionCopyDate.min && date <= actionCopyDate.max ? date : '';
+    actionCopyNotes.value = [text !== actionCopyTitle.value ? text : '',
+      item.owner ? `原负责人 ${item.owner}` : '', date && !actionCopyDate.value ? `原截止日期 ${date}` : ''].filter(Boolean).join('\n');
+    document.getElementById('meeting-action-copy-source').textContent = `来自「${current.title}」的行动项 · 修订 ${current.revision}`;
+    actionCopyStatus.textContent = '';
+    actionCopyClose.textContent = '取消';
+    actionCopySubmit.hidden = false;
+    actionCopySubmit.disabled = false;
+    actionCopyLink.hidden = true;
+    actionCopyLink.removeAttribute('href');
+    for (const input of [actionCopyTitle, actionCopyNotes, actionCopyDate]) input.readOnly = false;
+    actionCopyDialog.showModal();
+  }
+
+  actionCopyClose?.addEventListener('click', () => { if (!actionCopy?.busy) actionCopyDialog.close(); });
+  actionCopyDialog?.addEventListener('cancel', event => { if (actionCopy?.busy) event.preventDefault(); });
+  actionCopyDialog?.addEventListener('close', () => {
+    const closed = actionCopy;
+    actionCopy = null;
+    if (closed?.button.isConnected && active(closed)) closed.button.focus({preventScroll:true});
+  });
+  function finishActionCopy(target) {
+    if (actionCopy !== target) return false;
+    target.busy = false;
+    actionCopySubmit.disabled = false;
+    actionCopyClose.disabled = false;
+    for (const input of [actionCopyTitle, actionCopyNotes, actionCopyDate]) input.readOnly = false;
+    if (active(target)) return true;
+    actionCopyDialog.close();
+    return false;
+  }
+  document.getElementById('meeting-action-copy-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = actionCopy;
+    if (!target || target.busy || actionCopySubmit.hidden || !active(target) || current?.id !== target.id ||
+        current.revision !== target.revision) return;
+    target.busy = true;
+    actionCopySubmit.disabled = true;
+    actionCopyClose.disabled = true;
+    for (const input of [actionCopyTitle, actionCopyNotes, actionCopyDate]) input.readOnly = true;
+    actionCopyStatus.textContent = '正在保存待办…';
+    const listing = await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
+    if (actionCopy !== target) return;
+    if (!active(target)) { finishActionCopy(target); return; }
+    const workspace = listing.status === 200 && listing.body.items?.find(item => item.kind === 'personal')?.id;
+    if (!meetingIdPattern.test(workspace || '')) {
+      finishActionCopy(target);
+      actionCopyStatus.textContent = '暂时无法读取个人空间，请重试。';
+      return;
+    }
+    const source = {workspace_id:target.workspace, meeting_id:target.id, action_index:target.index, revision:target.revision};
+    const date = actionCopyDate.value;
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/from-meeting`, {
+      source, title:actionCopyTitle.value.trim(), notes:actionCopyNotes.value,
+      due_at:date ? Date.parse(date + 'T00:00:00Z') / 1000 : null,
+    }, {'Idempotency-Key':target.key}).catch(() => unavailable);
+    if (!finishActionCopy(target)) return;
+    const action = result.body.action;
+    if (![200,201].includes(result.status) || action?.workspace_id !== workspace || !meetingIdPattern.test(action.id || '')) {
+      actionCopyStatus.textContent = messageFor(result.body.error, '暂时无法保存待办，请重试。');
+      return;
+    }
+    actionCopyStatus.textContent = result.status === 201 ? '已保存到个人空间。' : '这条行动项已在个人待办中。';
+    actionCopyLink.href = '/memory?' + new URLSearchParams({workspace,page:'todos',action:action.id});
+    actionCopyLink.hidden = false;
+    actionCopySubmit.hidden = true;
+    actionCopyClose.textContent = '关闭';
+    for (const input of [actionCopyTitle, actionCopyNotes, actionCopyDate]) input.readOnly = true;
+    actionCopyLink.focus({preventScroll:true});
+  });
 
   function clearNoteCopies() {
     for (const {status, link} of copyDestinations) {
@@ -1287,8 +1387,17 @@ function mount() {
       link.textContent = '跟进自动化';
       link.target = '_blank';
       link.rel = 'noopener';
-      actionFollowups.push({link, action});
-      row.append(text, owner, deadline, done, remove, link);
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'secondary action-memory';
+      copy.textContent = '存入我的待办';
+      copy.addEventListener('click', () => openActionCopy(action, copy));
+      const destinations = document.createElement('div');
+      destinations.className = 'action-destinations';
+      destinations.append(copy, link);
+      if (Number.isInteger(action.savedIndex)) row.dataset.meetingActionIndex = action.savedIndex;
+      actionFollowups.push({link, copy, action});
+      row.append(text, owner, deadline, done, remove, destinations);
       holder.append(row);
     });
     syncWriting();
@@ -1548,7 +1657,7 @@ function mount() {
     else fill(null);
   }
 
-  async function openMeeting(id, read, transcriptQuery) {
+  async function openMeeting(id, read, transcriptQuery, actionReference) {
     const pendingSave = writing?.kind === 'save' && active(writing) ? writing
       : saveRetry && active(saveRetry) ? saveRetry : null;
     const owner = viewer;
@@ -1583,6 +1692,17 @@ function mount() {
     }
     if (transcriptQuery) transcriptSearch.open(transcriptQuery);
     show('', '');
+    if (actionReference) {
+      const target = current.revision === actionReference.revision &&
+        document.querySelector(`#action-list [data-meeting-action-index="${actionReference.index}"]`);
+      if (target) {
+        target.tabIndex = -1;
+        target.dataset.sourceAction = '';
+        target.scrollIntoView({block:'center'});
+        target.focus({preventScroll:true});
+        rewriteLocation({meeting:id, action:actionReference.index, revision:actionReference.revision});
+      } else show('ok', '会议已更新，当前展示最新纪要。');
+    }
     return true;
   }
 
@@ -1699,6 +1819,7 @@ function mount() {
     const linked = new URLSearchParams((globalThis.location?.hash || '').slice(1));
     const linkedWorkspace = linked.get('workspace');
     const meetingId = linked.get('meeting') || '';
+    const actionReference = meetingId ? linkedMeetingAction(linked) : null;
     const shareId = linked.get('shared') || '';
     const fromCall = linked.has('from-call');
     const callId = linked.get('from-call');
@@ -1755,7 +1876,7 @@ function mount() {
       syncLibraryLink();
       if (shareId) void openSharedMeeting(shareId, detail);
       else {
-        void openMeeting(meetingId, detail);
+        void openMeeting(meetingId, detail, undefined, actionReference);
         void loadList({keepEditor: true});
       }
     }
@@ -1807,7 +1928,7 @@ function mount() {
         show('error', '共享纪要链接无效。');
       }
     } else if (workspaceId() === linkedWorkspace && meetingIdPattern.test(meetingId)) {
-      await Promise.all([openMeeting(meetingId, viewerMatches && detail), loadList({keepEditor: true})]);
+      await Promise.all([openMeeting(meetingId, viewerMatches && detail, undefined, actionReference), loadList({keepEditor: true})]);
     } else if (linked.get('new') === '1') {
       fill(null);
       if (linked.get('from') === 'chat') {

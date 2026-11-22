@@ -24,6 +24,11 @@ export function actionView(store, row, includeNotes = true, user = usernames(sto
     const source = store.get(`SELECT workspace_id, share_id, revision, action_index
       FROM memory_shared_meeting_action_sources WHERE action_id=?`, row.id)
     if (source) data.source = {kind:'shared_meeting', ...source}
+    else {
+      const meeting = store.get(`SELECT workspace_id, meeting_id, revision, action_index
+        FROM memory_owned_meeting_action_sources WHERE action_id=?`, row.id)
+      if (meeting) data.source = {kind:'meeting', ...meeting}
+    }
     const chat = store.get(`SELECT kind,workspace_id,conversation_id,message_id,agent_id,revision
       FROM memory_chat_action_sources WHERE action_id=?`, row.id)
     if (chat) {

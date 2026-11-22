@@ -484,6 +484,39 @@ test('Space recent pages, scopes and facets include matches beyond the first pag
   assert.notEqual(latest.body.activity_version, first.body.activity_version)
 })
 
+test('Space automation scope filters before pagination and retains the exact saved run', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const automation = 'b'.repeat(32)
+  const firstRun = 'c'.repeat(32)
+  const secondRun = 'd'.repeat(32)
+  const otherSpace = 'f'.repeat(32)
+  async function create(title, workspace = WS, run) {
+    const source = run && {kind:'automation_run', id:run, automation_id:automation, automation_title:'整理日报'}
+    const result = await call('POST', base('', workspace),
+      {title, body:'一份自动化结果', ...(source && {source})}, key())
+    assert.equal(result.status, 201, JSON.stringify(result.body))
+    return result.body.artifact
+  }
+  const first = await create('日结', WS, firstRun)
+  const second = await create('周报', WS, secondRun)
+  await create('手工整理')
+  const foreign = await create('其他工作区', otherSpace, firstRun)
+  const query = 'scope=automation&order=recent&limit=1'
+  const page = await call('GET', base('?' + query))
+  assert.equal(page.status, 200)
+  assert.equal(page.body.cursor, page.body.items[0].id)
+  const rest = await call('GET', base('?' + query + '&cursor=' + page.body.cursor))
+  assert.equal(rest.body.cursor, null)
+  const artifacts = [...page.body.items, ...rest.body.items]
+  assert.deepEqual(new Set(artifacts.map(item => item.id)), new Set([first.id, second.id]))
+  assert.deepEqual(artifacts.find(item => item.id === first.id).source, first.source)
+  const filtered = await call('GET', base('?' + query + '&type=document&q=周报'))
+  assert.deepEqual(filtered.body.items.map(item => item.id), [second.id])
+  const other = await call('GET', base('?' + query, otherSpace))
+  assert.deepEqual(other.body.items.map(item => item.id), [foreign.id])
+})
+
 test('Space activity tracks saved revisions and favorites only in this owner and workspace', async () => {
   const bot = await boot()
   const another = await boot()

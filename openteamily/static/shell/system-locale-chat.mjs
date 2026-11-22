@@ -371,6 +371,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.memory.all_workspaces": ["记忆 · 跨工作区", "All workspaces"],
   "chat.memory.disabled": ["记忆 · 关闭", "Off"],
   "chat.send": ["发送", "Send"],
+  "chat.reply.stop": ["停止生成", "Stop generating"],
   "chat.memory.history_help": ["从这段私聊中选择最多 12 条你发出的消息，生成待核对建议。", "Select up to 12 of your messages in this direct chat to create suggestions for review."],
   "chat.search.find_messages": ["查找消息", "Find messages"],
   "chat.search.by_message_body": ["按消息内容搜索", "Search message text"],

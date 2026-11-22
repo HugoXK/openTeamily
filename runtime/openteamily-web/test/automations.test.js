@@ -180,20 +180,30 @@ test('scheduler projections distinguish one-time trigger, pause, and the next sl
   assert.deepEqual(status(recurring.id), {state:'due'})
 })
 
-test('a successful native run saves a durable, idempotent document from its own output', async () => {
+test('the exact native run and history expose its durable saved work after rename and deletion', async () => {
   const table = {}
   const host = featureHost({name: 'artifacts', identity: {instanceId: W},
     dataDir: mkdtempSync(join(tmpdir(), 'ot-auto-artifacts-')), table})
   const artifacts = artifactsFeature(host)
   registerFeature(table, 'artifacts', artifacts)
-  const {e, feature} = fixture(undefined, undefined, payload => host.call('artifacts/saveAutomationRun', payload))
+  const feature = createAutomations({
+    db: new DatabaseSync(':memory:'),
+    turn: async () => ({text:'DS-Bot did it'}),
+    saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
+    readSavedWorks: payload => host.call('artifacts/savedAutomationWorks', payload),
+  })
+  const e = feature.endpoints
   const {automation} = e['automations/create']({workspace_id: W, title: '保存工作简报', participants: ['alice'],
     template_id: 'custom', schedule: {kind: 'now', time_zone: 'UTC'},
     prompt: 'Summarize the day.', idempotency_key: 'create-save-run-001'})
   const {run} = e['automations/runNow']({workspace_id: W, id: automation.id, idempotency_key: 'start-save-run-001'})
   await feature.inflight.get(run.id)
-  const path = `/v1/workspaces/${W}/automations/${automation.id}/runs/${run.id}/artifact`
+  const runsPath = `/v1/workspaces/${W}/automations/${automation.id}/runs`
+  const path = runsPath + '/' + run.id + '/artifact'
+  const read = path => e['automations/v1']({method:'GET', path})
   const save = () => e['automations/v1']({method: 'POST', path, body: {body: 'caller cannot override output'}})
+  const exact = () => read(runsPath + '/' + run.id)
+  assert.equal((await exact()).body.run.saved_work, null)
   const first = await save()
   assert.equal(first.status, 201)
   const {artifact} = first.body
@@ -201,12 +211,30 @@ test('a successful native run saves a durable, idempotent document from its own 
   assert.equal(artifact.source.kind, 'automation_run')
   assert.equal(artifact.source.id, run.id)
   assert.equal(artifact.source.automation_id, automation.id)
+  const receipt = {id:artifact.id, title:artifact.title}
+  assert.deepEqual((await exact()).body.run.saved_work, receipt)
+  assert.deepEqual((await read(runsPath + '?limit=1')).body.items[0].saved_work, receipt)
   const repeat = await save()
   assert.equal(repeat.status, 200)
   assert.equal(repeat.body.artifact.id, artifact.id)
   assert.equal((await e['automations/v1']({method: 'GET', path})).status, 405)
   assert.equal((await e['automations/v1']({method: 'POST', path: path.replace(W, 'b'.repeat(32))})).status, 404)
+  const ref = {workspace_id:W, automation_id:automation.id, run_ids:[run.id]}
+  assert.deepEqual(await host.call('artifacts/savedAutomationWorks', {...ref, automation_id:'b'.repeat(32)}), {items:[]})
+  assert.deepEqual(await host.call('artifacts/savedAutomationWorks', {...ref, workspace_id:'b'.repeat(32)}), {items:[]})
+  await assert.rejects(() => artifacts.endpoints.savedAutomationWorks(ref), {status:404})
   await assert.rejects(() => artifacts.endpoints.saveAutomationRun({}, {internal: false}), /Save results/)
+  const work = `/v1/workspaces/${W}/artifacts/${artifact.id}`
+  const edit = (path, body) => table['artifacts/v1']({method:'POST', path, body})
+  assert.equal((await edit(work, {revision:1, changes:{title:'重命名的结果'}})).status, 200)
+  assert.deepEqual((await exact()).body.run.saved_work, {...receipt, title:'重命名的结果'})
+  assert.equal((await edit(work + '/remove', {})).status, 200)
+  assert.equal((await exact()).body.run.saved_work, null)
+  assert.equal((await read(runsPath)).body.items[0].saved_work, null)
+  const replacement = await save()
+  assert.equal(replacement.status, 201)
+  assert.notEqual(replacement.body.artifact.id, artifact.id)
+  assert.equal((await exact()).body.run.saved_work.id, replacement.body.artifact.id)
 })
 
 test('team publication reviews only the stored output and recovers a lost share without a duplicate', async () => {

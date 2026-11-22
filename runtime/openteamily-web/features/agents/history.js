@@ -25,7 +25,9 @@ export async function adoptThread({ rt, source, target, sessionId }) {
 
 export async function importHistory({ db, rt, ctx, bot, conversationId, sessionId, secondarySessionIds = [] }) {
   db.exec('CREATE TABLE IF NOT EXISTS native_agent_events(message_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,event_seq INTEGER,source TEXT NOT NULL)')
-  const rows = db.prepare(`SELECT m.* FROM agent_messages m WHERE m.conversation_id=?
+  // Stopped partial replies are retained for the user, without constructing an
+  // assistant message in the native Session that the model never completed.
+  const rows = db.prepare(`SELECT m.* FROM agent_messages m WHERE m.conversation_id=? AND m.status<>'cancelled'
     AND NOT EXISTS (SELECT 1 FROM native_agent_events e WHERE e.message_id=m.id)
     ORDER BY m.created,m.id`).all(conversationId)
     .filter(row => !JSON.parse(row.meta || '{}').nativePending)

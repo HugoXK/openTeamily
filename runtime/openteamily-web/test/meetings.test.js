@@ -10,6 +10,43 @@ import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
 
+test('reviewed local meeting actions copy once to personal Memory with a saved reference', async () => {
+  const team = 'b'.repeat(32)
+  const bot = await bootMemory(volume(), {teams:[team]})
+  const target = `/v1/workspaces/${WS}/memory/actions`
+  const create = await bot.call('meetings','POST',base('',team), {...body,
+    action_items:[{...body.action_items[0],due_date:'2030-01-17'}, {text:'已完成',done:true}]}, key())
+  assert.equal(create.status,201)
+  const {id,revision} = create.body.meeting
+  const reference = {workspace_id:team,meeting_id:id,action_index:0,revision}
+  const reviewed = {title:'个人复核会议室',notes:'先确认时间',due_at:Date.parse('2030-01-18')/1000,source:reference}
+  const copy = (payload = reviewed, path = target) => bot.call('memory','POST',path+'/from-meeting',payload,key())
+  assert.equal((await copy({...reviewed,source:{...reference,action_index:1}})).status,409)
+  assert.equal((await copy(reviewed, `/v1/workspaces/${team}/memory/actions`)).status,404)
+  assert.equal((await copy({...reviewed,due_at:'2030-01-18'})).status,400)
+  const stored = await copy()
+  assert.equal(stored.status,201)
+  const action = stored.body.action
+  assert.deepEqual(action.source,{kind:'meeting',...reference})
+  assert.equal(action.title,reviewed.title)
+  assert.equal(action.due_at,reviewed.due_at)
+  assert.doesNotMatch(JSON.stringify(action),/讨论排期|同步进度|订会议室/)
+  const extra = await copy({...reviewed,notes:'不应覆盖第一次保存'})
+  assert.equal(extra.status,200)
+  assert.deepEqual(extra.body.action,action)
+  const edit = await bot.call('meetings','POST',base(id,team),{revision,changes:{summary:'更改摘要'}})
+  assert.equal(edit.status,200)
+  assert.equal((await copy()).body.error.code,'source_changed')
+  const current = {...reviewed,source:{...reference,revision:edit.body.meeting.revision}}
+  assert.equal((await copy(current)).body.action.id,action.id)
+  assert.equal((await bot.call('memory','GET', target)).body.items.length,1)
+  assert.deepEqual((await bot.call('memory','GET', target+'/'+action.id)).body.action.source, action.source)
+  bot.features.table['teams/activeWorkspaces'] = async () => []
+  assert.equal((await copy(current)).status,404)
+  assert.equal((await bot.call('memory','POST', target+'/'+action.id+'/remove',{})).status,200)
+  assert.equal((await bot.call('memory','GET', target+'/'+action.id)).status,404)
+})
+
 test('meeting catalogue searches saved transcript passages with bounded private excerpts and normal paging', async () => {
   const bot = await boot()
   const term = 'Build [4.2]'

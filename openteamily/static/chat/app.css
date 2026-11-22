@@ -1929,6 +1929,10 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
   max-width: 100%;
   margin-inline-start: auto;
 }
+#chat-reply-stop { border: 1px solid var(--ot-line); color: var(--ot-ink); border-radius: 50%; }
+#chat-reply-stop[hidden] { display: none; }
+#message-list .reply-stopped { margin: .375rem 0 0; font-size: .8125rem; color: var(--ot-muted); }
+
 .composer-send {
   width: 2.15rem !important; min-width: 2.15rem !important; height: 2.15rem !important;
   padding: 0 !important; border-radius: 50% !important;

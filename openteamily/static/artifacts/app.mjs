@@ -1,5 +1,6 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
+import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch } from '../shell/studio-link.mjs';
 import { mountSharedStudio } from './shared-studio.mjs';
 import { mountStudioCopy } from './studio-copy.mjs';
@@ -187,6 +188,9 @@ export function visibleArtifacts(items, options = {}) {
   if (scope === 'memory') {
     rows = rows.filter((item) => item.source && item.source.kind === 'agent_task');
   }
+  if (scope === 'automation') {
+    rows = rows.filter((item) => item.source?.kind === 'automation_run');
+  }
   if (kind === 'messages') {
     rows = rows.filter((item) => item.source && item.source.kind === 'agent_message');
   } else if (kind && kind !== 'all') {
@@ -266,6 +270,7 @@ export function viewFromSearch(search) {
   if (value === 'created') return {kind: 'all', scope: 'mine'};
   if (value === 'starred') return {kind: 'all', scope: 'favorites'};
   if (value === 'memory') return {kind: 'all', scope: 'memory'};
+  if (value === 'automation') return {kind: 'all', scope: 'automation'};
   if (value === 'meetings') return {kind: 'meetings', scope: 'all'};
   return {kind: 'all', scope: 'all'};
 }
@@ -275,7 +280,27 @@ export function queryForView(kind, scope) {
   if (scope === 'mine') return '?view=created';
   if (scope === 'favorites') return '?view=starred';
   if (scope === 'memory') return '?view=memory';
+  if (scope === 'automation') return '?view=automation';
   return '';
+}
+
+export function artifactOrigin(item, workspace) {
+  if (!item?.source) return null;
+  const source = item.source;
+  const scoped = CATALOG_CURSOR.test(workspace || '') && (!item.workspace_id || item.workspace_id === workspace);
+  if (source.kind === 'automation_run') {
+    const href = scoped && CATALOG_CURSOR.test(source.automation_id || '') && CATALOG_CURSOR.test(source.id || '')
+      ? '/automations?' + new URLSearchParams({workspace, automation: source.automation_id, run: source.id}) : '';
+    return {kind: '自动化运行', title: source.automation_title || '', label: '查看原运行', href};
+  }
+  if (source.kind === 'agent_message') {
+    const {conversation_id: id, agent_id, id: message_id} = source;
+    const href = scoped && chatPathId(id) && chatPathId(message_id) && (!agent_id || CATALOG_CURSOR.test(agent_id))
+      ? conversationChatHref(workspace, {source: agent_id ? 'agent' : 'social', id, agent_id, message_id}) : '';
+    return {kind: '对话消息', title: source.conversation_title || '', label: '查看原消息', href};
+  }
+  if (source.kind === 'agent_task') return {kind: '智能体任务'};
+  return null;
 }
 
 export function artifactDeletePrompt(artifact) {
@@ -1198,23 +1223,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       drawBoard();
     }
     const source = document.getElementById('editor-source');
-    if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
-      const {conversation_id: id, agent_id, conversation_title, id: message_id} = item.source;
+    const origin = artifactOrigin(item, workspaceId());
+    source.hidden = !origin;
+    source.textContent = origin ? '来源：' + origin.kind : '';
+    if (origin?.title) source.append(' · ' + origin.title);
+    if (origin?.href) {
       const link = document.createElement('a');
-      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id, message_id});
-      link.textContent = conversation_title || '打开会话';
-      source.hidden = false;
-      source.textContent = '来源会话：';
-      source.append(link);
-    } else if (item && item.source) {
-      source.hidden = false;
-      const from = item.source.kind === 'agent_message' ? '对话消息'
-        : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
-      const name = item.source.automation_title || item.source.task_kind || '';
-      source.textContent = `出处：${from}${name ? ' · ' + name : ''} · ${item.source.id}`;
-    } else {
-      source.hidden = true;
-      source.textContent = '';
+      link.href = origin.href;
+      link.textContent = origin.label;
+      source.append(' ', link);
     }
     setWebsitePreview(item);
     if (editor) editor.cleanDraft = editorDraft();
@@ -1266,7 +1283,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const fragment = catalogKind === 'meetings' && workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
+    const fragment = (catalogKind === 'meetings' || catalogScope === 'automation') && workspaceId()
+      ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
     const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     writeSpaceAddress(url);
   }
@@ -1575,6 +1593,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const emptyAll = document.getElementById('empty-all');
     const emptyStarred = document.getElementById('empty-starred');
     const emptyMemory = document.getElementById('empty-memory');
+    const emptyAutomation = document.getElementById('empty-automation');
     const emptyKind = document.getElementById('empty-kind');
     const emptyMatches = document.getElementById('empty-no-match');
     const emptyMeetings = document.getElementById('empty-meetings');
@@ -1595,14 +1614,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const showMeetings = catalogKind === 'meetings' && !noWorkspace;
     const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace && !noMatches;
     const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace && !noMatches;
+    const showAutomation = catalogScope === 'automation' && catalogKind === 'all' && !noWorkspace && !noMatches;
     const showAllEmpty = (catalogKind === 'all' && (catalogScope === 'all' || catalogScope === 'mine')
       && !showStarred && !showMemory && !noWorkspace && !noMatches);
     if (emptyAll) emptyAll.hidden = !showAllEmpty;
     if (emptyStarred) emptyStarred.hidden = !showStarred;
     if (emptyMemory) emptyMemory.hidden = !showMemory;
+    if (emptyAutomation) emptyAutomation.hidden = !showAutomation;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
     if (emptyMatches) emptyMatches.hidden = !noMatches;
-    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace || noMatches;
+    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showAutomation || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
     if (emptyKind && !emptyKind.hidden) {
@@ -1928,7 +1949,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     else duplicateSubmit.focus();
   });
 
-  function itemMenu(item, onOpen, inScope, path) {
+  function itemMenu(item, onOpen, inScope, path, origin) {
     const wrap = document.createElement('span');
     wrap.className = 'artifact-more-wrap';
     const button = document.createElement('button');
@@ -1992,7 +2013,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       await loadList();
       if (keepFocus && document.activeElement === document.body) newMenuButton?.focus({preventScroll: true});
     });
-    menu.append(send, rename);
+    menu.append(send);
+    if (origin?.href) {
+      const link = document.createElement('a');
+      link.setAttribute('role', 'menuitem');
+      link.className = 'artifact-menu-origin';
+      link.href = origin.href;
+      link.textContent = origin.label;
+      link.addEventListener('click', event => {
+        if (!inScope()) event.preventDefault();
+      });
+      menu.append(link);
+    }
+    menu.append(rename);
     if (canDuplicate(item)) {
       const copy = document.createElement('button');
       copy.type = 'button';
@@ -2088,8 +2121,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       open.addEventListener('click', () => onOpen(item));
       const meta = document.createElement('span');
       meta.className = 'note';
-      const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
-      meta.textContent = `${kindLabel(item.kind, item.media?.mime)} · ${item.created_by || ''}${source}`;
+      const origin = artifactOrigin(item, workspace);
+      meta.textContent = [kindLabel(item.kind, item.media?.mime), item.created_by, origin?.kind].filter(Boolean).join(' · ');
       row.appendChild(open);
       row.appendChild(meta);
       if (match && !titleMatch) {
@@ -2162,7 +2195,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const updated = document.createElement('span');
       updated.className = 'artifact-updated';
       updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
-      row.append(created, updated, itemMenu(item, onOpen, inScope, path));
+      row.append(created, updated, itemMenu(item, onOpen, inScope, path, origin));
       nextRows.push(row);
     }
     if (!preserve) {
@@ -3211,7 +3244,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace ||
-      (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+      (catalogKind === 'meetings' || catalogScope === 'automation' || newKind ? fragment.get('workspace') : '');
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
       !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
@@ -3304,7 +3337,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       renderCatalog();
       return;
     }
-    if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+    if ((newKind || catalogScope === 'automation') && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
       syncWorkspaceCreation();
       notifications.setWorkspace('');
@@ -3378,7 +3411,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterCreators = [];
     filterSessions = [];
     renderFilterControls();
-    if (catalogKind === 'meetings' || artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    if (catalogKind === 'meetings' || catalogScope === 'automation' ||
+        artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     void loadList();
   });
   function cancelScheduledSearch() {
@@ -3510,7 +3544,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor && !canLeaveEditor()) return;
       if (editor) hideEditor();
       const kind = button.getAttribute('data-kind') || 'all';
-      const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
+      const scope = kind === 'meetings' ? 'all' : catalogScope;
       applyView(kind, scope);
       await loadList({reuse: true});
     });

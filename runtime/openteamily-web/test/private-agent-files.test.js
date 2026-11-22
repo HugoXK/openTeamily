@@ -574,6 +574,86 @@ test('private text replies retry the same durable pair, fence stale attempts and
   assert.deepEqual(await (await progress()).json(),{state:'succeeded',...complete})
 })
 
+test('stopping an exact private reply preserves its partial text and waits before the next native send', {timeout:3000}, async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const reached = Promise.withResolvers(), aborted = Promise.withResolvers(), finish = Promise.withResolvers()
+  const nativeEvents = []
+  const sent = []
+  runtime.rt.eventsBackwards = async function* () { yield* [...nativeEvents].reverse() }
+  runtime.nativeTurn = async (bot, sessionId, prompt, requestId, {onProgress, signal}) => {
+    sent.push({bot, sessionId, prompt, requestId})
+    nativeEvents.push({type:'user/message', seq:sent.length, time:sent.length, data:{source:{rpcId:requestId},
+      content:[{type:'text',text:prompt}]}})
+    if (sent.length === 1) {
+      signal.addEventListener('abort', aborted.resolve, {once:true})
+      onProgress('Already streamed text')
+      reached.resolve()
+      await finish.promise
+      throw signal.reason
+    }
+    return {text:'Follow-up reply',sessionId,turnId:2}
+  }
+  const {endpoints:e} = createAgents({db,host:{runtime:async () => runtime,call:async () => null}})
+  const {agent} = await e.create({workspace_id:workspace,name:'Stop reader',idempotency_key:'stop-agent-key-1234'})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation:neighbor} = await e['conversation-create']({workspace_id:workspace,id:agent.id,title:'Other'})
+  const scope = {workspace_id:workspace,id:agent.id,conversation_id:conversation.id}
+  const convo = `${root}/${agent.id}/conversations/${conversation.id}`
+  const request = legacyRequest(e)
+  const key = 'stop-private-message-key', nextKey = 'next-private-message-key'
+  const send = (key, body, accept_pending = true) => request(convo + '/messages', jsonPost(key,{body,accept_pending}))
+  const stop = (attempt = 1, path = convo, extra = {}) => request(path + '/reply-stop', jsonPost(key,{key,attempt,...extra}))
+  const first = await (await send(key,'Long running request')).json()
+  assert.equal(first.reply.can_stop,true)
+  await reached.promise
+  const stream = e.replyStream({...scope,key},new Request('http://dsbot/chat'))
+  const reader = stream.body.getReader()
+  const decoder = new TextDecoder()
+  assert.match(decoder.decode((await reader.read()).value),/connected/)
+  assert.match(decoder.decode((await reader.read()).value),/Already streamed text/)
+  const second = await (await send(nextKey,'Next request')).json()
+  assert.equal(second.reply.status,'running')
+  assert.equal((await stop(2)).status,409)
+  assert.equal((await stop(1,convo.replace(conversation.id,neighbor.id))).status,404)
+  assert.equal((await stop(1,convo.replace(workspace,'b'.repeat(32)))).status,404)
+  assert.equal((await stop(1,convo,{agent_id:agent.id})).status,400)
+
+  const stoppedResponse = await stop()
+  assert.equal(stoppedResponse.status,200)
+  const stopped = await stoppedResponse.json()
+  assert.deepEqual(stopped.message,first.message)
+  assert.equal(stopped.reply.id,first.reply.id)
+  assert.equal(stopped.reply.status,'cancelled')
+  assert.equal(stopped.reply.body,'Already streamed text')
+  assert.equal(stopped.reply.can_retry,false)
+  assert.equal(stopped.reply.can_stop,undefined)
+  await aborted.promise
+  const frame = decoder.decode((await reader.read()).value)
+  assert.match(frame,/"state":"cancelled"/)
+  assert.doesNotMatch(frame,/"text":""/)
+  assert.equal((await reader.read()).done,true)
+  assert.deepEqual(await (await stop()).json(),stopped)
+  const progressPath = convo + '/reply-progress'
+  assert.deepEqual(await (await request(progressPath,{},`key=${key}&receipt=1`)).json(),
+    {state:'cancelled',text:'Already streamed text',...stopped})
+  assert.equal((await request(convo + '/messages/' + first.reply.id + '/retry',
+    jsonPost('cancelled-retry-key-123',{attempt:1}))).status,409)
+  assert.equal(sent.length,1)
+
+  finish.resolve()
+  assert.deepEqual(await (await send(key,'Long running request',false)).json(),stopped)
+  const next = await (await send(nextKey,'Next request',false)).json()
+  assert.equal(next.reply.status,'succeeded')
+  assert.equal(next.reply.body,'Follow-up reply')
+  assert.deepEqual(sent.map(turn => turn.requestId),[`ot-agent:${first.message.id}`,`ot-agent:${second.message.id}`])
+  assert.equal((await stop(1,convo,{key:nextKey})).status,409)
+  const {items} = await (await request(convo)).json()
+  assert.deepEqual(items.map(item => item.id),[first.message.id,first.reply.id,second.message.id,second.reply.id])
+  assert.equal(items[1].body,'Already streamed text')
+})
+
 test('startup settles accepted retry receipts and releases interrupted unkeyed user messages', async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
