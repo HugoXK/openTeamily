@@ -1,0 +1,16 @@
+en__dark__1440x900__chat__chat-search-empty.png changed_px=28 (0.0022%) bbox=(1427, 6, 1440, 900)
+en__dark__1440x900__chat__chat-search-hit.png changed_px=57 (0.0044%) bbox=(144, 3, 1440, 43)
+en__dark__390x844__chat__chat-search-empty.png changed_px=92 (0.0279%) bbox=(312, 66, 370, 192)
+en__dark__390x844__chat__chat-search-hit.png changed_px=0 (0.0000%) bbox=None
+en__light__1440x900__chat__chat-search-empty.png changed_px=6 (0.0005%) bbox=(329, 16, 332, 21)
+en__light__1440x900__chat__chat-search-hit.png changed_px=19 (0.0015%) bbox=(1428, 888, 1440, 900)
+en__light__390x844__chat__chat-search-empty.png changed_px=0 (0.0000%) bbox=None
+en__light__390x844__chat__chat-search-hit.png changed_px=0 (0.0000%) bbox=None
+zh-CN__dark__1440x900__chat__chat-search-empty.png changed_px=0 (0.0000%) bbox=None
+zh-CN__dark__1440x900__chat__chat-search-hit.png changed_px=120746 (9.3168%) bbox=(134, 3, 1440, 761)
+zh-CN__dark__390x844__chat__chat-search-empty.png changed_px=77 (0.0234%) bbox=(158, 66, 356, 190)
+zh-CN__dark__390x844__chat__chat-search-hit.png changed_px=0 (0.0000%) bbox=None
+zh-CN__light__1440x900__chat__chat-search-empty.png changed_px=8 (0.0006%) bbox=(1435, 3, 1440, 12)
+zh-CN__light__1440x900__chat__chat-search-hit.png changed_px=129 (0.0100%) bbox=(65, 3, 1440, 856)
+zh-CN__light__390x844__chat__chat-search-empty.png changed_px=4 (0.0012%) bbox=(337, 72, 371, 73)
+zh-CN__light__390x844__chat__chat-search-hit.png changed_px=0 (0.0000%) bbox=None

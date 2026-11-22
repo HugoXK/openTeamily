@@ -1,0 +1,730 @@
+{
+  "slug": "ev352before",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-22T09:09:18.177Z",
+  "sides": [
+    {
+      "name": "before",
+      "url": "http://127.0.0.1:8835"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__1440x900__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 105958
+      },
+      "sha256": "a0faa342717d0f77fc82e5b40e7ea696d80a9899be2c564611d5fc09646fdc19",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 686
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 对话 · 1 林 林然 你看完回我一句就行。 06:37 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打扰 成员 linran 早上好，季度回顾的初稿我放在作品",
+        "textLength": 686,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__1440x900__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 102411
+      },
+      "sha256": "573d7d3e3cdecd1c6297111e1b1421790cd36dc439d87e04e91d9da7ae85a2ba",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 716
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打",
+        "textLength": 716,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__1440x900__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 144535
+      },
+      "sha256": "f68782d01581b37e556bf7c3ab392a9ba4afa55525c3e1f844eaaf6206b27666",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 686
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 对话 · 1 林 林然 你看完回我一句就行。 06:37 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打扰 成员 linran 早上好，季度回顾的初稿我放在作品",
+        "textLength": 686,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__1440x900__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 113195
+      },
+      "sha256": "5e4ba01647b17e897feb9107b951aacabcb12a3a0801f56b8999b76b03fc34dc",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 716
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打",
+        "textLength": 716,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__1440x900__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 105928
+      },
+      "sha256": "6824cb35a60c647df595a005bfea0b081d6e68565bd3526ac14f9482ac4d09c9",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 686
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 对话 · 1 林 林然 你看完回我一句就行。 06:37 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打扰 成员 linran 早上好，季度回顾的初稿我放在作品",
+        "textLength": 686,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__1440x900__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 102411
+      },
+      "sha256": "573d7d3e3cdecd1c6297111e1b1421790cd36dc439d87e04e91d9da7ae85a2ba",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 716
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打",
+        "textLength": 716,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__1440x900__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 148029
+      },
+      "sha256": "8645181cecc0e727772227141b1ce1d0ea395d32bf57f45353ece7ced813107d",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 686
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 对话 · 1 林 林然 你看完回我一句就行。 06:37 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打扰 成员 linran 早上好，季度回顾的初稿我放在作品",
+        "textLength": 686,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__1440x900__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 113195
+      },
+      "sha256": "5e4ba01647b17e897feb9107b951aacabcb12a3a0801f56b8999b76b03fc34dc",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 716
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 林 林然 单聊 · 2 人 邀请 多选 置顶会话 免打",
+        "textLength": 716,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__390x844__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50962
+      },
+      "sha256": "26c6b9f90efd3c9be9233ed4cc110effdb952c4c267774a10c0c4f314d7a5e90",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 林 林然 单聊 · 2 人 linran 早上好，季度回顾的初稿我放在作品里了。 11/22 06:26 ⋯ 我 收到，我下午过一遍再回你。 11/22 06:27 ⋯ linran 好的，第三节的图还缺一张。 11/22 06:28 ⋯ 我 图我补上了，顺手把标题改短了一点。 11/22 06:29 ⋯ linran 看到了。第三版比之前顺多",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__390x844__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 30618
+      },
+      "sha256": "a0e2933f140001bff3148d6d3465a0569759e98f43318b4b70c17198a8e51d12",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 129
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 聊天 ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 聊天 发现 联系人 设置",
+        "textLength": 129,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__390x844__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 84656
+      },
+      "sha256": "629df5164083a79dd2d3133909d07136e1bbc9f9ffed7d2ebb8aa7039811b56c",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 林 林然 单聊 · 2 人 linran 早上好，季度回顾的初稿我放在作品里了。 11/22 06:26 ⋯ 我 收到，我下午过一遍再回你。 11/22 06:27 ⋯ linran 好的，第三节的图还缺一张。 11/22 06:28 ⋯ 我 图我补上了，顺手把标题改短了一点。 11/22 06:29 ⋯ linran 看到了。第三版比之前顺多",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__dark__390x844__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 32421
+      },
+      "sha256": "80c6adecc3b20346f0cb3005777c3cc8bba5c3710862a1d4bb35cc5d65427d15",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 129
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 聊天 ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 聊天 发现 联系人 设置",
+        "textLength": 129,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__390x844__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50962
+      },
+      "sha256": "26c6b9f90efd3c9be9233ed4cc110effdb952c4c267774a10c0c4f314d7a5e90",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 林 林然 单聊 · 2 人 linran 早上好，季度回顾的初稿我放在作品里了。 11/22 06:26 ⋯ 我 收到，我下午过一遍再回你。 11/22 06:27 ⋯ linran 好的，第三节的图还缺一张。 11/22 06:28 ⋯ 我 图我补上了，顺手把标题改短了一点。 11/22 06:29 ⋯ linran 看到了。第三版比之前顺多",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__light__390x844__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 30618
+      },
+      "sha256": "a0e2933f140001bff3148d6d3465a0569759e98f43318b4b70c17198a8e51d12",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 129
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 聊天 ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 聊天 发现 联系人 设置",
+        "textLength": 129,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__390x844__chat__chat-search-hit.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "chat-search-hit",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 84656
+      },
+      "sha256": "629df5164083a79dd2d3133909d07136e1bbc9f9ffed7d2ebb8aa7039811b56c",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 499
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 林 林然 单聊 · 2 人 linran 早上好，季度回顾的初稿我放在作品里了。 11/22 06:26 ⋯ 我 收到，我下午过一遍再回你。 11/22 06:27 ⋯ linran 好的，第三节的图还缺一张。 11/22 06:28 ⋯ 我 图我补上了，顺手把标题改短了一点。 11/22 06:29 ⋯ linran 看到了。第三版比之前顺多",
+        "textLength": 499,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/en__dark__390x844__chat__chat-search-empty.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "chat-search-empty",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 32423
+      },
+      "sha256": "709dc6e26f2f983bec367e32d5f2994b767a234b44a1a523698a56b63beee186",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 129
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 聊天 ‹ 搜索 + 工作区 个人空间 qa352 完善工作背景，让自动化推荐更贴合你。打开新手引导 全部 Artifacts 联系人 群组 智能体 消息 文件 云文档 媒体 链接 当前工作区里没有匹配的结果。 聊天 发现 联系人 设置",
+        "textLength": 129,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    }
+  ],
+  "failures": []
+}
