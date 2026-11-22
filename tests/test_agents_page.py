@@ -34,6 +34,8 @@ class AgentsPageTests(unittest.TestCase):
         self.assertIn('name="name"', html)
         self.assertIn('name="instructions"', html)
         self.assertIn('id="chat-panel"', html)
+        self.assertIn('id="open-in-chat"', html)
+        self.assertNotIn('id="new-conversation"', html)
         self.assertIn('id="homepage-panel"', html)
         self.assertIn('id="manage-public-homepage"', html)
         self.assertIn('name="quick_starts"', html)
@@ -42,7 +44,8 @@ class AgentsPageTests(unittest.TestCase):
         script = self.raw.call('GET', '/agents/app.mjs')
         self.assertEqual(script['status'], 200)
         self.assertIn(b'/v1/workspaces/', script['body'])
-        self.assertIn(b'/conversations', script['body'])
+        self.assertIn(b'/chat#workspace=', script['body'])
+        self.assertNotIn(b'/conversations', script['body'])
         self.assertIn(b'/discover?', script['body'])
         self.assertNotIn(b'/homepage', script['body'])
         self.assertIn(b'Idempotency-Key', script['body'])
@@ -64,19 +67,12 @@ class AgentsPageTests(unittest.TestCase):
                     'x=1', 'category=Design', 'category=design&category=sales'):
             self.assertEqual(self.raw.call('GET', '/agents', query=bad)['status'], 400, bad)
 
-    def test_wrapper_still_exposes_agent_directory(self):
-        space = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
-                                 {'HTTP_IDEMPOTENCY_KEY': 'agents-page-space-01'})
-        self.assertEqual(space['status'], 201, space)
-        wid = space['body']['workspace']['id']
-        created = self.client.call(
-            'POST', f'/v1/workspaces/{wid}/agents',
-            {'name': '目录助手', 'summary': '', 'instructions': '保持简短。'},
-            {'HTTP_IDEMPOTENCY_KEY': 'agents-page-create-01'})
-        self.assertEqual(created['status'], 201, created)
-        listed = self.client.call('GET', f'/v1/workspaces/{wid}/agents')
-        self.assertEqual(listed['status'], 200)
-        self.assertEqual([row['name'] for row in listed['body']['items']], ['目录助手'])
+    def test_platform_wrapper_leaves_agent_directory_to_the_runtime(self):
+        path = f'/v1/workspaces/{"a" * 32}/agents'
+        for method, body in (('GET', None), ('POST', {'name': '目录助手'})):
+            result = self.client.call(method, path, body)
+            self.assertEqual(result['status'], 410, result)
+            self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
 
     def test_directory_search_filters_in_place_and_keeps_open_chat(self):
         page = self.raw.call('GET', '/agents')

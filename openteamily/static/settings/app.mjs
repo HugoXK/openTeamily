@@ -353,6 +353,38 @@ export function fillModelForm(form, values) {
   form.elements.api_key.value = '';
 }
 
+export function renderModelApi(document, form, data, failed = false) {
+  const values = data?.model_api;
+  const effective = data?.effective;
+  const platform = effective?.source === 'platform';
+  const account = effective?.source === 'account';
+  const state = platform ? 'platform' : account ? 'account' : (values || failed) ? 'unavailable' : 'loading';
+  const source = platform ? 'platform-active' : account ? 'account-active' :
+    failed ? 'load-error' : values ? 'none' : 'loading';
+
+  function label(id, suffix) {
+    const node = document.getElementById(id);
+    const key = 'settings.model-api.' + suffix;
+    node.textContent = uiText(document, key);
+    node.setAttribute('data-ui-text', key);
+  }
+
+  label('model-key-state', state);
+  label('model-effective-source', source);
+  label('model-api-override-title', account ? 'override-edit' : 'override');
+  const model = (platform || account) && effective.model;
+  document.getElementById('model-effective-model').textContent = model ? ' (' + model + ')' : '';
+  document.getElementById('model-platform-ready').hidden = !platform;
+  document.getElementById('model-key-state-detail').hidden = !values?.api_key_set;
+  document.getElementById('restore-platform-model').hidden = !values?.api_key_set;
+  const override = document.getElementById('model-api-override');
+  override.hidden = !values;
+  override.open = account;
+  document.getElementById('model-api-fields').disabled = !values;
+  fillModelForm(form, values);
+  form.elements.api_key.required = Boolean(values && !values.api_key_set);
+}
+
 export function fillForm(form, values) {
   for (const option of form.querySelectorAll('[name="appearance"], [name="appearance_schedule"]')) {
     option.checked = option.value === values[option.name];
@@ -515,6 +547,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const modelFields = modelForm && document.getElementById('model-api-fields');
   const imageForm = document.getElementById('image-api-form');
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
@@ -532,7 +565,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let current = null;
   let loadSequence = 0;
   let languageSave = null;
-  let modelRevision = 0;
+  let modelRevision = null;
   let pendingSecretConfirm = null;
   let secretConfirmSeq = 0;
 
@@ -643,6 +676,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function load() {
     const sequence = ++loadSequence;
+    if (modelForm) {
+      modelRevision = null;
+      renderModelApi(document, modelForm);
+    }
     if (languageSave) {
       languageSave.input.disabled = false;
       languageSave = null;
@@ -667,6 +704,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const account = session.body.user.id ?? session.body.user.username;
     switchImageAccount(account);
     for (const api of mediaApis) api.setAccount(account);
+    const modelRead = modelForm && request('GET', '/v1/model-api').catch(() => null);
     const settings = await request('GET', '/v1/settings');
     if (sequence !== loadSequence) return;
     if (settings.status !== 200) {
@@ -681,23 +719,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillForm(form, current);
     refreshAppearance();
     renderView();
-    if (modelForm) {
-      const model = await request('GET', '/v1/model-api');
-      if (model.status === 200) {
-        modelRevision = model.body.model_api.revision;
-        fillModelForm(modelForm, model.body.model_api);
-        const effective = model.body.effective || {};
-        const source = effective.source === 'account' ? '正在使用你自己的配置' :
-          effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
-        const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
-        document.getElementById('model-effective').textContent = label;
-        const keyText = uiText(document, model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
-        const keyState = document.getElementById('model-key-state');
-        keyState.setAttribute('data-ui-text', model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
-        keyState.textContent = keyText;
-        const keyDetail = document.getElementById('model-key-state-detail');
-        if (keyDetail) keyDetail.textContent = keyText;
-      }
+    if (modelRead) {
+      const model = await modelRead;
+      if (sequence !== loadSequence) return;
+      const values = model?.status === 200 && model.body?.model_api;
+      if (values && Number.isInteger(values.revision)) modelRevision = values.revision;
+      renderModelApi(document, modelForm, modelRevision === null ? null : model.body, modelRevision === null);
     }
     await renderSkillSecrets();
     await syncComposio();
@@ -958,27 +985,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
   if (modelForm) {
-    modelForm.addEventListener('submit', async event => {
-      event.preventDefault();
-      const changes = readModelForm(modelForm);
+    async function saveModelApi(changes, success) {
+      if (modelRevision === null || modelFields.disabled) return;
+      const sequence = loadSequence;
       if (!Object.keys(changes).length) {
-        show('ok', '没有需要保存的模型 API 更改。');
+        show('ok', uiText(document, 'settings.model-api.no-changes'));
         return;
       }
-      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes});
+      modelFields.disabled = true;
+      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      modelFields.disabled = false;
       modelForm.elements.api_key.value = '';
-      if (result.status === 409) {
-        show('error', '模型 API 已在别处更新，已重新加载，请再保存一次。');
+      if (result?.status === 409) {
+        show('error', uiText(document, 'settings.model-api.save-conflict'));
         await load();
         return;
       }
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '保存模型 API 失败。'));
+      if (result?.status !== 200) {
+        show('error', uiText(document, 'settings.model-api.save-error'));
         return;
       }
-      show('ok', '模型 API 已保存。');
+      show('ok', uiText(document, success));
       await load();
+    }
+
+    modelForm.addEventListener('submit', event => {
+      event.preventDefault();
+      return saveModelApi(readModelForm(modelForm), 'settings.model-api.saved');
     });
+    document.getElementById('restore-platform-model').addEventListener('click', () =>
+      saveModelApi({api_key: null}, 'settings.model-api.restored'));
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

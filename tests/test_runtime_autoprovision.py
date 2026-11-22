@@ -183,7 +183,30 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertTrue(all(r['status'] in (200, 201) for r in results), results)
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
         self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_auto_provisions'), 1)
-        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 1)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 0)
+
+    def test_retired_agent_binding_cannot_block_an_owners_first_runtime(self):
+        self.make_app(enabled=False)
+        alice = self.user('alice', '127.0.0.1')
+        bob = self.user('bob', '127.0.0.2')
+        with self.store.transaction() as db:
+            owner = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            row, _ = self.app.ensure_personal_agent(db, owner, 'alice', self.now)
+            old_binding = (row['agent_id'], row['workspace_id'], 'a' * 32, 1, owner, self.now, self.now)
+            db.execute('INSERT INTO workspace_agent_bindings VALUES(?,?,?,?,?,?,?)', old_binding)
+        self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='auto-mgr', max_instances=5)
+
+        first = self.ensure(alice)['runtime_provisioning']
+        other = self.ensure(bob)['runtime_provisioning']
+        self.assertEqual(first['state'], 'provisioned')
+        self.assertEqual(other['state'], 'provisioned')
+        self.assertNotIn(first['instance_id'], (old_binding[2], other['instance_id']))
+        self.assertEqual(self.ensure(alice)['runtime_provisioning']['instance_id'], first['instance_id'])
+        self.assertEqual(bob.call('GET', f"/v1/instances/{first['instance_id']}")['status'], 404)
+        with self.store.connect() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM workspace_agent_bindings')], [old_binding])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0], 2)
+            self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_global_cap_refuses_cleanly_with_actionable_chat_state(self):
         self.make_app(max_instances=1)

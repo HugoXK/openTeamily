@@ -6,11 +6,19 @@ const ORIGIN = 'https://openteamily.example';
 const WS = 'a'.repeat(32);
 const ID = 'b'.repeat(32);
 
+test('the personal sticker library routes only canonical paths to the owner runtime', () => {
+  for (const path of ['/v1/stickers?limit=20', `/v1/stickers/${ID}`, `/v1/stickers/${ID}/file`]) {
+    assert.deepEqual(movedTarget(path, ORIGIN), {feature:'stickers', path});
+  }
+  assert.equal(movedTarget('/v1/stickers/other/file', ORIGIN), null);
+});
+
 test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot', () => {
   assert.deepEqual(movedTarget(`/v1/workspaces/${WS}/meetings?limit=20`, ORIGIN),
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/artifact`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/memory`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/action?index=0&revision=1`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
@@ -19,6 +27,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared/${ID}/revoke`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/transcribe`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'A'.repeat(26)}`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'O'.repeat(26)}`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/draft`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
@@ -42,6 +52,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/attachments?kind=file`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages/${ID}/retry`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-progress?key=reply-test-key-123`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
@@ -89,6 +100,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/transfer-ownership`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites/oti_01/revoke`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget('/v1/invites/accept', ORIGIN).feature, 'invites');
@@ -123,6 +135,13 @@ test('Space activity stays in the owner artifact feature and does not reuse mana
   const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
   assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
   assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
+});
+
+test('team studio is dispatched to the account runtime with its revision query', () => {
+  const path = `/v1/workspaces/${WS}/studio/documents/${ID}?revision=3`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'studio',path});
+  const revision = `/v1/workspaces/${WS}/studio/documents/${ID}/versions/3`;
+  assert.deepEqual(movedTarget(revision, ORIGIN), {feature:'studio',path:revision});
 });
 
 test('answers become ordinary responses, downloads keep their name', async () => {
@@ -203,11 +222,24 @@ test('moved notification read requests retain keepalive on the actual DS-Bot fet
   }});
 });
 
-test('work detail and comment paths stay within the viewer’s Discover plugin', () => {
+test('work detail, remix and comment paths stay within the viewer’s Discover plugin', () => {
   const base = '/v1/discover/works/work-demo';
   const id = 'otwc_' + '0'.repeat(26);
-  for (const path of [base, base + '/comments?limit=20', base + '/comments/' + id + '/like', base + '/comments/' + id + '/remove']) {
+  for (const path of [base, base + '/remix', base + '/comments?limit=20', base + '/comments/' + id + '/like', base + '/comments/' + id + '/remove']) {
     assert.equal(movedTarget(path, ORIGIN)?.feature, 'discover');
   }
   assert.equal(movedTarget(base + '/comments/forum/comment', ORIGIN), null);
+});
+test('collaboration pages use the owner runtime for private runs and Bot Social shares', () => {
+  const origin = 'https://openteamily.example';
+  const base = '/v1/workspaces/' + 'c'.repeat(32);
+  const run = base + '/team-runs/' + 'd'.repeat(32);
+  const share = base + '/shared-runs/otsr_' + '1'.repeat(26);
+  for (const [path, feature] of [
+    [base + '/team-runs', 'team-runs'], [run + '/steps/0/artifact', 'team-runs'],
+    [run + '/steps/7/retry', 'team-runs'], [run + '/share', 'shares'], [share + '/revoke', 'shares'],
+  ]) {
+    assert.deepEqual(movedTarget(path, origin), {feature, path});
+  }
+  assert.equal(movedTarget(run + '/steps/8/retry', origin), null);
 });

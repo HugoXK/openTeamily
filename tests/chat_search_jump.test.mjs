@@ -3,8 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   SEARCH_JUMP_HIGHLIGHT_MS,
-  SEARCH_JUMP_MISSING,
-  jumpToSearchHit,
+  jumpToRenderedHit,
   messageNodeById,
 } from '../openteamily/static/chat/app.mjs';
 
@@ -34,7 +33,7 @@ test('jumpToSearchHit centres the hit, focuses it and marks one row at a time', 
   const target = node('m-2');
   const list = {children: [older, target]};
   const timers = [];
-  assert.equal(jumpToSearchHit(list, 'm-2', {schedule: (fn, ms) => timers.push([fn, ms])}), true);
+  assert.equal(jumpToRenderedHit(list, 'm-2', {schedule: (fn, ms) => timers.push([fn, ms])}), true);
   assert.deepEqual(target.scrolled, {block: 'center', behavior: 'smooth'});
   assert.deepEqual(target.focused, {preventScroll: true});
   assert.equal(target.tabIndex, -1);
@@ -49,21 +48,21 @@ test('the highlight clears itself after the shared jump window', () => {
   const target = node('m-2');
   const list = {children: [target]};
   const timers = [];
-  jumpToSearchHit(list, 'm-2', {schedule: (fn, ms) => timers.push([fn, ms])});
+  jumpToRenderedHit(list, 'm-2', {schedule: (fn, ms) => timers.push([fn, ms])});
   assert.equal(target.dataset.searchJump, 'true');
   timers[0][0]();
   assert.equal(target.dataset.searchJump, undefined);
 });
 
-test('a hit that is not in the loaded window is reported instead of highlighted', () => {
+test('a hit that is not in the loaded window draws nothing and leaves the retry pending', () => {
   const target = node('m-2');
   target.dataset.searchJump = 'true';
   const list = {children: [target]};
-  assert.equal(jumpToSearchHit(list, 'm-99', {schedule: () => {}}), false);
-  // Nothing loaded changes: the search panel message explains where the hit is.
+  // The open path pages the window and owns the user-facing miss; this retry
+  // only paints a row that the repaint has actually rendered.
+  assert.equal(jumpToRenderedHit(list, 'm-99', {schedule: () => {}}), false);
   assert.equal(target.dataset.searchJump, 'true');
   assert.equal(target.scrolled, null);
-  assert.equal(SEARCH_JUMP_MISSING, '这条消息在更早的历史里，当前会话还没有加载到它。请用会话内搜索再查一次，或先加载更多消息。');
 });
 
 test('the sidebar message result opens its conversation and then jumps to the hit', () => {
@@ -75,4 +74,7 @@ test('the sidebar message result opens its conversation and then jumps to the hi
   // jump is retried by the render that finishes for that conversation.
   assert.match(source, /currentConversation\.id !== pending\.conversationId\) return;/);
   assert.match(source, /renderSessions\(\);\n    flushPendingHitJump\(\);/);
+  // The open path itself jumps after the conversation is on screen, so the
+  // retry never has to claim a miss of its own.
+  assert.match(source, /if \(target\.message\) await jumpToMessage\(target\.message, status\);/);
 });

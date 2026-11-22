@@ -47,14 +47,15 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertNotIn('id="meetings-panel"', html)
         self.assertNotIn('<button type="button" data-view="meetings"', html)
         self.assertIn('话题亮点', html)
-        self.assertIn('未实现', html)
-        self.assertIn('尚未自动注入模型', html)
+        self.assertIn('id="memory-capture-toggle"', html)
         self.assertIn('id="memory-profile-form"', html)
         self.assertIn('做梦', html)
         self.assertIn('Professional Profile', html)
         self.assertIn('Work Style', html)
         self.assertIn('Communication &amp; Writing Style', html)
-        self.assertIn('当前没有可预期的事项。', html)
+        self.assertIn('暂无行动。', html)
+        self.assertIn('id="action-search"', html)
+        self.assertIn('id="action-follow-up"', html)
         self.assertIn('id="new-action-open"', html)
         self.assertIn('id="new-action-form"', html)
         self.assertIn('id="new-action-form" hidden', html)
@@ -70,7 +71,6 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertNotIn('Develops and maintains software', html)
         self.assertNotIn('Teamily Wiki', html)
         self.assertNotIn('Welcome to Teamily', html)
-        self.assertIn('已读状态接口', html)
         self.assertIn('data-filter="updated"', html)
         self.assertIn('id="graph-canvas"', html)
         self.assertIn('id="graph-empty"', html)
@@ -143,6 +143,25 @@ class MemoryPageServingTests(unittest.TestCase):
             self.assertIn('我的资料', page['body'].decode())
         self.assertEqual(self.raw.call('POST', '/memory')['status'], 405)
 
+    def test_memory_citation_queries_load_exact_records_and_reject_external_returns(self):
+        workspace, agent, conversation, message, memory = (str(n) * 32 for n in range(1, 6))
+        origin = f'{workspace}.{agent}.{conversation}'
+        base = f'workspace={workspace}'
+        target = f'{base}&page={memory}'
+        for query in (base, f'page=candidates&{base}', target,
+                      f'{target}&revision=2&from={origin}.{message}',
+                      f'{base}&page=profile&from={origin}',
+                      f'{base}&page=todos&action={memory}&from={origin}'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/memory', query=query)['status'], 200)
+        for query in (f'{target}&from=https%3A%2F%2Fevil.test',
+                      f'{target}&from={origin}&from={origin}',
+                      f'{target}&revision=0002', f'{target}&revision=123456789',
+                      f'{base}&page=candidates&from={origin}', f'{base}&page=profile&action={memory}',
+                      f'page={memory}&from={origin}', f'{target}&workspace={workspace}'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/memory', query=query)['status'], 400)
+
     def test_the_dream_button_asks_the_server_and_can_be_declined(self):
         page = self.raw.call('GET', '/memory')
         html = page['body'].decode()
@@ -154,20 +173,13 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('/dream', js)
         self.assertIn('已忽略，原文没有改动。', js)
 
-    def test_wrapper_still_exposes_the_memory_api(self):
-        workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
-                                     {'HTTP_IDEMPOTENCY_KEY': 'memory-page-space-0001'})
-        self.assertEqual(workspace['status'], 201, workspace)
-        wid = workspace['body']['workspace']['id']
-        created = self.client.call(
-            'POST', f'/v1/workspaces/{wid}/memory',
-            {'title': 'Brief', 'body': 'Hello'},
-            {'HTTP_IDEMPOTENCY_KEY': 'memory-page-create-0001'},
-        )
-        self.assertEqual(created['status'], 201, created)
-        listed = self.client.call('GET', f'/v1/workspaces/{wid}/memory')
-        self.assertEqual(listed['status'], 200)
-        self.assertEqual([item['title'] for item in listed['body']['items']], ['Brief'])
+    def test_platform_wrapper_defers_memory_reads_and_writes_to_dsbot(self):
+        path = f'/v1/workspaces/{"a" * 32}/memory'
+        for method, body in (('GET', None), ('POST', {'title': 'Brief', 'body': 'Hello'})):
+            with self.subTest(method=method):
+                response = self.client.call(method, path, body)
+                self.assertEqual(response['status'], 410)
+                self.assertEqual(response['body']['error']['code'], 'moved_to_dsbot')
 
     def test_directory_search_filters_in_place_and_keeps_open_editor(self):
         page = self.raw.call('GET', '/memory')
@@ -178,10 +190,11 @@ class MemoryPageServingTests(unittest.TestCase):
         script = self.raw.call('GET', '/memory/app.mjs')
         source = script['body'].decode()
         self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
-        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn("searchInput.addEventListener('input', event =>", source)
+        self.assertIn('searchDirectory({delay: 220})', source)
         self.assertIn('没有匹配的记忆页。试试其他关键词。', source)
-        self.assertIn("event.key !== 'Escape'", source)
-        self.assertIn('matchingMemoryPages', source)
+        self.assertIn("event.key === 'Escape'", source)
+        self.assertIn('memoryDirectoryQuery', source)
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             ['node', '--test', 'tests/memory_search.test.mjs'],

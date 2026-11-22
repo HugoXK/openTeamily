@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { startOpenPart, threadOf, threadOfPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { splitRef } from '../ds-bot-upstream/ds-bot/src/host/text.js'
 import { request as httpsRequest } from 'node:https'
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
@@ -128,6 +129,51 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
 const PROGRESS_TEXT_LIMIT = 20_000
 const PROGRESS_INTERVAL_MS = 50
 
+async function streamedCompletion(body, onProgress) {
+  if (!body) throw new Error('Text inference did not return a stream')
+  let pending = '', text = ''
+  for await (const chunk of body.pipeThrough(new TextDecoderStream())) {
+    pending += chunk
+    let frame
+    while ((frame = /\r?\n\r?\n/.exec(pending))) {
+      const data = pending.slice(0, frame.index).split(/\r?\n/)
+        .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')
+      pending = pending.slice(frame.index + frame[0].length)
+      if (!data) continue
+      if (data === '[DONE]') return text
+      const payload = JSON.parse(data)
+      if (payload.error) throw new Error('Text inference stream failed')
+      const choice = payload.choices?.[0]
+      const next = choice?.delta?.content
+      if (typeof next === 'string' && next) {
+        text += next.slice(0, PROGRESS_TEXT_LIMIT - text.length)
+        onProgress(text.toWellFormed())
+      }
+      if (choice?.finish_reason === 'stop' || choice?.finish_reason === 'length' ||
+          text.length === PROGRESS_TEXT_LIMIT) return text
+    }
+    if (pending.length > 512 * 1024) throw new Error('Text inference event is too large')
+  }
+  throw new Error('Text inference stream ended early')
+}
+
+export async function textOnlyCompletion(bridge, prompt, {system, onProgress} = {}) {
+  await bridge.setup()
+  const stream = typeof onProgress === 'function'
+  const messages = [...(system ? [{role:'system', content:system}] : []), {role:'user', content:prompt}]
+  const response = await fetch(bridge.baseURL + '/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+    body: JSON.stringify({ model: MODEL_ID, messages, stream }),
+    signal: AbortSignal.timeout(170000), redirect: 'error',
+  })
+  if (!response.ok) throw new Error('Text-only model inference failed')
+  const text = stream && response.headers.get('content-type')?.includes('text/event-stream')
+    ? await streamedCompletion(response.body, onProgress)
+    : (await response.json()).choices?.[0]?.message?.content
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
+  return text.slice(0, PROGRESS_TEXT_LIMIT).toWellFormed()
+}
+
 function turnProgress(onProgress) {
   if (typeof onProgress !== 'function') return
   let committed = '', draft = '', sent = ''
@@ -174,15 +220,45 @@ function turnProgress(onProgress) {
   }
 }
 
+function ownsLiveChat(rt, botId, sessionId) {
+  return threadOf(rt.botOf(botId), sessionId) !== undefined
+    && rt.chatOwners?.get(sessionId) === botId && !rt.pastOwners?.has(sessionId)
+}
+
+export async function prepareNativeChat(rt, botId, sessionId) {
+  const bot = rt.botOf(botId)
+  if (!threadOfPart(bot, sessionId)) throw new Error('Mapped native chat no longer belongs to this Bot')
+  // Live background parts accept messages directly. Reopening them via
+  // switchPart would reselect the model for every part of the Bot.
+  if (!ownsLiveChat(rt, botId, sessionId)) await rt.switchPart(botId, sessionId)
+  if (!ownsLiveChat(rt, botId, sessionId)) throw new Error('Mapped native chat is no longer active')
+  const ref = await rt.applyModel(bot)
+  const route = splitRef(ref)
+  if (route) {
+    // A session's own composer can select a different model independently.
+    // Reapply the Bot's route only to the part receiving this message.
+    const effort = bot.appliedEffort
+    await rt.selectSessionModel(sessionId, {...route, ...(effort === undefined ? {} : {reasoningEffort:effort})})
+  }
+  if (rt.chatOf(botId) !== sessionId) await rt.applyPermission(bot, sessionId, undefined)
+}
+
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId } = {}) {
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
+  if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
+  sessionId ??= rt.chatOf(botId)
   return new Promise((resolve, reject) => {
-    const sessionId = rt.chatOf(botId)
     const progress = turnProgress(onProgress)
     let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
     let revision = 0
+    let phase = 'preparing'
+    function emitPhase(next) {
+      if (next === phase || typeof onPhase !== 'function') return
+      phase = next
+      try { void Promise.resolve(onPhase(next)).catch(() => {}) } catch {}
+    }
     let settled = false
     const parts = []
     const listeners = []
@@ -203,6 +279,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
     function discardAttempt() {
       attempt = undefined
       progress?.discard()
+      emitPhase('preparing')
     }
     function resetTurn() {
       boundSession = undefined
@@ -210,6 +287,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
       attempt = undefined
       parts.length = 0
       progress?.reset()
+      emitPhase('preparing')
     }
     try {
       listeners.push(ctx.on('session/event', (session, event) => {
@@ -242,9 +320,9 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
         for (const item of rt.displayItems(sessionId, [event]) ?? []) {
           if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
         }
-        if (progress && event.type === 'assistant/message') {
+        if (event.type === 'assistant/message') {
           if (attempt?.step === event.data?.step) attempt = undefined
-          progress.commit(parts.slice(start))
+          progress?.commit(parts.slice(start))
         }
         if (event.type === 'turn/end') {
           const reply = parts.join('\n\n').trim()
@@ -252,7 +330,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
         }
       }))
-      if (progress) {
+      if (progress || typeof onPhase === 'function') {
         listeners.push(ctx.on('agent/assistant-stream', ({ agent, frame }) => {
           if (settled || !boundSession || boundTurn === undefined || agent?.id !== sessionId || agent?.session !== boundSession
               || !Number.isSafeInteger(frame?.revision)) return
@@ -271,7 +349,10 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           if (frame.type === 'end') {
             discardAttempt()
           } else if (frame.type === 'chunk' && frame.chunk?.type === 'text-delta' && typeof frame.chunk.text === 'string') {
-            progress.append(frame.chunk.text)
+            progress?.append(frame.chunk.text)
+            emitPhase('writing')
+          } else if (frame.type === 'chunk' && frame.chunk?.type === 'reasoning-delta') {
+            emitPhase('thinking')
           }
         }, { global: true }))
         listeners.push(ctx.on('agent/disposed', ({ agent }) => {
@@ -363,10 +444,15 @@ export function createBridge(rt, { env = process.env, port } = {}) {
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
 
-  async function prepareModel() {
-    await ensureSetup()
-    const input = effectiveInput()
-    if (input.includes('image') !== hasImageInput) await saveInput(input)
+  let modelUpdates = Promise.resolve()
+  function prepareModel() {
+    const update = modelUpdates.then(async () => {
+      await ensureSetup()
+      const input = effectiveInput()
+      if (input.includes('image') !== hasImageInput) await saveInput(input)
+    })
+    modelUpdates = update.catch(() => {})
+    return update
   }
 
   function requireModel(botId) {
@@ -378,11 +464,22 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     }
   }
 
-  // Native turns share a queue because they switch the active DS-Bot part.
-  let turnQueue = Promise.resolve()
-  function exclusive(fn) {
-    const run = turnQueue.then(() => fn())
-    turnQueue = run.catch(() => {})
+  // Switching parts can only affect turns for the same Bot. Operations that
+  // move a thread between Bots still wait for the whole roster to be idle.
+  const botTurns = new Map()
+  let rosterWork = Promise.resolve()
+  function exclusive(fn, botId) {
+    const pending = botId ? [botTurns.get(botId)] : [...botTurns.values()]
+    const run = Promise.all([rosterWork, ...pending]).then(() => fn())
+    const wait = run.catch(() => {})
+    if (botId) {
+      botTurns.set(botId, wait)
+      void wait.then(() => {
+        if (botTurns.get(botId) === wait) botTurns.delete(botId)
+      })
+    } else {
+      rosterWork = wait
+    }
     return run
   }
   return {
