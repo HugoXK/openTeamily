@@ -673,6 +673,84 @@ function sessionRows(el) {
   return el('conversation-list').children.map((li) => li.children[0]);
 }
 
+for (const preset of [true,false]) {
+  test(`group creation shows an inline retry for ${preset ? 'team presets' : 'custom groups'}`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.documentElement = {lang:preset ? 'zh-CN' : 'en'};
+    const restore = installChatGlobals({narrow:preset});
+    const {fetcher:original} = sessionFetcher();
+    const mode = el('compose-mode-team');
+    mode.dataset.groupMode = 'team';
+    const memberChoices = el('member-choices');
+    const templateChoices = el('team-template-choices');
+    const members = () => memberChoices.children.map(label=>label.children[0]);
+    const templates = () => templateChoices.children.map(label=>label.children[0]);
+    const originalAll = doc.querySelectorAll;
+    doc.querySelectorAll = selector => {
+      if (selector === '#compose-mode-switch [data-group-mode]') return [mode];
+      if (selector === '#team-template-choices input:checked') return templates().filter(box=>box.checked);
+      if (selector === '#member-choices label') return memberChoices.children;
+      if (selector === '#member-choices input:checked') return members().filter(box=>box.checked);
+      if (selector === '#member-choices input[name="member"]:checked') return members().filter(box=>box.checked&&box.name==='member');
+      if (selector === '#member-choices input[name="agent-member"]:checked') return [];
+      return originalAll(selector);
+    };
+    doc.querySelector = selector => selector === '#team-template-choices input:checked' ? templates().find(box=>box.checked) : null;
+    const attempts = [];
+    const path = '/v1/workspaces/ws-1/' + (preset ? 'team-templates/product-squad' : 'social/conversations');
+    const created = {id:'new-group',kind:'group',title:'调研协作群',members:[{user_id:alice,username:'alice'}]};
+    try {
+      await mount(doc,{fetcher:async (url,options={})=>{
+        if (url === '/v1/team-templates') return json(200,{items:[{slug:'product-squad',name:'产品研发小队',agents:[{name:'产品经理'}]}]});
+        if (url.endsWith('/members')) return json(200,{items:[{user_id:bob,username:'bob'}]});
+        if (url === path && options.method === 'POST') {
+          attempts.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+          if (attempts.length === 1) return json(500,{error:{code:'internal_error',message:'Internal service error'}});
+          if (preset && attempts.length === 2) return json(409,{error:{code:'team_template_role_conflict',
+            message:'「产品经理助理」已归档。请在智能体中恢复后重试。'}});
+          if (preset && attempts.length === 3) return json(429,{error:{code:'team_template_agent_quota'}});
+          return json(201,{conversation:created});
+        }
+        if (url.endsWith('/new-group')) return json(200,{conversation:created,items:[]});
+        return original(url,options);
+      }});
+      await fire(el('compose-new-group'),'click',{detail:1});
+      if (preset) {
+        await fire(el('compose-mode-switch'),'click',{target:mode});
+        await settle();
+      } else el('compose-title').value = '调研协作群';
+      const choice = preset ? templates()[0] : members()[0];
+      choice.checked = true;
+      await fire(preset ? templateChoices : memberChoices,'change');
+      const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
+      await submit();
+      const error = el('compose-dialog-error');
+      assert.equal(error.hidden,false);
+      assert.equal(error.focused,true);
+      assert.match(error.textContent,preset ? /所选模板已保留.*重试/ : /Your selections are saved\. Try again/);
+      assert.doesNotMatch(el('status').textContent,/Internal service error/);
+      assert.equal(el('compose-dialog').hidden,false);
+      assert.equal(el('compose-dialog-submit').disabled,false);
+      assert.equal(choice.checked,true);
+      if (!preset) assert.equal(el('compose-title').value,'调研协作群');
+      assert.deepEqual(attempts[0].body,preset ? {} : {kind:'group',member_ids:[bob],title:'调研协作群'});
+      if (preset) {
+        await submit();
+        assert.match(error.textContent,/产品经理助理.*在智能体中恢复/);
+        await submit();
+        assert.match(error.textContent,/智能体数量已达上限.*切换到有可用名额的工作区/);
+        assert.equal(choice.checked,true);
+        assert.equal(el('compose-dialog-submit').disabled,false);
+      }
+      await submit();
+      for (const retry of attempts.slice(1)) assert.deepEqual(retry,attempts[0]);
+      assert.equal(error.hidden,true);
+      assert.equal(el('compose-dialog').hidden,true);
+      assert.match(el('status').textContent,preset ? /智能体团队已创建/ : /会话已创建/);
+    } finally {restore();}
+  });
+}
+
 test('a slow send moves the draft into the conversation and submits only once', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher, requests} = sessionFetcher();

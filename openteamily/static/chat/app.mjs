@@ -5651,6 +5651,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let composing = false;
   let composeAttempt = null;
+  let composeView = 0;
+  const composeError = document.getElementById('compose-dialog-error');
+  function setComposeError(text = '') {
+    composeError.hidden = !text;
+    composeError.textContent = text;
+    if (text) {
+      composeError.focus({preventScroll:true});
+      composeError.scrollIntoView?.({block:'nearest'});
+    }
+  }
+
+  function composeCreateError(status, template, error) {
+    if (!status) return uiLabel('连接中断，当前选择已保留。请重试。', 'Connection interrupted. Your selections are saved. Try again.');
+    if (template && error?.code === 'team_template_role_conflict') {
+      const detail = typeof error.message === 'string' && error.message.length <= 240 && /\p{Script=Han}/u.test(error.message)
+        ? error.message : '模板角色的名称被占用。请在「智能体」中恢复已归档的角色，或将占用名称的智能体改名后重试。';
+      return uiLabel(detail, 'A template role’s name is in use. In Agents, restore the archived role or rename the conflicting agent, then try again.');
+    }
+    if (template && error?.code === 'team_template_agent_quota') {
+      return uiLabel('当前工作区的智能体数量已达上限。请切换到有可用名额的工作区后重试。',
+        'This workspace has reached its agent limit. Switch to a workspace with available slots and try again.');
+    }
+    if (status === 401) return uiLabel('登录已失效。请重新登录后再创建。', 'Your session expired. Sign in again to create the conversation.');
+    if (status === 403) return template
+      ? uiLabel('只有工作区所有者或管理员可以从模板创建团队。请切换到你能管理的工作区。', 'Only workspace owners or admins can use templates. Switch to a workspace you can manage.')
+      : uiLabel('你在当前工作区没有创建权限。请切换工作区后重试。', 'You do not have permission to create conversations here. Switch workspaces and try again.');
+    if (status === 400 || status === 404 || status === 409) return template
+      ? uiLabel('暂时无法使用所选模板。请选择其他模板，或稍后重试。', 'The selected template is unavailable. Choose another template or try again later.')
+      : uiLabel('请核对成员和群组名称后重试。', 'Review the selected members and conversation name, then try again.');
+    if (status === 429) return uiLabel('创建请求暂时过多。当前选择已保留，请稍后重试。', 'Too many creation requests. Your selections are saved. Try again later.');
+    return template ? uiLabel('暂时无法创建智能体团队。所选模板已保留，请重试。', 'Could not create the agent team. Your template is still selected. Try again.')
+      : uiLabel('暂时无法创建会话。当前选择已保留，请重试。', 'Could not create the conversation. Your selections are saved. Try again.');
+  }
+
   function syncComposeCreate() {
     const button = document.getElementById('compose-dialog-submit');
     button.disabled = composing || !composeCreateEnabled({
@@ -5695,6 +5729,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setGroupMode(mode) {
     groupMode = mode === 'team' ? 'team' : 'custom';
+    setComposeError();
     for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
       button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
     }
@@ -5738,6 +5773,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let composeOpener;
   function closeComposeDialog({focus = false} = {}) {
+    composeView += 1;
     const opener = composeOpener;
     composeOpener = null;
     document.getElementById('compose-dialog').hidden = true;
@@ -5787,6 +5823,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openComposeDialog(mode, {keyboard = false} = {}) {
+    composeView += 1;
     composeMenu.close({focus: true});
     composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
@@ -7608,15 +7645,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupMode(button.dataset.groupMode);
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
-  document.getElementById('member-choices').addEventListener('change', syncSelectedCount);
+  document.getElementById('compose-title').addEventListener('input', () => setComposeError());
+  document.getElementById('member-choices').addEventListener('change', () => {
+    setComposeError();
+    syncSelectedCount();
+  });
   const templateChoices = document.getElementById('team-template-choices');
-  if (templateChoices) templateChoices.addEventListener('change', syncComposeCreate);
+  if (templateChoices) templateChoices.addEventListener('change', () => {
+    setComposeError();
+    syncComposeCreate();
+  });
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
     const submit = document.getElementById('compose-dialog-submit');
     if (composing || submit.disabled) return;
     const wid = workspaceId();
+    const owner = currentUser;
+    const view = composeView;
+    const current = () => wid === workspaceId() && owner === currentUser && view === composeView &&
+      !document.getElementById('compose-dialog').hidden;
     const template = composeMode === 'group' && groupMode === 'team';
     const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
     const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
@@ -7627,18 +7675,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const body = template ? {} : composeMode === 'contact'
       ? {kind:'dm', member_ids:memberIds}
       : composeGroupPayload(memberIds, title, agentIds);
-    const fingerprint = JSON.stringify([path, body]);
+    const fingerprint = JSON.stringify([owner?.id, path, body]);
     if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
     const cancel = document.getElementById('compose-dialog-cancel');
+    setComposeError();
     composing = true;
     cancel.disabled = true;
-    submit.textContent = '创建中…';
+    submit.textContent = uiLabel('创建中…', 'Creating…');
     syncComposeCreate();
     try {
       const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key});
-      if (wid !== workspaceId()) return;
+      if (!current()) return;
       if (![200,201].includes(result.status) || !result.body.conversation?.id) {
-        show('error', messageFor(result.body.error, '无法创建会话。'));
+        setComposeError(composeCreateError(result.status, template, result.body.error));
         return;
       }
       composeAttempt = null;
@@ -7648,11 +7697,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('ok', template ? '智能体团队已创建。' : '会话已创建。');
       }
     } catch {
-      show('error', '网络连接失败，所选成员已保留。');
+      if (current()) setComposeError(composeCreateError(0, template));
     } finally {
       composing = false;
       cancel.disabled = false;
-      submit.textContent = '创建';
+      submit.textContent = uiLabel('创建', 'Create');
       syncComposeCreate();
     }
   });

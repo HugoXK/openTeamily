@@ -595,6 +595,27 @@ export function createAgents({ db, host }) {
         return profile ? {...agent,memory_recall_default:profile.recall !== 'off'} : agent
       })) }
     },
+    async templateRoles(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      if (!Array.isArray(p.names) || p.names.length > 3 || p.names.some(name => !validName(name))) {
+        fail('invalid', 'Invalid template roles', 400)
+      }
+      const names = new Set(p.names)
+      const {rt} = await host.runtime()
+      const rows = all(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
+        FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id WHERE a.workspace_id=?`, workspaceId)
+      const items = []
+      for (const row of rows) {
+        const observed = observeAgent(row, rt.botOf(row.native_bot_id), true)
+        if (!names.has(row.name) && !names.has(observed.name)) continue
+        const agent = await native.ensure(row)
+        if (names.has(agent.name)) items.push({
+          id: agent.id, name: agent.name, category: agent.category, archived: agent.archived, native_deleted: !!agent.native_deleted,
+        })
+      }
+      return {items}
+    },
     get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
     async create(p, inheritCapabilities = true, source = null) {
       const workspaceId = ws(p)
@@ -1164,6 +1185,7 @@ export default async function agents(host) {
   }
   wrapped.startupEntry = endpoints.startupEntry
   wrapped.createRemix = endpoints.createRemix
+  wrapped.templateRoles = endpoints.templateRoles
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)
