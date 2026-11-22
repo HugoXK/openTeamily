@@ -94,12 +94,16 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   await owner.ok("PATCH", `/v1/ot/teams/${team.id}/members/${teammate.handle}`, {suspended:true});
   const stale = await owner.ok("GET",room);
   assert.deepEqual(stale.group_agent_routing.policy,{mode:"lead",lead:selected,lead_unavailable:true});
-  const suppressed = await send(owner,"今天再帮我检查发布记录");
-  assert.deepEqual(targets(suppressed),[]);
+  const fallback = await send(owner,"今天再帮我检查发布记录");
+  assert.deepEqual(new Set(targets(fallback).map(([id,agent]:string[])=>id+"/"+agent)),
+    new Set([ownerId+"/shared",ownerId+"/auto"]));
+  const fallbackJobs = (await owner.ok("GET",queue)).jobs.filter((job: any) => job.message.id === fallback.id);
+  assert.equal(fallbackJobs.length,2);
+  assert.ok(fallbackJobs.every((job: any) => job.discretionary));
   const quotedUnavailable = await send(owner,"同一个问题", {reply_to:reply.id});
   assert.deepEqual(targets(quotedUnavailable),[]);
   assert.equal((await owner.call("POST", room+"/agent-messages",{
-    agent_ref:"auto",body:"Unselected legacy reply",mode:"auto",reply_to:suppressed.id,
+    agent_ref:"auto",body:"Unselected legacy reply",mode:"auto",reply_to:quotedUnavailable.id,
   })).data.error.code,"reply_job_unavailable");
   const explicitAvailable = await send(owner,"请回答", {agent_mentions:[pair(ownerId,"shared")]});
   assert.deepEqual(targets(explicitAvailable),[[ownerId,"shared"]]);
@@ -108,7 +112,7 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   const autoOptIn = await send(owner,"默认策略的普通消息");
   const inbox = await owner.ok("GET",queue);
   assert.ok(inbox.items.some((item: any) => item.message.id === autoOptIn.id && item.agent_ref === "auto"));
-  assert.ok(!inbox.items.some((item: any) => [suppressed.id,quotedUnavailable.id].includes(item.message.id)));
+  assert.ok(!inbox.items.some((item: any) => item.message.id === quotedUnavailable.id));
 });
 
 test("the personal group retains unavailable-lead metadata with an empty roster and transfers edit authority with ownership", async () => {
@@ -138,8 +142,10 @@ test("the personal group retains unavailable-lead metadata with an empty roster 
   assert.equal(moved.group_agent_routing.can_edit,false);
   assert.equal((await teammate.ok("GET",room)).group_agent_routing.can_edit,true);
   await teammate.ok("PUT",room+"/agents/replacement",{name:"Replacement"});
-  const blocked = await owner.ok("POST",room+"/messages",{body:"新成员也不能替代旧主答"});
-  assert.deepEqual(targets(blocked),[]);
+  const fallback = await owner.ok("POST",room+"/messages",{body:"请现在可用的智能体看看"});
+  assert.deepEqual(targets(fallback),[[teammateId,"replacement"]]);
+  const queued = (await teammate.ok("GET",queue)).jobs.find((job: any) => job.message.id === fallback.id);
+  assert.ok(queued?.discretionary);
   const updated = (await teammate.ok("POST",room+"/management",{
     action:"reply_policy",mode:"lead",lead:pair(teammateId,"replacement"),revision:moved.group_management.revision,direct:true,
   })).conversation;

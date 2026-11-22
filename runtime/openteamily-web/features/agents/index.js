@@ -684,7 +684,7 @@ export function createAgents({ db, host }) {
       return {items}
     },
     get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
-    async create(p, inheritCapabilities = true, source = null) {
+    create: (p, inheritCapabilities = true, source = null) => native.write(async ({ensure}) => {
       const workspaceId = ws(p)
       const { name } = p
       const summary = p.summary ?? ''
@@ -705,7 +705,7 @@ export function createAgents({ db, host }) {
       if (prior) {
         if (prior.request_hash !== requestHash) fail(source ? 'agent_copy_request_conflict' : 'conflict',
           'Idempotency key was used for a different request', 409)
-        return { status: 200, agent: view(await native.ensure(prior)) }
+        return { status: 200, agent: view(await ensure(prior)) }
       }
       if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) {
         fail(source ? 'name_conflict' : 'conflict', 'An agent with this name already exists', 409)
@@ -717,37 +717,41 @@ export function createAgents({ db, host }) {
         created, updated, archived, key_hash, request_hash, inherit_capabilities, imported_from) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?,?,?)`,
       id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null,
       JSON.stringify(starts.map(s => s.trim())), t, t, keyHash, requestHash, Number(inheritCapabilities), source)
-      return { status: 201, agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', id))) }
-    },
-    async update(p) {
-      const row = await native.ensure(load(ws(p), p.id))
+      return { status: 201, agent: view(await ensure(one('SELECT * FROM agents WHERE id=?', id))) }
+    }),
+    update: p => native.write(async ({ensure, update}) => {
+      const row = await ensure(load(ws(p), p.id))
       const { revision, changes } = p
       if (!Number.isInteger(revision) || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) fail('invalid', 'Provide the current revision and a non-empty changes object', 400)
       const allowed = new Set(['name', 'summary', 'instructions', 'category', 'quick_starts'])
       if (Object.keys(changes).some((k) => !allowed.has(k))) fail('invalid', 'Unknown agent field', 400)
-      if (revision !== row.revision) fail('conflict', 'Agent changed elsewhere; reload and retry', 409)
+      if (revision !== row.revision) fail('revision-conflict', 'Agent changed elsewhere; reload and retry', 409)
       const next = { name: row.name, summary: row.summary, instructions: row.instructions, category: row.category, quick_starts: JSON.parse(row.quick_starts) }
       if ('name' in changes) { if (!validName(changes.name)) fail('invalid', 'Invalid name', 400); next.name = changes.name.trim() }
       if ('summary' in changes) { if (!validSummary(changes.summary)) fail('invalid', 'Invalid summary', 400); next.summary = changes.summary }
-      if ('instructions' in changes) { if (!validInstructions(changes.instructions)) fail('invalid', 'Invalid instructions', 400); next.instructions = changes.instructions }
+      if ('instructions' in changes) { if (!validInstructions(changes.instructions)) fail('invalid', 'Invalid instructions', 400); next.instructions = changes.instructions.trim() }
       if ('category' in changes) { if (!validCategory(changes.category)) fail('invalid', 'Invalid category', 400); next.category = changes.category || null }
       if ('quick_starts' in changes) { if (!validQuickStarts(changes.quick_starts)) fail('invalid', 'Invalid quick starts', 400); next.quick_starts = changes.quick_starts.map((s) => s.trim()) }
       if (next.name !== row.name && one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=? AND id<>?', row.workspace_id, sha(next.name.toLowerCase()), row.id)) fail('conflict', 'An agent with this name already exists', 409)
-      await native.update(row, next)
+      const updatedStarts = JSON.stringify(next.quick_starts)
+      const changedFields = Object.keys(changes).filter(key => key === 'quick_starts'
+        ? updatedStarts !== row.quick_starts : next[key] !== row[key])
+      const rosterChange = Object.fromEntries(changedFields.map(key => [key,next[key]]))
+      const mapping = await update(row, rosterChange)
       run('UPDATE agents SET name=?, name_hash=?, summary=?, instructions=?, category=?, quick_starts=?, revision=revision+1, updated=? WHERE id=?',
-        next.name, sha(next.name.toLowerCase()), next.summary, next.instructions, next.category, JSON.stringify(next.quick_starts), now(), row.id)
-      return { agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', row.id))) }
-    },
-    async archive(p) {
-      const row = await native.ensure(load(ws(p), p.id))
+        next.name, sha(next.name.toLowerCase()), next.summary, next.instructions, next.category, updatedStarts, now(), row.id)
+      return { agent: view({...load(row.workspace_id, row.id), ...mapping}) }
+    }),
+    archive: p => native.write(async ({ensure, update}) => {
+      const row = await ensure(load(ws(p), p.id))
       const archived = p.archived === false ? 0 : 1
-      if (p.revision !== undefined && p.revision !== row.revision) fail('conflict', 'Agent changed elsewhere; reload and retry', 409)
+      if (p.revision !== undefined && p.revision !== row.revision) fail('revision-conflict', 'Agent changed elsewhere; reload and retry', 409)
       if (row.native_deleted) fail('native-deleted', 'The native agent was deleted and cannot be restored', 409)
       if (archived === row.archived) return { agent: view(row) }
-      await native.update(row, { archived: !!archived })
+      const mapping = await update(row, { archived: !!archived })
       run('UPDATE agents SET archived=?, revision=revision+1, updated=? WHERE id=?', archived, now(), row.id)
-      return { agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', row.id))) }
-    },
+      return { agent: view({...load(row.workspace_id, row.id), ...mapping}) }
+    }),
     async conversations(p) {
       const agent = load(ws(p), p.id)
       if (p.archived === true) {

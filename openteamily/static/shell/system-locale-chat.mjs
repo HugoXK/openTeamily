@@ -74,6 +74,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.search.messages": ["消息", "Messages"],
   "chat.search.files": ["文件", "Files"],
   "chat.search.documents": ["云文档", "Cloud documents"],
+  "chat.search.works": ["作品", "Works"],
   "chat.search.media": ["媒体", "Media"],
   "chat.search.links": ["链接", "Links"],
   "chat.search.workspace_scope": ["搜索当前工作区。", "Search the current workspace."],

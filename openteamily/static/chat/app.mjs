@@ -18,11 +18,12 @@ import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, 
   chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
-import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
+import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
-  ['artifacts', 'Artifacts'],
+  ['artifacts', '作品'],
+  ['memory', '记忆'],
   ['contacts', '联系人'],
   ['groups', '群组'],
   ['agents', '智能体'],
@@ -847,7 +848,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaces = [];
   let agents = [];
   let members = [];
-  let artifacts = [];
   let socialConversations = [];
   let sessions = [];
   let currentAgent = null;
@@ -1158,7 +1158,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (lead) text = uiLabel(`${lead.name} 优先判断是否回复 · 可用 @所有人`, `${lead.name} decides whether to reply first · Use @all to ask them all`);
       else {
         kind = 'attention';
-        text = uiLabel('优先智能体不可用 · 可用 @ 指定回复对象', 'Preferred agent unavailable · Use @ to pick who replies');
+        text = agents.length
+          ? uiLabel('优先智能体不可用 · 由其他智能体判断是否回复', 'Preferred agent unavailable · Other agents decide whether to reply')
+          : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
       }
     } else if (!agents.length) text = uiLabel('用 @所有人提及群内所有成员', 'Use @all to mention everyone in the group');
     else if (auto) text = uiLabel('开启自动回复的智能体判断是否回复 · 可用 @所有人',
@@ -5067,7 +5069,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else if (currentSource === 'agent' && privateHistory) await restorePrivateLatest(privateHistory);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
-  let membersStatus = '', artifactsStatus = '';
+  let membersStatus = '';
   async function loadSessions(link, {nativeDirectory, onPrivate} = {}) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
@@ -5078,8 +5080,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
-      sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
-      membersStatus = artifactsStatus = 'loading';
+      sessions = []; agents = []; members = []; socialConversations = [];
+      membersStatus = 'loading';
       renderSessions();
     }
     if (!id) return;
@@ -5100,12 +5102,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (['all', 'contacts'].includes(searchTab)) refreshDirectorySearch();
       });
     }
-    void read('/artifacts?limit=100').then(result => {
-      if (!current()) return;
-      artifactsStatus = result.status === 200 ? '' : 'failed';
-      if (!artifactsStatus) artifacts = result.body.items || [];
-      if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
-    });
     function applyReceipt(source, directory) {
       const receipt = link?.readReceipt;
       if (receipt?.source !== source) return;
@@ -5337,8 +5333,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (lead) {
         const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
         summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
-      } else summary.textContent = uiLabel('优先智能体不可用。普通消息暂不触发回复。',
-        'Preferred agent unavailable. Ordinary messages currently do not trigger replies.');
+      } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+        summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
+          'The preferred agent is unavailable. Other group agents decide whether to reply.');
+      } else summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
     } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
       summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
         'Group default · Agents with auto-reply enabled decide');
@@ -6544,6 +6542,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function closeSearchPanel({focus = false} = {}) {
     searchSeq++;
     void messageSearch.load('');
+    stopSearchSources();
     searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
@@ -6585,18 +6584,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     root.append(section);
   }
 
-  function artifactKind(item) {
-    return item.kind || item.public_kind || '';
+  const worksSearchTabs = new Set(['artifacts', 'documents', 'media']);
+  let sourceSearch;
+
+  function stopSearchSources() {
+    sourceSearch?.controller.abort();
+    sourceSearch = null;
   }
 
-  function artifactItems(kind) {
-    return artifacts.filter(item => !kind || artifactKind(item) === kind).map(item => ({
-      type: 'artifact',
-      id: item.id,
-      title: item.title || '未命名',
-      preview: artifactKind(item) || '作品',
-      href: '/space',
-    }));
+  function loadSearchSources(owner, workspace, tab, query) {
+    const everySource = tab === 'all' && Boolean(query);
+    const works = everySource || worksSearchTabs.has(tab);
+    const memories = servedByDsbot && (everySource || tab === 'memory');
+    if (!owner?.id || !PRIVATE_THREAD_ID.test(workspace || '') || (!works && !memories)) {
+      stopSearchSources();
+      return null;
+    }
+    const key = JSON.stringify([owner.id, workspace, tab, query]);
+    if (sourceSearch?.key === key) return sourceSearch;
+    stopSearchSources();
+    const controller = new AbortController();
+    const pending = {key, controller, sections:null};
+    const params = new URLSearchParams({limit:'50', order:'recent'});
+    if (query) params.set('q', query);
+    if (tab === 'documents') params.set('kind','document');
+    if (tab === 'media') params.set('kind','media');
+    pending.results = Promise.all([
+      ...(works ? [{path:'artifacts', title:uiLabel('作品','Works')}] : []),
+      ...(memories ? [{path:'memory', title:uiLabel('记忆','Memory')}] : []),
+    ].map(async ({path, title}) => {
+      const result = await request('GET', `/v1/workspaces/${workspace}/${path}?${params}`,
+        undefined, undefined, controller.signal).catch(() => ({status:0,body:{}}));
+      const failed = result.status !== 200 || !Array.isArray(result.body.items);
+      const items = (failed ? [] : result.body.items).filter(item =>
+        item?.workspace_id === workspace && PRIVATE_THREAD_ID.test(item.id || '')
+      ).map(item => ({
+        title:item.title || uiLabel('未命名','Untitled'),
+        preview:item.match?.text || (path === 'artifacts' ? artifactKindLabel(item.kind) : ''),
+        href:path === 'artifacts' ? spaceHref(workspace,item.id)
+          : '/memory?' + new URLSearchParams({workspace,page:item.id}),
+      }));
+      return {title, items, failed};
+    })).then(sections => pending.sections = sections);
+    sourceSearch = pending;
+    return pending;
   }
 
   function contactItems() {
@@ -6632,7 +6663,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
     const note = document.getElementById('search-source-note');
+    const more = document.getElementById('search-more');
     const paged = searchTab === 'messages' || searchTab === 'all';
+    const owner = currentUser, workspace = workspaceId();
     results.replaceChildren();
     empty.hidden = true;
     note.hidden = Boolean(query) && !searchConversation;
@@ -6640,22 +6673,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? '仅搜索当前对话：' + searchConversationTitle
       : '搜索当前工作区。';
     const seq = ++searchSeq;
+    const current = () => seq === searchSeq && owner === currentUser && workspace === workspaceId();
+    if (more) more.hidden = true;
 
     if (searchTab === 'files' || searchTab === 'links') {
+      stopSearchSources();
       const params = new URLSearchParams({kind: searchTab, q: query, limit: '20'});
       if (appendResources && resourceCursor) params.set('cursor', resourceCursor);
-      const found = await request('GET', `/v1/workspaces/${workspaceId()}/search/resources?${params}`);
-      if (seq !== searchSeq) return;
+      const found = await request('GET', `/v1/workspaces/${workspace}/search/resources?${params}`)
+        .catch(() => ({status:0,body:{}}));
+      if (!current()) return;
       if (found.status !== 200) { empty.hidden = false; empty.textContent = '无法加载搜索结果。'; return; }
       resourceItems = appendResources ? resourceItems.concat(found.body.items || []) : (found.body.items || []);
       resourceCursor = found.body.cursor || '';
       addSearchSection(results, searchTab === 'files' ? '文件' : '链接', resourceItems, () => {});
       empty.hidden = Boolean(resourceItems.length); empty.textContent = '没有匹配的结果。';
-      const more = document.getElementById('search-more');
       if (more) { more.hidden = !resourceCursor; more.disabled = false; }
       return;
     }
     if (searchTab === 'messages' && !query) {
+      stopSearchSources();
       empty.hidden = false;
       empty.textContent = searchConversation
         ? '输入关键词，搜索当前对话中你有权查看的消息。'
@@ -6664,9 +6701,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     let messageItems = [];
+    const sources = loadSearchSources(owner, workspace, searchTab, query);
     if (paged && query) {
       if (!reuseMessages) await messageSearch.load(query, searchConversation);
-      if (seq !== searchSeq) return;
+      if (!current()) return;
       const state = messageSearch.state;
       if (state.error && searchTab === 'messages' && !state.hits.length) {
         empty.hidden = false;
@@ -6680,6 +6718,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       messageItems = state.hits;
     }
+    let searchable = sources?.sections || [];
+    if (sources && !sources.sections) {
+      if (searchTab === 'all') {
+        void sources.results.then(() => {
+          if (current()) void renderSearch({reuseMessages:true});
+        });
+      } else {
+        note.hidden = false;
+        note.textContent = uiLabel('正在搜索…','Searching…');
+        searchable = await sources.results;
+        if (!current()) return;
+        note.hidden = Boolean(query);
+        note.textContent = uiLabel('搜索当前工作区。','Searching the current workspace.');
+      }
+    }
+    if (!current()) return;
+    const failedSources = searchable.filter(source => source.failed).map(source => source.title);
+    if (failedSources.length) {
+      const warning = uiLabel('暂时无法搜索：','Search unavailable: ') + failedSources.join(' · ');
+      note.textContent = note.hidden ? warning : [note.textContent, warning].filter(Boolean).join(' ');
+      note.hidden = false;
+    }
 
     const filtered = (items) => items.filter(item => matchesQuery(item, query));
     const sections = [];
@@ -6692,18 +6752,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (searchTab === 'all' || searchTab === 'groups') {
       sections.push(['群组', filtered(groupItems())]);
     }
-    if (searchTab === 'all' || searchTab === 'artifacts') {
-      sections.push(['Artifacts', filtered(artifactItems())]);
-    }
-    if (searchTab === 'documents') {
-      sections.push(['云文档', filtered(artifactItems('document'))]);
-    }
-    if (searchTab === 'media') {
-      sections.push(['媒体', filtered(artifactItems('media'))]);
-    }
     if (searchTab === 'all' || searchTab === 'messages') {
       sections.push(['消息', messageItems]);
     }
+    for (const {title, items} of searchable) sections.push([title, items]);
 
     let total = 0;
     for (const [title, items] of sections) {
@@ -6731,12 +6783,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      const directoryStatus = searchTab === 'contacts' ? membersStatus
-        : (['artifacts', 'documents', 'media'].includes(searchTab) ? artifactsStatus : '');
+      const directoryStatus = searchTab === 'contacts' ? membersStatus : '';
       if (directoryStatus === 'loading') empty.textContent = '正在加载…';
       else if (directoryStatus === 'failed') empty.textContent = '无法加载搜索范围。';
       else if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
-      else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
+      else if (failedSources.length || (paged && messageSearch.state.warning)) empty.textContent = '可搜索的内容里没有匹配结果。';
       else empty.textContent = '当前工作区里没有匹配的结果。';
     }
     if (paged && query && messageSearch.state.error) {

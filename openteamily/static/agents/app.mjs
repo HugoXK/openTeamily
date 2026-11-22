@@ -125,6 +125,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const createForm = document.getElementById('create-form');
   const editForm = document.getElementById('edit-form');
+  const editConflict = document.getElementById('agent-edit-conflict');
+  const reloadSettings = document.getElementById('reload-agent-settings');
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
   const openCreate = document.getElementById('open-create');
@@ -570,6 +572,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillEdit(agent) {
     sharing?.close();
+    if (editConflict) editConflict.hidden = true;
+    if (reloadSettings) reloadSettings.hidden = true;
     createForm.hidden = true;
     currentAgent = agent;
     editForm.hidden = false;
@@ -678,19 +682,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return loadWorkspace();
   });
 
-  document.getElementById('agent-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-id]');
-    if (!button) return;
+  async function openAgent(agentId) {
     const workspace = workspaceId();
     const user = currentUser?.id;
     const selected = ++agentSelection;
-    const result = await request('GET', `/v1/workspaces/${workspace}/agents/${button.dataset.id}`);
+    const result = await request('GET', `/v1/workspaces/${workspace}/agents/${agentId}`).catch(() => ({status:0, body:{}}));
     if (selected !== agentSelection || workspace !== workspaceId() || user !== currentUser?.id) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法打开这个智能体。'));
       return;
     }
     fillEdit(result.body.agent);
+  }
+
+  document.getElementById('agent-list').addEventListener('click', event => {
+    const button = event.target.closest('button[data-id]');
+    if (button) return openAgent(button.dataset.id);
+  });
+  reloadSettings?.addEventListener('click', () => {
+    if (currentAgent) return openAgent(currentAgent.id);
   });
 
   function invalidQuickStarts(starts) {
@@ -729,22 +739,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   editForm.addEventListener('submit', async event => {
     event.preventDefault();
     if (!canManage(actor)) return;
-    const id = workspaceId();
+    const workspace = workspaceId();
+    const selected = agentSelection;
+    const edited = event.currentTarget.elements.id.value;
+    const submit = event.currentTarget.querySelector('button[type="submit"]');
+    if (submit.disabled) return;
     const values = readAgentForm(event.currentTarget);
     if (invalidQuickStarts(values.quick_starts)) return;
     values.revision = Number(event.currentTarget.elements.revision.value);
-    const result = await request(
-      'POST',
-      `/v1/workspaces/${id}/agents/${event.currentTarget.elements.id.value}`,
-      values,
-    );
+    submit.disabled = true;
+    const result = await request('POST', `/v1/workspaces/${workspace}/agents/${edited}`, values)
+      .catch(() => ({status:0, body:{}}));
+    submit.disabled = false;
+    if (selected !== agentSelection || workspace !== workspaceId() || edited !== currentAgent?.id) return;
+    if (result.body.error?.code === 'revision_conflict' && editConflict && reloadSettings) {
+      editConflict.hidden = reloadSettings.hidden = false;
+      return;
+    }
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法保存。'));
       return;
     }
+    const {agent} = result.body;
+    directoryAgents = directoryAgents.map(item => item.id === agent.id ? agent : item);
+    renderDirectory();
+    fillEdit(agent);
     show('ok', '已更新。之后的对话会使用新的说明。');
-    await loadWorkspace();
-    if (id === workspaceId()) fillEdit(result.body.agent);
   });
 
   async function changeArchive(agent, archived, button) {
@@ -761,6 +781,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         {revision: agent.revision, archived}).catch(() => ({status:0, body:{}}));
       if (wid !== workspaceId() || user !== currentUser?.id || view !== archivedOnly) return;
       if (result.status !== 200) {
+        if (result.body.error?.code === 'revision_conflict' && archived && currentAgent?.id === agent.id && editConflict && reloadSettings) {
+          editConflict.hidden = reloadSettings.hidden = false;
+          return;
+        }
         show('error', messageFor(result.body.error, archived ? '无法归档智能体。' : '无法恢复智能体。'));
         return;
       }

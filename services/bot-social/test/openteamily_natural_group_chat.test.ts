@@ -306,7 +306,7 @@ test("an active owner gets a bounded head start on shared ordinary text while ex
   await colleague.ok("POST",jobRoute(active),pass(activeClaim));
 });
 
-test("ordinary group judgment is bounded when a group has a large agent roster", async () => {
+test("large groups bound ordinary judgment and explicitly reach the whole roster", async () => {
   const owner = await home(service.base, "natural-cap");
   const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true, title: "Roster", agents: [lead]});
   const room = roomPath(group);
@@ -317,4 +317,8 @@ test("ordinary group judgment is bounded when a group has a large agent roster",
   assert.equal(result.reply_jobs.length, 20);
   assert.equal(new Set(targets(result)).size, 20);
   assert.equal(targets(result)[0], lead.agent_ref);
+  const requested = await owner.ok("POST", room + "/messages", {body: "@所有人 请检查发布计划"});
+  assert.deepEqual(targets(requested), [
+    lead.agent_ref, ...Array.from({length:21}, (_, index)=>"number-" + index),
+  ]);
 });

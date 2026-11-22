@@ -46,7 +46,7 @@ test('chatIdentity shows a letter avatar only for a real conversation title', ()
 
 test('SEARCH_TABS lists the recorded search scopes', () => {
   assert.deepEqual(SEARCH_TABS.map((entry) => entry[1]), [
-    '全部', 'Artifacts', '联系人', '群组', '智能体', '消息', '文件', '云文档', '媒体', '链接',
+    '全部', '作品', '记忆', '联系人', '群组', '智能体', '消息', '文件', '云文档', '媒体', '链接',
   ]);
 });
 
@@ -1420,31 +1420,35 @@ test('only the matching same-name assistant row becomes the durable reply in tra
   } finally { restore(); }
 });
 
-test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
+test('the first chat opens using the batched directory while people are pending without preloading artifacts', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: fallback, requests} = sessionFetcher();
   const restore = installChatGlobals({narrow: false});
-  let releasePeople, releaseArtifacts;
+  let releasePeople;
+  let workRequests = 0;
   async function fetcher(path) {
     if (path.endsWith('/agents?limit=100&include=conversations')) {
       return json(200, {items: [{id: 'brief', name: 'Brief'}],
         conversations: [{id: 'brief-chat', agent_id: 'brief', title: 'Prior briefing', updated: 1}]});
     }
     if (path.endsWith('/members')) return new Promise(resolve => {releasePeople = resolve;});
-    if (path.endsWith('/artifacts?limit=100')) return new Promise(resolve => {releaseArtifacts = resolve;});
+    if (path.includes('/artifacts')) {
+      workRequests += 1;
+      return json(200, {items: []});
+    }
     return fallback(path);
   }
   try {
     mount(doc, {fetcher});
     await settle();
-    assert.ok(releasePeople && releaseArtifacts);
+    assert.ok(releasePeople);
+    assert.equal(workRequests, 0);
     assert.ok(sessionRows(el).some(row => row.dataset.conversation === 'brief-chat'));
     assert.equal(el('message-list').children[0].dataset.messageId, 'm-1');
     assert.ok(!requests.some(path => path.includes('/agents/brief/conversations')));
     await fire(el('compose-add-contact'), 'click');
     assert.match(el('compose-members-empty').textContent, /正在加载/);
     releasePeople(json(200, {items: [{user_id: bob, username: 'bob'}]}));
-    releaseArtifacts(json(200, {items: []}));
     await settle();
     assert.equal(descendants(el('member-choices')).filter(node => node.tagName === 'INPUT')[0].value, bob);
   } finally { restore(); }
