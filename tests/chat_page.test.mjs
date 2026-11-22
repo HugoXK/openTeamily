@@ -4349,6 +4349,32 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
   }
 });
 
+test('a link to the latest native send highlights it and keeps its pending reply live', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const {agent,nativeThread,nativeRows,routes,restore} = fixture;
+  const key = 'artifact-receipt-reply';
+  let items = [nativeRows[0],{...nativeRows[1],body:'',status:'running',client_key:key}];
+  routes.set(scope + linkNativeLatest,()=>json(200,{agent,conversation:nativeThread,items}));
+  const progress = scope + linkNativePath + '/reply-progress?key=' + key + '&after=0';
+  routes.set(progress,()=> {
+    items = [nativeRows[0],{...nativeRows[1],body:'Live reply from the receipt'}];
+    return json(200,{state:'succeeded'});
+  });
+  try {
+    await mount(fixture.doc,{fetcher:fixture.fetcher});
+    assert.deepEqual(fixture.messages(),[linkAgentOlder,linkAgentLatest]);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump,'true');
+    assert.equal(fixture.el('message-scroller').dataset.readingHistory,undefined);
+    t.mock.timers.tick(400);
+    await settle();
+    assert.ok(fixture.calls.some(call=>call.path === progress));
+    assert.match(fixture.el('message-list').children[1].children[1].textContent,/Live reply from the receipt/);
+  } finally { restore(); }
+});
+
 test('a linked native history and message jump render while settings and the Social directory load', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const scope = linkBase(linkWork);

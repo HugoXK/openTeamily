@@ -6324,11 +6324,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try {
       if (!await opened || !link.current()) return;
       if (message) {
+        const openingHistory = privateHistory;
+        const latestReply = lastAgentItems.at(-1);
+        const latestUser = lastAgentItems.at(-2);
+        const followsReply = !start.social && openingHistory?.readingHistory &&
+          latestUser?.role === 'user' && latestUser.id === message && latestReply && waitingAgentReply(latestReply);
         const moved = await jumpToMessage(message, null, link.current);
         if (!link.current()) return;
         if (!moved) {
           show('error', '找不到这条来源消息。');
           return;
+        }
+        // A receipt for the latest send already opens the live window.
+        if (followsReply && privateHistory === openingHistory) {
+          privateHistory.readingHistory = false;
+          updateHistoryControls();
+          if (!syncReplyProgress()) schedulePoll();
         }
       }
       const requestedAgent = start.directAccess;
