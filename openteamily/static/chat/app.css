@@ -109,14 +109,14 @@ body.app-workspace > #status[data-announce-only="true"] {
 #conversation-list button.session-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 2.1rem minmax(0, 1fr) auto;
-  gap: 0.25rem 0.5rem;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  gap: 0 .625rem;
   align-items: center;
   text-align: left;
   background: transparent;
   border: 0;
   border-radius: 0.65rem;
-  padding: 0.38rem 0.45rem;
+  padding: .5rem;
   font: inherit;
   font-weight: 500;
   color: var(--ot-ink);
@@ -852,8 +852,6 @@ body.app-workspace > #status[data-announce-only="true"] {
 #conversation-list .title { font-size: .88rem; font-weight: 550; }
 #conversation-list .preview { font-size: .8rem; line-height: 1.4; }
 #conversation-list .time { font-size: .75rem; font-variant-numeric: tabular-nums; }
-#conversation-list li.session-divider { display: flex; flex-direction: column; }
-#conversation-list .session-section-title { order: -1; margin: .75rem .4rem .25rem; font-size: .75rem; font-weight: 500; color: var(--ot-muted); }
 .chat-top { min-height: 3rem; margin: .45rem .65rem 0; padding: .35rem .65rem; box-shadow: var(--ot-shadow-sm); border: 0; border-bottom: 1px solid var(--ot-line); border-radius: .75rem; background: var(--ot-surface-2); }
 .chat-top h1 { font-size: .95rem; font-weight: 600; }
 .chat-actions { gap: .15rem; flex-wrap: nowrap; }
@@ -1119,6 +1117,8 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   border: 0; border-radius: 50%; background: transparent; color: var(--ot-muted); box-shadow: none;
 }
 .session-toolbar .toolbar-icon:hover, .session-toolbar #search-close:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+.session-toolbar #session-filter[data-filter-active="true"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
+.session-toolbar:has(#search-close:not([hidden])) > :is(#session-filter, #notifications-toggle, .compose-menu) { display: none; }
 .session-search {
   display: flex; flex-wrap: nowrap; align-items: center; gap: .375rem; flex: 1 1 auto; min-width: 0;
   height: 2rem; margin: 0; padding: 0 .625rem; box-sizing: border-box;
@@ -1144,9 +1144,9 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 .session-group > h2, #conversation-heading {
   margin: .5rem .375rem .125rem; color: var(--ot-muted); font-size: .75rem; font-weight: 500; letter-spacing: .02em;
 }
-#conversation-list { display: grid; gap: 1px; }
-#conversation-list li { border: 0 !important; padding: 0 !important; }
-#conversation-list li.session-divider::before { margin: .625rem .375rem .25rem; font-size: .75rem; color: var(--ot-muted); }
+#conversation-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
+#conversation-list li { display: block; border: 0; padding: 0; }
+#conversation-list li.session-divider::before { display: block; margin: .625rem .375rem .25rem; font-size: .75rem; color: var(--ot-muted); }
 #conversation-list .session-row {
   display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) auto; align-items: center; gap: 0 .625rem;
   width: 100%; min-height: 3.5rem; padding: .5rem .5rem; box-sizing: border-box;
@@ -1155,6 +1155,8 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 #conversation-list .session-row:hover { background: var(--ot-surface-2); }
 #conversation-list .session-row[aria-current="true"] { background: var(--ot-accent-soft); color: var(--ot-ink); border: 0; box-shadow: none; outline: 0; }
 #conversation-list .session-row[aria-current="true"] .title { color: var(--ot-ink); }
+#conversation-list button.session-row:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: -2px; }
+#conversation-list .session-row.is-unread:not(.is-muted) .title { font-weight: 700; }
 #conversation-list .session-row[aria-busy="true"] { background: var(--ot-surface-2); }
 #conversation-list .session-row[aria-busy="true"] .time::after {
   content: ""; display: block; width: .75rem; height: .75rem; margin: .2rem 0 0 auto;
@@ -1172,7 +1174,7 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 .session-transition button { flex-shrink: 0; min-height: 2rem; padding: .2rem .5rem; }
 #conversation-list .avatar {
   display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 50%;
-  font-size: .875rem; font-weight: 600; line-height: 1;
+  box-sizing: border-box; font-size: .875rem; font-weight: 600; line-height: 1;
 }
 #conversation-list .avatar[data-kind="group"] { border-radius: .75rem; }
 #conversation-list .copy { display: grid; gap: .125rem; min-width: 0; }
@@ -1784,6 +1786,7 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
 /* Capsule composer: + on the left, icon tools, circular send on the right. */
 .composer {
   position: relative;
+  grid-template-columns: minmax(0, 1fr);
   padding: 0.4rem 0.5rem 0.35rem;
   border-radius: 1.35rem;
   background: var(--ot-surface);
@@ -1856,9 +1859,16 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
 .plus-row .plus-tag { position: static; margin-left: auto; }
 .plus-hint { margin: 0.35rem 0.5rem 0; font-size: 0.75rem; color: var(--ot-muted); }
 .composer-tools { display: flex; align-items: center; gap: 0.1rem; margin-top: 0.1rem; }
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  max-width: 100%;
+  margin-inline-start: auto;
+}
 .composer-send {
   width: 2.15rem !important; min-width: 2.15rem !important; height: 2.15rem !important;
-  margin-left: auto; padding: 0 !important; border-radius: 50% !important;
+  padding: 0 !important; border-radius: 50% !important;
   background: var(--ot-accent) !important; color: var(--ot-on-accent) !important;
 }
 .composer-send:hover { background: #0b6a3e !important; color: #fff !important; }
@@ -1918,8 +1928,8 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 }html[data-theme-resolved="dark"] #conversation-list button.session-row{
   border-radius: 0.9rem;
   padding: 0.55rem 0.6rem;
-  transition: background-color .16s var(--ot-ease), transform .16s var(--ot-ease);
-}html[data-theme-resolved="dark"] #conversation-list button.session-row:hover{ background: var(--ot-bg-accent); transform: translateX(1px); }html[data-theme-resolved="dark"] #conversation-list button.session-row[aria-current="true"]{
+  transition: background-color .16s var(--ot-ease);
+}html[data-theme-resolved="dark"] #conversation-list button.session-row:hover{ background: var(--ot-bg-accent); }html[data-theme-resolved="dark"] #conversation-list button.session-row[aria-current="true"]{
   background: var(--ot-grad-soft);
   box-shadow: inset 3px 0 0 var(--ot-accent), 0 8px 24px color-mix(in srgb, var(--ot-accent) 12%, transparent);
 }html[data-theme-resolved="dark"] #conversation-list .avatar{
@@ -1946,12 +1956,14 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
   animation: ot-rise .22s var(--ot-ease) both;
-}html[data-theme-resolved="dark"] #message-list li.user, html[data-theme-resolved="dark"] #message-list li.mine{
-  background: var(--ot-grad);
-  border-color: transparent;
-  color: #ffffff;
-  box-shadow: 0 14px 34px color-mix(in srgb, var(--ot-accent) 32%, transparent);
-}html[data-theme-resolved="dark"] #message-list li.user .role, html[data-theme-resolved="dark"] #message-list li.user .time, html[data-theme-resolved="dark"] #message-list li.mine .role, html[data-theme-resolved="dark"] #message-list li.mine .time{ color: rgba(255,255,255,0.78); }html[data-theme-resolved="dark"] #message-list li.agent{
+}
+html[data-theme-resolved="dark"] #message-list :is(li.user, li.mine) {
+  background: var(--ot-bubble-mine);
+  border-color: var(--ot-line);
+  color: var(--ot-ink);
+  box-shadow: none;
+}
+html[data-theme-resolved="dark"] #message-list li.agent{
   background: var(--ot-grad-soft);
   border: 1px dashed color-mix(in srgb, var(--ot-accent) 42%, transparent);
 }html[data-theme-resolved="dark"] .composer{
@@ -2222,6 +2234,20 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   padding: .25rem .5rem;
   font-size: .75rem;
 }
+#session-filter-clear:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  min-height: 2rem;
+  margin: .125rem .375rem .25rem;
+  padding: .25rem .625rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-size: .75rem;
+}
+#session-filter-clear svg { flex-shrink: 0; }
 .inbox-notification-filters {
   justify-content: flex-start;
   padding-block: .375rem;
@@ -2589,6 +2615,7 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   .mobile-inbox-heading a:hover { background: var(--ot-bg-accent); }
   .session-toolbar { gap: .25rem; }
   .session-toolbar :is(.toolbar-icon, #new-conversation, #search-close) { width: 2.75rem; height: 2.75rem; }
+  #session-filter-clear:not([hidden]) { min-height: 2.75rem; }
   .session-toolbar input[type="search"] { font-size: 1rem; }
 
   .chat-top {
@@ -2614,7 +2641,6 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
     min-width: 2.75rem !important;
     min-height: 2.75rem;
   }
-  .composer-tools { flex-wrap: nowrap; }
   .composer-plus-sheet { left: 0; width: min(30rem, calc(100vw - 1.875rem)); }
   .plus-auto > a { white-space: normal; }
   .group-info, #conversation-search-panel { bottom: max(.5rem, env(safe-area-inset-bottom)); }
@@ -2757,7 +2783,6 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
   max-width: 100%;
   min-height: 2rem;
   padding-inline: .375rem .25rem;
-  margin-inline-start: auto;
   border: 1px solid var(--ot-line);
   border-radius: .5rem;
   background-color: var(--ot-surface);
@@ -2765,7 +2790,6 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
   font-size: .75rem;
 }
 #agent-memory-recall[hidden] { display: none; }
-#agent-memory-recall:not([hidden]) + #chat-send { margin-inline-start: .25rem; }
 @media (pointer: coarse) { #agent-memory-recall { min-height: 2.75rem; } }
 #message-list .reply-memory-sources { margin: .375rem 0; font-size: .8125rem; color: var(--ot-muted); }
 #message-list .reply-memory-sources summary { cursor: pointer; width: fit-content; }

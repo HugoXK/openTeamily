@@ -778,6 +778,37 @@ test('private quick starts are suppressed for an agent returned outside the curr
   } finally { restore(); }
 });
 
+test('a growing composer stays with the live reply unless the reader had scrolled up', async () => {
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, _options, scope) => {
+    assert.equal(path, '?limit=50');
+    return json(200, {...scope, items:[{id:'earlier', role:'user', body:'一条已有消息'}]});
+  });
+  const scroller = el('message-scroller');
+  scroller.clientHeight = 600;
+  scroller.scrollHeight = 1800;
+  let resized;
+  doc.defaultView = {
+    ResizeObserver: class {
+      constructor(callback) { resized = callback; }
+      observe(target) { assert.equal(target, scroller); }
+    },
+  };
+  try {
+    await mount(doc, {fetcher});
+    scroller.scrollTop = 1200;
+    scroller.clientHeight = 490;
+    resized();
+    assert.equal(scroller.scrollTop, scroller.scrollHeight);
+    assert.equal(el('chat-back-to-latest').hidden, true);
+
+    scroller.scrollTop = 750;
+    scroller.clientHeight = 600;
+    resized();
+    assert.equal(scroller.scrollTop, 750);
+    assert.equal(el('chat-back-to-latest').hidden, false);
+  } finally { restore(); }
+});
+
 test('a native reply streams as plain text without rebuilding history or changing an unsent draft', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const previous = {id: 'earlier', role: 'user', body: '更早的消息'};
@@ -1436,6 +1467,27 @@ test('closing search from the narrow session list keeps the list visible', async
   }
 });
 
+test('closing search started from the session list keeps a previously opened conversation in the background', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('chat-back'), 'click');
+    assert.equal(doc.body.classList.contains('sessions-open'), true);
+
+    await fire(el('session-search'), 'focus');
+    await fire(el('search-close'), 'click');
+
+    assert.equal(doc.body.classList.contains('sessions-open'), true);
+    assert.equal(el('conversation-heading').focused, true);
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1);
+  } finally {
+    restore();
+  }
+});
+
 test('a wide chat leaves the grid classes alone when search opens and closes', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher} = sessionFetcher();
@@ -1950,8 +2002,12 @@ test('session filter selects only real unread social rows', async () => {
     await fire(el('session-filter-value'), 'change');
     assert.equal(sessionRows(el).length, 1);
     assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-1');
-    el('session-filter-value').value = 'all';
-    await fire(el('session-filter-value'), 'change');
+    assert.equal(el('session-filter-clear').hidden, false);
+    assert.match(sessionRows(el)[0].getAttribute('aria-label'), /2 条未读消息/);
+    await fire(el('session-filter-clear'), 'click');
+    assert.equal(el('session-filter-value').value, 'all');
+    assert.equal(el('session-filter-clear').hidden, true);
+    assert.equal(el('session-filter').focused, true);
     assert.equal(sessionRows(el).length, 2);
   } finally { restore(); }
 });

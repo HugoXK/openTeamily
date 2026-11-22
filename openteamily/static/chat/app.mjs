@@ -952,6 +952,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchTab = 'all';
   let searchConversation = '';
   let searchConversationTitle = '';
+  let searchFromSessionList = true;
   let composeMode = 'group';
   let groupMode = 'custom';
   let groupReplyAttempt = null;
@@ -1884,6 +1885,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       preview.replaceChildren(mark, document.createTextNode(draft));
     } else fillBold(document, preview, session.preview || '');
     button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
+      (session.unread_count ? uiLabel(`，${session.unread_count} 条未读消息`, `, ${session.unread_count} unread`) : '') +
       (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
   }
 
@@ -1902,8 +1904,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderSessions() {
     const list = document.getElementById('conversation-list');
+    const active = document.activeElement;
+    const focused = active?.parentElement?.parentElement === list ? active.dataset : null;
+    let nextFocus;
     if (privateArchiveOpen) privateArchiveOpen.hidden = !currentThreadWorkspace();
-    list.replaceChildren();
     sessionRows.clear();
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
@@ -1927,6 +1931,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
       readAll.disabled = markingConversationsRead;
     }
+    const items = [];
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -1936,6 +1941,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.dataset.conversation = session.id;
       button.dataset.source = session.source;
       if (session.agent_id) button.dataset.agent = session.agent_id;
+      if (focused?.conversation === session.id && focused.source === session.source) nextFocus = button;
       if (sessionTransition?.pending && sessionTargetMatches(sessionTransition, button)) button.setAttribute('aria-busy', 'true');
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
@@ -1966,10 +1972,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
       if (session.unread_count > 0) {
+        button.classList.add('is-unread');
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
         unread.textContent = String(session.unread_count);
-        unread.setAttribute('aria-label', session.unread_count + uiLabel(' 条未读消息', ' unread'));
+        unread.setAttribute('aria-hidden', 'true');
         time.append(unread);
       }
 
@@ -1978,8 +1985,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
       li.append(button);
-      list.append(li);
+      items.push(li);
     }
+    list.replaceChildren(...items);
+    nextFocus?.focus({preventScroll: true});
   }
 
   function setChatSubtitle(text, busy = false) {
@@ -2155,8 +2164,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
   }
 
-  function messageScrollerAtBottom(scroller) {
-    return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
+  function messageScrollerAtBottom(scroller, viewportHeight = scroller.clientHeight || 0) {
+    return scroller.scrollHeight - scroller.scrollTop - viewportHeight < 48;
   }
 
   function addPrivateReplyRetry(bubble, item) {
@@ -2240,7 +2249,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
-    role.className = 'role';
+    role.className = item.role === 'user' ? 'role visually-hidden' : 'role';
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
     const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
@@ -3171,6 +3180,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     updateLatestMessageControl();
     scheduleUnreadRead();
   }, {passive: true});
+  const ResizeObserver = document.defaultView?.ResizeObserver;
+  if (historyScroller && ResizeObserver) {
+    let previousHeight = historyScroller.clientHeight;
+    new ResizeObserver(() => {
+      const before = previousHeight;
+      previousHeight = historyScroller.clientHeight;
+      if (!before || !previousHeight || before === previousHeight) return;
+      // Growing the composer reduces the viewport before ResizeObserver runs.
+      if (currentConversation && messageScrollerAtBottom(historyScroller, before)
+          && !(currentSource === 'agent' ? readingPrivateContext() : readingSocialContext(before))) {
+        historyScroller.scrollTop = historyScroller.scrollHeight;
+      }
+      updateLatestMessageControl();
+    }).observe(historyScroller, {box: 'border-box'});
+  }
   globalThis.addEventListener('resize', updateLatestMessageControl);
   newerMessages?.addEventListener('click', async () => {
     const state = socialHistory;
@@ -3643,7 +3667,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
-      role.className = 'role';
+      role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
       role.textContent = groupReplyID ? groupReplyAuthor(item.agent_name)
         : item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
@@ -4042,12 +4066,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
   }
 
-  function readingSocialContext() {
+  function readingSocialContext(viewportHeight) {
     const scroller = document.getElementById('message-scroller');
     const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
       || (unread && unread.committed < unread.latest)
-      || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
+      || !messageScrollerAtBottom(scroller, viewportHeight)
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
   }
@@ -5230,7 +5254,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function openSearchPanel(tab, conversationId = '') {
+  function openSearchPanel(tab, conversationId = '', {fromSessionList = true} = {}) {
+    searchFromSessionList = fromSessionList;
     searchConversation = conversationId;
     searchConversationTitle = document.getElementById('chat-title').textContent;
     document.getElementById('search-panel').hidden = false;
@@ -5239,6 +5264,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
     composeMenu.close();
+    setFilterOpen(false, {focus: false});
+    setNotificationsOpen(false);
     // The panel is a child of the session pane, which the narrow stylesheet
     // paints only in the sessions-open state. Opening search has to reveal it
     // there, or the panel is laid out inside a display:none parent.
@@ -5252,7 +5279,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (isSearchOpen() && !messageSearch.state.loading) void renderSearch({reuseMessages: true});
   }
 
-  function closeSearchPanel() {
+  function closeSearchPanel({focus = false} = {}) {
     searchSeq++;
     void messageSearch.load('');
     searchConversation = '';
@@ -5261,9 +5288,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = false;
     document.getElementById('session-search').value = '';
     setSearchTab('all');
-    // Narrow screens show the conversation when one is open and the list
-    // otherwise; dropping the state unconditionally would blank both.
-    if (narrowScreen()) setSessionsOpen(!currentConversation);
+    const returnToList = searchFromSessionList || !currentConversation;
+    if (narrowScreen()) setSessionsOpen(returnToList);
+    if (focus) document.getElementById(returnToList ? 'conversation-heading' : 'chat-title').focus({preventScroll: true});
   }
 
   function addSearchSection(root, title, items, onPick) {
@@ -6624,25 +6651,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const filterButton = document.getElementById('session-filter');
   const filterLabel = document.getElementById('session-filter-label');
   const filterValue = document.getElementById('session-filter-value');
-  function setFilterOpen(open) {
+  const filterClear = document.getElementById('session-filter-clear');
+  function setFilterOpen(open, {focus = true} = {}) {
     if (!filterLabel || !filterButton) return;
     filterLabel.hidden = !open;
     filterButton.setAttribute('aria-expanded', String(open));
-    if (open) filterValue?.focus();
-    else filterButton.focus();
+    if (focus) (open ? filterValue : filterButton)?.focus();
   }
   filterButton?.addEventListener('click', () => setFilterOpen(Boolean(filterLabel?.hidden)));
+  document.addEventListener('click', event => {
+    if (filterLabel && !filterLabel.hidden && !event.target?.closest?.('#session-filter, #session-filter-label')) {
+      setFilterOpen(false, {focus: false});
+    }
+  });
   filterValue?.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       event.preventDefault();
       setFilterOpen(false);
     }
   });
-  filterValue?.addEventListener('change', () => {
+  function applySessionFilter() {
+    const active = filterValue.value !== 'all';
     const name = filterValue.selectedOptions?.[0]?.textContent;
+    filterButton.dataset.filterActive = String(active);
     if (name) filterButton?.setAttribute('aria-label', uiLabel('会话筛选：', 'Conversation filter: ') + name);
+    filterClear.hidden = !active;
+    document.getElementById('session-filter-selection').textContent = active ? name || '' : '';
+    if (active && name) filterClear.setAttribute('aria-label', uiLabel(`清除「${name}」筛选`, `Clear “${name}” filter`));
     setFilterOpen(false);
     renderSessions();
+  }
+  filterValue?.addEventListener('change', applySessionFilter);
+  filterClear?.addEventListener('click', () => {
+    filterValue.value = 'all';
+    applySessionFilter();
   });
   document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
     if (markingConversationsRead) return;
@@ -6714,7 +6756,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   muteButton?.addEventListener('click', toggleMute);
   groupMute?.addEventListener('click', toggleMute);
   pinButton?.addEventListener('click', toggleConversationPin);
-  document.getElementById('search-close').addEventListener('click', closeSearchPanel);
+  document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
     cancelStartupLink();
     stopReplyProgress();
@@ -6752,7 +6794,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     document.getElementById('session-search').value = '';
-    openSearchPanel('messages', currentConversation.id);
+    openSearchPanel('messages', currentConversation.id, {fromSessionList: false});
     document.getElementById('session-search').focus();
   });
   document.getElementById('search-panel').addEventListener('click', event => {
@@ -7236,7 +7278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       closeComposeDialog({focus: true});
       return;
     }
-    if (isSearchOpen()) closeSearchPanel();
+    if (isSearchOpen()) closeSearchPanel({focus: true});
   });
 
   const plus = document.querySelector('details.composer-plus');

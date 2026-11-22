@@ -59,8 +59,6 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   font: inherit;
 }
 
-.artifact-scopes button[aria-current="page"],
-.artifact-kinds button[aria-current="page"],
 .layout-toggle button[aria-pressed="true"] {
   background: var(--ot-accent);
   color: var(--ot-surface);
@@ -754,11 +752,6 @@ li[data-unread="true"] > .artifact-notification-row::before {
   border-radius: 999px;
 }
 
-.meeting-scopes button[aria-current="page"] {
-  background: var(--ot-accent);
-  color: var(--ot-surface);
-}
-
 #main-panel.is-meetings .artifact-scopes,
 #main-panel.is-meetings .filter-wrap,
 #main-panel.is-meetings #layout-toggle,
@@ -978,10 +971,6 @@ li[data-unread="true"] > .artifact-notification-row::before {
 .artifact-kinds button {
   border-radius: 999px;
 }
-.artifact-kinds button[aria-current="page"] {
-  background: var(--ot-accent-soft);
-  color: var(--ot-accent-hover);
-}
 #new-menu {
   border-radius: var(--ot-radius);
   box-shadow: var(--ot-shadow-lg);
@@ -1005,7 +994,6 @@ body.app-workspace:not(.chat-open) > main > #main-panel { padding: .65rem .75rem
 .artifact-dir { background: var(--ot-surface); border: 0; border-right: 1px solid var(--ot-line); border-radius: 0; padding: .7rem .65rem; }
 .artifact-main { background: transparent; border: 0; padding: .5rem .65rem; border-radius: 0; }
 .artifact-kinds button { border: 0; background: transparent; padding: .45rem .65rem; font-size: .85rem; }
-.artifact-kinds button[aria-current="page"], .artifact-scopes button[aria-current="page"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
 #new-menu-button { background: var(--ot-accent); color: var(--ot-on-accent); border: 0; min-height: 2.5rem; }
 #artifact-list { display: grid; gap: .75rem; }
 #artifact-list[data-layout="grid"] { grid-template-columns: repeat(auto-fill, minmax(min(100%,13rem),1fr)); align-items: stretch; }
@@ -1064,12 +1052,16 @@ body.app-workspace:not(.chat-open) > main > #main-panel { padding: .65rem .75rem
 .artifact-kinds { flex-direction: column; flex-wrap: nowrap; gap: .125rem; }
 .artifact-kinds button { width: 100%; height: 2rem; min-height: 0; display: flex; align-items: center; gap: .5rem; padding: 0 .625rem; border: 0; border-radius: .5rem; background: transparent; color: var(--ot-ink); font-size: .8125rem; text-align: left; box-shadow: none; }
 .artifact-kinds button:hover { background: var(--ot-surface-2); }
-.artifact-kinds button[aria-current="page"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); font-weight: 650; }
 .artifact-kinds .kind-icon { display: inline-grid; place-items: center; width: 1rem; height: 1rem; color: currentColor; opacity: .8; }
 .artifact-scopes { gap: .125rem; }
 .artifact-scopes button { height: 1.875rem; min-height: 0; padding: 0 .875rem; border: 0; background: transparent; color: var(--ot-ink); font-size: .8125rem; box-shadow: none; }
 .artifact-scopes button:hover { background: var(--ot-bg-accent); }
-.artifact-scopes button[aria-current="page"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); font-weight: 650; }
+:is(.artifact-kinds, .artifact-scopes, .meeting-scopes) button[aria-current="page"],
+:is(.artifact-kinds, .artifact-scopes, .meeting-scopes) button[aria-current="page"]:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-weight: 650;
+}
 .artifacts-top .workspace-picker { font-size: .75rem; color: var(--ot-muted); }
 .artifacts-top .workspace-picker select { height: 1.875rem; min-height: 0; padding: 0 1.5rem 0 .625rem; border: 0; border-radius: 999px; background-color: var(--ot-bg-accent); font-size: .75rem; max-width: 12rem; }
 #filter-button { height: 1.875rem; min-height: 0; padding: 0 .75rem; border: 0; background: transparent; font-size: .8125rem; box-shadow: none; }
@@ -1358,7 +1350,6 @@ html[data-theme-resolved="dark"] #send-to-chat-cancel{
   transition: transform .18s var(--ot-ease), box-shadow .18s var(--ot-ease);
 }
 #artifact-list li:hover { transform: translateY(-2px); box-shadow: var(--ot-shadow); }
-.artifact-kinds button[aria-current="page"] { background: var(--ot-grad-soft); color: var(--ot-accent); }
 #new-menu { background: var(--ot-surface-solid); border: 1px solid var(--ot-line); border-radius: var(--ot-radius); box-shadow: var(--ot-shadow-lg); }
 #filter-panel, #editor-form, .slide-card, #version-list li, #share-list li {
   background: var(--ot-surface);

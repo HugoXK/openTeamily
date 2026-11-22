@@ -13,7 +13,7 @@ function currentPath() {
 function markNavigation() {
   const here = currentPath();
   for (const link of document.querySelectorAll('nav a[href]')) {
-    if (link.closest('.catalog-tabs')) continue;
+    if (link.closest('.catalog-tabs, .memory-views')) continue;
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
