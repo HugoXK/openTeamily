@@ -3,6 +3,7 @@ import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/pub
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
 import { discoverIntentFromHash } from '../shell/discover-link.mjs';
 import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
+import { socialMessageFromHash } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime } from './runtime-readiness.mjs';
@@ -382,11 +383,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
+        const message = socialMessageFromHash(hash);
         if (invite) {
           const destination = '/members' + teamInviteHash(invite);
           if (await initializePersonalAgent(destination) && view.location.hash === hash) {
             view.location.replace(destination);
           }
+        } else if (message) {
+          view.location.replace(message);
         } else if (intent) {
           await continuePublicActivity({
             target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,

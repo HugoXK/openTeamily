@@ -102,8 +102,25 @@ def poll_once(args):
     # Keep signup priority and fenced per-instance jobs. Bound concurrent checks
     # so one slow container does not block another owner's queued start.
     items = sorted(client.assigned(), key=priority)
-    pending = sum(not item['converged'] and not item['blocked'] for item in items)
-    if pending > 1 and not args.import_legacy:
+    pending = [item for item in items if not item['converged'] and not item['blocked']]
+    repairs = [item for item in items if gateway and item['converged'] and not item['blocked']
+               and item['observed'] == 'running' and item['health'] == 'healthy'
+               and item.get('gateway_route_present') is False]
+    if pending and repairs and not args.import_legacy:
+        # A cold start can hold its worker for the entire readiness budget.
+        # Keep one worker available to reconnect already running accounts.
+        def poll_group(group):
+            return {item['id']: poll_instance(item) for item in group}
+
+        completed = {}
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            for group in workers.map(poll_group, (pending, repairs)):
+                completed.update(group)
+        results = []
+        for item in items:
+            result = completed.get(item['id'])
+            results.extend(result if result is not None else poll_instance(item))
+    elif len(pending) > 1 and not args.import_legacy:
         with ThreadPoolExecutor(max_workers=2) as workers:
             results = [result for group in workers.map(poll_instance, items) for result in group]
     else:

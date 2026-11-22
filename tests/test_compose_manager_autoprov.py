@@ -128,6 +128,52 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(sorted(started), sorted(assigned))
         self.assertEqual([row['instance_id'] for row in result['results']], sorted(assigned))
 
+    def test_route_repair_for_a_running_owner_proceeds_during_another_owners_start(self):
+        client = self.start_http()
+        _, cold = self.auto_instance()
+        online, repair = self.auto_instance('dana', '127.0.0.10')
+        self.cfg['instances'] = {}
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['dsbot_gateway'] = {'web_container': 'fixture-web'}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        claim = client.claim(repair)
+        client.leased_call(repair, claim, 'observe', observed='running', process_ref='c' * 32)
+        with self.store.transaction() as db:
+            ensure_schema(db)
+        path = '/v1/auth/runtime-readiness'
+        self.assertEqual(online.call('GET', path)['body']['state'], 'starting')
+        entered, release, rerouted = Event(), Event(), Event()
+
+        def wait_for_start(_worker, iid):
+            self.assertEqual(iid, cold)
+            entered.set()
+            self.assertTrue(release.wait(4))
+            return {'status': 'no_claim', 'instance_id': iid}
+
+        def publish(_engine, _client, iid):
+            self.assertEqual(iid, repair)
+            with self.store.transaction() as db:
+                record_upstream(db, repair, '10.0.0.2:8080', 'dsh-auth-fixture=' + 'x' * 24, self.now)
+            rerouted.set()
+            return {'status': 'published', 'instance_id': repair}
+
+        with (patch.object(ManagerWorker, 'run_once', new=wait_for_start),
+              patch.object(dsbot_route, 'publish', side_effect=publish),
+              ThreadPoolExecutor(max_workers=1) as observer):
+            future = observer.submit(self.poll)
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(rerouted.wait(2))
+                self.assertFalse(future.done())
+                self.assertEqual(online.call('GET', path)['body']['state'], 'ready')
+            finally:
+                release.set()
+            code, result = future.result(timeout=5)
+        self.assertEqual(code, 0, result)
+        accepted = [(row['instance_id'], row['status']) for row in result['results']]
+        self.assertEqual(accepted, [(cold, 'no_claim'), (cold, 'not_running'),
+                                    (repair, 'no_claim'), (repair, 'published')])
+
     def test_new_accounts_inherit_platform_model_and_restart_picks_up_rotation(self):
         client = self.start_http()
         original = 'synthetic-platform-fixture-key'
@@ -246,6 +292,7 @@ class AutoProvisionPollTests(unittest.TestCase):
         with patch.object(dsbot_route, 'publish', side_effect=publish):
             self.assertEqual(self.poll()[0], 0)
             item = client.snapshot(iid)
+            self.assertTrue(item['gateway_route_present'])
             self.assertTrue(item['gateway_route_fresh'])
             self.assertNotIn('auth_cookie', item)
             self.assertNotIn('address', item)
@@ -254,11 +301,14 @@ class AutoProvisionPollTests(unittest.TestCase):
                 self.assertEqual(calls, [iid])
                 with self.store.transaction() as db:
                     db.execute('UPDATE dsbot_upstreams SET updated=updated-? WHERE instance_id=?', (GATEWAY_REFRESH_SECONDS, iid))
-                self.assertFalse(client.snapshot(iid)['gateway_route_fresh'])
+                stale = client.snapshot(iid)
+                self.assertTrue(stale['gateway_route_present'])
+                self.assertFalse(stale['gateway_route_fresh'])
                 self.assertEqual(self.poll()[0], 0)
                 self.assertEqual(calls, [iid, iid])
                 with self.store.transaction() as db:
                     db.execute('DELETE FROM dsbot_upstreams WHERE instance_id=?', (iid,))
+                self.assertFalse(client.snapshot(iid)['gateway_route_present'])
                 self.assertEqual(self.poll()[0], 0)
                 self.assertEqual(calls, [iid, iid, iid])
                 with patch.object(dsbot_import, 'deliver', return_value={'status': 'delivered'}) as deliver:

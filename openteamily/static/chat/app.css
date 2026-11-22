@@ -1584,6 +1584,7 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
 .message-menu {
   position: fixed; z-index: 60; min-width: 11.5rem; padding: .3125rem; display: grid; gap: .0625rem;
   border-radius: .875rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 16px 36px rgba(20, 40, 30, .16);
+  max-height: calc(100dvh - 1rem); overflow-y: auto; box-sizing: border-box;
 }
 .message-menu[hidden] { display: none; }
 .message-menu > button {
@@ -1600,6 +1601,14 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
 .message-menu-reactions button:hover, .message-menu-reactions button:focus-visible { background: var(--ot-surface-2); outline: none; transform: scale(1.08); }
 .message-menu > button:disabled { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .message-menu > button:disabled::after { content: "未接通"; font-size: .75rem; color: var(--ot-muted); }
+#message-link-dialog {
+  width: min(27rem, calc(100% - 2rem)); box-sizing: border-box;
+  border: 1px solid var(--ot-line); border-radius: .875rem; background: var(--ot-surface); color: var(--ot-ink);
+}
+#message-link-dialog form { display: grid; gap: .75rem; }
+#message-link-dialog :is(h2, p) { margin: 0; }
+#message-link-dialog input { min-width: 0; width: 100%; box-sizing: border-box; }
+#message-link-dialog button { justify-self: end; }
 
 /* Parity (2026-11-19) in-chat search (01c): right-hand panel with a pill field, a scope line,
    and result rows (avatar, author, time, highlighted snippet). */

@@ -361,6 +361,7 @@
       <button type="button" role="menuitem" data-menu="translate" title="使用配置的模型和自己的在线运行时" data-ui-title="chat.translate.model_help" data-ui-text="chat.translate.translate">翻译</button>
       <button type="button" role="menuitem" data-menu="ask" data-ui-text="chat.messages.ask_ai">问 AI</button>
       <button type="button" role="menuitem" data-menu="copy" data-ui-text="chat.copy">复制</button>
+      <button type="button" role="menuitem" data-menu="copy-link" data-ui-text="chat.messages.copy_link" hidden>复制消息链接</button>
       <button type="button" role="menuitem" data-menu="forward" data-ui-text="chat.forward">转发</button>
       <button type="button" role="menuitem" data-menu="pin"><span data-ui-text="chat.pin">置顶</span></button>
       <button type="button" role="menuitem" data-menu="remind-1h" data-ui-text="chat.messages.remind_hour">提醒我：1 小时后</button>
@@ -371,6 +372,14 @@
       <button type="button" role="menuitem" data-menu="retract" data-ui-text="chat.messages.retract">撤回</button>
       <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" data-ui-text="chat.messages.delete_for_me">仅为我删除</button>
     </div>
+    <dialog id="message-link-dialog" aria-labelledby="message-link-title">
+      <form method="dialog">
+        <h2 id="message-link-title" data-ui-text="chat.messages.copy_link">复制消息链接</h2>
+        <p data-ui-text="chat.messages.link_manual">请手动复制链接。只有能访问该会话的人才能查看消息。</p>
+        <input id="message-link-url" type="text" readonly aria-label="消息链接" data-ui-label="chat.messages.link">
+        <button data-ui-text="chat.close">关闭</button>
+      </form>
+    </dialog>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索" data-ui-label="chat.search.in_conversation">
       <form id="conversation-search-form"><label><span id="conversation-search-query-label" class="sr-only"><span data-ui-text="chat.search.conversation">搜索当前会话</span></span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off" data-ui-placeholder="chat.search.conversation"></label><button type="submit" data-ui-text="chat.search">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索" data-ui-label="chat.search.close">×</button></form>
       <div class="search-tabs" role="tablist" aria-label="会话内搜索范围" data-ui-label="chat.search.in_conversation_scope">

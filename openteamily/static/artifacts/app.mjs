@@ -2272,6 +2272,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
     current = null;
+    clearCreatedShare();
     clearTimeout(draftTimer);
     if (recovery) recovery.hidden = true;
     if (recoveryCopy) recoveryCopy.value = '';
@@ -2306,7 +2307,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const id of ['share-once', 'share-empty', 'version-empty', 'revoke-discover', 'artifact-live-update']) {
       document.getElementById(id).hidden = true;
     }
-    for (const id of ['share-once', 'share-list', 'version-list']) document.getElementById(id).textContent = '';
+    for (const id of ['share-list', 'version-list']) document.getElementById(id).textContent = '';
+    clearCreatedShare();
+    document.getElementById('create-share').disabled = false;
+    document.getElementById('share-expires').value = '';
     discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
     if (discoverEditable) discoverEditable.checked = false;
     const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
@@ -2490,6 +2494,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
   }
 
+  function clearCreatedShare() {
+    const once = document.getElementById('share-once');
+    once.hidden = true;
+    delete once.dataset.shareId;
+    document.getElementById('share-url').value = '';
+    document.getElementById('open-share').removeAttribute('href');
+    document.getElementById('share-copy-status').textContent = '';
+  }
+
+  async function changeShare(selection, path, {create = false, item, button}) {
+    if (!activeEditor(selection) || selection.shareWrite) return;
+    const restoreFocus = document.activeElement === button;
+    selection.shareWrite = true;
+    button.disabled = true;
+    if (!create && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
+    const expires = Number(document.getElementById('share-expires').value);
+    panelStatus('share', create ? '正在创建分享链接…' : '正在撤销分享链接…');
+    try {
+      const result = await request('POST', path, create && expires ? {expires_in: expires} : {},
+        undefined, selection.controller.signal).catch(() => ({status: 0, body: {}}));
+      if (!activeEditor(selection)) return;
+      const share = result.body?.share;
+      if (create && result.status === 201 && /^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) {
+        const value = new URL(share.path, document.defaultView.location.origin).href;
+        const once = document.getElementById('share-once');
+        const copy = document.getElementById('copy-share');
+        document.getElementById('share-url').value = value;
+        document.getElementById('open-share').href = value;
+        document.getElementById('share-copy-status').textContent = '';
+        once.dataset.shareId = share.id;
+        once.hidden = false;
+        copy.focus({preventScroll: true});
+        await loadShares();
+        return;
+      }
+      if (!create && result.status === 200 && share?.revoked === true) {
+        await loadShares();
+        if (activeEditor(selection)) panelStatus('share', '分享链接已撤销。');
+        return;
+      }
+      await loadShares();
+      if (activeEditor(selection)) panelStatus('share', create
+        ? '无法确认分享链接已创建。请查看分享列表后再试。'
+        : '撤销尚未确认，链接可能仍可访问。请重试撤销。');
+    } finally {
+      selection.shareWrite = false;
+      if (activeEditor(selection)) {
+        button.disabled = false;
+        if (!create && restoreFocus && document.activeElement === document.body) {
+          const row = [...document.getElementById('share-list').children].find(node => node.dataset.shareId === item.id);
+          (row?.querySelector('button') || document.getElementById('create-share')).focus({preventScroll: true});
+        }
+      }
+    }
+  }
+
   async function loadShares() {
     const response = await readPanel('share', '/shares');
     if (!response) return;
@@ -2506,28 +2566,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
+      row.dataset.shareId = item.id;
       const meta = document.createElement('span');
       meta.className = 'note';
-      meta.textContent = item.revoked ? `已撤销 · ${item.prefix}…` : `有效 · ${item.prefix}…`;
+      const expired = item.expired === true;
+      const state = item.revoked ? '已撤销' : expired ? '已过期' : item.revocation_pending ? '撤销待确认' : '有效';
+      const expiry = item.expires ? ` · 到期 ${artifactTime(item.expires)}` : '';
+      meta.textContent = `${state} · ${item.prefix}…${expiry}`;
       row.appendChild(meta);
-      if (!item.revoked) {
+      if (!item.revoked && !expired) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
-        revoke.textContent = '撤销';
-        revoke.addEventListener('click', async () => {
-          if (!activeEditor(selection)) return;
-          const result = await request('POST', editorPath(selection, artifact.id) + `/shares/${item.id}/revoke`, {})
-            .catch(() => ({status: 0, body: {}}));
-          if (!activeEditor(selection)) return;
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '撤销失败。'));
-            return;
-          }
-          document.getElementById('share-once').hidden = true;
-          document.getElementById('share-once').textContent = '';
-          show('ok', '分享链接已撤销。');
-          await loadShares();
-        });
+        revoke.textContent = item.revocation_pending ? '重试撤销' : '撤销';
+        revoke.addEventListener('click', () => changeShare(selection,
+          editorPath(selection, artifact.id) + `/shares/${item.id}/revoke`, {item, button: revoke}));
         row.appendChild(revoke);
       }
       list.appendChild(row);
@@ -4045,26 +4097,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   publishDiscover?.addEventListener('click', () => changeDiscoverListing(true));
   revokeDiscover?.addEventListener('click', () => changeDiscoverListing(false));
 
-  document.getElementById('create-share').addEventListener('click', async () => {
+  const createShareButton = document.getElementById('create-share');
+  createShareButton.addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再创建分享链接。');
       return;
     }
-    const selection = editor;
-    if (!activeEditor(selection)) return;
-    const result = await request('POST', editorPath(selection) + '/shares', {})
-      .catch(() => ({status: 0, body: {}}));
-    if (!activeEditor(selection)) return;
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法创建分享链接。'));
-      return;
+    if (!activeEditor(editor)) return;
+    void changeShare(editor, editorPath(editor) + '/shares', {create: true, button: createShareButton});
+  });
+  document.getElementById('copy-share').addEventListener('click', async () => {
+    const field = document.getElementById('share-url');
+    const status = document.getElementById('share-copy-status');
+    const value = field.value;
+    if (!value) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(value);
+      if (field.value === value) status.textContent = '已复制链接。';
+    } catch {
+      if (field.value !== value) return;
+      field.focus({preventScroll: true});
+      field.select();
+      status.textContent = '已选中链接，请手动复制。';
     }
-    const share = result.body.share || {};
-    const once = document.getElementById('share-once');
-    once.hidden = false;
-    once.textContent = share.path ? ('链接只显示一次：' + share.path) : '链接已创建，请立即复制。';
-    show('ok', '已创建只读分享链接，完整地址只显示这一次。');
-    await loadShares();
   });
 
   document.getElementById('export-artifact').addEventListener('click', () => {

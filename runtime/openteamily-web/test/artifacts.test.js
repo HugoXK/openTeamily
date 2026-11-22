@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
@@ -93,7 +94,24 @@ test('saved website, structured work and historical media copies keep their nati
   assert.deepEqual(Buffer.from(file.download.data,'base64'),PNG)
 })
 
-test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async () => {
+test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async (t) => {
+  const published = new Set()
+  let offline = false
+  let revocations = 0
+  setSharedBotSocial({
+    request: async (method, path, snapshot) => {
+      if (method === 'PUT') {
+        published.add(snapshot.token_hash)
+        return { published: true }
+      }
+      assert.equal(method, 'DELETE')
+      revocations++
+      if (offline) throw Error('controlled Bot Social outage')
+      assert.ok(published.delete(path.split('/').at(-1)))
+      return { revoked: true }
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
   const created = await call('POST', base(), { title: '周报', body: '本周完成迁移。', kind: 'document' }, key())
@@ -151,8 +169,24 @@ test('document, website, slides, dashboard and whiteboard CRUD, favorites, versi
   assert.equal(share.body.share.token.length, 43)
   const listedShares = await call('GET', base(`/${doc.id}/shares`))
   assert.equal(listedShares.body.items.length, 1)
-  const revoked = await call('POST', base(`/${doc.id}/shares/${share.body.share.id}/revoke`), {})
+  assert.equal(listedShares.body.items[0].path, undefined)
+  assert.equal(listedShares.body.items[0].token, undefined)
+  const revokePath = base(`/${doc.id}/shares/${share.body.share.id}/revoke`)
+  offline = true
+  const pendingRevoke = await call('POST', revokePath, {})
+  assert.equal(pendingRevoke.status, 503)
+  assert.equal(pendingRevoke.body.error.code, 'share_revoke_unconfirmed')
+  assert.equal(published.size, 1)
+  const pending = (await call('GET', base(`/${doc.id}/shares`))).body.items[0]
+  assert.equal(pending.revoked, false)
+  assert.equal(pending.revocation_pending, true)
+  offline = false
+  const revoked = await call('POST', revokePath, {})
   assert.equal(revoked.body.share.revoked, true)
+  assert.equal(revoked.body.share.revocation_pending, false)
+  assert.equal(published.size, 0)
+  assert.equal((await call('POST', revokePath, {})).body.share.revoked, true)
+  assert.equal(revocations, 2)
 
   assert.equal((await call('POST', base(`/${doc.id}/remove`), {})).status, 200)
   assert.equal((await call('GET', base('/' + doc.id))).status, 404)

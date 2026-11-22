@@ -98,6 +98,8 @@ CREATE TABLE artifact_spreadsheets (
   workbook TEXT NOT NULL);
 `, `
 CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, updated DESC, id);
+`, `
+ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
 `]
 
 export const IMPORT_TABLES = {

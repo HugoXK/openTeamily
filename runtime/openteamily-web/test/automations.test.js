@@ -210,7 +210,7 @@ test('creating a scheduled automation can save it enabled in the same request', 
 })
 
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {
-  const at = zonedEpoch('UTC', 2027, 1, 4, 9, 1)
+  const at = zonedEpoch('UTC', 2027, 1, 4, 9, 0)
   const { e, calls, feature, clock } = fixture(null, at)
   const { automation } = e['automations/create']({ workspace_id: W, title: '提醒', template_id: 'reminder', schedule: { kind: 'daily', time: '09:00', time_zone: 'UTC' }, participants: ['alice'], idempotency_key: 'r'.repeat(16) })
   assert.equal(automation.enabled, true)
@@ -229,6 +229,85 @@ test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot re
   assert.equal(items[0].dispatch.ds_bot.session_id, 's1')
   clock.now += 86400
   assert.equal(feature.tick().length, 1, 'next day fires again')
+})
+
+test('recurring plans use the current activation and skip times elapsed before create, resume or rule change', async () => {
+  const at = zonedEpoch('Europe/Paris', 2027, 2, 25, 12, 0)
+  const nextSlot = zonedEpoch('Europe/Paris', 2027, 2, 27, 10, 0)
+  const {e, feature, clock, dbPath} = fixture(undefined, at)
+  const schedule = {kind:'daily', time:'09:00', time_zone:'Europe/Paris'}
+  const {automation} = e['automations/create']({
+    workspace_id:W, title:'定期简报', template_id:'custom', schedule, participants:['alice'],
+    idempotency_key:'new-recurring-brief-001', enabled:true,
+  })
+  const where = {workspace_id:W, id:automation.id}
+  let saved = automation
+  const update = changes => {
+    saved = e['automations/update']({...where, revision:saved.revision, changes}).automation
+  }
+  assert.deepEqual(saved.schedule_status, {state:'scheduled', at:zonedEpoch('Europe/Paris', 2027, 2, 26, 9, 0)})
+  assert.deepEqual(feature.tick(W), [])
+  update({enabled:false})
+  clock.now += 86400
+  assert.deepEqual(feature.tick(W), [])
+  update({enabled:true})
+  assert.deepEqual(saved.schedule_status, {state:'scheduled', at:zonedEpoch('Europe/Paris', 2027, 2, 27, 9, 0)})
+  update({schedule:{...schedule, time:'10:00'}})
+  assert.deepEqual(saved.schedule_status, {state:'scheduled', at:nextSlot})
+  assert.deepEqual(feature.tick(W), [])
+  assert.deepEqual(e['automations/list']({workspace_id:W}).items[0].schedule_status, saved.schedule_status)
+  assert.deepEqual(e['automations/runs'](where).schedule_status, saved.schedule_status)
+
+  clock.now = nextSlot + 60
+  update({prompt:'Include the project plan.', enabled:true, schedule:{...schedule, time:'10:00'}})
+  assert.deepEqual(saved.schedule_status, {state:'due'})
+  feature.db.close()
+  const calls = []
+  const restored = createAutomations({db: new DatabaseSync(dbPath), clock: () => clock.now,
+    turn: async ({prompt}) => { calls.push(prompt); return {text:'saved result'} }})
+  try {
+    restored.start()
+    await Promise.all(restored.inflight.values())
+    assert.deepEqual(restored.tick(W), [])
+    const {items} = restored.endpoints['automations/runs'](where)
+    assert.equal(items.length, 1)
+    assert.equal(items[0].due_at, nextSlot)
+    assert.equal(items[0].status, 'succeeded')
+    assert.match(calls[0], /Include the project plan/)
+  } finally {
+    restored.stop()
+    restored.db.close()
+  }
+})
+
+test('upgrading an existing automation volume keeps enabled definitions and applies the cutoff when a paused plan resumes', async () => {
+  const morning = zonedEpoch('UTC', 2027, 2, 25, 8, 0)
+  const scheduled = zonedEpoch('UTC', 2027, 2, 25, 9, 0)
+  const {e, feature, clock, dbPath} = fixture(undefined, morning)
+  const create = (title, enabled) => e['automations/create']({
+    workspace_id:W, title, template_id:'custom', schedule:{kind:'daily', time:'09:00', time_zone:'UTC'},
+    participants:['alice'], idempotency_key:`volume-migration-${title}`, enabled,
+  }).automation
+  const enabled = create('existing-enabled', true)
+  const paused = create('existing-paused', false)
+  feature.db.exec('ALTER TABLE ot_automations DROP COLUMN schedule_active_at')
+  feature.db.close()
+  clock.now = scheduled + 120
+  const restored = createAutomations({db: new DatabaseSync(dbPath), clock: () => clock.now,
+    turn: async () => ({text:'migration result'})})
+  try {
+    const result = restored.endpoints['automations/update']({workspace_id:W, id:paused.id,
+      revision:paused.revision, changes:{enabled:true}})
+    assert.deepEqual(result.automation.schedule_status, {state:'scheduled', at:scheduled + 86400})
+    const fired = restored.tick(W)
+    assert.deepEqual(fired.map(item => item.automation_id), [enabled.id])
+    await Promise.all(restored.inflight.values())
+    assert.deepEqual(restored.tick(W), [])
+    assert.deepEqual(restored.endpoints['automations/get']({workspace_id:W,id:enabled.id}).automation.schedule_status,
+      {state:'scheduled', at:scheduled + 86400})
+  } finally {
+    restored.db.close()
+  }
 })
 
 test('automations keep running after 200 historical runs and preserve keyset history and artifact sources', async () => {

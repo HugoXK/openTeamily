@@ -12,7 +12,8 @@ import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs'
 import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
-import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
+import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
+  chatPathId, socialMessageHref, socialMessageFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -403,8 +404,6 @@ function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
 }
-
-const chatPathId = value => /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(value || '');
 
 function writeHash(values) {
   const params = new URLSearchParams();
@@ -2715,6 +2714,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageMenuTarget = null;
   }
 
+  const messageLinkDialog = document.getElementById('message-link-dialog');
+  const messageLinkUrl = document.getElementById('message-link-url');
+  messageLinkDialog?.addEventListener('close', () => { messageLinkUrl.value = ''; });
+
+  function shareableMessageHref(item) {
+    if (!servedByDsbot || !currentConversation || currentConversation.public_agent || item.retracted) return '';
+    return socialMessageHref({
+      workspace: currentConversation.direct || currentConversation.account_group ? '' : workspaceId(),
+      conversation: currentConversation.id, message: item.id,
+    });
+  }
+
+  async function copyMessageLink(href, scope) {
+    if (!href || sendScope() !== scope) return;
+    const view = document.defaultView;
+    const url = new URL(href, view.location.origin).href;
+    try {
+      await view.navigator.clipboard.writeText(url);
+      if (sendScope() === scope) show('ok', uiLabel('已复制消息链接。', 'Message link copied.'));
+    } catch {
+      if (sendScope() !== scope || messageLinkDialog.open) return;
+      messageLinkUrl.value = url;
+      messageLinkDialog.showModal();
+      messageLinkUrl.focus();
+      messageLinkUrl.select();
+    }
+  }
+
   function openMessageMenu(item, li, mine, x, y) {
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
@@ -2745,6 +2772,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       menu.querySelector(`[data-menu="${action}"]`).hidden = publicThread;
     }
     menu.querySelector('[data-menu="save"]').hidden = publicThread || !saveableSocialMessage(item);
+    menu.querySelector('[data-menu="copy-link"]').hidden = !shareableMessageHref(item);
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
     const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
@@ -2785,6 +2813,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else if (action === 'copy') {
         try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
         catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
+      } else if (action === 'copy-link') {
+        li.querySelector('.message-more')?.focus({preventScroll: true});
+        await copyMessageLink(shareableMessageHref(item), scope);
       } else if (action === 'forward' || action === 'select') {
         if (scope === sendScope()) setSelecting(true, item.id);
       } else if (action === 'pin') {
@@ -3789,6 +3820,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(reply);
       }
       if (item.role === 'agent' && !currentConversation?.public_agent && saveableSocialMessage(item)) li.append(saveMessageButton(item));
+      if (item.role === 'agent' && shareableMessageHref(item)) {
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = uiLabel('复制消息链接', 'Copy message link');
+        copy.addEventListener('click', () => copyMessageLink(shareableMessageHref(item), scope));
+        li.append(copy);
+      }
       if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item, li));
       if (!selecting && item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (!selecting && item.role !== 'agent' && !item.retracted) {
@@ -5600,7 +5638,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           return;
         }
       }
-      writeHash(start.social ? {workspace, social:start.social, message}
+      writeHash(start.social ? {workspace: message && !start.workspace ? '' : workspace, social:start.social, message}
         : {workspace, agent:start.agent, conversation:start.conversation, message});
       show('', '');
     } finally {
@@ -5828,7 +5866,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       void loadSessions();
       return;
     }
-    if (hasLink && start.workspace) {
+    const portableMessage = !start.workspace && socialMessageFromHash(hash);
+    if (portableMessage && (!personalWorkspace || workspaceId() !== personalWorkspace)) {
+      show('error', '无法打开此消息所在的会话。');
+      void loadSessions();
+      return;
+    }
+    if (hasLink && (start.workspace || portableMessage)) {
       const snapshot = openLocal && !start.social ? ownedStartingTranscript(local, start.agent, start.conversation) : undefined;
       await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null, snapshot);
       return;
@@ -6198,6 +6242,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   function clearChatScope() {
     closePrivateThreadDialogs();
+    if (messageLinkDialog?.open) messageLinkDialog.close();
     resetStickerSurface();
     clearSessionTransition();
     cancelStartupLink();
