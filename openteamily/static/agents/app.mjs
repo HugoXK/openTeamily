@@ -129,6 +129,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const drawer = document.getElementById('manage-drawer');
   const openCreate = document.getElementById('open-create');
   const openSharing = document.getElementById('agent-share-open');
+  const openAccess = document.getElementById('agent-access-open');
   const nativeSharing = servedByDsBot(document);
   let sharing;
   const directoryStatus = document.getElementById('agent-status');
@@ -221,7 +222,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {agent:currentAgent, user:currentUser.id, workspace:workspaceId()};
   }
 
-  openSharing?.addEventListener('click', async () => {
+  async function openSharePanel(access) {
     const selected = shareContext();
     if (!selected) return;
     try {
@@ -229,14 +230,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const latest = shareContext();
       if (!latest || latest.agent !== selected.agent || latest.user !== selected.user || latest.workspace !== selected.workspace) return;
       sharing ??= mountAgentSharing(document, {request, context:shareContext, idempotencyKey});
-      sharing.open();
+      sharing.open({access});
     } catch {
       const latest = shareContext();
       if (latest?.agent === selected.agent && latest.user === selected.user && latest.workspace === selected.workspace) {
         show('error', document.documentElement?.lang === 'en' ? 'Could not open sharing. Try again.' : '无法打开分享，请重试。');
       }
     }
-  });
+  }
+  openSharing?.addEventListener('click', () => void openSharePanel(false));
+  openAccess?.addEventListener('click', () => void openSharePanel(true));
 
   function renderTeamTemplates() {
     const list = document.getElementById('team-template-list');
@@ -591,6 +594,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const english = document.documentElement?.lang?.startsWith('en');
       openSharing.textContent = active ? (english ? 'Share privately' : '私下分享')
         : (english ? 'Manage shares' : '管理分享');
+    }
+    if (openAccess) {
+      openAccess.hidden = !nativeSharing || !canManage(actor);
+      const english = document.documentElement?.lang?.startsWith('en');
+      openAccess.textContent = active ? (english ? 'Authorize chat with original agent' : '授权与原智能体对话')
+        : (english ? 'Manage chat access' : '管理对话授权');
     }
     editForm.querySelector('button[type="submit"]').hidden = !writable;
     document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';

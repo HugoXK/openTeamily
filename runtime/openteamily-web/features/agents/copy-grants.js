@@ -2,8 +2,10 @@ import { FeatureError, idempotencyKey, requireBodyKeys } from '../../featurekit/
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 
 const SHARES = '/v1/ot/agent-copy-grants'
+const ACCESS = '/v1/ot/agent-access'
 const ID = '([0-9a-f]{32})'
 const GRANT = '(otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})'
+const DM = '(otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})'
 const REVISION = /^[0-9a-f]{64}$/
 
 const method = (request, allowed) => {
@@ -37,10 +39,17 @@ function route(pattern, fn) {
 
 export function agentCopyRoutes(host, endpoints) {
   const social = () => sharedBotSocial(host)
-  const scoped = `^/v1/workspaces/${ID}/agents/${ID}/shares`
+  const scoped = `^/v1/workspaces/${ID}/agents/${ID}`
   const list = query => social().get(SHARES + (query.size ? '?' + query : ''))
   const ownAgent = (workspace, id) => endpoints.get({workspace_id:workspace,id}).then(({agent}) => agent)
   const personalWorkspace = async () => (await endpoints['personal-binding']())?.workspace_id
+  async function savedActiveAgent(workspace, id, revision) {
+    if (await personalWorkspace() !== workspace) await social().get('/v1/ot/teams/by-workspace/'+workspace)
+    const agent = await ownAgent(workspace,id)
+    if (agent.archived || agent.native_deleted) throw new FeatureError(404,'not_found','Agent is unavailable')
+    if (agent.revision !== revision) throw new FeatureError(409,'agent_changed','Agent changed; reopen sharing to review it')
+    return agent
+  }
   return [
     route(/^\/v1\/agent-copy-grants\/recipients$/, async request => {
       method(request,['GET'])
@@ -55,7 +64,7 @@ export function agentCopyRoutes(host, endpoints) {
       query.set('direction',direction)
       return {body:await list(query)}
     }),
-    route(new RegExp(scoped+'$'), async (request, workspace, id) => {
+    route(new RegExp(scoped+'/shares$'), async (request, workspace, id) => {
       method(request,['GET','POST'])
       if (request.method === 'GET') {
         const query = paging(request)
@@ -72,10 +81,7 @@ export function agentCopyRoutes(host, endpoints) {
         throw new FeatureError(400,'invalid','Choose a recipient and the agent content to share')
       }
       const key = idempotencyKey(request.headers)
-      if (await personalWorkspace() !== workspace) await social().get('/v1/ot/teams/by-workspace/'+workspace)
-      const agent = await ownAgent(workspace,id)
-      if (agent.archived || agent.native_deleted) throw new FeatureError(404,'not_found','Agent is unavailable')
-      if (agent.revision !== body.revision) throw new FeatureError(409,'agent_changed','Agent changed; reopen sharing to review it')
+      const agent = await savedActiveAgent(workspace,id,body.revision)
       const template = {name:agent.name,summary:agent.summary,category:agent.category,
         ...(body.share_instructions ? {instructions:agent.instructions} : {}),
         ...(body.share_quick_starts ? {quick_starts:agent.quick_starts} : {}),
@@ -85,12 +91,39 @@ export function agentCopyRoutes(host, endpoints) {
         share_instructions:body.share_instructions, share_quick_starts:body.share_quick_starts,
       })}
     }),
-    route(new RegExp(scoped+'/'+GRANT+'/revoke$'), async (request,workspace,id,grant) => {
+    route(new RegExp(scoped+'/shares/'+GRANT+'/revoke$'), async (request,workspace,id,grant) => {
       method(request,['POST'])
       noQuery(request)
       requireBodyKeys(await request.json(128),[])
       await ownAgent(workspace,id)
       return {body:await social().del(SHARES+'/'+grant+'?source_agent_id='+id)}
+    }),
+    route(new RegExp(scoped+'/access$'), async (request,workspace,id) => {
+      method(request,['GET','POST'])
+      if (request.method === 'GET') {
+        const query = paging(request)
+        await ownAgent(workspace,id)
+        query.set('agent_id',id)
+        return {body:await social().get(ACCESS+'?'+query)}
+      }
+      noQuery(request)
+      const body = requireBodyKeys(await request.json(1024),['recipient_owner_id','revision'])
+      if (typeof body.recipient_owner_id !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(body.recipient_owner_id)
+        || !Number.isSafeInteger(body.revision) || body.revision < 1) {
+        throw new FeatureError(400,'invalid','Choose a recipient for the current agent version')
+      }
+      const agent = await savedActiveAgent(workspace,id,body.revision)
+      const result = await social().post(ACCESS,{
+        agent_id:id, name:agent.name.slice(0,40).toWellFormed(), recipient_owner_id:body.recipient_owner_id,
+      })
+      return {status:result.created === false ? 200 : 201,body:{access:result.access}}
+    }),
+    route(new RegExp(scoped+'/access/'+DM+'/revoke$'), async (request,workspace,id,conversation) => {
+      method(request,['POST'])
+      noQuery(request)
+      requireBodyKeys(await request.json(128),[])
+      await ownAgent(workspace,id)
+      return {body:await social().del(ACCESS+'/'+conversation+'/'+id)}
     }),
     route(new RegExp('^/v1/agent-copy-grants/'+GRANT+'/remix$'), async (request,grant) => {
       method(request,['GET','POST'])

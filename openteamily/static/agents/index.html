@@ -156,6 +156,7 @@
           <div class="actions">
             <button type="submit">保存</button>
             <button type="button" id="agent-share-open" aria-haspopup="dialog" aria-controls="agent-share-dialog" hidden>私下分享</button>
+            <button type="button" id="agent-access-open" aria-haspopup="dialog" aria-controls="agent-share-dialog" hidden>授权与原智能体对话</button>
             <button type="button" id="archive-button">归档</button>
             <button type="button" id="cancel-edit">取消</button>
           </div>
@@ -190,7 +191,7 @@
     <form id="agent-share-form">
       <label><span id="agent-share-recipient-label">收件人</span> <select id="agent-share-recipient" required></select></label>
       <button id="agent-share-recipients-more" type="button" hidden>加载更多收件人</button>
-      <fieldset>
+      <fieldset id="agent-share-content">
         <legend id="agent-share-content-label">随副本分享</legend>
         <label><input type="checkbox" id="agent-share-instructions"> <span id="agent-share-instructions-label">已保存的指令</span></label>
         <label><input type="checkbox" id="agent-share-quick-starts"> <span id="agent-share-quick-starts-label">已保存的快捷开场</span></label>
@@ -199,6 +200,7 @@
       <button type="submit" id="agent-share-submit" disabled>创建分享</button>
     </form>
     <label id="agent-share-link-field" hidden><span id="agent-share-link-label">收件人链接</span> <input id="agent-share-link" readonly></label>
+    <a id="agent-share-open-chat" hidden>打开对话</a>
     <p id="agent-share-status" role="status"></p>
     <section aria-labelledby="agent-share-sent-title">
       <h3 id="agent-share-sent-title">已发出的分享</h3>

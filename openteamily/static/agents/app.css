@@ -311,3 +311,4 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 #agent-share-sent li > span { flex: 1 1 9rem; min-width: 0; }
 #agent-share-status:empty { display: none; }
 #agent-share-dialog button { min-height: 2.75rem; }
+#agent-share-open-chat { display: inline-flex; align-items: center; min-height: 2.75rem; }

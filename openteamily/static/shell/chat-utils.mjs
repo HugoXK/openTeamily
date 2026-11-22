@@ -21,6 +21,22 @@ export function socialMessageFromHash(hash) {
   return socialMessageHref({workspace: workspace || '', conversation: params.get('social'), message: params.get('message')});
 }
 
+const directId = /^otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const agentId = /^[0-9a-f]{32}$/;
+const socialOwnerId = /^[A-Za-z0-9._-]{1,80}$/;
+
+export function directAgentAccessHref({conversation, ownerId, agentId: id}) {
+  if (!directId.test(conversation || '') || !socialOwnerId.test(ownerId || '') || !agentId.test(id || '')) return '';
+  return '/chat#' + new URLSearchParams({social:conversation, access_owner:ownerId, access_agent:id});
+}
+
+export function directAgentAccessFromHash(hash) {
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
+  if (params.size !== 3) return null;
+  const target = {conversation:params.get('social'), ownerId:params.get('access_owner'), agentId:params.get('access_agent')};
+  return directAgentAccessHref(target) ? target : null;
+}
+
 export function canManage(actor) {
   return actor === 'owner' || actor === 'admin';
 }

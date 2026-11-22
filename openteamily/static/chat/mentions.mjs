@@ -17,7 +17,7 @@ export function mountAgentMentions(doc, context) {
   const staleStatus = doc.getElementById('chat-agent-mention-status');
   if (!input || !list || !chips) return {
     refresh() {}, clear() {}, forget() {}, openPicker() {}, canPick: () => false, keydown: () => false,
-    restoreDirect: () => false, message: body => ({body}),
+    restoreDirect: () => false, prepareDirectLink: () => false, message: body => ({body}),
   };
   const pickerNode = id => doc.getElementById(`chat-agent-picker-${id}`);
   const launcher = pickerNode('open');
@@ -292,6 +292,17 @@ export function mountAgentMentions(doc, context) {
       restoreTargets(targets);
       remember();
       renderSelected();
+      return true;
+    },
+    prepareDirectLink({ownerId, agentId}) {
+      const group = refresh();
+      const key = agentKey({owner_id:ownerId,id:agentId});
+      if (!group?.direct || !available.has(key)) return false;
+      if (!selected.size && !input.value.trim()) {
+        restoreTargets([{owner_id:ownerId,agent_id:agentId}]);
+        remember();
+        renderSelected();
+      }
       return true;
     },
     keydown(event) {

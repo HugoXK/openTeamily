@@ -12,6 +12,9 @@ const key = 'fixture-agent-copy-key'
 const source = `/v1/workspaces/${workspace}/agents/${agent}/shares`
 const shares = '/v1/ot/agent-copy-grants'
 const incoming = '/v1/agent-copy-grants/'+grant+'/remix'
+const accessSource = `/v1/workspaces/${workspace}/agents/${agent}/access`
+const accessPath = '/v1/ot/agent-access'
+const conversation = 'otc_'+'2'.repeat(26)
 
 function fixture(t) {
   const calls = []
@@ -19,18 +22,27 @@ function fixture(t) {
     quick_starts:['Plan a study'],revision:6}
   const shared = {...saved,instructions:'',revision}
   let revoked = false
+  let accessCreated = false
   const connector = {
     request(method,path,body) { return this[{GET:'get',POST:'post',DELETE:'del'}[method]](path,body) },
     async get(path) { calls.push(['GET',path]); return {items:[],next_cursor:null} },
     async post(path,body) {
       calls.push(['POST',path,body])
+      if (path === accessPath) {
+        const created = !accessCreated
+        accessCreated = true
+        return {created,access:{conversation_id:conversation}}
+      }
       if (path === shares+'/'+grant+'/claim') {
         if (revoked) throw Object.assign(new Error('撤回'),{status:410,code:'social/agent_copy_revoked'})
         return {grant:{id:grant},template:shared}
       }
       return {grant:{id:grant}}
     },
-    async del(path) { calls.push(['DELETE',path]); return {grant:{id:grant,state:'revoked'}} },
+    async del(path) {
+      calls.push(['DELETE',path])
+      return path.startsWith(accessPath+'/') ? {revoked:true} : {grant:{id:grant,state:'revoked'}}
+    },
   }
   setSharedBotSocial(connector)
   t.after(() => setSharedBotSocial(undefined))
@@ -88,4 +100,24 @@ test('private copy authorizes the exact recipient revision before creating in th
   assert.equal(denied.status,410)
   assert.equal(denied.body.error.code,'agent_copy_revoked')
   assert.equal(f.calls.filter(([method])=>method==='CREATE').length,1)
+})
+
+test('original agent access uses the saved version and preserves the existing conversation on replay', async t => {
+  const f = fixture(t)
+  const body = {recipient_owner_id:'recipient',revision:6}
+  assert.equal((await f.request('POST',accessSource,{...body,name:'Forged name'})).status,400)
+  assert.equal((await f.request('POST',accessSource,{...body,revision:5})).status,409)
+  assert.deepEqual(f.calls,[])
+
+  for (const expectedStatus of [201,200]) {
+    const response = await f.request('POST',accessSource,body)
+    assert.equal(response.status,expectedStatus)
+    assert.deepEqual(response.body,{access:{conversation_id:conversation}})
+    assert.deepEqual(f.calls.pop(),['POST',accessPath,{agent_id:agent,name:'Local agent',recipient_owner_id:'recipient'}])
+  }
+
+  await f.request('GET',accessSource+'?limit=10&after='+conversation)
+  assert.deepEqual(f.calls.pop(),['GET',accessPath+'?limit=10&after='+conversation+'&agent_id='+agent])
+  assert.deepEqual((await f.request('POST',accessSource+'/'+conversation+'/revoke',{})).body,{revoked:true})
+  assert.deepEqual(f.calls.pop(),['DELETE',accessPath+'/'+conversation+'/'+agent])
 })

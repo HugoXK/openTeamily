@@ -9,6 +9,7 @@ import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
 import {pendingSignupSession, rememberSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
+import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -3623,6 +3624,30 @@ test('named team group replies explicitly pin what was previewed and keep drafts
     assert.equal(prompt.value, '');
     assert.equal(picker.value, '');
     assert.equal(el('group-studio-excerpt').textContent, '');
+  } finally { restore(); }
+});
+
+test('an original-agent link opens the personal direct chat and selects the exact owner pair without sending', async () => {
+  const target = {conversation:linkSocial, ownerId:bob, agentId:linkAgent};
+  const hash = directAgentAccessHref(target).slice('/chat'.length);
+  assert.deepEqual(directAgentAccessFromHash(hash), target);
+  assert.equal(directAgentAccessFromHash(hash + '&access_owner=' + alice), null);
+  const fixture = linkedChatFixture(hash, {narrow:true});
+  const {doc,el,routes,restore} = fixture;
+  const path = linkBase(linkWork) + linkSocialPath;
+  const agent = {id:linkAgent,name:'同名智能体'};
+  routes.set(path, () => json(200,{conversation:{
+    id:linkSocial,workspace_id:linkWork,kind:'dm',title:'队友',
+    direct:{open:true},direct_agent_requests:true,members:[linkMember,{user_id:bob,username:'小周'}],
+    agent_members:[{...agent,owner_id:alice,owner_name:'小林'},{...agent,owner_id:bob,owner_name:'小周'}],
+  },items:[]}));
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    assert.deepEqual(el('chat-agent-mentions').children.map(node => node.dataset.agentMentionKey),
+      [JSON.stringify([bob,linkAgent])]);
+    assert.equal(el('chat-body').value, '');
+    assert.equal(fixture.calls.some(call => call.method === 'POST' && call.path.endsWith('/messages')), false);
+    assert.equal(directAgentAccessFromHash(globalThis.location.hash), null);
   } finally { restore(); }
 });
 

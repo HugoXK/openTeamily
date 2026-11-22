@@ -15,7 +15,7 @@ import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessi
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
-  chatPathId, socialMessageHref, socialMessageFromHash } from '../shell/chat-utils.mjs';
+  chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -6161,9 +6161,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           return;
         }
       }
+      const requestedAgent = start.directAccess;
+      const available = !requestedAgent || agentMentions.prepareDirectLink(requestedAgent);
       writeHash(start.social ? {workspace: message && !start.workspace ? '' : workspace, social:start.social, message}
         : {workspace, agent:start.agent, conversation:start.conversation, message});
-      show('', '');
+      if (available) show('', '');
+      else show('error',uiLabel('这个智能体已无法在此聊天中调用。','This agent is no longer available in this chat.'));
     } finally {
       if (startupLink === link) startupLink = null;
     }
@@ -6237,7 +6240,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const hash = location.hash;
     const pathname = location.pathname;
     const banner = document.getElementById('onboarding-banner');
-    const start = chatStartFromHash(hash);
+    const start = {...chatStartFromHash(hash), directAccess:directAgentAccessFromHash(hash)};
     const publicIntent = publicAgentIntentFromHash(hash);
     let navigation = socialOpen;
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
@@ -6390,13 +6393,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       void loadSessions();
       return;
     }
-    const portableMessage = !start.workspace && socialMessageFromHash(hash);
-    if (portableMessage && (!personalWorkspace || workspaceId() !== personalWorkspace)) {
+    const portableSocialLink = !start.workspace && (start.directAccess || socialMessageFromHash(hash));
+    if (portableSocialLink && (!personalWorkspace || workspaceId() !== personalWorkspace)) {
       show('error', '无法打开此消息所在的会话。');
       void loadSessions();
       return;
     }
-    if (hasLink && (start.workspace || portableMessage)) {
+    if (hasLink && (start.workspace || portableSocialLink)) {
       const snapshot = openLocal && !start.social ? ownedStartingTranscript(local, start.agent, start.conversation) : undefined;
       await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null, snapshot);
       return;

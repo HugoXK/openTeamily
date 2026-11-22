@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
+import { body, handleKey, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { shareTeam, requireMember } from "./teams.js";
 import { acceptedContact } from "./contacts.js";
 
@@ -270,9 +270,42 @@ export function requireDirectReach(ot: OtContext, conv: {id: string; kind: strin
 
 function directAgentPeer(ot: OtContext, conv: {id: string; kind: string; team_id?: string | null; dm_key?: string | null}, owner: string) {
   if (!ordinaryDirect(conv)) return;
-  const others = ot.all<{owner_id: string}>("SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>? LIMIT 2", conv.id, owner);
-  const peer = others[0]?.owner_id;
-  if (others.length === 1 && conv.dm_key === [owner, peer].sort().join(":")) return peer;
+  const seats = ot.all<{owner_id: string}>("SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? LIMIT 3", conv.id);
+  const peer = seats.find(seat => seat.owner_id !== owner)?.owner_id;
+  if (seats.length === 2 && peer && seats.some(seat => seat.owner_id === owner)
+    && conv.dm_key === [owner, peer].sort().join(":")) return peer;
+}
+
+// Called inside the transaction that checks reachability and creates the DM.
+function getOrCreateDirectConversation(ot: OtContext, owner: string, peer: string) {
+  const key = [owner,peer].sort().join(":");
+  const existing = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key=?",key);
+  if (existing) return {conversation:existing,created:false};
+  const id = newId("otc");
+  const now = ot.now();
+  ot.run(`INSERT INTO ot_conversations(id,kind,dm_key,created_by,created_at,updated_at) VALUES (?,'dm',?,?,?,?)`,id,key,owner,now,now);
+  for (const member of [owner,peer]) {
+    ot.run("INSERT INTO ot_conversation_members(conversation_id,owner_id,created_at) VALUES (?,?,?)",id,member,now);
+  }
+  return {conversation:ot.get<any>("SELECT * FROM ot_conversations WHERE id=?",id),created:true};
+}
+
+function grantDirectAgent(ot: OtContext, conversationId: string, owner: string, ref: string, name: string) {
+  const prior = ot.get<{created_at: number; direct_grant_id: string | null}>(`SELECT created_at,direct_grant_id FROM ot_conversation_agents
+    WHERE conversation_id=? AND agent_ref=? AND owner_id=?`,conversationId,ref,owner);
+  const created = !prior?.direct_grant_id;
+  const at = prior?.direct_grant_id ? prior.created_at : ot.now();
+  ot.run(`INSERT INTO ot_conversation_agents(conversation_id,agent_ref,owner_id,name,created_at,direct_grant_id) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(conversation_id,agent_ref,owner_id) DO UPDATE SET name=excluded.name,auto_reply=0,
+      created_at=excluded.created_at,direct_grant_id=excluded.direct_grant_id
+    WHERE ot_conversation_agents.name<>excluded.name OR ot_conversation_agents.auto_reply<>0
+      OR ot_conversation_agents.direct_grant_id IS NULL`,conversationId,ref,owner,name,at,prior?.direct_grant_id ?? newId("otdag"));
+  return {created,created_at:at};
+}
+
+function removeDirectAgent(ot: OtContext, conversationId: string, owner: string, ref: string) {
+  return ot.run(`DELETE FROM ot_conversation_agents WHERE conversation_id=? AND agent_ref=? AND owner_id=?
+    AND direct_grant_id IS NOT NULL`,conversationId,ref,owner).changes;
 }
 
 export function accountConversation(ot: OtContext, id: string, owner: string) {
@@ -709,6 +742,76 @@ function replyContext(ot: OtContext, conversationId: string, seq: number, viewer
     ORDER BY m.seq DESC LIMIT 12) ORDER BY seq`, conversationId, seq, viewer).map(m => messageView(ot, m));
 }
 
+function registerAgentAccess(app: FastifyInstance, ot: OtContext) {
+  const root = "/v1/ot/agent-access";
+  const agentId = /^[a-f0-9]{32}$/;
+  const socialId = /^[A-Za-z0-9._-]{1,80}$/;
+  type Peer = {owner_id: string; handle: string; display_name: string};
+  type AccessRow = Peer & {conversation_id: string; created_at: number};
+
+  app.get(root, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const q = query(req);
+    const ref = one(q.agent_id,"agent_id");
+    const after = one(q.after,"after") ?? "";
+    assert(ref && agentId.test(ref) && (!after || socialId.test(after))
+      && Object.keys(q).every(key => ["agent_id","limit","after"].includes(key)),400,"invalid_request","Invalid agent access filters");
+    const limit = Math.max(1,intParam(q.limit,"limit",50,100));
+    const rows = ot.all<AccessRow>(`SELECT a.conversation_id,a.created_at,p.owner_id,p.handle,p.display_name FROM ot_conversation_agents a
+      JOIN ot_conversations room ON room.id=a.conversation_id
+      JOIN ot_conversation_members sender ON sender.conversation_id=room.id AND sender.owner_id=a.owner_id
+      JOIN ot_conversation_members peer ON peer.conversation_id=room.id AND peer.owner_id<>sender.owner_id
+      JOIN ot_profiles p ON p.owner_id=peer.owner_id
+      WHERE a.owner_id=? AND a.agent_ref=? AND a.direct_grant_id IS NOT NULL AND a.conversation_id>?
+        AND room.kind='dm' AND room.team_id IS NULL AND room.group_archived_at IS NULL
+        AND room.dm_key=${directKey("sender.owner_id","peer.owner_id")} AND room.dm_key NOT LIKE 'agent:%'
+        AND NOT EXISTS (SELECT 1 FROM ot_conversation_members other WHERE other.conversation_id=room.id
+          AND other.owner_id NOT IN (sender.owner_id,peer.owner_id)) AND ${directRelationship("sender.owner_id","peer.owner_id")}
+      ORDER BY a.conversation_id LIMIT ?`,ownerId,ref,after,limit+1);
+    return {items:rows.slice(0,limit).map(({conversation_id,created_at,owner_id,handle,display_name})=>({
+      conversation_id,agent_id:ref,owner_id:ownerId,recipient:{owner_id,handle,display_name},created_at,
+    })),next_cursor:rows.length>limit ? rows[limit-1].conversation_id : null};
+  });
+
+  app.post(root, {bodyLimit:2048}, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const b = body(req);
+    assert(Object.keys(query(req)).length === 0 && Object.keys(b).every(key => ["agent_id","name","recipient_owner_id"].includes(key))
+      && typeof b.agent_id === "string" && agentId.test(b.agent_id) && typeof b.recipient_owner_id === "string"
+      && /^[A-Za-z0-9._:-]{1,80}$/.test(b.recipient_owner_id) && b.recipient_owner_id !== ownerId,
+    400,"invalid_request","Choose another person and an agent to share");
+    const name = text(b.name,"name",{min:1,max:40});
+    const ref = b.agent_id;
+    const result = ot.db.transaction(() => {
+      const recipient = ot.get<Peer>("SELECT owner_id,handle,display_name FROM ot_profiles WHERE owner_id=?",b.recipient_owner_id);
+      assert(recipient && directReachable(ot,ownerId,recipient.owner_id),
+        409,"agent_access_recipient_unavailable","这位联系人或队友已不可用。");
+      const {conversation} = getOrCreateDirectConversation(ot,ownerId,recipient.owner_id);
+      assert(conversation.group_archived_at === null && directAgentPeer(ot,conversation,ownerId) === recipient.owner_id,
+        409,"direct_conversation_unavailable","此私聊暂不可用。");
+      const {created,created_at} = grantDirectAgent(ot,conversation.id,ownerId,ref,name);
+      return {created,access:{conversation_id:conversation.id,agent_id:ref,owner_id:ownerId,recipient,created_at}};
+    }).immediate();
+    return reply.status(result.created ? 201 : 200).send(result);
+  });
+
+  app.delete(root+"/:conversation_id/:agent_id", async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const {conversation_id,agent_id} = params(req);
+    assert(socialId.test(conversation_id) && agentId.test(agent_id) && Object.keys(query(req)).length === 0
+      && Object.keys(body(req)).length === 0,400,"invalid_request","Invalid agent access removal");
+    return ot.db.transaction(() => {
+      const conversation = memberOf(ot,conversation_id,ownerId);
+      assert(directAgentPeer(ot,conversation,ownerId) && removeDirectAgent(ot,conversation_id,ownerId,agent_id) === 1,
+        404,"agent_access_not_found","找不到这条智能体访问授权。");
+      return {revoked:true};
+    }).immediate();
+  });
+}
+
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   migrateChatFiles(ot);
   // SQLite lower() folds ASCII only. Filenames can contain Unicode letters.
@@ -734,12 +837,15 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   }
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
   if (!agentCols.has("direct_grant_id")) ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN direct_grant_id TEXT");
+  ot.run(`CREATE INDEX IF NOT EXISTS ot_conversation_agents_direct_owner
+    ON ot_conversation_agents(owner_id,agent_ref,conversation_id) WHERE direct_grant_id IS NOT NULL`);
   if (!agentCols.has("auto_reply_after_seq")) {
     ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
   }
   registerActivityTriggers(ot);
   registerReplyJobInvalidation(ot);
   registerDirectAgentRevocation(ot);
+  registerAgentAccess(app,ot);
   const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
@@ -747,16 +853,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     if (b.kind === "dm") {
       const peer = ot.ownerByHandle(b.peer);
       assert(peer !== me.ownerId, 400, "invalid_request", "pick another member");
-      assert(directReachable(ot, me.ownerId, peer), 403, "not_reachable", "请先建立联系人关系。");
-      const key = [me.ownerId, peer].sort().join(":");
-      const existing = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
-      if (existing) return reply.status(200).send(conversationView(ot, existing, me.ownerId));
-      const id = newId("otc"); const now = ot.now();
-      ot.tx(() => {
-        ot.run("INSERT INTO ot_conversations(id, kind, dm_key, created_by, created_at, updated_at) VALUES (?, 'dm', ?, ?, ?, ?)", id, key, me.ownerId, now, now);
-        for (const o of [me.ownerId, peer]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
-      });
-      return reply.status(201).send(conversationView(ot, ot.get("SELECT * FROM ot_conversations WHERE id = ?", id), me.ownerId));
+      const {conversation,created} = ot.db.transaction(() => {
+        assert(directReachable(ot,me.ownerId,peer),403,"not_reachable","请先建立联系人关系。");
+        return getOrCreateDirectConversation(ot,me.ownerId,peer);
+      }).immediate();
+      return reply.status(created ? 201 : 200).send(conversationView(ot,conversation,me.ownerId));
     }
     assert(b.kind === "group", 400, "invalid_request", "kind must be dm or group");
     const title = text(b.title ?? "新群聊", "title", { min: 1, max: 80 });
@@ -1431,10 +1532,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (b.workspace !== undefined) workspaceConversation(ot, b.workspace, conv.id, me.ownerId);
         assert(directAgentPeer(ot, conv, me.ownerId), 404, "conversation_not_found", "no such direct conversation");
         requireDirectReach(ot, conv, me.ownerId);
-        ot.run(`INSERT INTO ot_conversation_agents(conversation_id,agent_ref,owner_id,name,created_at,direct_grant_id)
-          VALUES (?,?,?,?,?,?) ON CONFLICT(conversation_id,agent_ref,owner_id) DO UPDATE SET
-            name=excluded.name, auto_reply=0, direct_grant_id=COALESCE(ot_conversation_agents.direct_grant_id,excluded.direct_grant_id)`,
-        conv.id, ref, me.ownerId, name, ot.now(), newId("otdag"));
+        grantDirectAgent(ot,conv.id,me.ownerId,ref,name);
         return conversationView(ot, conv, me.ownerId);
       });
     }
@@ -1474,8 +1572,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       assert(owner === me.ownerId || owner === peer, 404, "agent_not_found", "找不到这个私聊智能体。");
       return ot.tx(() => {
         if (input.workspace !== undefined) workspaceConversation(ot, text(input.workspace,"workspace",{min:32,max:32}), conv.id, me.ownerId);
-        ot.run(`DELETE FROM ot_conversation_agents WHERE conversation_id=? AND agent_ref=? AND owner_id=?
-          AND direct_grant_id IS NOT NULL`, conv.id, params(req).agent, owner);
+        removeDirectAgent(ot,conv.id,owner,params(req).agent);
         return conversationView(ot, conv, me.ownerId);
       });
     }

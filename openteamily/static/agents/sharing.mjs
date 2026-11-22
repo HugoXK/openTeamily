@@ -1,4 +1,7 @@
+import {directAgentAccessHref} from '../shell/chat-utils.mjs';
+
 const grantId = /^otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const conversationId = /^otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 
 export function mountAgentSharing(document, {request, context, idempotencyKey}) {
   const node = id => document.getElementById('agent-share-' + id);
@@ -14,13 +17,27 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
   let view;
 
   for (const [id, zh, en] of [
-    ['title','私下分享智能体','Share agent privately'], ['recipient-label','收件人','Recipient'],
+    ['recipient-label','收件人','Recipient'],
     ['recipients-more','加载更多收件人','More recipients'], ['content-label','随副本分享','Include in the copy'],
     ['instructions-label','已保存的指令','Saved instructions'], ['quick-starts-label','已保存的快捷开场','Saved quick starts'],
-    ['note','对方可将名称、简介和分类复制到个人工作区，并另行配置工具。','The recipient can copy the name, summary, and category into their personal workspace and configure tools there.'],
-    ['submit','创建分享','Create share'], ['link-label','收件人链接','Recipient link'],
-    ['sent-title','已发出的分享','Sent shares'], ['sent-more','加载更多分享','More shares'], ['close','关闭','Close'],
+    ['close','关闭','Close'],
   ]) node(id).textContent = text(zh,en);
+
+  function renderLabels(access) {
+    node('title').textContent = access ? text('授权与原智能体对话','Authorize chat with the original agent')
+      : text('私下分享智能体','Share agent privately');
+    node('content').hidden = access;
+    node('note').textContent = access
+      ? text('双方可请求原智能体回复。每次只传当前文字和明确引用的一条消息。回复由所有者的独立容器生成。',
+        'Both people can ask the original agent to reply. A request includes only its text and one explicitly selected quote, if any. The agent replies from its owner’s container.')
+      : text('对方可将名称、简介和分类复制到个人工作区，并另行配置工具。',
+        'The recipient can copy the name, summary, and category into their personal workspace and configure tools there.');
+    submit.textContent = access ? text('授权对话','Authorize chat') : text('创建分享','Create share');
+    node('link-label').textContent = access ? text('对话链接','Chat link') : text('收件人链接','Recipient link');
+    node('sent-title').textContent = access ? text('已授权的对话','Authorized chats') : text('已发出的分享','Sent shares');
+    node('sent-more').textContent = access ? text('加载更多对话','More chats') : text('加载更多分享','More shares');
+    node('open-chat').textContent = text('打开对话','Open chat');
+  }
 
   function current(state) {
     const selected = context();
@@ -42,19 +59,38 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
     }
   }
 
+  function normalizeGrant(state, grant) {
+    if (!state.access) return grantId.test(grant?.id || '') && grant.source_agent_id === state.agent.id ? grant : null;
+    if (!conversationId.test(grant?.conversation_id || '') || grant.agent_id !== state.agent.id) return null;
+    return {...grant, id:grant.conversation_id, state:grant.state || (grant.revoked_at ? 'revoked' : 'active')};
+  }
+
+  function clearLink() {
+    node('link').value = '';
+    node('link-field').hidden = true;
+    node('open-chat').hidden = true;
+    node('open-chat').removeAttribute('href');
+  }
+
   function showLink(state, grant) {
-    const path = '/discover?' + new URLSearchParams({tab:'agents', share:grant.id});
+    const path = state.access ? directAgentAccessHref({conversation:grant.id,ownerId:grant.owner_id,agentId:grant.agent_id}) ||
+      '/chat#' + new URLSearchParams({social:grant.id}) : '/discover?' + new URLSearchParams({tab:'agents', share:grant.id});
     const origin = document.defaultView?.location?.origin;
     state.linkId = grant.id;
     node('link').value = origin ? origin + path : path;
     node('link-field').hidden = false;
+    if (state.access) {
+      node('open-chat').href = path;
+      node('open-chat').hidden = false;
+    }
   }
 
   async function copyLink(state, grant) {
     showLink(state, grant);
     try {
       await document.defaultView.navigator.clipboard.writeText(node('link').value);
-      if (current(state)) status.textContent = text('已复制收件人链接。', 'Recipient link copied.');
+      if (current(state)) status.textContent = state.access ? text('已复制对话链接。','Chat link copied.')
+        : text('已复制收件人链接。', 'Recipient link copied.');
     } catch {
       if (!current(state)) return;
       node('link').focus();
@@ -79,7 +115,8 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
       label.textContent = person(grant.recipient) + ' · ' + labels[grant.state];
       row.append(label);
       if (grant.state !== 'active') return row;
-      const copy = button(text('复制链接','Copy link'), () => { if (current(state)) void copyLink(state,grant); });
+      const copy = button(state.access ? text('复制对话链接','Copy chat link') : text('复制链接','Copy link'),
+        () => { if (current(state)) void copyLink(state,grant); });
       const revoke = button(text('撤销','Revoke'), () => {
         if (!current(state) || state.busy) return;
         const confirm = button(text('确认撤销','Confirm revoke'), () => void revokeGrant(state,grant));
@@ -120,14 +157,15 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
     if (!current(state)) return;
     page.loading = false;
     page.failed = result?.status !== 200;
-    if (page.failed) status.textContent = text('加载失败，请重试。','Could not load shares. Try again.');
+    if (page.failed) status.textContent = text('加载失败，请重试。','Could not load. Try again.');
     else {
       const items = Array.isArray(result.body.items) ? result.body.items : [];
       const key = kind === 'sent' ? 'id' : 'owner_id';
       const found = new Map(page.items.map(row => [row[key],row]));
-      for (const item of items) {
+      for (const row of items) {
+        const item = kind === 'sent' ? normalizeGrant(state,row) : row;
         if (kind === 'sent') {
-          if (!grantId.test(item.id) || item.source_agent_id !== state.agent.id) continue;
+          if (!item) continue;
           if (item.state === 'active' && found.has(item.id) && found.get(item.id).state !== 'active') continue;
         } else if (typeof item.owner_id !== 'string') continue;
         found.set(item[key],item);
@@ -137,7 +175,7 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
       if (kind === 'sent') renderSent(state);
       else {
         renderRecipients(page.items);
-        if (!page.items.length) status.textContent = text('暂无可分享的联系人或队友。','No eligible contacts or teammates.');
+        if (!page.items.length) status.textContent = text('暂无符合条件的联系人或队友。','No eligible contacts or teammates.');
       }
     }
     controls(state);
@@ -151,17 +189,21 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
     if (!current(state)) return;
     state.busy = false;
     controls(state);
-    if (result?.status !== 200 || result.body.grant?.id !== grant.id) {
-      status.textContent = result?.body?.error?.message || text('无法撤销分享。','Could not revoke the share.');
+    const confirmed = state.access ? result?.body?.access?.conversation_id === grant.id || result?.body?.revoked === true
+      : result?.body?.grant?.id === grant.id;
+    if (result?.status !== 200 || !confirmed) {
+      status.textContent = result?.body?.error?.message || (state.access ? text('无法撤销对话授权。','Could not revoke chat access.')
+        : text('无法撤销分享。','Could not revoke the share.'));
       return;
     }
-    state.sent.items = state.sent.items.map(item => item.id === grant.id ? result.body.grant : item);
+    const revoked = state.access ? {...grant,state:'revoked'} : result.body.grant;
+    state.sent.items = state.sent.items.map(item => item.id === grant.id ? revoked : item);
     if (state.linkId === grant.id) {
-      node('link-field').hidden = true;
-      node('link').value = '';
+      state.linkId = null;
+      clearLink();
     }
     renderSent(state);
-    status.textContent = text('已撤销分享。','Share revoked.');
+    status.textContent = state.access ? text('已撤销对话授权。','Chat access revoked.') : text('已撤销分享。','Share revoked.');
     node('close').focus({preventScroll:true});
   }
 
@@ -170,25 +212,27 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
     const state = view;
     if (!state || !current(state) || submit.disabled) return;
     const body = {recipient_owner_id:recipient.value, revision:state.agent.revision,
-      share_instructions:!instructions.disabled && instructions.checked, share_quick_starts:!quickStarts.disabled && quickStarts.checked};
+      ...(!state.access ? {share_instructions:!instructions.disabled && instructions.checked,
+        share_quick_starts:!quickStarts.disabled && quickStarts.checked} : {})};
     const fingerprint = JSON.stringify([state.user,state.path,body]);
     const key = keys.get(fingerprint) || idempotencyKey();
     keys.set(fingerprint,key);
     state.busy = true;
     controls(state);
-    status.textContent = text('正在创建分享…','Creating share…');
+    status.textContent = state.access ? text('正在授权…','Authorizing chat…') : text('正在创建分享…','Creating share…');
     const result = await request('POST', state.path, body, {'Idempotency-Key':key}).catch(() => null);
     if (!current(state)) return;
     state.busy = false;
-    const grant = result?.body?.grant;
-    if (![200,201].includes(result?.status) || !grantId.test(grant?.id || '') || grant.source_agent_id !== state.agent.id) {
-      status.textContent = result?.body?.error?.message || text('无法确认是否已创建分享，请重试。','Could not confirm the share. Try again.');
+    const grant = normalizeGrant(state,state.access ? result?.body?.access : result?.body?.grant);
+    if (![200,201].includes(result?.status) || !grant || grant.recipient?.owner_id !== body.recipient_owner_id) {
+      status.textContent = result?.body?.error?.message || (state.access ? text('无法确认是否已授权，请重试。','Could not confirm chat access. Try again.')
+        : text('无法确认是否已创建分享，请重试。','Could not confirm the share. Try again.'));
     } else {
       keys.delete(fingerprint);
       state.sent.items = [grant,...state.sent.items.filter(item => item.id !== grant.id)];
       renderSent(state);
       showLink(state,grant);
-      status.textContent = text('已创建分享。','Share created.');
+      status.textContent = state.access ? text('已授权对话。','Chat authorized.') : text('已创建分享。','Share created.');
       recipient.value = '';
     }
     controls(state);
@@ -202,22 +246,22 @@ export function mountAgentSharing(document, {request, context, idempotencyKey}) 
     view = null;
     recipient.replaceChildren();
     node('sent').replaceChildren();
-    node('name').textContent = status.textContent = node('link').value = '';
-    node('link-field').hidden = true;
+    node('name').textContent = status.textContent = '';
+    clearLink();
   });
 
   return {
-    open() {
+    open({access = false} = {}) {
       const selected = context();
       if (!selected || dialog.open) return;
       const {agent,workspace} = selected;
-      const state = view = {...selected, path:`/v1/workspaces/${workspace}/agents/${agent.id}/shares`,
+      const state = view = {...selected, access, path:`/v1/workspaces/${workspace}/agents/${agent.id}/${access ? 'access' : 'shares'}`,
         recipients:{items:[]}, sent:{items:[]}, canCreate:!agent.archived && !agent.native_deleted};
       node('form').hidden = !state.canCreate;
+      renderLabels(access);
       node('name').textContent = agent.name;
       status.textContent = '';
-      node('link-field').hidden = true;
-      node('link').value = '';
+      clearLink();
       instructions.checked = quickStarts.checked = false;
       renderRecipients([]);
       renderSent(state);

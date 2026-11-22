@@ -6,6 +6,7 @@ class Element {
   constructor() { this.children=[]; this.handlers={}; this.value=''; this.textContent=''; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
+  removeAttribute(name) { delete this[name]; }
   addEventListener(type, callback) { this.handlers[type] = callback; }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
@@ -76,4 +77,60 @@ test('sender shares the saved revision with the selected teammate and can revoke
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls.at(-1),{method:'POST',route:`${path}/${grant.id}/revoke`,body:{},headers:undefined});
   assert.equal(el('sent').children[0].children[0].textContent,'同名成员 · @real-teammate · 已撤销');
+});
+
+test('original-agent access authorizes and revokes a specific conversation independently of copies', async () => {
+  const elements = new Map();
+  const doc = {defaultView:{location:{origin:'https://local.example'}},createElement:()=>new Element(),
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id,new Element());
+      return elements.get(id);
+    }};
+  const el = id => doc.getElementById('agent-share-'+id);
+  const source = {id:'a'.repeat(32), revision:8, name:'校对助理', instructions:'保存的指令', quick_starts:['保存的开场']};
+  const actor = {agent:source,workspace:'workspace-a',user:'sender-account'};
+  const recipient = {owner_id:'recipient-id',handle:'first-peer',display_name:'同名成员'};
+  const other = {owner_id:'other-id',handle:'second-peer',display_name:'同名成员'};
+  const access = {conversation_id:'otc_'+'A'.repeat(26),agent_id:source.id,owner_id:'sender-social',recipient,created_at:1};
+  const existing = {...access,conversation_id:'otc_'+'B'.repeat(26),recipient:other};
+  const path = `/v1/workspaces/workspace-a/agents/${source.id}/access`;
+  const calls = [];
+  const panel = mountAgentSharing(doc,{context:()=>actor,idempotencyKey:()=>`access-key-${calls.length}`,
+    request:async (method,route,body,headers)=>{
+      calls.push({method,route,body,headers});
+      if (route.startsWith('/v1/agent-copy-grants/recipients?')) return {status:200,body:{items:[recipient,other]}};
+      if (route === path + '?limit=30') return {status:200,body:{items:[existing]}};
+      if (route === path) return {status:201,body:{access}};
+      if (route === `${path}/${access.conversation_id}/revoke`) return {status:200,body:{revoked:true}};
+      throw new Error(route);
+    }});
+  panel.open({access:true});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(el('title').textContent,'授权与原智能体对话');
+  assert.equal(el('content').hidden,true);
+  el('recipient').value = recipient.owner_id;
+  el('recipient').handlers.change();
+  el('instructions').checked = el('quick-starts').checked = true;
+  await el('form').handlers.submit({preventDefault() {}});
+  const create = calls.find(call=>call.method==='POST');
+  assert.equal(create.route,path);
+  assert.deepEqual(create.body,{recipient_owner_id:recipient.owner_id,revision:8});
+  assert.match(create.headers['Idempotency-Key'],/^access-key-/);
+  const href = `/chat#social=${access.conversation_id}&access_owner=${access.owner_id}&access_agent=${source.id}`;
+  assert.equal(el('open-chat').href,href);
+  assert.equal(el('link').value,'https://local.example'+href);
+  assert.equal(el('open-chat').hidden,false);
+  assert.equal(el('sent').children.length,2);
+
+  const [target] = el('sent').children;
+  target.children.find(button=>button.textContent==='撤销').handlers.click();
+  assert.equal(calls.filter(call=>call.method==='POST').length,1);
+  target.children.find(button=>button.textContent==='确认撤销').handlers.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls.at(-1),{method:'POST',route:`${path}/${access.conversation_id}/revoke`,body:{},headers:undefined});
+  assert.equal(el('open-chat').hidden,true);
+  assert.equal(el('open-chat').href,undefined);
+  assert.equal(el('sent').children[0].children[0].textContent,'同名成员 · @first-peer · 已撤销');
+  assert.equal(el('sent').children[1].children[0].textContent,'同名成员 · @second-peer · 有效');
+  assert.ok(calls.every(call=>!call.route.includes('/shares')));
 });
