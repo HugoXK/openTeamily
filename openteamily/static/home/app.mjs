@@ -274,7 +274,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     mainPanel.hidden = true;
     show(document, 'loading', loadingText);
     try {
-      const personal = await initializePersonalAgent();
+      const personal = await initializePersonalAgent(target);
       if (!stillCurrent() || !personal) return;
       const ready = await request('GET', '/v1/workspaces?scope=personal');
       if (!stillCurrent()) return;
@@ -299,7 +299,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     status.append(retry, back);
   }
 
-  async function initializePersonalAgent() {
+  async function initializePersonalAgent(resumePath = '/runtime-starting#home=1') {
     const result = await request('POST', '/v1/personal-agent').catch(() => null);
     const agent = result?.body?.personal_agent;
     const provisioning = agent?.runtime_provisioning;
@@ -316,6 +316,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         view.location.replace('/login' + view.location.hash);
         return null;
       }
+    }
+    if (provisioning?.readiness === 'stopped' || state === 'stopped') {
+      view.location.replace(resumePath);
+      return null;
     }
     const message = provisioning?.state === 'capacity'
       ? '当前运行容量已满，请稍后重试。'
@@ -366,7 +370,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       } catch {}
       const target = meetingHref(meeting);
       if (target) {
-        if (!await initializePersonalAgent()) return;
+        if (!await initializePersonalAgent(target)) return;
         try { view.sessionStorage.removeItem(pendingKey); } catch {}
         view.location.replace(target);
         return;
@@ -379,8 +383,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const work = publicWorkIntentFromHash(hash);
         const discover = discoverIntentFromHash(hash);
         if (invite) {
-          if (await initializePersonalAgent() && view.location.hash === hash) {
-            view.location.replace('/members' + teamInviteHash(invite));
+          const destination = '/members' + teamInviteHash(invite);
+          if (await initializePersonalAgent(destination) && view.location.hash === hash) {
+            view.location.replace(destination);
           }
         } else if (intent) {
           await continuePublicActivity({

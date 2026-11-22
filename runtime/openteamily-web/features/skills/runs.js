@@ -93,16 +93,8 @@ export function skillRunsV1(host, { userSkillName }) {
         return [201, view(record)]
       },
     },
-    // The legacy remote-runtime task API (flybot.pyz connections) is gone: this DS-Bot is
-    // the only runtime. Its skill runs are the visible task history.
-    { method: 'GET', path: /^\/v1\/runtime\/tasks$/, handle: async () => [200, { items: load().map((r) => ({ ...r.task, skill_id: r.skill_id })) }] },
-    { method: 'POST', path: /^\/v1\/runtime\/tasks$/, handle: async () => { throw new Fault(410, 'gone', 'Remote runtime tasks were removed; chat with your DS-Bot instead') } },
     {
-      method: 'GET', path: /^\/v1\/runtime\/connections$/,
-      handle: async () => [200, { items: [{ id: 'ds-bot', hostname: 'ds-bot', personal: true, status: services() ? 'online' : 'offline' }] }],
-    },
-    {
-      method: 'POST', path: /^\/v1\/runtime\/tasks\/([0-9a-f]{32})\/cancel$/,
+      method: 'POST', path: /^\/v1\/skills\/runs\/([0-9a-f]{32})\/cancel$/,
       async handle({ match }) {
         const run = load().find((r) => r.task.id === match[1])
         if (!run) throw new Fault(404, 'not_found', 'Task not found')
@@ -111,7 +103,7 @@ export function skillRunsV1(host, { userSkillName }) {
       },
     },
     {
-      method: 'POST', path: /^\/v1\/runtime\/tasks\/([0-9a-f]{32})\/artifact$/,
+      method: 'POST', path: /^\/v1\/skills\/runs\/([0-9a-f]{32})\/artifact$/,
       async handle({ match, body }) {
         const run = load().find((r) => r.task.id === match[1])
         if (!run || !TASK.test(match[1])) throw new Fault(404, 'not_found', 'Task not found')

@@ -39,6 +39,7 @@ export function workspaceFromHash(hash = '') {
   return /^#?workspace=([a-f0-9]{32})$/.exec(hash)?.[1] || '';
 }
 
+const WORKSPACE_ID = /^[a-f0-9]{32}$/;
 const JOIN_STATES = {pending: '等待审批', approved: '已批准', rejected: '未获批准'};
 const unavailable = {status: 0, body: {}};
 
@@ -143,6 +144,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
+  const workspaceChat = document.getElementById('workspace-chat');
   const view = document.defaultView;
   const receiveForm = document.getElementById('accept-form');
   const receiveToken = document.getElementById('receive-invite-token');
@@ -158,6 +160,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   let actor = null;
   let workspaces = [];
   let workspaceEpoch = 0;
+  let workspaceSelection = 0;
   let rosterRead = 0;
   let queueRead = 0;
   let loadRead = 0;
@@ -608,6 +611,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   function clearWorkspaceView() {
     actor = null;
+    workspaceChat.hidden = true;
+    workspaceChat.removeAttribute('href');
     closeConfirm({restoreFocus: false});
     renderMembers([]);
     renderInvites([]);
@@ -650,6 +655,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const items = listed.body.items;
     const self = items.find(item => samePerson(item, currentUser));
     actor = self && !self.suspended ? self.role : null;
+    workspaceChat.hidden = !actor || !WORKSPACE_ID.test(id);
+    if (workspaceChat.hidden) workspaceChat.removeAttribute('href');
+    else workspaceChat.setAttribute('href', '/chat#workspace=' + id);
     roleNote.textContent = actor ? `当前角色：${ROLE_LABELS[actor] || actor}` : '';
     renderMembers(items, scope);
     addForm.hidden = !canAdd(actor);
@@ -718,15 +726,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       pill.textContent = JOIN_STATES[item.status];
       row.appendChild(pill);
       if (item.status === 'approved' && workspace) {
-        const open = document.createElement('button');
-        open.type = 'button';
-        open.textContent = '打开工作区';
-        open.addEventListener('click', async () => {
-          if (!workspaces.some(entry => entry.id === workspace.id)) return;
-          await selectWorkspace(workspace.id);
-          if (workspaceId() === workspace.id) document.getElementById('members-heading').focus();
-        });
-        row.appendChild(open);
+        row.appendChild(openWorkspaceButton(workspace.id));
       }
       list.appendChild(row);
     }
@@ -794,15 +794,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
   }
 
-  async function selectWorkspace(id) {
-    linkedWorkspace = null;
-    workspaceSelect.value = id;
-    if (/^[a-f0-9]{32}$/.test(id) && view?.location) {
+  function pinWorkspace(id) {
+    if (!WORKSPACE_ID.test(id)) return;
+    linkedWorkspace = id;
+    if (view?.location) {
       view.history?.replaceState(null, '', view.location.pathname + view.location.search + '#workspace=' + id);
     }
+  }
+
+  async function selectWorkspace(id) {
+    workspaceSelection += 1;
+    workspaceSelect.value = id;
+    pinWorkspace(id);
     workspaceEpoch += 1;
     show('', '');
     await loadWorkspace({reset: true});
+  }
+
+  function openWorkspaceButton(id) {
+    const button = document.createElement('button');
+    const viewer = currentUser;
+    button.type = 'button';
+    button.textContent = '打开工作区';
+    button.addEventListener('click', async () => {
+      if (viewer !== currentUser || !WORKSPACE_ID.test(id)) return;
+      if (workspaces.some(entry => entry.id === id)) await selectWorkspace(id);
+      else {
+        workspaceSelection += 1;
+        pinWorkspace(id);
+        await refreshWorkspaces({preferred: id, explicit: true, initial: true});
+      }
+      if (viewer === currentUser && workspaceId() === id && actor) {
+        document.getElementById('members-heading').focus();
+      }
+    });
+    return button;
   }
 
   document.getElementById('refresh-my-join-requests').addEventListener('click', () => Promise.all([
@@ -826,7 +852,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       li.append(name, ' ', meta);
       const label = directoryMembershipLabel(team);
       if (label) {
-        li.append(' ' + label);
+        const membership = document.createElement('span');
+        membership.className = 'note';
+        membership.textContent = label;
+        li.append(membership);
+        if (team.membership === 'member' && WORKSPACE_ID.test(team.workspace_id || '')) {
+          li.append(openWorkspaceButton(team.workspace_id));
+        }
       } else {
         const join = document.createElement('button');
         join.type = 'button';
@@ -858,7 +890,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
             join.textContent = '已暂停';
           } else {
             show('ok', '你已加入此团队。');
-            join.textContent = '已加入';
+            const joined = result.body.workspace_id || team.workspace_id;
+            if (WORKSPACE_ID.test(joined || '')) join.replaceWith(openWorkspaceButton(joined));
+            else join.textContent = '已加入';
             await refreshWorkspaces();
           }
           await loadMyRequests();
@@ -1003,6 +1037,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   });
 
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
+  view?.addEventListener?.('hashchange', () => {
+    const requested = workspaceFromHash(view.location.hash);
+    if (!currentUser || requested === null || requested === workspaceId()) return;
+    if (workspaces.some(item => item.id === requested)) return selectWorkspace(requested);
+    linkedWorkspace = requested;
+    workspaceSelection += 1;
+    workspaceEpoch += 1;
+    workspaceSelect.value = '';
+    clearWorkspaceView();
+    document.getElementById('role-note').textContent = '正在查看工作区…';
+    return refreshWorkspaces({preferred: requested, explicit: true, initial: true});
+  });
 
   document.getElementById('add-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -1082,7 +1128,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (token !== previewed) return previewInvite(token);
-    const viewer = currentUser;
+    const viewer = currentUser, selection = workspaceSelection;
     accepting = true;
     receiveToken.readOnly = true;
     receiveButton.disabled = true;
@@ -1104,7 +1150,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       const pending = result.status === 202 || result.body.join_request?.status === 'pending';
       receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
       if (pending) await loadMyRequests();
-      else await refreshWorkspaces({preferred: result.body.workspace?.id, initial: true});
+      else {
+        const joined = result.body.workspace?.id;
+        if (selection === workspaceSelection && WORKSPACE_ID.test(joined || '')) {
+          pinWorkspace(joined);
+          await refreshWorkspaces({preferred: joined, explicit: true, initial: true});
+        } else await refreshWorkspaces();
+      }
     } finally {
       accepting = false;
       receiveToken.readOnly = false;

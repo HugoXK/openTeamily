@@ -1335,3 +1335,41 @@ test('recorded trigger and execution location distinguish manual, scheduled and 
   ]);
   assert.deepEqual(runDetailFields({trigger: 'retry'}), [{label: '触发方式', value: '重新运行'}]);
 });
+
+test('unsaved edits require confirmation before a saved-version run or leaving the editor', async () => {
+  const {elements, posts, restore} = await mountRuns({
+    runs: [],
+    dispatch: async () => ({status:202, json:async () => ({run:{id:'r1',status:'queued'}})}),
+  });
+  try {
+    const form = elements.get('editor-form');
+    const confirmArea = elements.get('editor-head-confirm') || form;
+    const run = elements.get('tick-automation');
+    const back = elements.get('cancel-editor');
+    form.elements.prompt.value = '仅存在于未保存草稿中的任务';
+
+    await run.handlers.click[0]();
+    let dialog = alertdialogIn(confirmArea);
+    assert.match(labelledQuestion(dialog).textContent, /使用已保存的设置/);
+    assert.equal(posts.length, 0);
+    dialog.children.find(node => node.textContent === '取消').handlers.click[0]();
+    assert.equal(posts.length, 0);
+    assert.equal(alertdialogIn(confirmArea), undefined);
+
+    await back.handlers.click[0]();
+    dialog = alertdialogIn(confirmArea);
+    assert.match(labelledQuestion(dialog).textContent, /放弃修改/);
+    dialog.children.find(node => node.textContent === '取消').handlers.click[0]();
+    assert.equal(form.hidden, false);
+    assert.equal(form.elements.prompt.value, '仅存在于未保存草稿中的任务');
+
+    await run.handlers.click[0]();
+    alertdialogIn(confirmArea).children.find(node => node.textContent === '运行已保存版本').handlers.click[0]();
+    await flush();
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body, '{}');
+    assert.equal(form.elements.prompt.value, '仅存在于未保存草稿中的任务');
+  } finally {
+    restore();
+  }
+});

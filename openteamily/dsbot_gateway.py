@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .lifecycle import RuntimeFault
-from .runtime_autoprovision import owned_instance
+from .runtime_autoprovision import owned_instance, resumable_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -71,7 +71,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
     (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
-    (re.compile(r'^/v1/runtime/(?:connections|tasks(?:/[0-9a-f]{32}/(?:cancel|artifact))?)$'), 'skills'),
+    (re.compile(r'^/v1/skills/runs/[0-9a-f]{32}/(?:cancel|artifact)$'), 'skills'),
     (re.compile(r'^/v1/workspaces$'), 'teams'),
     (re.compile(r'^/v1/teams$'), 'teams'),
     (re.compile(r'^/v1/team-directory$'), 'teams'),
@@ -130,7 +130,6 @@ MOVED_API_LOCATIONS = (
     'location = /v1/invites/preview { return 418; }',
     'location = /v1/join-requests { return 418; }',
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ^~ /v1/runtime/ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
     'location = /v1/workspaces { return 418; }',
     'location = /v1/agent-homepages/start { return 410; }',
@@ -297,7 +296,7 @@ def _upstream_row(db, instance_id):
     return row
 
 
-def owner_runtime_readiness(db, user_id):
+def owner_runtime_readiness(db, user_id, manager_id=None):
     """The browser receives a state only, never the address or runtime cookie."""
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
         return 'unmanaged'
@@ -320,7 +319,9 @@ def owner_runtime_readiness(db, user_id):
         """, (iid,)).fetchone()
         if state is None or state[1] or state[2]:
             return 'unavailable'
-        return 'starting' if state[0] == 'running' or state[3] else 'unavailable'
+        if state[0] == 'running' or state[3]:
+            return 'starting'
+        return 'stopped' if resumable_instance(db, user_id, manager_id) is not None else 'unavailable'
     return 'ready'
 
 
@@ -669,6 +670,10 @@ __KEY_SETTING__
   location = /v1/admin { return 404; }
   location ^~ /v1/admin/ { return 404; }
   location = /v1/platform/route { return 404; }
+  location ^~ /v1/runtime/ {
+    default_type application/json;
+    return 410 '{"error":{"code":"retired"}}';
+  }
 __SOCIAL_LOCATION__
   location = /_ot_authz {
     internal;

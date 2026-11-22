@@ -786,8 +786,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (selectedRow) focusDirectoryRow(selectedRow);
   }
 
+  function directoryRow(id) {
+    if (!id) return;
+    return [...(listEl.querySelectorAll?.('[data-id]') || [])].find(button => button.dataset.id === id);
+  }
+
   function focusDirectoryRow(id) {
-    [...(listEl.querySelectorAll?.('[data-id]') || [])].find(button => button.dataset.id === id)?.focus();
+    directoryRow(id)?.focus();
+  }
+
+  function syncDirectorySelection() {
+    for (const button of listEl.querySelectorAll?.('[data-id]') || []) {
+      if (button.dataset.id === currentPage?.id && !editor.hidden) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
   }
 
   function directoryWindow(options = {}) {
@@ -1154,6 +1166,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderActions(items) {
     const list = document.getElementById('action-list');
     const empty = document.getElementById('action-empty');
+    const focused = list.contains?.(document.activeElement) ? document.activeElement.dataset.id : undefined;
     list.replaceChildren();
     for (const item of items) {
       const li = document.createElement('li');
@@ -1166,6 +1179,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.addEventListener('click', () => openAction(item.id));
       li.appendChild(button);
       list.appendChild(li);
+      if (focused === item.id) button.focus({preventScroll: true});
     }
     empty.hidden = items.length > 0;
     syncActionComposer(items.length > 0);
@@ -1528,6 +1542,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadWorkspace({syncView = true} = {}) {
+    directoryReturn = null;
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     const switched = browseDirectory?.workspace !== id || browseDirectory?.owner !== currentUser;
@@ -1563,9 +1578,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await Promise.allSettled([loadDirectoryPage(browseDirectory), loadActions(), loadGraph()]);
   }
 
+  let directoryReturn = null;
+
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
   function showPageMode() {
+    if (listPanel.dataset.view !== 'page' && listPanel.dataset.mobileGraph !== 'true') {
+      const scrollers = [document.scrollingElement, document.getElementById('main'), listPanel,
+        document.getElementById('memory-dir'), listEl].filter(Boolean);
+      directoryReturn = {state: activeDirectory, scroll: scrollers.map(node => [node, node.scrollTop])};
+    }
     closeProfilePreview();
     candidates.show(false);
     listPanel.hidden = false;
@@ -1575,6 +1597,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (panel) panel.hidden = true;
     }
     if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
+  }
+
+  function focusDetailBack(id) {
+    const back = document.getElementById(id);
+    back?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+    back?.focus?.({preventScroll: true});
   }
 
   const rich = document.getElementById('editor-rich');
@@ -1963,7 +1991,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
     syncExportButton();
     syncPageUrl(revision);
-    renderDirectory();
+    syncDirectorySelection();
+    focusDetailBack('close-editor');
   }
 
   function syncPageUrl(revision) {
@@ -2183,6 +2212,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
+    syncDirectorySelection();
+    focusDetailBack('close-action-editor');
   }
 
   document.getElementById('login-form').addEventListener('submit', async (event) => {
@@ -2701,9 +2732,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function returnToList() {
+    const page = currentPage?.id;
+    const action = currentAction?.id;
+    const previous = directoryReturn;
+    directoryReturn = null;
+    currentPage = null;
+    currentAction = null;
+    closeDeleteConfirm({restoreFocus: false});
+    closePageHistory({restoreFocus: false});
+    if (groupShareDialog?.open) groupShareDialog.close();
     setMobileGraph(false);
-    if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
-    return loadWorkspace();
+    showView(currentView);
+    syncExportButton();
+    syncDirectorySelection();
+    if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
+      for (const [node, offset] of previous.scroll) node.scrollTop = offset;
+    }
+    const result = currentView === 'actions' && action
+      ? [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
+        .find(button => button.dataset.id === action)
+      : currentView === 'overview' ? directoryRow(page) : null;
+    const target = result || (currentView === 'overview' ? searchInput
+      : document.querySelector('.memory-views [aria-current="page"]'));
+    target?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+    target?.focus?.({preventScroll: true});
   }
 
   document.getElementById('close-editor').addEventListener('click', returnToList);
@@ -2720,6 +2772,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('new-action-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
+    const owner = currentUser;
     if (!id) return;
     const title = document.getElementById('new-action-title').value.trim();
     const notes = document.getElementById('new-action-notes').value;
@@ -2741,6 +2794,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     let parsed = {};
     try { parsed = await created.json(); } catch { parsed = {}; }
+    if (workspaceId() !== id || currentUser !== owner) return;
     if (created.status !== 201 && created.status !== 200) {
       show('error', messageFor(parsed.error, '无法创建下一步行动。'));
       return;
@@ -2750,6 +2804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('new-action-due').value = '';
     document.getElementById('new-action-page').value = '';
     show('ok', '已创建下一步行动。');
+    void loadActions();
     await openAction(parsed.action.id);
   });
 
@@ -2770,10 +2825,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       },
     }).catch(() => ({status:0, body:{}}));
     if (workspaceId() !== id || currentUser !== owner) return;
-    if (currentAction !== editing) {
-      if (saved.status === 200) void loadActions();
-      return;
-    }
+    if (saved.status === 200) void loadActions();
+    if (currentAction !== editing) return;
     if (saved.status !== 200 || !saved.body.action) {
       show('error', messageFor(saved.body.error, '无法保存下一步行动。'));
       return;

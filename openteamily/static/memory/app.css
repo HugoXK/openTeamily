@@ -264,19 +264,9 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   font: inherit;
 }
 
-.side-tabs button[aria-selected="true"] {
-  background: var(--ot-accent);
-  color: #fff;
-}
-
 .side-tabs button:hover {
   background: var(--ot-line);
   color: var(--ot-ink);
-}
-
-.side-tabs button[aria-selected="true"]:hover {
-  background: var(--ot-accent);
-  color: #fff;
 }
 
 #memory-list,
@@ -641,20 +631,6 @@ textarea {
   font-size: 0.9rem;
 }
 
-html[data-theme-resolved="dark"] .memory-views a[aria-current="page"],
-html[data-theme-resolved="dark"] .memory-views button[aria-current="page"],
-html[data-theme-resolved="dark"] .memory-views a[aria-current="page"]:hover,
-html[data-theme-resolved="dark"] .memory-views button[aria-current="page"]:hover {
-  background: var(--ot-accent-soft);
-  color: var(--ot-accent-hover);
-}
-
-html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"],
-html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"]:hover {
-  background: var(--ot-accent);
-  color: #1c1917;
-}
-
 html[data-theme-resolved="dark"] #new-page {
   color: #1c1917;
 }
@@ -678,7 +654,8 @@ html[data-theme-resolved="dark"] .filter-count {
   border-radius: 999px;
 }
 .memory-views button[aria-current="page"],
-.side-tabs button[aria-selected="true"] {
+.side-tabs button[aria-selected="true"],
+.side-tabs button[aria-selected="true"]:hover {
   background: var(--ot-accent-soft);
   color: var(--ot-accent-hover);
 }
@@ -1074,9 +1051,6 @@ html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: f
   box-shadow: var(--ot-shadow-sm);
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
-}html[data-theme-resolved="dark"] .memory-views button[aria-current="page"], html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"]{
-  background: var(--ot-grad-soft);
-  color: var(--ot-accent);
 }
 
 .profile-dream-dialog {

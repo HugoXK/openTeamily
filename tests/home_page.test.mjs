@@ -254,3 +254,28 @@ test('confirmed sign-in opens the same Discover view without a dashboard detour'
     ['GET', '/v1/auth/session'], ['POST', '/v1/personal-agent'], ['GET', '/v1/workspaces?scope=personal'],
   ]);
 });
+
+test('a stopped runtime waits for explicit start before reloading the original workspace link', async () => {
+  const {document, read, view} = homeFixture('/space', '#workspace=' + alice);
+  const calls = [];
+  document.cookie = 'ot_dev_csrf=expected-csrf';
+  let click, reloaded = false;
+  read('runtime-retry').addEventListener = (_event, handler) => { click = handler; };
+  view.location.reload = () => { reloaded = true; };
+  await mountRuntimeStarting(document, {fetcher: async (path, options) => {
+    calls.push(path);
+    if (path === '/v1/auth/runtime-start') {
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers['X-CSRF-Token'], 'expected-csrf');
+      assert.equal(options.body, '{}');
+      return {status: 202, json: async () => ({state: 'starting'})};
+    }
+    return {status: 200, json: async () => ({state: calls.length === 1 ? 'stopped' : 'ready'})};
+  }});
+  assert.deepEqual(calls, ['/v1/auth/runtime-readiness']);
+  assert.equal(read('runtime-retry').textContent, '启动我的智能体');
+  assert.equal(reloaded, false);
+  await click();
+  assert.deepEqual(calls, ['/v1/auth/runtime-readiness', '/v1/auth/runtime-start', '/v1/auth/runtime-readiness']);
+  assert.equal(reloaded, true);
+});

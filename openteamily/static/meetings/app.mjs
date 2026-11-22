@@ -431,6 +431,8 @@ function mount() {
   const saveStatus = document.getElementById('meeting-save-status');
   const remove = document.getElementById('remove-meeting');
   const deleteDialog = document.getElementById('meeting-delete-dialog');
+  const unsavedDialog = document.getElementById('meeting-unsaved-dialog');
+  const unsavedMessage = document.getElementById('meeting-unsaved-message');
   const filters = document.getElementById('meeting-list-filters');
   const search = document.getElementById('meeting-search');
   const openOnly = document.getElementById('meeting-open-only');
@@ -483,6 +485,10 @@ function mount() {
   let writing = null;
   let saveRetry = null;
   let saveConflict = false;
+  let savedDraft = null;
+  let editingWorkspace = '';
+  let continueNavigation = null;
+  let watchingLeave = false;
   let deleting = null;
   const attendeeInput = document.getElementById('meeting-attendees');
   const attendeeList = document.getElementById('attendee-matches');
@@ -550,18 +556,21 @@ function mount() {
       const source = document.createElement('button');
       source.type = 'button';
       source.textContent = '查看会议';
-      source.addEventListener('click', async () => {
+      source.addEventListener('click', () => {
         if (!currentInbox(state)) return;
-        setInbox(false, {focus:false});
-        if (!await openMeeting(item.meeting_id)) return;
-        if (inboxReturn) {
-          inboxReturn.hidden = false;
-          if (mobileBack) mobileBack.hidden = true;
-        }
-        if (current?.id === item.meeting_id && current.revision === item.revision) {
-          const target = document.querySelector(`#action-list .action-row:nth-child(${item.action_index + 1}) input`);
-          target?.focus();
-        }
+        return confirmNavigation(async () => {
+          if (!currentInbox(state)) return;
+          setInbox(false, {focus:false});
+          if (!await openMeeting(item.meeting_id)) return;
+          if (inboxReturn) {
+            inboxReturn.hidden = false;
+            if (mobileBack) mobileBack.hidden = true;
+          }
+          if (current?.id === item.meeting_id && current.revision === item.revision) {
+            const target = document.querySelector(`#action-list .action-row:nth-child(${item.action_index + 1}) input`);
+            target?.focus();
+          }
+        });
       });
       const done = document.createElement('button');
       done.type = 'button';
@@ -640,6 +649,7 @@ function mount() {
           current.revision = meeting.revision;
           const draft = actions.find(row => row.savedIndex === item.action_index && row.text === item.text && (row.owner || '') === item.owner);
           if (draft) draft.done = true;
+          noteSavedAction(item.action_index, true);
           clearNoteCopies();
           document.getElementById('meeting-meta').textContent = '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
           renderActions();
@@ -701,6 +711,7 @@ function mount() {
     if (mobileSave) mobileSave.textContent = label;
     for (const box of actionBoxes) box.disabled = blocked;
     syncSavedActions(blocked);
+    syncLeaveProtection();
   }
 
   function syncSavedActions(pending) {
@@ -1093,6 +1104,7 @@ function mount() {
 
   function chooseAttendee(username) {
     attendeeInput.value = attendeeInsert(attendeeInput.value, username);
+    syncLeaveProtection();
     syncDraft();
     hideAttendees();
     attendeeInput.focus();
@@ -1224,6 +1236,7 @@ function mount() {
       return;
     }
     current = result.body.meeting;
+    noteSavedAction(action.savedIndex, done);
     clearNoteCopies();
     document.getElementById('meeting-meta').textContent =
       '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
@@ -1341,6 +1354,8 @@ function mount() {
     document.getElementById('meeting-transcript').value = meeting ? (meeting.transcript || '') : '';
     syncDraft();
     actions = meeting ? (meeting.action_items || []).map((item, savedIndex) => ({...item, savedIndex})) : [];
+    savedDraft = draftContents();
+    editingWorkspace = workspaceId();
     renderActions();
     syncRecord();
   }
@@ -1354,6 +1369,7 @@ function mount() {
     stopDraftPoll();
     actions = [];
     actionFollowups = [];
+    savedDraft = null;
     resume.hidden = true;
     clearNoteCopies();
     setReceiptMode(false);
@@ -1472,6 +1488,8 @@ function mount() {
     showDraft();
     hideAttendees();
     form.hidden = true;
+    savedDraft = null;
+    syncLeaveProtection();
     setReceiptMode(true);
     sharedDetail.hidden = true;
     emptyDetail.hidden = true;
@@ -1538,6 +1556,8 @@ function mount() {
     const seq = ++workspaceLoad;
     setInbox(false, {focus:false});
     selection += 1;
+    savedDraft = null;
+    syncLeaveProtection();
     resetSave();
     resetList();
     renderList();
@@ -1659,7 +1679,8 @@ function mount() {
         if (source) {
           titleInput.value = source.title;
           transcript.value = source.transcript;
-          updateDraftButton();
+          syncDraft();
+          syncLeaveProtection();
           show('ok', '已填入所选聊天消息。可编辑正文，再生成纪要。');
         } else {
           show('error', '无法读取聊天草稿。你可以粘贴会议正文。');
@@ -1677,6 +1698,57 @@ function mount() {
     return JSON.stringify([titleInput.value, startedInput.value, attendeeInput.value, summary.value, transcript.value,
       actions.map(({text, owner, done}) => [text, owner, done])]);
   }
+
+  function hasUnsavedChanges() {
+    return savedDraft !== null && !form.hidden && draftContents() !== savedDraft;
+  }
+
+  function beforeLeaving(event) {
+    if (!hasUnsavedChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
+  function syncLeaveProtection() {
+    const dirty = hasUnsavedChanges();
+    if (dirty === watchingLeave) return;
+    watchingLeave = dirty;
+    if (dirty) globalThis.addEventListener?.('beforeunload', beforeLeaving);
+    else globalThis.removeEventListener?.('beforeunload', beforeLeaving);
+  }
+
+  function noteSavedAction(index, done) {
+    if (!savedDraft) return;
+    const snapshot = JSON.parse(savedDraft);
+    if (!snapshot[5][index]) return;
+    snapshot[5][index][2] = done;
+    savedDraft = JSON.stringify(snapshot);
+  }
+
+  function confirmNavigation(leave) {
+    if (!hasUnsavedChanges()) return leave();
+    unsavedMessage.textContent = writing && active(writing)
+      ? '保存请求仍在处理。离开后可重新打开原会议，核对保存结果。'
+      : saveRetry && active(saveRetry)
+        ? '上次保存结果尚未确认。离开后可重新打开原会议，核对保存结果。'
+        : '尚未保存的会议内容会丢失。';
+    continueNavigation = leave;
+    unsavedDialog.showModal();
+  }
+
+  form.addEventListener('input', syncLeaveProtection);
+  form.addEventListener('change', syncLeaveProtection);
+  unsavedDialog.addEventListener('cancel', () => { continueNavigation = null; });
+  document.getElementById('keep-meeting-edits').addEventListener('click', () => {
+    continueNavigation = null;
+    unsavedDialog.close();
+  });
+  document.getElementById('discard-meeting-edits').addEventListener('click', () => {
+    const leave = continueNavigation;
+    continueNavigation = null;
+    unsavedDialog.close();
+    return leave?.();
+  });
 
   function beginSave() {
     const title = titleInput.value.trim();
@@ -1762,6 +1834,7 @@ function mount() {
     else {
       current = meeting;
       callDraft = null;
+      savedDraft = operation.draft;
       clearNoteCopies();
       for (const action of actions) delete action.savedIndex;
       if (!revisedCreate) operation.submittedActions.forEach((action, index) => { action.savedIndex = index; });
@@ -1795,11 +1868,13 @@ function mount() {
 
   newButton.addEventListener('click', () => {
     if (!workspaceId()) return;
-    selection += 1;
-    fill(null);
-    show('', '');
-    document.getElementById('main').scrollTop = 0;
-    document.getElementById('meeting-title').focus?.();
+    return confirmNavigation(() => {
+      selection += 1;
+      fill(null);
+      show('', '');
+      document.getElementById('main').scrollTop = 0;
+      titleInput.focus?.();
+    });
   });
 
   document.getElementById('add-action').addEventListener('click', () => {
@@ -1808,12 +1883,12 @@ function mount() {
     renderActions();
   });
 
-  document.getElementById('cancel-meeting').addEventListener('click', () => {
+  document.getElementById('cancel-meeting').addEventListener('click', () => confirmNavigation(() => {
     if (globalThis.matchMedia?.('(max-width: 700px)').matches) {
       openCatalogue({focus: true});
       show('', '');
     } else fill(current);
-  });
+  }));
 
   mobileBack?.addEventListener('click', () => {
     if (!layout || form.hidden) return;
@@ -1866,7 +1941,7 @@ function mount() {
   document.getElementById('meeting-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-meeting]');
     if (button && !resume.hidden && current?.id === button.dataset.meeting) resume.click();
-    else if (button) await openMeeting(button.dataset.meeting);
+    else if (button) await confirmNavigation(() => openMeeting(button.dataset.meeting));
   });
 
   function filterMeetings(debounce = false) {
@@ -1898,6 +1973,13 @@ function mount() {
   });
 
   workspaceSelect.addEventListener('change', () => {
+    const next = workspaceId();
+    if (hasUnsavedChanges()) workspaceSelect.value = editingWorkspace;
+    return confirmNavigation(() => changeWorkspace(next));
+  });
+
+  function changeWorkspace(next) {
+    workspaceSelect.value = next;
     const actionView = Boolean(inboxView);
     setInbox(false, {focus:false});
     workspaceLoad += 1;
@@ -1911,7 +1993,7 @@ function mount() {
     openCatalogue();
     if (actionView) setInbox(true, {focus:false});
     if (workspaceId()) void loadList({keepEditor:actionView});
-  });
+  }
 
   const login = document.getElementById('login-form');
   if (login) {
@@ -1934,8 +2016,10 @@ function mount() {
   if (logout) {
     logout.addEventListener('submit', async event => {
       event.preventDefault();
-      await request('POST', '/v1/auth/logout', {});
-      await load();
+      return confirmNavigation(async () => {
+        await request('POST', '/v1/auth/logout', {});
+        await load();
+      });
     });
   }
 

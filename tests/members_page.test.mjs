@@ -64,6 +64,7 @@ class FakeElement {
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   removeEventListener() {}
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   getAttribute(name) { return this.attributes[name]; }
   appendChild(child) {
     child.parentElement = this;
@@ -488,6 +489,8 @@ function setView(doc, hash = '') {
   doc.defaultView = {
     location: new URL('https://example.test/members' + hash),
     history: {replaceState(_state, _title, next) { doc.defaultView.location = new URL(next, doc.defaultView.location); }},
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
   };
 }
 
@@ -517,6 +520,93 @@ test('an exact members fragment selects only the accessible team and inaccessibl
       assert.equal(elements.get('member-workspace-field').hidden, false);
       assert.match(elements.get('status').textContent, /无法打开此工作区/);
       assert.deepEqual(rosterReads, []);
+    }
+  });
+});
+
+test('same-tab workspace fragments change the roster and hide a foreign team before validation', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const rosterReads = [];
+  const refreshed = Promise.withResolvers();
+  let hold = false;
+  await mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') {
+      if (hold) await refreshed.promise;
+      return jsonResponse(200, {items: workspaceListing});
+    }
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+    if (path.endsWith('/members')) {
+      rosterReads.push(path);
+      return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+    }
+    throw new Error(path);
+  }});
+  const view = doc.defaultView;
+  view.location.hash = '#workspace=' + teamB;
+  await view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + teamB);
+
+  hold = true;
+  view.location.hash = '#workspace=' + 'f'.repeat(32);
+  const change = view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').hidden, true);
+  assert.equal(elements.get('member-list').children.length, 0);
+  refreshed.resolve();
+  await change;
+  assert.equal(elements.get('workspace').value, '');
+  assert.match(elements.get('status').textContent, /无法打开此工作区/);
+  assert.deepEqual(rosterReads, [`/v1/workspaces/${teamA}/members`, `/v1/workspaces/${teamB}/members`]);
+});
+
+test('joining pins the verified team and a newer manual switch wins during acceptance', async t => {
+  const invited = 'c'.repeat(32);
+  const token = 'browser-invite-with-access';
+  for (const manual of [false, true]) await t.test(manual ? 'manual switch' : 'newly joined team', async () => {
+    const {doc, elements} = fakeDocument();
+    setView(doc);
+    const accept = Promise.withResolvers();
+    const issued = Promise.withResolvers();
+    let joined = false;
+    const original = globalThis.FormData;
+    globalThis.FormData = class { get(name) { return name === 'token' ? token : null; } };
+    try {
+      await mount(doc, {fetcher: async path => {
+        if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+        if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {
+          items: joined ? [...workspaceListing, {id: invited, name:'新加入的团队'}] : workspaceListing,
+        });
+        if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+        if (path === '/v1/invites/preview') return jsonResponse(200, {invitation: {team_name: '新加入的团队',role: 'member'}});
+        if (path === '/v1/invites/accept') {
+          issued.resolve();
+          await accept.promise;
+          joined = true;
+          return jsonResponse(200, {workspace: {id: invited}});
+        }
+        if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+        throw new Error(path);
+      }});
+      const form = elements.get('accept-form');
+      const submit = () => form.handlers.submit[0]({preventDefault() {}, currentTarget: form});
+      await submit();
+      const response = submit();
+      await issued.promise;
+      if (manual) {
+        const select = elements.get('workspace');
+        select.value = teamB;
+        await select.handlers.change[0]();
+      }
+      accept.resolve();
+      await response;
+      const expected = manual ? teamB : invited;
+      assert.equal(elements.get('workspace').value, expected);
+      assert.equal(doc.defaultView.location.hash, '#workspace=' + expected);
+      assert.equal(elements.get('workspace-chat').hidden, false);
+      assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + expected);
+    } finally {
+      globalThis.FormData = original;
     }
   });
 });

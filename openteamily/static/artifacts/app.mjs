@@ -40,6 +40,10 @@ export function csrfCookie(raw) {
   return '';
 }
 
+const DRAFT_STORAGE_PREFIX = 'ot-space-draft-v1:';
+const DRAFT_MAX_ENTRIES = 16;
+const DRAFT_MAX_AGE = 24 * 60 * 60 * 1000;
+const DRAFT_MAX_BODY = 32_000;
 const CATALOG_PAGE_SIZE = 20;
 const CATALOG_READ_LIMIT = 100;
 const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
@@ -281,12 +285,10 @@ export function artifactDeletePrompt(artifact) {
   };
 }
 
-export function savableTaskArtifacts(tasks) {
-  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
-    const result = task && task.result;
-    const text = result && (typeof result.text === 'string' ? result.text : result.echo);
-    return Boolean(task) && task.status === 'succeeded' && typeof text === 'string' && text.trim() !== '';
-  });
+export function savableTaskArtifacts(runs) {
+  return (Array.isArray(runs) ? runs : []).filter(run =>
+    run?.verified === true && /^[a-f0-9]{32}$/.test(run.task?.id || '')
+  ).map(run => run.task);
 }
 
 export function taskArtifactTitle(task) {
@@ -1501,6 +1503,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       : searchTimer !== null || (sameSelection(catalog) && catalog.state === 'loading' && !catalog.background);
     document.getElementById('artifact-list').setAttribute('aria-busy', String(Boolean(busy)));
     renderPageFooter(items.length);
+    renderDraftResume();
     if (catalogKind === 'meetings') renderMeetings();
     else {
       renderList(items, {preserve});
@@ -2082,6 +2085,137 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     };
   }
 
+  const recovery = document.getElementById('artifact-draft-recovery');
+  const recoveryMessage = document.getElementById('artifact-draft-message');
+  const recoveryDetails = document.getElementById('artifact-draft-details');
+  const recoveryCopy = document.getElementById('artifact-draft-copy');
+  let draftTimer;
+
+  function draftKey(selection = editor, item = current) {
+    const actor = selection?.account?.id;
+    if (!actor || selection.account !== currentUser || !selection.workspace ||
+        !['document', 'website'].includes(item?.kind)) return '';
+    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, item.id || null]);
+  }
+
+  function readDraft(key) {
+    if (!key) return null;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      const entry = JSON.parse(bin.getItem(key));
+      if (entry && typeof entry.title === 'string' && entry.title.length <= 80 &&
+          typeof entry.body === 'string' && entry.body.length <= DRAFT_MAX_BODY &&
+          (entry.revision === null || Number.isSafeInteger(entry.revision) && entry.revision > 0) &&
+          Number.isFinite(entry.updated) && Date.now() - entry.updated < DRAFT_MAX_AGE) return entry;
+      if (entry) bin.removeItem(key);
+    } catch {}
+    return null;
+  }
+
+  function removeDraft(key) {
+    if (!key) return;
+    try { document.defaultView.sessionStorage.removeItem(key); } catch {}
+  }
+
+  function renderDraftResume() {
+    const resume = document.getElementById('artifact-draft-resume');
+    if (!resume) return;
+    const scope = {account:currentUser, workspace:workspaceId()};
+    let visible = false;
+    for (const kind of ['document', 'website']) {
+      const button = document.getElementById('resume-draft-' + kind);
+      if (!button) continue;
+      button.hidden = !readDraft(draftKey(scope, {kind}));
+      visible ||= !button.hidden;
+    }
+    resume.hidden = catalogKind === 'meetings' || !visible;
+  }
+
+  function persistDraft() {
+    clearTimeout(draftTimer);
+    const key = draftKey();
+    if (!key || form.hidden || !editor?.cleanDraft) return;
+    const previous = readDraft(key);
+    const revision = current.revision ?? null;
+    // A draft based on an older revision stays available for copying.
+    if (previous && previous.revision !== revision) return;
+    if (!hasEditorDraft()) {
+      removeDraft(key);
+      if (recovery) recovery.hidden = true;
+      return;
+    }
+    const {title, body} = form.elements;
+    if (body.value.length > DRAFT_MAX_BODY || (previous?.title === title.value && previous.body === body.value)) return;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      if (!previous) {
+        const entries = Object.keys(bin).filter(name => name.startsWith(DRAFT_STORAGE_PREFIX))
+          .map(name => ({name, updated:readDraft(name)?.updated})).filter(entry => entry.updated != null)
+          .sort((left, right) => left.updated - right.updated);
+        for (const entry of entries.slice(0, Math.max(0, entries.length - DRAFT_MAX_ENTRIES + 1))) {
+          bin.removeItem(entry.name);
+        }
+      }
+      bin.setItem(key, JSON.stringify({revision, title:title.value, body:body.value, updated:Date.now()}));
+    } catch {}
+  }
+
+  function readEditorRecovery({restore = false} = {}) {
+    if (!recovery) return;
+    recovery.hidden = true;
+    recoveryDetails.hidden = true;
+    recoveryDetails.open = false;
+    recoveryCopy.value = '';
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    if (entry.title === (current.title || '') && entry.body === (current.body || '')) {
+      removeDraft(key);
+      return;
+    }
+    const conflict = entry.revision !== (current.revision ?? null);
+    if (restore && !conflict) {
+      form.elements.title.value = entry.title;
+      form.elements.body.value = entry.body;
+      richDocument.instance?.load(entry.body, current.kind === 'document');
+    }
+    if (!restore && !conflict) return;
+    recoveryMessage.textContent = conflict
+      ? '作品已有新版本。你可以查看并复制先前草稿。'
+      : '已恢复未保存的草稿。保存后会更新这件作品。';
+    recovery.hidden = false;
+    recoveryDetails.hidden = !conflict;
+    if (conflict) recoveryCopy.value = entry.title + '\n\n' + entry.body;
+  }
+
+  function scheduleDraft(event) {
+    if (!draftKey()) return;
+    const target = event.target;
+    if (event.type === 'input' && target !== form.elements.title && target !== form.elements.body &&
+        !target.closest?.('#document-rich, #document-source')) return;
+    if (event.type === 'click' && !target.closest?.('[data-doc-format]')) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(persistDraft, 200);
+  }
+
+  form.addEventListener('input', scheduleDraft);
+  form.addEventListener('click', scheduleDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistDraft();
+  });
+  document.defaultView?.addEventListener?.('pagehide', persistDraft);
+  document.getElementById('artifact-draft-discard')?.addEventListener('click', () => {
+    if (!activeEditor(editor) || editor.saving) return;
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    removeDraft(key);
+    if (entry.revision === (current.revision ?? null)) fillEditor(current);
+    else persistDraft();
+    readEditorRecovery();
+    form.elements.title.focus();
+  });
+
   function editorDraftChanged(saved, draft = editorDraft()) {
     return saved && (saved.content !== draft.content || saved.file !== draft.file);
   }
@@ -2097,12 +2231,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (!hasEditorDraft()) return true;
     const browser = document.defaultView;
-    return (browser?.confirm || globalThis.confirm)?.call(browser,
+    const discard = (browser?.confirm || globalThis.confirm)?.call(browser,
       '这个作品有未保存的修改。要放弃修改并离开吗？') === true;
+    if (discard) {
+      const key = draftKey();
+      if (readDraft(key)?.revision === (current.revision ?? null)) removeDraft(key);
+      clearTimeout(draftTimer);
+    }
+    return discard;
   }
 
   function warnBeforeLeavingSpace(event) {
     if (!editor?.saving && !hasEditorDraft()) return;
+    persistDraft();
+    const entry = readDraft(draftKey());
+    if (!editor?.saving && entry?.revision === (current.revision ?? null) &&
+        entry.title === form.elements.title.value && entry.body === form.elements.body.value) return;
     event.preventDefault();
     event.returnValue = '';
   }
@@ -2128,6 +2272,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
     current = null;
+    clearTimeout(draftTimer);
+    if (recovery) recovery.hidden = true;
+    if (recoveryCopy) recoveryCopy.value = '';
     artifactSendOrigin = null;
     closeSpaceActionDialog();
     if (agentTaskDialog) closeAgentTaskDialog();
@@ -2226,6 +2373,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     current = item;
     fillEditor(current);
+    readEditorRecovery({restore:true});
     resetEditorPanels();
     updateMobileActions();
     document.getElementById('remove-artifact').hidden = !current?.id;
@@ -2433,6 +2581,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         restore.textContent = '恢复为新修订';
         restore.addEventListener('click', async () => {
           if (!activeEditor(selection) || current.id !== artifact.id) return;
+          persistDraft();
           const revision = current.revision;
           const result = await request('POST', editorPath(selection, artifact.id) + '/restore', {revision, to: item.revision})
             .catch(() => ({status: 0, body: {}}));
@@ -2444,6 +2593,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           current = result.body.artifact;
           catalog = null;
           fillEditor(current);
+          readEditorRecovery();
           show('ok', `已恢复为修订 ${current.revision}。`);
           await loadVersions();
         });
@@ -2530,8 +2680,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         show('error', '服务器作品暂不可读取，已保留你的草稿。');
         return;
       }
+      persistDraft();
       current = result.body.artifact;
       fillEditor(current);
+      readEditorRecovery();
       document.getElementById('artifact-live-update').hidden = true;
       for (const [name, panel] of editorPanels) {
         if (panel.open) void panelLoads[name]();
@@ -3038,6 +3190,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     openEditor({kind: 'document'});
   });
 
+  for (const kind of ['document', 'website']) {
+    bindCreate('resume-draft-' + kind, () => document.getElementById(newKindButtonId(kind))?.click());
+  }
+
   bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
@@ -3352,6 +3508,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     const isNew = !current?.id;
+    const recoveryKey = draftKey();
+    if (readDraft(recoveryKey)?.revision === (current.revision ?? null)) removeDraft(recoveryKey);
     if (artifactSendOrigin?.item === current) artifactSendOrigin.item = result.body.artifact;
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
@@ -3363,6 +3521,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (kind === 'media') document.getElementById('media-file').value = '';
       fillEditor(current);
     }
+    if (newerDraft) persistDraft();
+    readEditorRecovery();
     if (isNew) recordEditorAddress(selection, current);
     document.getElementById('artifact-live-update').hidden = true;
     updateMobileActions();
@@ -3739,7 +3899,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const failed = () => ({status: 0, body: {}});
     if (typeof close.focus === 'function') close.focus();
 
-    const listed = await request('GET', '/v1/runtime/tasks').catch(failed);
+    const listed = await request('GET', '/v1/skills/runs').catch(failed);
     if (!active()) return;
     if (listed.status !== 200) {
       note.hidden = false;
@@ -3763,7 +3923,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         if (!active()) return;
         save.disabled = true;
         note.hidden = true;
-        const saved = await request('POST', `/v1/runtime/tasks/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
+        const saved = await request('POST', `/v1/skills/runs/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
         if (!active()) return;
         if (saved.status === 200 || saved.status === 201) {
           closeAgentTaskDialog();

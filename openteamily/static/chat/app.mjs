@@ -126,6 +126,10 @@ export function searchHitFromItem(item) {
     conversationId: item.conversation_id,
     agentId: item.agent_id || '',
     kind: item.kind,
+    ...(Number.isFinite(item.created) && {created: item.created}),
+    ...(typeof item.author === 'string' && item.author && {author: item.author}),
+    ...(item.role && {role: item.role}),
+    ...(item.agent_name && {agentName: item.agent_name}),
   };
 }
 
@@ -149,7 +153,7 @@ export function createMessageSearch(loadPage) {
   let generation = 0;
   let pending = null;
   let activeKey = '';
-  async function load(query, conversationId = '', {append = false} = {}) {
+  async function load(query, conversationId = '', {append = false, signal} = {}) {
     const text = String(query || '').trim();
     const key = JSON.stringify([text, conversationId]);
     if (!text) {
@@ -173,7 +177,7 @@ export function createMessageSearch(loadPage) {
     state.loading = true;
     pending = (async () => {
       try {
-        const page = await loadPage(text, conversationId, append ? state.cursor : '');
+        const page = await loadPage(text, conversationId, append ? state.cursor : '', signal);
         if (token !== generation) return state;
         const incoming = ((page && page.items) || []).map(searchHitFromItem);
         state.hits = mergeSearchHits(append ? state.hits : [], incoming);
@@ -948,6 +952,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchTab = 'all';
   let searchConversation = '';
   let searchConversationTitle = '';
+  let searchFromSessionList = true;
   let composeMode = 'group';
   let groupMode = 'custom';
   let groupReplyAttempt = null;
@@ -1880,6 +1885,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       preview.replaceChildren(mark, document.createTextNode(draft));
     } else fillBold(document, preview, session.preview || '');
     button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
+      (session.unread_count ? uiLabel(`，${session.unread_count} 条未读消息`, `, ${session.unread_count} unread`) : '') +
       (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
   }
 
@@ -1898,8 +1904,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderSessions() {
     const list = document.getElementById('conversation-list');
+    const active = document.activeElement;
+    const focused = active?.parentElement?.parentElement === list ? active.dataset : null;
+    let nextFocus;
     if (privateArchiveOpen) privateArchiveOpen.hidden = !currentThreadWorkspace();
-    list.replaceChildren();
     sessionRows.clear();
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
@@ -1923,6 +1931,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
       readAll.disabled = markingConversationsRead;
     }
+    const items = [];
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -1932,6 +1941,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.dataset.conversation = session.id;
       button.dataset.source = session.source;
       if (session.agent_id) button.dataset.agent = session.agent_id;
+      if (focused?.conversation === session.id && focused.source === session.source) nextFocus = button;
       if (sessionTransition?.pending && sessionTargetMatches(sessionTransition, button)) button.setAttribute('aria-busy', 'true');
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
@@ -1962,10 +1972,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
       if (session.unread_count > 0) {
+        button.classList.add('is-unread');
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
         unread.textContent = String(session.unread_count);
-        unread.setAttribute('aria-label', session.unread_count + uiLabel(' 条未读消息', ' unread'));
+        unread.setAttribute('aria-hidden', 'true');
         time.append(unread);
       }
 
@@ -1974,8 +1985,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
       li.append(button);
-      list.append(li);
+      items.push(li);
     }
+    list.replaceChildren(...items);
+    nextFocus?.focus({preventScroll: true});
   }
 
   function setChatSubtitle(text, busy = false) {
@@ -2151,8 +2164,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
   }
 
-  function messageScrollerAtBottom(scroller) {
-    return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
+  function messageScrollerAtBottom(scroller, viewportHeight = scroller.clientHeight || 0) {
+    return scroller.scrollHeight - scroller.scrollTop - viewportHeight < 48;
   }
 
   function addPrivateReplyRetry(bubble, item) {
@@ -2236,7 +2249,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
-    role.className = 'role';
+    role.className = item.role === 'user' ? 'role visually-hidden' : 'role';
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
     const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
@@ -3036,17 +3049,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function historyPage(state, query) {
-    const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`);
+  async function historyPage(state, query, signal) {
+    const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`, undefined, undefined, signal);
     return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
       && currentConversation?.id === state.cid ? result : null;
   }
 
-  async function privateHistoryPage(state, query) {
+  async function privateHistoryPage(state, query, signal) {
     const open = socialOpen;
     const scope = sendScope();
     const path = agentConversationPath(state.wid, state.aid, state.cid);
-    const result = await request('GET', `${path}?${query}`).catch(() => null);
+    const result = await request('GET', `${path}?${query}`, undefined, undefined, signal).catch(() => null);
     if (privateHistory !== state || open !== socialOpen || scope !== sendScope() || currentUser?.id !== state.owner) return null;
     const conversation = result?.body.conversation;
     if (!result || (result.status === 200 && (conversation?.id !== state.cid
@@ -3167,6 +3180,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     updateLatestMessageControl();
     scheduleUnreadRead();
   }, {passive: true});
+  const ResizeObserver = document.defaultView?.ResizeObserver;
+  if (historyScroller && ResizeObserver) {
+    let previousHeight = historyScroller.clientHeight;
+    new ResizeObserver(() => {
+      const before = previousHeight;
+      previousHeight = historyScroller.clientHeight;
+      if (!before || !previousHeight || before === previousHeight) return;
+      // Growing the composer reduces the viewport before ResizeObserver runs.
+      if (currentConversation && messageScrollerAtBottom(historyScroller, before)
+          && !(currentSource === 'agent' ? readingPrivateContext() : readingSocialContext(before))) {
+        historyScroller.scrollTop = historyScroller.scrollHeight;
+      }
+      updateLatestMessageControl();
+    }).observe(historyScroller, {box: 'border-box'});
+  }
   globalThis.addEventListener('resize', updateLatestMessageControl);
   newerMessages?.addEventListener('click', async () => {
     const state = socialHistory;
@@ -3639,7 +3667,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
-      role.className = 'role';
+      role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
       role.textContent = groupReplyID ? groupReplyAuthor(item.agent_name)
         : item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
@@ -3816,8 +3844,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const link = document.getElementById('open-agent-dir');
     link.hidden = Boolean(session?.public_agent);
     if (session && session.source === 'social') {
-      link.href = '/members';
-      link.textContent = uiLabel('成员', 'Members');
+      const id = workspaceId();
+      const personal = inPersonalWorkspace();
+      const membersHref = /^[a-f0-9]{32}$/.test(id) ? '/members#workspace=' + id : '/members';
+      link.href = personal ? '/contacts' : membersHref;
+      link.textContent = personal ? uiLabel('联系人', 'Contacts') : uiLabel('成员', 'Members');
     } else {
       link.href = '/agents';
       link.textContent = uiLabel('资料', 'Resources');
@@ -4035,12 +4066,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
   }
 
-  function readingSocialContext() {
+  function readingSocialContext(viewportHeight) {
     const scroller = document.getElementById('message-scroller');
     const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
       || (unread && unread.committed < unread.latest)
-      || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
+      || !messageScrollerAtBottom(scroller, viewportHeight)
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
   }
@@ -5223,7 +5254,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function openSearchPanel(tab, conversationId = '') {
+  function openSearchPanel(tab, conversationId = '', {fromSessionList = true} = {}) {
+    searchFromSessionList = fromSessionList;
     searchConversation = conversationId;
     searchConversationTitle = document.getElementById('chat-title').textContent;
     document.getElementById('search-panel').hidden = false;
@@ -5232,6 +5264,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
     composeMenu.close();
+    setFilterOpen(false, {focus: false});
+    setNotificationsOpen(false);
     // The panel is a child of the session pane, which the narrow stylesheet
     // paints only in the sessions-open state. Opening search has to reveal it
     // there, or the panel is laid out inside a display:none parent.
@@ -5245,7 +5279,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (isSearchOpen() && !messageSearch.state.loading) void renderSearch({reuseMessages: true});
   }
 
-  function closeSearchPanel() {
+  function closeSearchPanel({focus = false} = {}) {
     searchSeq++;
     void messageSearch.load('');
     searchConversation = '';
@@ -5254,9 +5288,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = false;
     document.getElementById('session-search').value = '';
     setSearchTab('all');
-    // Narrow screens show the conversation when one is open and the list
-    // otherwise; dropping the state unconditionally would blank both.
-    if (narrowScreen()) setSessionsOpen(!currentConversation);
+    const returnToList = searchFromSessionList || !currentConversation;
+    if (narrowScreen()) setSessionsOpen(returnToList);
+    if (focus) document.getElementById(returnToList ? 'conversation-heading' : 'chat-title').focus({preventScroll: true});
   }
 
   function addSearchSection(root, title, items, onPick) {
@@ -6200,11 +6234,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!isSearchOpen()) openSearchPanel();
     else renderSearch();
   });
-  const inChatSearch = createMessageSearch(async (query, conversationId, cursor) => {
+  const inChatSearch = createMessageSearch(async (query, conversationId, cursor, signal) => {
     if (currentSource === 'social') {
       const params = new URLSearchParams({q: query, limit: '20'});
       if (cursor) params.set('before', cursor);
-      const result = await request('GET', `${socialBase()}/${conversationId}/messages?${params}`);
+      const people = currentConversation?.members || members;
+      const viewer = currentUser?.id;
+      const result = await request('GET', `${socialBase()}/${conversationId}/messages?${params}`, undefined, undefined, signal);
       if (result.status !== 200) throw new Error('无法搜索当前会话。');
       return {
         items: (result.body.items || []).map(item => {
@@ -6213,17 +6249,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const start = Math.max(0, index - 48);
           return {
             kind: 'social', conversation_id: conversationId, message_id: item.id, created: item.created,
+            role: item.role === 'agent' ? 'assistant' : item.user_id && item.user_id === viewer ? 'user' : '',
+            agent_name: item.agent_name,
+            author: item.user_id && people.find(member => member.user_id === item.user_id)?.username,
             snippet: (start > 0 ? '…' : '') + body.slice(start, start + 160) + (body.length > start + 160 ? '…' : ''),
           };
         }),
         cursor: result.body.cursor,
       };
     }
-    const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`);
+    const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`, undefined, undefined, signal);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
   });
-  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'), isCurrent = () => true) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
+    isCurrent = () => true, {signal, onLocated} = {}) {
     if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
@@ -6241,7 +6281,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       try {
         const query = new URLSearchParams({around: messageId, limit: HISTORY_PAGE_SIZE});
-        const result = await (privateChat ? privateHistoryPage(state, query) : historyPage(state, query));
+        const result = await (privateChat ? privateHistoryPage(state, query, signal) : historyPage(state, query, signal));
         if (!result || jump !== historyJump || !isCurrent()) return false;
         if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
           const window = {...state, cursor: result.body.cursor ?? null, readingHistory: true, loading: false};
@@ -6269,10 +6309,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
       }
     }
+    if (jump !== historyJump || !isCurrent()) return false;
     if (!target) {
       if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return false;
     }
+    onLocated?.(target);
     target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
     target.tabIndex = -1; target.focus?.({preventScroll: true});
     for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
@@ -6280,36 +6322,68 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
+  async function jumpToSearchHit(messageId, view, button) {
+    if (!currentSearchView(view) || view.jump?.messageId === messageId) return;
+    const status = view.jump?.status ?? inChatStatus.textContent;
+    view.jump?.controller.abort();
+    const controller = new AbortController();
+    const jump = {messageId, status, controller};
+    view.jump = jump;
+    button.setAttribute('aria-busy', 'true');
+    inChatStatus.textContent = uiLabel('正在定位消息…', 'Finding the message…');
+    try {
+      const located = await jumpToMessage(messageId, inChatStatus,
+        () => currentSearchView(view) && view.jump === jump, {
+          signal: controller.signal,
+          onLocated(target) {
+            searchScrollSnapshot = null;
+            if (globalThis.matchMedia?.('(max-width: 900px)').matches) {
+              closeInChatSearch({restoreScroll: false, focus: false});
+            } else {
+              searchJumpTarget = target;
+            }
+          },
+        });
+      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = status;
+    } finally {
+      button.removeAttribute('aria-busy');
+      if (view.jump === jump) view.jump = null;
+    }
+  }
+
   function searchHitRow(hit, view) {
     const li = document.createElement('li');
-    li.className = 'search-hit';
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(hit.messageId, inChatStatus, () => currentSearchView(view));
-    li.addEventListener('click', jump);
-    li.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
-    });
+    li.className = 'message-search-hit';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'search-hit';
+    button.addEventListener('click', () => jumpToSearchHit(hit.messageId, view, button));
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
-    const who = hit.role === 'agent' ? (hit.agent_name || '智能体') : (hit.title || '消息');
+    const who = hit.role === 'user' ? uiLabel('我', 'Me')
+      : (hit.agentName || hit.author || hit.title || uiLabel('消息', 'Message'));
+    const snippet = hit.preview || '';
+    const timestamp = hit.created ? formatSessionTime(hit.created) : '';
+    const label = uiLabel('跳到这条消息', 'Jump to this message');
+    button.setAttribute('aria-label', [label, who, timestamp, snippet].filter(Boolean).join(' · '));
     avatar.textContent = leadGlyph(who);
     const head = document.createElement('span');
     head.className = 'search-hit-head';
     const name = document.createElement('strong');
     name.textContent = who;
     const when = document.createElement('time');
-    when.textContent = hit.created ? formatSessionTime(hit.created) : '';
+    when.textContent = timestamp;
+    if (timestamp) when.dateTime = new Date(hit.created * 1000).toISOString();
     head.append(name, when);
     const text = document.createElement('span');
     text.className = 'search-hit-text';
-    text.append(...highlightParts(hit.snippet || hit.preview || '', view.query).map(part => {
+    text.append(...highlightParts(snippet, view.query).map(part => {
       if (!part.match) return document.createTextNode(part.text);
       const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
     }));
-    li.append(avatar, head, text);
+    button.append(avatar, head, text);
+    li.append(button);
     return li;
   }
   const CONVERSATION_SCOPES = {
@@ -6335,6 +6409,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function clearConversationSearch() {
     clearTimeout(searchDelay);
     inChatView?.controller?.abort();
+    inChatView?.jump?.controller.abort();
     inChatView = null;
     void inChatSearch.load('');
     inChatResults.replaceChildren();
@@ -6369,12 +6444,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     jump.type = 'button';
     jump.className = 'search-hit attachment-search-jump';
     jump.setAttribute('aria-label', '跳到原消息，' + title);
-    jump.addEventListener('click', async () => {
-      const located = await jumpToMessage(item.message_id, inChatStatus, () => currentSearchView(view));
-      if (!located || !currentSearchView(view)) return;
-      searchScrollSnapshot = null;
-      if (globalThis.matchMedia?.('(max-width: 700px)').matches) closeInChatSearch({restoreScroll: false, focus: false});
-    });
+    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump));
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -6413,7 +6483,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
     const params = new URLSearchParams({kind, q: view.query, limit: '20'});
     if (view.cursor) params.set('cursor', view.cursor);
-    view.controller = new AbortController();
     const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
     if (!currentSearchView(view)) return;
     if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
@@ -6444,6 +6513,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = CONVERSATION_SCOPES[view.scope];
     const noun = scope.noun || '消息';
     view.loading = true;
+    view.controller = new AbortController();
     inChatResults.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
     inChatMore.disabled = true;
@@ -6452,7 +6522,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (scope.kind) {
         await searchAttachmentPage(view, scope);
       } else {
-        const state = await inChatSearch.load(view.query, currentConversation.id, {append});
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: view.controller.signal});
         if (!currentSearchView(view)) return;
         if (state.error) throw new Error(state.error);
         inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
@@ -6505,6 +6575,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   let searchScrollSnapshot = null;
+  let searchJumpTarget = null;
   const inChatOpen = document.getElementById('conversation-search-open');
   inChatOpen?.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
@@ -6518,16 +6589,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
     inChatPanel.hidden = false;
+    inChatOpen.setAttribute('aria-expanded', 'true');
     inChatQuery.focus();
     return searchCurrentConversation();
   });
   function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+    const target = restoreScroll && searchJumpTarget?.isConnected ? searchJumpTarget : null;
+    const targetTop = target?.getBoundingClientRect().top;
     inChatPanel.hidden = true;
+    inChatOpen?.setAttribute('aria-expanded', 'false');
     clearConversationSearch();
-    if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) {
-      document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
-    }
+    const scroller = document.getElementById('message-scroller');
+    if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) scroller.scrollTop = searchScrollSnapshot.top;
+    else if (target) scroller.scrollTop += target.getBoundingClientRect().top - targetTop;
     searchScrollSnapshot = null;
+    searchJumpTarget = null;
     if (focus) {
       const opener = inChatOpen?.checkVisibility?.() === false ? document.getElementById('chat-more') : inChatOpen;
       opener?.focus();
@@ -6575,25 +6651,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const filterButton = document.getElementById('session-filter');
   const filterLabel = document.getElementById('session-filter-label');
   const filterValue = document.getElementById('session-filter-value');
-  function setFilterOpen(open) {
+  const filterClear = document.getElementById('session-filter-clear');
+  function setFilterOpen(open, {focus = true} = {}) {
     if (!filterLabel || !filterButton) return;
     filterLabel.hidden = !open;
     filterButton.setAttribute('aria-expanded', String(open));
-    if (open) filterValue?.focus();
-    else filterButton.focus();
+    if (focus) (open ? filterValue : filterButton)?.focus();
   }
   filterButton?.addEventListener('click', () => setFilterOpen(Boolean(filterLabel?.hidden)));
+  document.addEventListener('click', event => {
+    if (filterLabel && !filterLabel.hidden && !event.target?.closest?.('#session-filter, #session-filter-label')) {
+      setFilterOpen(false, {focus: false});
+    }
+  });
   filterValue?.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       event.preventDefault();
       setFilterOpen(false);
     }
   });
-  filterValue?.addEventListener('change', () => {
+  function applySessionFilter() {
+    const active = filterValue.value !== 'all';
     const name = filterValue.selectedOptions?.[0]?.textContent;
+    filterButton.dataset.filterActive = String(active);
     if (name) filterButton?.setAttribute('aria-label', uiLabel('会话筛选：', 'Conversation filter: ') + name);
+    filterClear.hidden = !active;
+    document.getElementById('session-filter-selection').textContent = active ? name || '' : '';
+    if (active && name) filterClear.setAttribute('aria-label', uiLabel(`清除「${name}」筛选`, `Clear “${name}” filter`));
     setFilterOpen(false);
     renderSessions();
+  }
+  filterValue?.addEventListener('change', applySessionFilter);
+  filterClear?.addEventListener('click', () => {
+    filterValue.value = 'all';
+    applySessionFilter();
   });
   document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
     if (markingConversationsRead) return;
@@ -6665,7 +6756,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   muteButton?.addEventListener('click', toggleMute);
   groupMute?.addEventListener('click', toggleMute);
   pinButton?.addEventListener('click', toggleConversationPin);
-  document.getElementById('search-close').addEventListener('click', closeSearchPanel);
+  document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
     cancelStartupLink();
     stopReplyProgress();
@@ -6703,7 +6794,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     document.getElementById('session-search').value = '';
-    openSearchPanel('messages', currentConversation.id);
+    openSearchPanel('messages', currentConversation.id, {fromSessionList: false});
     document.getElementById('session-search').focus();
   });
   document.getElementById('search-panel').addEventListener('click', event => {
@@ -7187,7 +7278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       closeComposeDialog({focus: true});
       return;
     }
-    if (isSearchOpen()) closeSearchPanel();
+    if (isSearchOpen()) closeSearchPanel({focus: true});
   });
 
   const plus = document.querySelector('details.composer-plus');

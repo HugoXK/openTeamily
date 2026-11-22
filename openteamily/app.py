@@ -18,7 +18,7 @@ from . import skill_packages, agents, artifacts, bot_social, composio, conversat
 from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
-GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
+GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys'})
 GONE_WORKSPACE_EVENTS = re.compile(r'/v1/workspaces/[0-9a-f]{32}/events')
 
 class APIError(Exception):
@@ -558,7 +558,7 @@ class App:
             refuse(404, 'not_found', 'Route not found')
         if GONE_WORKSPACE_EVENTS.fullmatch(path):
             refuse(410, 'retired', 'Workspace event streams have been retired')
-        if path.startswith(('/v1/agent/', '/v1/gateway/')) or path in GONE_PATHS or moved_api(path):
+        if path.startswith(('/v1/agent/', '/v1/gateway/', '/v1/runtime/')) or path in GONE_PATHS or moved_api(path):
             # Execution moved to each user's DS-Bot; public pages to Bot Social. Old clients get 410.
             refuse(410, 'moved_to_dsbot', 'This route now runs on your own DS-Bot')
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
@@ -576,8 +576,10 @@ class App:
         if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-                state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
+                state = self.runtime_readiness(db, session['user_id'])
             return 200, {'state': state, 'user_id': session['user_id']}, []
+        if path == '/v1/auth/runtime-start' and method == 'POST' and not query:
+            return self.start_personal_runtime(env, now)
         if path == '/v1/auth/session' and method == 'GET' and not query:
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
@@ -813,6 +815,30 @@ class App:
         ]
 
 
+    def runtime_readiness(self, db, user_id):
+        if not self.auto_provision.enabled:
+            return 'unmanaged'
+        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id)
+
+    def start_personal_runtime(self, env, now):
+        with self.store.connect() as db:
+            session = self.authenticated(db, env, now)
+            self.csrf_check(env, session)
+            self.body(env, [])
+            owner = session['user_id']
+            state = self.runtime_readiness(db, owner)
+            if state in ('starting', 'ready'):
+                return 200, {'state': state}, []
+            if state != 'stopped':
+                refuse(409, 'runtime_unavailable', 'The personal runtime cannot be started here')
+            instance = runtime_autoprovision.resumable_instance(db, owner, self.auto_provision.manager_id)
+        if instance is None:
+            refuse(409, 'runtime_unavailable', 'The personal runtime changed; check its current state')
+        started, _ = self.lifecycle.start(owner, instance['id'], expected_revision=instance['revision'])
+        with self.store.connect() as db:
+            state = self.runtime_readiness(db, owner)
+        return (202 if started else 200), {'state': state}, []
+
     def personal_agent_get(self, db, session):
         row = personal.load(db, session['user_id'])
         if row is None:
@@ -829,7 +855,7 @@ class App:
             provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
             payload['personal_agent']['runtime_provisioning'] = {
                 'state': provision['state'], 'instance_id': provision['instance_id'],
-                'readiness': owner_runtime_readiness(db, session['user_id']),
+                'readiness': self.runtime_readiness(db, session['user_id']),
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []

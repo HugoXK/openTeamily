@@ -632,8 +632,8 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
     }
-    if (path === '/v1/runtime/tasks' && method === 'GET') return reply({body: {items: tasks}});
-    const taskSave = /^\/v1\/runtime\/tasks\/([0-9a-f]+)\/artifact$/.exec(path);
+    if (path === '/v1/skills/runs' && method === 'GET') return reply({body: {items: tasks.map(task => ({task, verified: task.status === 'succeeded' && !!task.result?.text?.trim()}))}});
+    const taskSave = /^\/v1\/skills\/runs\/([0-9a-f]+)\/artifact$/.exec(path);
     if (taskSave && method === 'POST') {
       saveCalls.push({id: taskSave[1], body: options.body ? JSON.parse(options.body) : null});
       if (saveReply) return reply(saveReply);
@@ -1187,14 +1187,14 @@ test('saving a completed task artifact posts the task id and lists the document'
   const page = await openArtifactsPage({
     items: [],
     tasks: [
-      {id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '周报正文'}},
-      {id: 'def456', status: 'running', prompt: '还在跑', workspace_id: 'w1', result: {}},
-      {id: 'aaa999', status: 'succeeded', prompt: '空结果', workspace_id: 'w1', result: {text: '   '}},
+      {id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '周报正文'}},
+      {id: 'd'.repeat(32), status: 'running', prompt: '还在跑', workspace_id: 'w1', result: {}},
+      {id: 'b'.repeat(32), status: 'succeeded', prompt: '空结果', workspace_id: 'w1', result: {text: '   '}},
     ],
   });
   try {
     await page.doc.getElementById('empty-save-agent').dispatch('click');
-    assert.equal(page.calls.some(call => call.path === '/v1/runtime/tasks' && call.method === 'GET'), true,
+    assert.equal(page.calls.some(call => call.path === '/v1/skills/runs' && call.method === 'GET'), true,
                  'the agent save panel must read the real task list');
     const dialog = page.created.find(node => node.id === 'agent-task-dialog');
     assert.ok(dialog, 'the panel is rendered');
@@ -1206,7 +1206,7 @@ test('saving a completed task artifact posts the task id and lists the document'
     assert.equal(save.textContent, '保存');
     await save.dispatch('click');
     assert.equal(page.saveCalls.length, 1);
-    assert.equal(page.saveCalls[0].id, 'abc123');
+    assert.equal(page.saveCalls[0].id, 'a'.repeat(32));
     assert.deepEqual(page.saveCalls[0].body, {workspace_id: 'w1'});
     assert.equal(page.elements.get('status').textContent, '已保存。');
     const list = page.elements.get('artifact-list');
@@ -1220,7 +1220,7 @@ test('saving a completed task artifact posts the task id and lists the document'
 test('a refused save shows the server reason and keeps the task on screen', async () => {
   const page = await openArtifactsPage({
     items: [],
-    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    tasks: [{id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
     saveReply: {status: 409, body: {error: {code: 'conflict', message: 'Only a succeeded task with a text result can be saved'}}},
   });
   try {
@@ -1243,7 +1243,7 @@ test('a refused save shows the server reason and keeps the task on screen', asyn
 test('an unauthorised save asks the user to sign in instead of failing silently', async () => {
   const page = await openArtifactsPage({
     items: [],
-    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    tasks: [{id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
     saveReply: {status: 401, body: {error: {code: 'unauthorized', message: 'Sign in first'}}},
   });
   try {
