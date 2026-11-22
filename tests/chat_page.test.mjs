@@ -3136,7 +3136,7 @@ test('a received GLB offers a collapsed viewer and an independent download', asy
   }
 });
 
-test('social history prepends older messages and returns from a searched window to latest', async () => {
+test('social history pages both ways from a searched window without acknowledging it', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow:true});
@@ -3146,6 +3146,10 @@ test('social history prepends older messages and returns from a searched window 
   Object.defineProperty(scroller, 'scrollHeight', {get: () => list.children.length * 100});
   scroller.clientHeight = 100;
   let latestReads = 0;
+  let nextReads = 0;
+  let acknowledgements = 0;
+  const pending = Promise.withResolvers();
+  const started = Promise.withResolvers();
   try {
     await mount(doc, {fetcher: async path => {
       if (path.endsWith('/conv-1')) {
@@ -3155,6 +3159,16 @@ test('social history prepends older messages and returns from a searched window 
       }
       if (path.includes('before=5')) return json(200, {items:[row(3), row(4), row(5)],cursor:3});
       if (path.includes('around=history-1')) return json(200, {items:[row(1), row(2)],cursor:null,has_newer:true});
+      if (path.includes('after=2')) {
+        if (++nextReads === 1) return json(503, {});
+        if (nextReads === 3) {
+          started.resolve();
+          return pending.promise;
+        }
+        return json(200, {items:[row(2),row(3),row(4)],has_newer:true,last_seq:6});
+      }
+      if (path.includes('after=4')) return json(200, {items:[row(5),row(6)],has_newer:false,last_seq:6});
+      if (path.endsWith('/conv-1/read')) acknowledgements++;
       if (path.includes('/messages?q=')) return json(200, {items:[row(1)],cursor:null});
       return original(path);
     }});
@@ -3184,10 +3198,38 @@ test('social history prepends older messages and returns from a searched window 
     assert.deepEqual(ids(), ['history-1','history-2']);
     assert.equal(list.children[0].dataset.searchJump,'true');
     assert.equal(el('chat-back-to-latest').hidden,false);
+    const newer = el('chat-load-newer');
+    const status = el('chat-unread-status');
+    assert.equal(newer.hidden,false);
+    assert.equal(el('chat-mark-thread-read').hidden,true);
+    const receiptsBeforeHistory = acknowledgements;
+    await fire(newer,'click');
+    assert.match(status.textContent,/加载失败|Could not load/);
+    assert.deepEqual(ids(), ['history-1','history-2']);
+    await fire(newer,'click');
+    assert.deepEqual(ids(), ['history-1','history-2','history-3','history-4']);
+    await fire(newer,'click');
+    assert.deepEqual(ids(), ['history-1','history-2','history-3','history-4','history-5','history-6']);
+    assert.equal(newer.hidden,true);
+    assert.match(status.textContent,/已加载到最新消息|All newer messages/);
+    assert.equal(acknowledgements,receiptsBeforeHistory);
     await fire(el('chat-back-to-latest'),'click');
     await settle();
     assert.deepEqual(ids(), ['history-5','history-6']);
     assert.equal(el('chat-back-to-latest').hidden,true);
+    assert.equal(status.textContent,'');
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Message';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    await fire(el('conversation-search-results').children[0].children[0], 'click');
+    const forward = fire(newer,'click');
+    await started.promise;
+    await fire(latest,'click');
+    await settle();
+    pending.resolve(json(200,{items:[row(3),row(4)],has_newer:true,last_seq:6}));
+    await forward;
+    assert.deepEqual(ids(), ['history-5','history-6']);
+    assert.equal(newer.hidden,true);
   } finally { restore(); }
 });
 

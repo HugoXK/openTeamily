@@ -11,7 +11,7 @@ const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
     'cf6f9ddbf898ded9429c6895c43eea8175c9b57e2777f4800c8c4f89acd97035',
-    '25df7ddeeb6dc0039331bb87385b1899651b5ea5ca3736e1cb4dbf6a6fa12698',
+    'b9d2961997b21f6949d5a69500a80baf35db81273349e9c472f1228ed6b87fbc',
   ],
   'src/client/group-settings.js': [
     '4f4aa19f4972f734c6fe8d71553a6c17386d9418bd84e56106ed4e48b9b7fdca',
@@ -19,7 +19,15 @@ const files = {
   ],
   'src/client/i18n.js': [
     '1124fb90ac4409c3bfff7f092800e98aa5590437c5372d3823a446ee427a2506',
-    '2d77f4d359f297f8e84acdf4b084104eb204b62e26da8aea4a78f5a8b7443e7d',
+    '5467513ec2ab35c6c8a6fd34555ff98c8f12a0d9904022f6d9f2dae49c0d840b',
+  ],
+  'src/client/new-chat.js': [
+    '1086a6d2a199959cb73f088f8c19492dd2ad654425eb324688a0ae8b6c2d5176',
+    '746883260e16ac825f6daf434bf5100b1f6182dd35dc5f2d8d37d6dcc968b53c',
+  ],
+  'src/client/team-actions.js': [
+    '2c7bb430115cc4bc44d714c1c7f12ec0965049774b6785d5434d20379ce714a6',
+    'b2e71f4025da27fd8a1451ec5fe0a7954c26bb50cd652260ac0cf7dc6b14b770',
   ],
   'src/host/capabilities.js': [
     'de00bf540137da28f4bd3e28cec2af87b95a5f9672e4f5461da9c9e94a1cc1c3',
@@ -27,7 +35,7 @@ const files = {
   ],
   'src/host/channel.js': [
     '705ef779835e55100f3eaa04cd7e995e4fcc7a02eb3ad9fd976cedbd904d6aa4',
-    '4baaa3683aa31b118017e742e3b2a5f40549f8e6cbf9ff557a329b210e8b10aa',
+    '85af8f7e5aed482bf79f36cd750452c6486acb60c27e74303803f5a52146f76e',
   ],
 }
 

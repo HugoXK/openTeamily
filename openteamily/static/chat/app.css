@@ -2492,6 +2492,11 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   background: var(--ot-surface);
   box-shadow: var(--ot-shadow-sm);
 }
+.chat-timeline:has(#chat-unread-actions:not([hidden])) #chat-back-to-latest:not([hidden]) {
+  position: static;
+  flex: 0 0 auto;
+  margin: .25rem auto .625rem;
+}
 
 #message-list > li.chat-unread-divider {
   display: flex;
