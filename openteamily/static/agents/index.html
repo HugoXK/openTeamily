@@ -155,6 +155,7 @@
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
+            <button type="button" id="agent-share-open" aria-haspopup="dialog" aria-controls="agent-share-dialog" hidden>私下分享</button>
             <button type="button" id="archive-button">归档</button>
             <button type="button" id="cancel-edit">取消</button>
           </div>
@@ -183,5 +184,28 @@
     </aside>
   </section>
   </main>
+  <dialog id="agent-share-dialog" aria-labelledby="agent-share-title">
+    <h2 id="agent-share-title">私下分享智能体</h2>
+    <p id="agent-share-name" class="note"></p>
+    <form id="agent-share-form">
+      <label><span id="agent-share-recipient-label">收件人</span> <select id="agent-share-recipient" required></select></label>
+      <button id="agent-share-recipients-more" type="button" hidden>加载更多收件人</button>
+      <fieldset>
+        <legend id="agent-share-content-label">随副本分享</legend>
+        <label><input type="checkbox" id="agent-share-instructions"> <span id="agent-share-instructions-label">已保存的指令</span></label>
+        <label><input type="checkbox" id="agent-share-quick-starts"> <span id="agent-share-quick-starts-label">已保存的快捷开场</span></label>
+      </fieldset>
+      <p id="agent-share-note" class="note">对方可将名称、简介和分类复制到个人工作区，并另行配置工具。</p>
+      <button type="submit" id="agent-share-submit" disabled>创建分享</button>
+    </form>
+    <label id="agent-share-link-field" hidden><span id="agent-share-link-label">收件人链接</span> <input id="agent-share-link" readonly></label>
+    <p id="agent-share-status" role="status"></p>
+    <section aria-labelledby="agent-share-sent-title">
+      <h3 id="agent-share-sent-title">已发出的分享</h3>
+      <ul id="agent-share-sent"></ul>
+      <button id="agent-share-sent-more" type="button" hidden>加载更多分享</button>
+    </section>
+    <button type="button" id="agent-share-close">关闭</button>
+  </dialog>
 </body>
 </html>

@@ -6,6 +6,7 @@ import { PRIVATE_FILE_BYTES, PRIVATE_FILE_COUNT } from './files.js'
 import { textReplyKey, textReplyAttempt } from './private-reply.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { CHAT_LANGUAGE_NAMES } from '../settings/settings.js'
+import { agentCopyRoutes } from './copy-grants.js'
 
 const HEX = '([0-9a-f]{32})'
 
@@ -54,9 +55,10 @@ const publicPair = (result, workspaceId, agentId) => ({
   reply: publicMessage(result.reply, workspaceId, agentId),
 })
 
-export function agentsV1({ endpoints, chatDirectory, log }) {
+export function agentsV1({ endpoints, chatDirectory, host, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    ...agentCopyRoutes(host,endpoints),
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-progress$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')

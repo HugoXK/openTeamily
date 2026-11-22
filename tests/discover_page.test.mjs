@@ -1333,6 +1333,46 @@ test('guest agent cards link to the public homepage without exposing private cop
   assert.equal(calls.some(([path, method])=>method!=='GET' || path.endsWith('/remix')), false);
 });
 
+test('a received private agent link waits for sign-in and uses the pinned personal copy review', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const id = 'otag_' + 'A'.repeat(26);
+  const path = '/v1/agent-copy-grants/' + id + '/remix';
+  const requests = [];
+  const grant = {id,state:'active',agent_name:'私享助理',sender:{display_name:'团队伙伴'}};
+  const init = mount(doc,{location:{search:'?tab=agents&share='+id},fetcher:async (route, options)=>{
+    requests.push([route,options]);
+    if (route === '/v1/auth/session') return session.promise;
+    if (route === path && options.method === 'GET') return commentResponse({grant,template:{
+      name:grant.agent_name,summary:'只在授权后出现的简介',instructions:'分享的指令',quick_starts:['看看讨论摘要'],revision:'pinned-release',
+    }});
+    if (route === path && options.method === 'POST') return commentResponse({error:{code:'agent_copy_revoked'}},410);
+    return commentResponse({items:[],viewer_username:'alice'});
+  }});
+  await flush();
+  assert.ok(!requests.some(([route])=>route===path));
+  assert.ok(doc.getElementById('discover-login').href.includes('share%3D'+id));
+  session.resolve(commentResponse({user:{id:'recipient',username:'alice'}}));
+  await init;
+  const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-remix-dialog').open,true);
+  assert.equal(el('catalog-remix-share-sender').textContent,'来自 团队伙伴');
+  assert.equal(el('catalog-remix-workspace-field').hidden,true);
+  assert.equal(el('catalog-remix-personal-destination').hidden,false);
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'看看讨论摘要');
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const write = requests.find(([route,options])=>route===path&&options.method==='POST')[1];
+  assert.deepEqual(JSON.parse(write.body),{revision:'pinned-release',name:grant.agent_name});
+  assert.match(write.headers['Idempotency-Key'],/^[A-Za-z0-9_-]{16,64}$/);
+  assert.equal(el('catalog-remix-submit').disabled,true);
+  assert.equal(el('catalog-remix-share-sender').hidden,true);
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.equal(el('catalog-remix-summary').textContent,'');
+  assert.equal(el('catalog-remix-status').textContent,'此分享已不可用。');
+});
+
 test('the status line is a polite live region for the create receipt', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /<p id="status" role="status" aria-live="polite">/);

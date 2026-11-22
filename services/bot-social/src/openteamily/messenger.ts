@@ -1473,7 +1473,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const owner = input.owner_id ?? me.ownerId;
       assert(owner === me.ownerId || owner === peer, 404, "agent_not_found", "找不到这个私聊智能体。");
       return ot.tx(() => {
-        if (input.workspace !== undefined) workspaceConversation(ot, input.workspace, conv.id, me.ownerId);
+        if (input.workspace !== undefined) workspaceConversation(ot, text(input.workspace,"workspace",{min:32,max:32}), conv.id, me.ownerId);
         ot.run(`DELETE FROM ot_conversation_agents WHERE conversation_id=? AND agent_ref=? AND owner_id=?
           AND direct_grant_id IS NOT NULL`, conv.id, params(req).agent, owner);
         return conversationView(ot, conv, me.ownerId);

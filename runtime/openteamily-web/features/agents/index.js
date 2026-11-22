@@ -596,7 +596,7 @@ export function createAgents({ db, host }) {
       })) }
     },
     get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
-    async create(p, inheritCapabilities = true) {
+    async create(p, inheritCapabilities = true, source = null) {
       const workspaceId = ws(p)
       const { name } = p
       const summary = p.summary ?? ''
@@ -611,20 +611,24 @@ export function createAgents({ db, host }) {
       const keyHash = sha(p.idempotency_key)
       const fields = [clean, summary, instructions, category || null, starts.map((s) => s.trim())]
       if (!inheritCapabilities) fields.push('remix')
+      if (source) fields.push(source)
       const requestHash = sha(JSON.stringify(fields))
       const prior = one('SELECT * FROM agents WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
       if (prior) {
-        if (prior.request_hash !== requestHash) fail('conflict', 'Idempotency key was used for a different request', 409)
+        if (prior.request_hash !== requestHash) fail(source ? 'agent_copy_request_conflict' : 'conflict',
+          'Idempotency key was used for a different request', 409)
         return { status: 200, agent: view(await native.ensure(prior)) }
       }
-      if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) fail('conflict', 'An agent with this name already exists', 409)
+      if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) {
+        fail(source ? 'name_conflict' : 'conflict', 'An agent with this name already exists', 409)
+      }
       if (one('SELECT COUNT(*) AS n FROM agents WHERE workspace_id=?', workspaceId).n >= LIMITS.agents) fail('quota', 'Agent capacity reached', 429)
       const id = newId()
       const t = now()
       run(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision,
-        created, updated, archived, key_hash, request_hash, inherit_capabilities) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?,?)`,
+        created, updated, archived, key_hash, request_hash, inherit_capabilities, imported_from) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?,?,?)`,
       id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null,
-      JSON.stringify(starts.map(s => s.trim())), t, t, keyHash, requestHash, Number(inheritCapabilities))
+      JSON.stringify(starts.map(s => s.trim())), t, t, keyHash, requestHash, Number(inheritCapabilities), source)
       return { status: 201, agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', id))) }
     },
     async update(p) {
@@ -1127,9 +1131,9 @@ export function createAgents({ db, host }) {
   }
   endpoints.createRemix = async (payload, call) => {
     if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
-    return endpoints.create(payload ?? {}, false)
+    return endpoints.create(payload ?? {}, false, call.source ?? null)
   }
-  endpoints.v1 = agentsV1({ endpoints, chatDirectory, log: host?.log })
+  endpoints.v1 = agentsV1({ endpoints, chatDirectory, host, log: host?.log })
   const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(endpoints, bundle) : endpoints.import(bundle))
   return { endpoints, migrate }
 }

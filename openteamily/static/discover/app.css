@@ -777,6 +777,12 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 #catalog-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 #catalog-remix-submit { background: var(--ot-accent); color: var(--ot-on-accent); }
 #catalog-remix-status:empty { display: none; }
+#received-agent-shares { margin: .5rem 0 .75rem; overflow-wrap: anywhere; }
+#received-agent-shares summary { cursor: pointer; }
+#received-agent-shares-status:empty, #received-agent-shares-list:empty { display: none; }
+#received-agent-shares-list { display: grid; gap: .5rem; list-style: none; padding: 0; }
+#received-agent-shares-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .375rem 1rem; }
+#received-agent-shares-list a { display: inline-flex; align-items: center; min-height: 2.75rem; }
 #catalog-category-options { display: flex; flex-wrap: wrap; gap: .375rem; margin: .75rem 0 1rem; }
 #catalog-category-options button[aria-pressed="true"] {
   background: var(--ot-accent-soft);
