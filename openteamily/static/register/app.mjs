@@ -35,7 +35,7 @@ export async function registerAccount(username, password, fetcher = globalThis.f
         if (user?.username === expectedName && platformId(user.id)) {
           expectedId = user.id;
           personalChat = expectedId ? personalChatPath(target) : '';
-          if (rememberSignupSession(view, expectedId)) {
+          if (rememberSignupSession(view, expectedId, undefined, personalChat)) {
             return {ok: true, pendingSession: true, ...(personalChat && {personalChat})};
           }
         }

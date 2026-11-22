@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
+import { CHAT_FILE_BODY_LIMIT, CHAT_FILE_MAX_BYTES, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
 import { WORK_SEARCH_SCHEMA, publicWorkText, registerWorkSearch, saveWorkSearch, workBodyCondition, workSearchMatch, workSearchQuery } from "./discover-work-search.js";
@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
   snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
   chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  publication_revision INTEGER NOT NULL DEFAULT 1,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -359,6 +360,21 @@ function publicRemixSource(ot: OtContext, listing: {id: string; work_kind: strin
   return {kind,body:content.body};
 }
 
+const remixBytes = (bytes: unknown) => typeof bytes === "number" && Number.isSafeInteger(bytes) &&
+  bytes >= 12 && bytes <= CHAT_FILE_MAX_BYTES;
+
+function publicRemixFile(ot: OtContext, work: {id: string; slug: string; title: string; work_kind: string | null; listed: number}) {
+  if (work.work_kind === "model3d") {
+    const model = ot.get<{bytes: number}>("SELECT length(content) AS bytes FROM ot_listing_models WHERE listing_id=?", work.id);
+    if (!model || !remixBytes(model.bytes)) return null;
+    return {table:"ot_listing_models",mime:MODEL_MIME,filename:work.title.replace(/[\x00-\x1f\x7f/\\]/g,"_")+".glb",bytes:model.bytes};
+  }
+  const advertised = publishedMediaView(ot,work);
+  if (!advertised.file_available || !remixBytes(advertised.file_bytes)) return null;
+  const row = ot.get<{filename: string}>("SELECT filename FROM ot_listing_media WHERE listing_id=?",work.id);
+  return row ? {table:"ot_listing_media",mime:advertised.file_mime,filename:row.filename,bytes:advertised.file_bytes} : null;
+}
+
 type FeedScope = { where: string; args: unknown[] };
 type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
@@ -604,6 +620,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+  if (!columns.has("publication_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 1");
   const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
@@ -653,7 +670,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const id = existing?.id ?? newId("otl");
     ot.tx(() => {
       if (existing) {
-        ot.run("UPDATE ot_listings SET slug = ?, title = ?, summary = ?, category = ?, work_kind = ?, snapshot = ?, listed = 1, chat_enabled = ?, chat_from = ?, updated_at = ? WHERE id = ?", slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
+        ot.run(`UPDATE ot_listings SET slug=?, title=?, summary=?, category=?, work_kind=?, snapshot=?, listed=1,
+          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1 WHERE id=?`,
+        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
         ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
@@ -757,8 +776,11 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
     assert(work, 404, "listing_not_found", "no such work");
     reply.header("Cache-Control", "no-store");
+    const view = listingView(ot, work, me.ownerId);
+    const remixable = view.file_available ? remixBytes(view.file_bytes)
+      : work.work_kind === "model3d" ? Boolean(publicRemixFile(ot,work)) : Boolean(publicRemixSource(ot,work));
     const detail = {
-      work: {...listingView(ot, work, me.ownerId), ...(publicRemixSource(ot,work) ? {remix_available:true} : {})},
+      work: {...view, ...(remixable ? {remix_available:true} : {})},
       previous: null, next: null,
     };
     if (scope.sort === "popular") {
@@ -783,7 +805,22 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     400,"invalid_request","Invalid work copy revision");
     return ot.tx(() => {
       const work = listedBySlug(ot, params(req).slug);
-      const source = work.kind === "work" ? publicRemixSource(ot,work) : null;
+      assert(work.kind === "work",404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      const file = publicRemixFile(ot,work);
+      if (file) {
+        const {table,mime,filename,bytes} = file;
+        // Publishing updates the listing revision and its file in one transaction.
+        // Only a confirmed copy reads the BLOB.
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,mime,filename,bytes]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind:"media",revision,media:{mime,filename,bytes}};
+        if (!q.revision) return {template};
+        const stored = ot.get<{content: Buffer}>(`SELECT content FROM ${table} WHERE listing_id=?`,work.id);
+        assert(stored?.content.length === bytes,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind:"media",mime,filename,bytes,data:stored.content.toString("base64")}};
+      }
+      const source = publicRemixSource(ot,work);
       assert(source,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
       const revision = hashCode(JSON.stringify([work.id,work.slug,work.updated_at,work.title,source]));
       assert(q.revision === undefined || q.revision === revision,

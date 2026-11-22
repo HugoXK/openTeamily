@@ -92,7 +92,7 @@
         <p id="team-run-agent-status" class="note" role="status"></p>
         <fieldset id="team-run-fields" class="team-run-fields">
           <legend class="visually-hidden">任务与执行步骤</legend>
-          <label>任务名称 <input id="team-run-title" required maxlength="80"></label>
+          <label>任务名称 <input id="team-run-title" type="text" required maxlength="80"></label>
           <label>目标 <textarea id="team-run-goal" required rows="3" maxlength="2000"></textarea></label>
           <div class="team-run-steps-label">
             <h3>执行步骤</h3>
@@ -115,6 +115,7 @@
         <p id="team-run-progress" role="status"></p>
         <p id="team-run-status" class="note" role="status"></p>
         <div class="team-run-actions">
+          <button type="button" class="secondary" id="team-run-reuse" hidden>复用为新任务</button>
           <button type="button" class="secondary" id="team-run-cancel" hidden>取消任务</button>
           <button type="button" class="secondary" id="team-run-remove" hidden>删除记录</button>
           <div id="share-team-run" hidden></div>

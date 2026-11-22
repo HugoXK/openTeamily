@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mountTeamRuns, removeDraftStep, teamRunPayload, teamRunTarget} from '../openteamily/static/team-runs/app.mjs';
+import {mountTeamRuns, removeDraftStep, teamRunDraftFromHistory, teamRunPayload, teamRunTarget} from '../openteamily/static/team-runs/app.mjs';
 
 const WS = 'a'.repeat(32);
 const OTHER_WS = 'b'.repeat(32);
@@ -48,6 +48,22 @@ test('removing a draft step removes its own dependencies while stable keys keep 
   const payload = teamRunPayload({...draft, steps: remaining}, AGENTS);
   assert.deepEqual(payload.steps.map(item => [item.instruction, item.depends_on]), [['再次核对', []], ['出稿', [0]]]);
   assert.equal(removeDraftStep(remaining, 42), remaining);
+});
+
+test('terminal run reuse carries definition and dependency identities without copying live state or output', () => {
+  let serial = 40;
+  const source = {id:RUN, status:'failed', title:'流程'.repeat(39)+'😀', goal:'处理下一轮反馈',
+    steps:[{position:0,agent_id:AGENT,instruction:'搜集',depends_on:[],output:'private result',attempts:2},
+      {position:1,agent_id:OTHER_AGENT,instruction:'复核',depends_on:[0],status:'blocked'}]};
+  const draft = teamRunDraftFromHistory(source, () => ++serial);
+  assert.ok(draft.title.length <= 80 && draft.title.endsWith('（副本）') && draft.title.isWellFormed());
+  assert.deepEqual(draft.steps, [step(41,AGENT,'搜集'),step(42,OTHER_AGENT,'复核',[41])]);
+  assert.equal(draft.sourceRun,RUN);
+  assert.equal(draft.goal,source.goal);
+  assert.ok(!JSON.stringify(draft).includes('private result'));
+  assert.equal(teamRunDraftFromHistory({...source,status:'running'}, () => ++serial),null);
+  source.steps[1].depends_on = [1];
+  assert.equal(teamRunDraftFromHistory(source, () => ++serial),null);
 });
 
 function fixture(hash = '') {

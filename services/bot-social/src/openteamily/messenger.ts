@@ -1086,13 +1086,34 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     if (!includeHidden) requireVisibleMessage(ot, id, ownerId);
     return m;
   };
+  const hideMessageFor = (owner: string, conversation: string, message: {id: string; seq: number}) =>
+    ot.run("INSERT OR IGNORE INTO ot_hidden_messages(owner_id,conversation_id,message_id,seq) VALUES (?,?,?,?)",
+      owner, conversation, message.id, message.seq);
   app.post("/v1/ot/messages/:id/hide", async req => {
     const me = ot.me(req);
     const m = ownMessage(params(req).id, me.ownerId, true);
     assert(body(req).conversation_id === m.conversation_id, 404, "message_not_found", "Message not in this conversation");
-    ot.run("INSERT OR IGNORE INTO ot_hidden_messages(owner_id,conversation_id,message_id,seq) VALUES (?,?,?,?)",
-      me.ownerId, m.conversation_id, m.id, m.seq);
+    hideMessageFor(me.ownerId, m.conversation_id, m);
     return {hidden: true};
+  });
+  app.post("/v1/ot/conversations/:id/messages/hide", async req => {
+    const me = ot.me(req);
+    const {id} = params(req);
+    const input = body(req);
+    const ids = input.message_ids;
+    assert(Array.isArray(ids) && ids.length > 0 && ids.length <= 20 && new Set(ids).size === ids.length &&
+      ids.every(value => typeof value === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(value)),
+    400, "invalid_request", "请选择 1–20 条有效消息。");
+    return ot.tx(() => {
+      const conv = input.direct === true ? accountConversation(ot, id, me.ownerId)
+        : workspaceConversation(ot, text(input.workspace, "workspace", {min: 32, max: 32}), id, me.ownerId).conv;
+      assert(!fixedPublicThread(conv), 404, "conversation_not_found", "No such conversation");
+      const rows = ot.all<{id: string; seq: number}>(`SELECT id,seq FROM ot_messages WHERE conversation_id=?
+        AND id IN (${ids.map(() => "?").join(",")})`, conv.id, ...ids);
+      assert(rows.length === ids.length, 404, "message_not_found", "部分消息不在此会话中。");
+      for (const row of rows) hideMessageFor(me.ownerId, conv.id, row);
+      return {hidden_message_ids: ids};
+    });
   });
   app.get("/v1/ot/messages/:id", async req => {
     const me=ot.me(req), m=ownMessage(params(req).id,me.ownerId), cid=query(req).conversation_id;

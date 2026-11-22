@@ -848,7 +848,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!sameWorkRemix(state) || state.read !== controller) return;
     const template = result.body?.template;
     if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
-        !['document','website'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !['document','website','media'].includes(template?.kind) || typeof template.title !== 'string' ||
         !/^[0-9a-f]{64}$/.test(template.revision || '')) {
       workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
       workRemix.refresh.hidden = result.status === 404;
@@ -857,7 +857,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const previous = state.suggestion;
     state.suggestion = template.title.slice(0,75).replace(/[\uD800-\uDBFF]$/,'').trimEnd() + ' · 副本';
     if (!workRemix.name.value || workRemix.name.value === previous) workRemix.name.value = state.suggestion;
-    workRemix.source.textContent = `「${template.title}」将保存到你的个人资料空间。`;
+    const size = template.kind === 'media' ? mediaFileSize(template.media?.bytes) : '';
+    workRemix.source.textContent = `「${template.title}」${size ? '（' + size + '）' : ''}将保存到你的个人资料空间。`;
     state.template = template;
     workRemix.submit.disabled = false;
     workRemix.status.textContent = '';

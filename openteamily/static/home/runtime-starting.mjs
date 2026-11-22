@@ -1,4 +1,4 @@
-import {csrfCookie, pendingSignupSession, waitForRuntime} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, readChatDrafts, signupDraftScope, waitForRuntime, writeChatDrafts} from './runtime-readiness.mjs';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -7,7 +7,56 @@ export function mountRuntimeStarting(document, {
   const status = document.getElementById('runtime-status');
   const progress = document.getElementById('runtime-progress');
   const retry = document.getElementById('runtime-retry');
+  const draftPanel = document.getElementById('runtime-draft');
+  const draft = document.getElementById('runtime-first-message');
+  const continueButton = document.getElementById('runtime-continue');
   let checking = false;
+  let draftScope, draftOwner, draftHash;
+  let composing = false;
+  let runtimeReady = false;
+  let leaving = false;
+
+  function saveDraft() {
+    if (!draftScope || view.location.hash !== draftHash) return true;
+    const drafts = readChatDrafts(view, draftOwner);
+    const text = draft.value || '';
+    if ((drafts.get(draftScope) ?? '') === text) return true;
+    if (text) drafts.set(draftScope, text);
+    else drafts.delete(draftScope);
+    return writeChatDrafts(view, draftOwner, drafts);
+  }
+
+  function openChat() {
+    if (leaving) return;
+    leaving = true;
+    if (view.location.pathname === '/runtime-starting') view.location.replace('/chat' + (view.location.hash || ''));
+    else view.location.reload();
+  }
+
+  function finish() {
+    if (!runtimeReady || leaving) return;
+    if (composing) {
+      status.textContent = '聊天已就绪，完成当前输入后会自动打开。';
+      return;
+    }
+    if (!saveDraft()) {
+      status.textContent = '聊天已就绪。浏览器暂时无法保留草稿，请复制文本后继续。';
+      continueButton.hidden = false;
+      return;
+    }
+    openChat();
+  }
+
+  draft?.addEventListener('compositionstart', () => { composing = true; });
+  draft?.addEventListener('compositionend', () => {
+    composing = false;
+    queueMicrotask(finish);
+  });
+  draft?.addEventListener('input', () => {
+    if (!composing) saveDraft();
+    if (runtimeReady) finish();
+  });
+  continueButton?.addEventListener('click', openChat);
 
   async function read(path, options = {}) {
     const response = await fetcher(path, {
@@ -27,7 +76,20 @@ export function mountRuntimeStarting(document, {
     status.textContent = '正在准备你的私人聊天。就绪后会自动继续。';
     const expectedUser = pendingSignupSession(view);
     const csrf = csrfCookie(document.cookie);
-    const check = () => waitForRuntime(() => read('/v1/auth/runtime-readiness'), {expectedUser});
+    const check = () => waitForRuntime(async () => {
+      const reply = await read('/v1/auth/runtime-readiness');
+      if (!draftScope && draftPanel && draft && reply.status === 200 && reply.body?.user_id === expectedUser) {
+        const scope = signupDraftScope(view, expectedUser);
+        if (scope) {
+          draftScope = scope;
+          draftOwner = expectedUser;
+          draftHash = view.location.hash;
+          draft.value = readChatDrafts(view, draftOwner).get(scope) ?? '';
+          draftPanel.hidden = false;
+        }
+      }
+      return reply;
+    }, {expectedUser});
     let state = await check();
     if (state === 'setup') {
       const result = await read('/v1/personal-agent', {method: 'POST', headers: {'X-CSRF-Token': csrf}})
@@ -43,8 +105,9 @@ export function mountRuntimeStarting(document, {
       return;
     }
     if (state === 'ready') {
-      if (view.location.pathname === '/runtime-starting') view.location.replace('/chat' + (view.location.hash || ''));
-      else view.location.reload();
+      runtimeReady = true;
+      if (progress) progress.hidden = true;
+      finish();
       return;
     }
     title.textContent = '专属智能体暂未就绪';

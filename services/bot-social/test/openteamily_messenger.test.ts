@@ -54,6 +54,35 @@ test("DMs only between teammates; one DM per pair; unread and read cursors", asy
   assert.equal((await B.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages.find((message: any) => message.id === m1.id).retracted, true);
 });
 
+test("batch hide is atomic, exact-room scoped and safely replays only for the acting member", async () => {
+  const owner = await home(S.base, "hide-owner");
+  const reader = await home(S.base, "hide-reader");
+  const outsider = await home(S.base, "hide-outsider");
+  const team = await teamOf(owner, reader);
+  const {workspaces} = await owner.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Exact team group", team_id: team.id, members: [reader.handle]});
+  const other = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Other team group", team_id: team.id, members: [reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}/messages`;
+  const own = await owner.ok("POST", room, {body: "Owner message"});
+  const received = await reader.ok("POST", room, {body: "Reader message"});
+  const elsewhere = await owner.ok("POST", `/v1/ot/conversations/${other.id}/messages`, {body: "Different conversation"});
+  const ids = [own.id, received.id];
+  const data = {workspace, message_ids: ids};
+  const hide = room + "/hide";
+  assert.equal((await outsider.call("POST", hide, data)).status, 404);
+  assert.equal((await owner.call("POST", hide, {message_ids: ids, direct: true})).status, 404);
+  assert.equal((await owner.call("POST", hide, {workspace, message_ids: [own.id, own.id]})).status, 400);
+  assert.equal((await owner.call("POST", hide, {workspace, message_ids: [own.id, elsewhere.id]})).status, 404);
+  const history = async (viewer: typeof owner) => (await viewer.ok("GET", room)).messages.map((message: any) => message.id);
+  assert.deepEqual(await history(owner), ids);
+  assert.deepEqual(await owner.ok("POST", hide, data), {hidden_message_ids: ids});
+  assert.deepEqual(await owner.ok("POST", hide, data), {hidden_message_ids: ids});
+  assert.deepEqual(await history(owner), []);
+  assert.deepEqual(await history(reader), ids);
+  assert.equal((await owner.ok("GET", `/v1/ot/conversations/${other.id}/messages`)).messages[0].id, elsewhere.id);
+});
+
 test("groups: members, mentions notify, creator removes, members leave", async () => {
   const A = await home(S.base, "ga");
   const B = await home(S.base, "gb");

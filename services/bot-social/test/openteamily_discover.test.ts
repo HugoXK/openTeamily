@@ -65,6 +65,48 @@ test("work remix yields only exact listed document or website snapshots", async 
   }
 });
 
+test("media remix exposes metadata until confirmation and rejects a same-timestamp file replacement", async (t) => {
+  const sameTime = Date.now();
+  const server = await startServer({...bulkAuth,now:() => sameTime});
+  t.after(server.stop);
+  const author = await home(server.base,"media-remix-author");
+  const reader = await home(server.base,"media-remix-reader");
+  const audio = {kind:"work",work_kind:"audio",ref:"audio-remix",slug:"audio-remix-fixture",title:"Sound clip",
+    media_filename:"声音.wav",media_mime:"audio/wav",media_data:WAV.toString("base64")};
+  const published = await author.ok("PUT","/v1/ot/listings",audio);
+  const path = "/v1/ot/discover/"+audio.slug;
+  assert.equal((await reader.ok("GET",path+"/detail")).work.remix_available,true);
+  const first = await reader.ok("GET",path+"/remix");
+  assert.deepEqual(Object.keys(first),["template"]);
+  assert.deepEqual(first.template.media,{mime:audio.media_mime,filename:audio.media_filename,bytes:WAV.length});
+  assert.equal(first.template.kind,"media");
+  const read = (revision: string) => reader.call("GET",path+"/remix?revision="+revision);
+  assert.deepEqual((await read(first.template.revision)).data.source,{
+    kind:"media",mime:audio.media_mime,filename:audio.media_filename,bytes:WAV.length,data:audio.media_data,
+  });
+  const modified = Buffer.from(WAV);
+  modified[modified.length-1] ^= 1;
+  const update = await author.ok("PUT","/v1/ot/listings",{...audio,media_data:modified.toString("base64")});
+  assert.equal(update.updated_at,published.updated_at);
+  const stale = await read(first.template.revision);
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"listing_changed");
+  const second = await reader.ok("GET",path+"/remix");
+  assert.deepEqual(second.template.media,first.template.media);
+  assert.notEqual(second.template.revision,first.template.revision);
+  assert.equal((await read(second.template.revision)).data.source.data,modified.toString("base64"));
+  await author.ok("DELETE","/v1/ot/listings/"+published.id);
+  assert.equal((await read(second.template.revision)).status,404);
+
+  const model = {kind:"work",work_kind:"model3d",ref:"model-remix",slug:"model-remix-fixture",title:"三角模型",model_data:TRIANGLE_GLB};
+  await author.ok("PUT","/v1/ot/listings",model);
+  const route = "/v1/ot/discover/"+model.slug;
+  assert.equal((await reader.ok("GET",route+"/detail")).work.remix_available,true);
+  const {template} = await reader.ok("GET",route+"/remix");
+  assert.deepEqual(template.media,{mime:"model/gltf-binary",filename:"三角模型.glb",bytes:Buffer.from(TRIANGLE_GLB,"base64").length});
+  assert.equal((await reader.ok("GET",route+"/remix?revision="+template.revision)).source.data,TRIANGLE_GLB);
+});
+
 test("publish, discover, like, collect, follow and notify followers", async () => {
   const A = await home(S.base, "creator");
   const B = await home(S.base, "fan");

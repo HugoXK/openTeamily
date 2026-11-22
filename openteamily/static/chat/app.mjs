@@ -9,7 +9,7 @@ import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, signupSessionError } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, signupDraftScope, signupSessionError } from '../home/runtime-readiness.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -531,9 +531,9 @@ export function reactionToggle(reactions, emoji) {
   return {emoji, active: !(current && current.mine)};
 }
 
-export function forwardTargets(conversations, currentId) {
+export function forwardTargets(conversations, currentId, userId) {
   return (conversations || []).filter(item => item.id !== currentId && !item.public_agent && item.direct?.open !== false)
-    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
+    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + conversationLabel(item, userId)}));
 }
 
 export function forwardCountLabel(count) {
@@ -1351,6 +1351,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
     groupManagementReceipts.clear();
+    hiddenMessageReceipts.clear();
+    if (hideDialog?.open) hideDialog.close();
     closePrivateThreadDialogs();
     resetStickerSurface();
   }
@@ -2404,26 +2406,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let selecting = false;
+  let selectionEpoch = 0;
+  let selectionScope = '';
   let forwardBusy = false;
   let forwardAttempt = null;
   const selectedMessages = new Set();
+  const hideDialog = document.getElementById('message-selection-hide-dialog');
+  const hideConfirm = document.getElementById('message-selection-hide-confirm');
+  const hideStatus = document.getElementById('message-selection-hide-status');
+  const hidingMessages = new Set();
+  const hiddenMessageReceipts = new Map();
+  let hideTarget = null;
   let pinnedIds = new Set();
+
+  const selectedSocialIds = () => selectionScope === sendScope() ? [...selectedMessages] : [];
 
   function syncForwardBar() {
     const bar = document.getElementById('forward-bar');
     if (!bar) return;
+    if (selecting && selectionScope !== sendScope()) {
+      selecting = false;
+      selectedMessages.clear();
+    }
     bar.hidden = !selecting;
-    document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
+    const count = selectedMessages.size;
+    document.getElementById('forward-count').textContent = uiLabel(forwardCountLabel(count), `${count} selected`);
     const target = document.getElementById('forward-target');
-    document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    const hiding = hidingMessages.has(sendScope());
+    document.getElementById('forward-submit').disabled = forwardBusy || hiding || !(count && target.value);
+    const remove = document.getElementById('selection-hide');
+    if (remove) {
+      remove.hidden = !servedByDsbot;
+      remove.disabled = !count || hiding || forwardBusy;
+    }
+    if (hideDialog?.open && (!selecting || hideTarget?.scope !== sendScope())) hideDialog.close();
     const capture = document.getElementById('selection-group-capture');
     if (capture) {
       capture.hidden = !servedByDsbot || currentSource !== 'social' || currentConversation?.kind !== 'group' || Boolean(currentConversation.public_agent);
-      capture.disabled = !selectedMessages.size;
+      capture.disabled = !count || hiding;
     }
     for (const id of ['selection-memory', 'selection-meeting']) {
       const action = document.getElementById(id);
-      if (action) action.disabled = !selectedMessages.size;
+      if (action) action.disabled = !count || hiding;
     }
     const toggle = document.getElementById('multi-select-toggle');
     if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
@@ -2432,21 +2456,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function fillForwardTargets() {
     const target = document.getElementById('forward-target');
     if (!target) return;
-    const options = forwardTargets(socialConversations, currentConversation && currentConversation.id);
-    target.replaceChildren(...options.map(item => {
+    const options = forwardTargets(socialConversations, currentConversation?.id, currentUser?.id);
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.disabled = true;
+    prompt.textContent = options.length ? uiLabel('选择会话', 'Choose a conversation') : uiLabel('暂无可用会话', 'No available conversations');
+    target.replaceChildren(prompt, ...options.map(item => {
       const option = document.createElement('option'); option.value = item.id; option.textContent = item.label; return option;
     }));
+    target.disabled = !options.length;
+    target.value = '';
   }
 
-  function setSelecting(on) {
+  function setSelecting(on, messageId) {
+    const anchor = currentSource === 'social' && currentConversation ? chatHistoryAnchor(undefined, messageId) : null;
     selecting = on;
+    selectionScope = on ? sendScope() : '';
+    selectionEpoch += 1;
     selectedMessages.clear();
+    if (on && messageId) selectedMessages.add(messageId);
+    const more = document.getElementById('message-selection-more');
+    if (more) more.open = false;
     if (on) fillForwardTargets();
     syncForwardBar();
-    if (currentConversation && currentSource === 'social') renderSocialMessages(lastSocialItems);
+    if (anchor) renderSocialMessages(lastSocialItems, {anchor});
+    if (on && messageId) {
+      const row = [...document.getElementById('message-list').children].find(item => item.dataset.messageId === messageId);
+      row?.querySelector('.message-tools input')?.focus({preventScroll: true});
+    }
   }
 
   function renderPinned(list) {
+    const hidden = hiddenMessageReceipts.get(sendScope());
+    if (hidden) list = list?.filter(item => !hidden.has(item.message_id));
     pinnedIds = new Set((list || []).map(item => item.message_id));
     const section = document.getElementById('pinned-messages');
     const holder = document.getElementById('pinned-message-list');
@@ -2465,7 +2507,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  function messageTools(item) {
+  function rememberHiddenMessages(scope, ids) {
+    const hidden = hiddenMessageReceipts.get(scope) || new Set();
+    for (const id of ids) hidden.add(id);
+    hiddenMessageReceipts.set(scope, hidden);
+  }
+
+  function forgetSocialMessages(ids, exitSelection = false) {
+    const removed = new Set(ids);
+    const anchor = chatHistoryAnchor(removed);
+    if (exitSelection) {
+      selecting = false;
+      selectionEpoch += 1;
+      selectedMessages.clear();
+    } else for (const id of ids) selectedMessages.delete(id);
+    syncForwardBar();
+    const scope = sendScope(), reply = replyDrafts.get(scope);
+    if (removed.has(reply?.message_id)) consumeReplyDraft(scope, reply);
+    const pins = document.getElementById('pinned-message-list');
+    for (const row of [...pins.children]) if (removed.has(row.dataset.pinnedMessage)) row.remove();
+    for (const id of ids) pinnedIds.delete(id);
+    document.getElementById('pinned-messages').hidden = !pinnedIds.size;
+    renderSocialMessages(lastSocialItems, {anchor});
+  }
+
+  function messageTools(item, row) {
     const tools = document.createElement('span');
     tools.className = 'message-tools';
     if (selecting) {
@@ -2473,16 +2539,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = selectedMessages.has(item.id);
-      box.setAttribute('aria-label', '选择这条消息');
+      box.setAttribute('aria-label', uiLabel('选择这条消息', 'Select this message'));
+      row.classList.add('message-selectable');
+      row.dataset.messageSelected = String(box.checked);
+      row.addEventListener('click', event => {
+        if (!event.target.closest('button, a, input, label, audio, video')) box.click();
+      });
       box.addEventListener('change', () => {
         if (box.checked && selectedMessages.size >= 20) {
           box.checked = false;
-          show('error', '一次最多转发 20 条消息。');
+          show('error', uiLabel('一次最多选择 20 条消息。', 'Select up to 20 messages.'));
         } else if (box.checked) {
           selectedMessages.add(item.id);
         } else {
           selectedMessages.delete(item.id);
         }
+        row.dataset.messageSelected = String(box.checked);
         syncForwardBar();
       });
       label.append(box, document.createTextNode('选择'));
@@ -2638,8 +2710,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
         catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
       } else if (action === 'forward' || action === 'select') {
-        setSelecting(true);
-        if (action === 'forward') { selectedMessages.add(item.id); syncForwardBar(); renderSocialMessages(lastSocialItems); }
+        if (scope === sendScope()) setSelecting(true, item.id);
       } else if (action === 'pin') {
         const pinButton = li.querySelector('.message-tools button');
         if (pinButton) pinButton.click();
@@ -2649,24 +2720,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
       } else if (action === 'delete') {
-        const wid = workspaceId(), cid = currentConversation.id;
+        if (scope !== sendScope() || !currentConversation) return;
+        const cid = currentConversation.id;
         const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`)
           .catch(() => ({status: 0, body: {}}));
-        if (wid !== workspaceId() || currentSource !== 'social' || currentConversation?.id !== cid) return;
         if (result.status !== 204) {
-          show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
+          if (scope === sendScope()) show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
           return;
         }
-        socialOpen++;
-        const visible = lastSocialItems.filter(row => row.id !== item.id).map(row =>
-          row.reply_preview?.message_id === item.id
-            ? {...row, reply_preview: {message_id: item.id, available: false}}
-            : row);
-        renderSocialMessages(visible, {refresh:true});
-        const pin = document.querySelector?.(`#pinned-message-list [data-pinned-message="${item.id}"]`);
-        pin?.remove();
-        pinnedIds.delete(item.id);
-        if (!pinnedIds.size) document.getElementById('pinned-messages').hidden = true;
+        rememberHiddenMessages(scope, [item.id]);
+        if (scope !== sendScope()) return;
+        forgetSocialMessages([item.id]);
         show('ok', '已从你的会话删除。', {announceOnly:true});
         void loadSessions();
       }
@@ -2827,11 +2891,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result;
   }
 
-  function privateHistoryAnchor() {
+  function chatHistoryAnchor(excluded, preferredId) {
     const scroller = document.getElementById('message-scroller');
     const top = scroller.getBoundingClientRect().top;
-    const message = Array.from(document.getElementById('message-list').children).find(node =>
-      node.dataset.messageId && node.getBoundingClientRect().bottom >= top);
+    const rows = Array.from(document.getElementById('message-list').children);
+    const preferred = preferredId && rows.find(node => node.dataset.messageId === preferredId);
+    const message = preferred || rows.find(node => node.dataset.messageId && !excluded?.has(node.dataset.messageId)
+      && node.getBoundingClientRect().bottom >= top);
     return {top: scroller.scrollTop, follow: false, id: message?.dataset.messageId,
       offset: message?.getBoundingClientRect().top};
   }
@@ -2875,7 +2941,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (result.status !== 200) throw new Error('History unavailable');
       const existing = new Set((privateChat ? lastAgentItems : lastSocialItems).map(item => item.id));
       const older = (result.body.items || []).filter(item => !existing.has(item.id));
-      const anchor = privateChat && older.length ? privateHistoryAnchor() : null;
+      const anchor = privateChat && older.length ? chatHistoryAnchor() : null;
       state.cursor = result.body.cursor ?? null;
       state.readingHistory = true;
       const notice = older.length
@@ -3216,7 +3282,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return block;
   }
 
-  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false, anchor} = {}) {
+    const hidden = hiddenMessageReceipts.get(sendScope());
+    if (hidden && items) items = items.filter(row => !hidden.has(row.id)).map(row =>
+      hidden.has(row.reply_preview?.message_id)
+        ? {...row, reply_preview: {message_id: row.reply_preview.message_id, available: false}} : row);
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
       ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
@@ -3368,9 +3438,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(reply);
       }
       if (item.role === 'agent' && !currentConversation?.public_agent && saveableSocialMessage(item)) li.append(saveMessageButton(item));
-      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item));
-      if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
-      if (item.role !== 'agent' && !item.retracted) {
+      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item, li));
+      if (!selecting && item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
+      if (!selecting && item.role !== 'agent' && !item.retracted) {
         const more = document.createElement('button');
         more.type = 'button'; more.className = 'message-more'; more.textContent = '⋯';
         more.setAttribute('aria-label', '消息操作'); more.setAttribute('aria-haspopup', 'menu');
@@ -3395,7 +3465,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPendingSend();
     syncGroupReplyProgress();
     attachmentSender?.render();
-    if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
+    if (anchor) {
+      scroller.scrollTop = anchor.top;
+      const anchored = [...list.children].find(row => anchor.id && row.dataset.messageId === anchor.id);
+      if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
+    } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
     return false;
   }
@@ -5206,7 +5280,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
-    const unconfirmedSignup = !confirmSignupSession(document.defaultView ?? globalThis, session);
+    const view = document.defaultView ?? globalThis;
+    const firstDraft = servedByDsbot && signupDraftScope(view, session.body?.user?.id);
+    const unconfirmedSignup = !confirmSignupSession(view, session);
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
@@ -5354,6 +5430,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const openStartingAgent = async () => {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) {
+        if (firstDraft && start.workspace === personalWorkspace && workspaceId() === personalWorkspace && start.agent === personalAgentId) {
+          publicDraft.move(firstDraft, JSON.stringify([owner.id, personalWorkspace, 'agent', personalAgentId, first.id]));
+        }
         const startupSnapshot = openLocal ? ownedStartingTranscript(local, start.agent, first.id) : undefined;
         await openAgentConversation(start.agent, first.id, {startupSnapshot});
       }
@@ -5547,15 +5626,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const multiToggle = document.getElementById('multi-select-toggle');
   if (multiToggle) multiToggle.addEventListener('click', () => setSelecting(!selecting));
   const forwardCancel = document.getElementById('forward-cancel');
-  if (forwardCancel) forwardCancel.addEventListener('click', () => setSelecting(false));
+  if (forwardCancel) forwardCancel.addEventListener('click', () => {
+    setSelecting(false);
+    (narrowScreen() ? document.getElementById('chat-more') : multiToggle)?.focus({preventScroll: true});
+  });
+  document.getElementById('message-selection-more')?.addEventListener('click', event => {
+    if (event.target.closest('button')) event.currentTarget.open = false;
+  });
+  const hideCancel = document.getElementById('message-selection-hide-cancel');
+  document.getElementById('selection-hide')?.addEventListener('click', () => {
+    const scope = sendScope(), ids = selectedSocialIds();
+    if (!servedByDsbot || !selecting || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
+        !ids.length || hidingMessages.has(scope) || forwardBusy || hideDialog.open) return;
+    hideTarget = {scope, ids, epoch: selectionEpoch, path: `${socialBase()}/${currentConversation.id}/messages/hide`};
+    document.getElementById('message-selection-hide-heading').textContent =
+      uiLabel(`从我的记录移除 ${ids.length} 条消息`, `Remove ${ids.length} ${ids.length === 1 ? 'message' : 'messages'} from my history`);
+    hideStatus.textContent = '';
+    hideConfirm.disabled = false;
+    hideDialog.showModal();
+    hideCancel.focus();
+  });
+  hideCancel?.addEventListener('click', () => hideDialog.close());
+  hideDialog?.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+  hideDialog?.addEventListener('close', () => { if (!hideDialog.open) hideTarget = null; });
+  document.getElementById('message-selection-hide-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = hideTarget;
+    if (!target || !hideDialog.open || hideConfirm.disabled || target.scope !== sendScope() || !selecting ||
+        target.epoch !== selectionEpoch || hidingMessages.has(target.scope)) return;
+    hidingMessages.add(target.scope);
+    syncForwardBar();
+    hideConfirm.disabled = true;
+    hideStatus.textContent = uiLabel('正在移除…', 'Removing messages…');
+    let result;
+    try { result = await request('POST', target.path, {message_ids: target.ids}, undefined, AbortSignal.timeout(10000)); }
+    catch {} finally {
+      hidingMessages.delete(target.scope);
+      syncForwardBar();
+    }
+    const sameView = hideDialog.open && hideTarget === target;
+    const hidden = result?.body?.hidden_message_ids;
+    if (result?.status !== 200 || !Array.isArray(hidden) || hidden.length !== target.ids.length || target.ids.some(id => !hidden.includes(id))) {
+      if (sameView && target.scope === sendScope()) {
+        hideStatus.textContent = result?.status === 404 ? uiLabel('所选消息有变化，请关闭后重新选择。', 'Your selection changed. Close this dialog and select again.')
+          : uiLabel('暂时无法确认移除结果，可以重试。', 'Could not confirm the removal. You can try again.');
+        hideConfirm.disabled = result?.status === 404;
+      }
+      return;
+    }
+    rememberHiddenMessages(target.scope, target.ids);
+    if (target.scope !== sendScope()) return;
+    if (sameView) hideDialog.close();
+    forgetSocialMessages(target.ids, target.epoch === selectionEpoch);
+    show('ok', uiLabel(`已从你的记录移除 ${target.ids.length} 条消息。`, `Removed ${target.ids.length} from your history.`), {announceOnly:true});
+    if (sameView && !sessionTransition?.pending) document.getElementById('chat-title')?.focus({preventScroll:true});
+    void loadSessions();
+  });
   const forwardTarget = document.getElementById('forward-target');
   if (forwardTarget) forwardTarget.addEventListener('change', syncForwardBar);
   const forwardSubmit = document.getElementById('forward-submit');
   if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
     const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
-    const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
-    if (!cid || !target || !ids.length || forwardBusy) return;
+    const ids = selectedSocialIds();
     const scope = sendScope();
+    if (!cid || !target || !ids.length || forwardBusy || hidingMessages.has(scope)) return;
+    const epoch = selectionEpoch;
     const signature = JSON.stringify([scope, target, ids]);
     if (forwardAttempt?.signature !== signature) forwardAttempt = {signature, key:idempotencyKey('forward-')};
     forwardBusy = true;
@@ -5569,7 +5704,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       forwardAttempt = null;
       if (scope === sendScope()) {
-        setSelecting(false);
+        if (epoch === selectionEpoch) setSelecting(false);
         show('ok', `已转发 ${result.body.forwarded ?? ids.length} 条消息。`);
         await loadSessions();
       }

@@ -303,6 +303,7 @@ class FakeElement {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); this.parent = null; }
+  getBoundingClientRect() { return {top: 0, bottom: 0}; }
   focus() { this.focused = true; }
   reset() { this.resetCount = (this.resetCount || 0) + 1; }
   closest(selector) {
@@ -2406,6 +2407,8 @@ test('pin a message and multi-select forward call the real endpoints', async () 
     box.checked = true;
     await fire(box, 'change');
     assert.equal(el('forward-count').textContent, '已选 1 条');
+    assert.equal(el('forward-target').value, '');
+    assert.equal(el('forward-submit').disabled, true);
     el('forward-target').value = 'conv-2';
     await fire(el('forward-target'), 'change');
     assert.equal(el('forward-submit').disabled, false);

@@ -1,16 +1,7 @@
 import {PUBLIC_AGENT_MESSAGE_LIMIT} from '../shell/public-agent-link.mjs';
+import {chatDraftOwner, readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
 
 const textOf = value => typeof value === 'string' && value.length <= PUBLIC_AGENT_MESSAGE_LIMIT ? value : '';
-
-function draftOwner(scope) {
-  try {
-    const [owner, workspace, kind, agent, conversation] = JSON.parse(scope);
-    if (typeof owner !== 'string' || !owner || typeof workspace !== 'string' || !workspace) return null;
-    if (kind === 'agent' && typeof agent === 'string' && agent) return owner;
-    if (kind === 'social' && typeof conversation === 'string' && conversation) return owner;
-  } catch {}
-  return null;
-}
 
 export function mountPublicDraft(document, {onChange = () => {}} = {}) {
   const input = document.getElementById('chat-body');
@@ -24,7 +15,6 @@ export function mountPublicDraft(document, {onChange = () => {}} = {}) {
   let writeTimer;
   const prefix = 'openteamily.public-agent-draft:';
   const recoveryPrefix = 'openteamily.public-agent-draft-recovery:';
-  const accountPrefix = 'openteamily.chat-drafts:';
 
   function read(scope, keyPrefix) {
     try { return document.defaultView?.sessionStorage?.getItem(keyPrefix + scope); } catch {}
@@ -46,14 +36,7 @@ export function mountPublicDraft(document, {onChange = () => {}} = {}) {
 
   function draftsOf(owner) {
     if (!accountDrafts.has(owner)) {
-      const drafts = new Map();
-      try {
-        const stored = JSON.parse(read(owner, accountPrefix) || '{}');
-        for (const [scope, value] of Object.entries(stored || {})) {
-          if (draftOwner(scope) === owner && textOf(value)) drafts.set(scope, value);
-        }
-      } catch {}
-      accountDrafts.set(owner, drafts);
+      accountDrafts.set(owner, readChatDrafts(document.defaultView, owner));
     }
     return accountDrafts.get(owner);
   }
@@ -62,22 +45,21 @@ export function mountPublicDraft(document, {onChange = () => {}} = {}) {
     globalThis.clearTimeout(writeTimer);
     writeTimer = undefined;
     for (const owner of dirtyAccounts) {
-      const drafts = draftsOf(owner);
-      save(owner, accountPrefix, drafts.size ? JSON.stringify(Object.fromEntries(drafts)) : '');
+      writeChatDrafts(document.defaultView, owner, draftsOf(owner));
     }
     dirtyAccounts.clear();
   }
 
   function lookup(scope, publicChat = false) {
     if (publicChat) return memory.get(scope) ?? textOf(read(scope, prefix));
-    const owner = draftOwner(scope);
+    const owner = chatDraftOwner(scope);
     return (owner ? draftsOf(owner).get(scope) : memory.get(scope)) || '';
   }
 
   function update(scope, publicChat, text) {
     const previous = lookup(scope, publicChat);
     if (previous === text) return;
-    const owner = publicChat ? null : draftOwner(scope);
+    const owner = publicChat ? null : chatDraftOwner(scope);
     const drafts = owner ? draftsOf(owner) : memory;
     if (text) drafts.set(scope, text);
     else drafts.delete(scope);
@@ -116,7 +98,7 @@ export function mountPublicDraft(document, {onChange = () => {}} = {}) {
       showRecovery(publicChat ? recovered.get(scope) ?? read(scope, recoveryPrefix) : '');
     },
     move(fromScope, toScope) {
-      if (fromScope === toScope || draftOwner(fromScope) !== draftOwner(toScope)) return;
+      if (fromScope === toScope || chatDraftOwner(fromScope) !== chatDraftOwner(toScope)) return;
       if (active?.scope === fromScope) {
         if (active.publicChat) return;
         const text = input.value || '';

@@ -242,6 +242,7 @@ function rethrow(error) {
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
     listing_changed: 'listing_changed',
+    title_conflict: 'title_conflict',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
     comment_not_found: 'not_found',
@@ -1126,6 +1127,19 @@ function messengerExtraRoutes(host, wakeReplies) {
           const bs = client(host); await messengerScope(host, bs, match[1], match[2])
           await bs.post(`${msg(match[3])}/hide`, {conversation_id: match[2]})
           return [204, {}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/messages\\/hide'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const {personal} = await messengerScope(host, bs, match[1])
+          const data = await bs.post(conv(match[2]) + '/messages/hide', {
+            message_ids: body?.message_ids, ...(personal ? {direct:true} : {workspace:match[1]}),
+          })
+          return [200, data]
         })
       },
     },

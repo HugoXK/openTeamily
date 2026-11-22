@@ -8,8 +8,72 @@ import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
 import { createDispatch } from '../src/dispatch.js'
 import { boot } from './helpers.js'
+import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
+
+test('private Space media remix imports exact bytes, revalidates signatures and retains committed receipts', async () => {
+  const bot = await boot()
+  const other = await boot()
+  const workspace = 'a'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  const revision = '7'.repeat(64)
+  const wav = Buffer.alloc(3*1024*1024 + 44,0x80)
+  Buffer.from('RIFF').copy(wav)
+  wav.writeUInt32LE(wav.length-8,4)
+  Buffer.from('WAVEfmt ').copy(wav,8)
+  wav.writeUInt32LE(16,16)
+  wav.writeUInt16LE(1,20)
+  wav.writeUInt16LE(1,22)
+  wav.writeUInt32LE(22050,24)
+  wav.writeUInt32LE(22050,28)
+  wav.writeUInt16LE(1,32)
+  wav.writeUInt16LE(8,34)
+  Buffer.from('data').copy(wav,36)
+  wav.writeUInt32LE(wav.length-44,40)
+  const model = triangleGlb()
+  const media = (mime, filename, bytes) => ({kind:'media',mime,filename,bytes:bytes.length,data:bytes.toString('base64')})
+  let source = media('audio/wav','三兆字节.wav',wav)
+  const template = {kind:'media',title:'Public media',revision}
+  let withdrawn = false
+  let reads = 0
+  setSharedBotSocial({request:async () => {
+    reads++
+    if (withdrawn) throw Object.assign(new Error('Withdrawn'),{status:404,code:'listing_not_found'})
+    return {template,source}
+  }})
+  const path = '/v1/discover/works/public-media/remix'
+  const call = (title,key) => bot.call('discover','POST',path,{title,revision},key)
+  const catalog = `/v1/workspaces/${workspace}/artifacts`
+  const first = await call('我的音频','media-remix-large')
+  assert.equal(first.status,201,JSON.stringify(first.body))
+  const audio = first.body.artifact
+  assert.equal(audio.kind,'media')
+  const file = catalog+'/'+audio.id+'/file'
+  const original = await bot.call('artifacts','GET',file)
+  assert.deepEqual(Buffer.from(original.download.data,'base64'),wav)
+  assert.equal((await other.call('artifacts','GET',file)).status,404)
+  const manual = await bot.call('artifacts','POST',catalog,{_multipart:true,fields:{title:'上传时仍限两兆字节'},
+    files:{file:{filename:source.filename,data:source.data}}},'oversize-upload-test')
+  assert.equal(manual.status,413)
+  assert.equal((await call('我的音频','media-remix-other-key')).body.error.code,'title_conflict')
+  assert.equal(reads,1)
+  source = {...source,mime:'image/png'}
+  assert.equal((await call('错误的类型','media-remix-mismatch')).status,400)
+  source = media('model/gltf-binary','外部模型.glb',triangleGlb({
+    customize(model) { model.buffers[0].uri = 'https://example.test/payload.bin' },
+  }))
+  assert.equal((await call('带外部地址的模型','media-remix-external')).status,400)
+  source = media('model/gltf-binary','三角模型.glb',model)
+  const glb = await call('我的模型','media-remix-glb-file')
+  assert.equal(glb.status,201,JSON.stringify(glb.body))
+  const saved = await bot.call('artifacts','GET',catalog+'/'+glb.body.artifact.id+'/file')
+  assert.equal(saved.download.content_type,'model/gltf-binary')
+  assert.deepEqual(Buffer.from(saved.download.data,'base64'),model)
+  withdrawn = true
+  assert.deepEqual((await call('我的音频','media-remix-large')).body,first.body)
+  assert.equal((await call('撤回后新副本','media-remix-closed')).status,404)
+})
 
 test('public work remix writes only verified publications to the viewer’s personal Space', async () => {
   const bot = await boot()

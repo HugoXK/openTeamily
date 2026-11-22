@@ -3,10 +3,10 @@
 // page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
-import { GLB_MIME } from '../../lib/glb.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
+  emptyBoard, emptyDashboard, emptySlides, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
@@ -381,12 +381,24 @@ export function remixPublicWork(ctx, {workspace_id:workspace,slug,revision,title
     if (prior.request_hash !== receiptHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
     return {status:200,body:{artifact:view(load(ctx.store,workspace,prior.id))}}
   }
-  if (!source) return null
-  if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
-    refuse(400,'invalid','该公开版本无法复制。')
-  }
   if (ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?',workspace,titleHash(trimmed))) {
     refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+  }
+  if (!source) return null
+  if (source.kind === 'media') {
+    const {mime, filename, bytes} = source
+    const maximum = mime === GLB_MIME ? MAX_GLB_BYTES : MAX_MEDIA_OBJECT_BYTES
+    if (!MEDIA_MIMES.has(mime) || typeof filename !== 'string' || !filename.trim() ||
+        !Number.isSafeInteger(bytes) || bytes < 12 || bytes > maximum || typeof source.data !== 'string' ||
+        source.data.length !== Math.ceil(bytes / 3) * 4) refuse(400,'invalid','这个公开文件的格式或大小不受支持。')
+    const data = Buffer.from(source.data,'base64')
+    if (data.length !== bytes || data.toString('base64') !== source.data || sniffMime(data) !== mime) {
+      refuse(400,'invalid','这个公开文件的内容与文件类型不符。')
+    }
+    return createMedia(ctx,workspace,{title:trimmed,mime,filename,data,key},{receiptHash})
+  }
+  if (!['document','website'].includes(source.kind) || !validBody(source.body) || !source.body.trim()) {
+    refuse(400,'invalid','该公开版本无法复制。')
   }
   return createArtifact(ctx,workspace,{title:trimmed,kind:source.kind,body:source.body},key,{receiptHash})
 }
@@ -443,7 +455,7 @@ export function duplicateArtifact({store, owner, featureDir}, workspaceId, {arti
   })
 }
 
-export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }) {
+export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }, {receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   if (!validTitle(title)) refuse(400, 'invalid', 'Provide a document title and body')
@@ -458,7 +470,7 @@ export function createMedia(ctx, workspaceId, { title, data, filename, mime, key
   const sha = createHash('sha256').update(data).digest('hex')
   const payload = { title: trimmed, kind: 'media', sha256: sha, mime: used, filename: name }
   const keyHash = digest('artifact:' + key)
-  const requestHash = digest(stableJson(payload))
+  const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
