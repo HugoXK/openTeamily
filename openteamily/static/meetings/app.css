@@ -120,6 +120,7 @@
 .meeting-actions a.secondary { display: inline-flex; align-items: center; text-decoration: none; }
 #meeting-draft-status { margin: 0; }
 #meeting-draft-status:empty { display: none; }
+#meeting-draft-status[data-state="failed"] { color: var(--ot-danger, #b42318); }
 .meeting-draft { border: 1px solid var(--ot-line); border-radius: var(--ot-radius); padding: .85rem; }
 .meeting-draft h3 { margin: 0; }
 #meeting-draft-summary { white-space: pre-wrap; overflow-wrap: anywhere; }

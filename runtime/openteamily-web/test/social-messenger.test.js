@@ -292,6 +292,11 @@ test('manual group reply uses the same managed send and progress reads follow th
       agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
     'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_source',body:input.body,
       reply_jobs:[{id:'otj_live',status:'queued',attempt:1}]}),
+    'GET /v1/ot/conversations/otc_1/messages': () => ({messages:[
+      {id:'otm_source',body:'Please help',author:{kind:'member',owner_id:'owner-a'}},
+      {id:'otm_answer',body:'Done',author:{kind:'agent',agent_ref:'helper',name:'Helper'},
+        reply_job_id:'otj_live'},
+    ]}),
     [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/reply-progress`]: () => ({items:[sharedProgress]}),
     'GET /v1/ot/conversations/otc_account/reply-progress': () => ({items:[accountProgress]}),
   })
@@ -317,6 +322,10 @@ test('manual group reply uses the same managed send and progress reads follow th
   const account = await feature.v1({method:'GET',path:from(personal,'otc_account')+'/reply-progress'})
   assert.deepEqual(account,{status:200,body:{items:[accountProgress]}})
   assert.equal(f.calls.at(-1).path,'/v1/ot/conversations/otc_account/reply-progress')
+  const transcript = await feature.v1({method:'GET',path:from(workspace)})
+  assert.equal(transcript.status,200)
+  assert.deepEqual(transcript.body.items.map(({id,reply_job_id}) => [id,reply_job_id]),
+    [['otm_source',undefined],['otm_answer','otj_live']])
 })
 
 test('the group settings route patches only the requested automatic-reply preference', async () => {

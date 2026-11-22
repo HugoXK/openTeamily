@@ -410,6 +410,8 @@ body.app-workspace #main-panel {
 #manual-run-status:empty { display: none; }
 #manual-run-status:is([data-state="failed"], [data-state="timeout"], [data-state="uncertain"]) { color: var(--ot-danger); }
 #manual-run-status[data-state="running"] { color: var(--ot-accent-hover); }
+.item-run-status { align-self: flex-start; }
+.item-run-status[data-status="running"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
 #manual-run-status[data-state="succeeded"] { color: var(--ot-success, #147044); }
 #view-watched-run, #run-history-retry { min-height: 2.75rem; }
 #run-history-error:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; }

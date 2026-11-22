@@ -68,6 +68,11 @@ function runActive(run) {
   return run?.status === 'queued' || run?.status === 'running';
 }
 
+function scopedActiveRun(run, workspace, automation) {
+  return runActive(run) && /^[a-f0-9]{32}$/.test(run.id) && run.workspace_id === workspace && run.automation_id === automation
+    ? run : null;
+}
+
 // A run that ended can be asked for again; a queued run is cancelled instead,
 // and a finished success has nothing to re-run.
 export function retryAllowed(run) {
@@ -427,6 +432,7 @@ function renderList(items, list, empty, onOpen) {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'link';
+    open.dataset.automationId = item.id;
     open.textContent = item.title;
     open.addEventListener('click', () => onOpen(item));
     const meta = document.createElement('span');
@@ -434,6 +440,14 @@ function renderList(items, list, empty, onOpen) {
     meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
     copy.appendChild(open);
     copy.appendChild(meta);
+    const running = scopedActiveRun(item.active_run, item.workspace_id, item.id);
+    if (running) {
+      const pill = document.createElement('span');
+      pill.className = 'status-pill item-run-status';
+      pill.dataset.status = running.status;
+      pill.textContent = runStatusLabel(running);
+      copy.appendChild(pill);
+    }
     const consumed = item.schedule_status?.state === 'once_triggered';
     if (item.schedule_status && !consumed) {
       const next = document.createElement('span');
@@ -518,6 +532,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let runTimer = 0;
   let runRequest = 0;
   let listRequest = 0;
+  let listTimer = 0;
+  let listFingerprint = '';
   let recentRuns = [];
   let runCursors = [''];
   let pendingRunCursors = null;
@@ -990,7 +1006,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (ok) {
       runCursors = cursors;
       nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
-      activeRun = typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive);
+      const pending = scopedActiveRun(listed.body.active_run, target.workspace, target.automation);
+      if (pending) watchedRuns.set(target.key, pending);
+      activeRun = Boolean(pending) || (typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive));
       const upcoming = listed.body.schedule_status;
       if (listed.body.schedule_revision === current.revision &&
           (upcoming?.state !== current.schedule_status?.state || upcoming?.at !== current.schedule_status?.at)) {
@@ -1009,7 +1027,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncRunControls();
     const watched = watchedRuns.get(target.key);
     let updated = watched && items.find(item => item.id === watched.id && watchMatches(item, target));
-    if (!updated && runActive(watched)) {
+    const reportedActive = ok && scopedActiveRun(listed.body.active_run, target.workspace, target.automation);
+    if (!updated && runActive(watched) && reportedActive?.id !== watched.id) {
       const exact = await runRequestWithTimeout('GET', `${path}/${encodeURIComponent(watched.id)}`);
       if (!stillCurrent()) return;
       if (watchedRuns.get(target.key) === watched && exact.status === 200 && exact.body.run?.id === watched.id && watchMatches(exact.body.run, target)) {
@@ -1110,6 +1129,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
+    globalThis.clearTimeout(listTimer);
+    listRequest += 1;
     editorRequest += 1;
     if (linkRetry) linkRetry.hidden = true;
     saveButton.disabled = false;
@@ -1119,7 +1140,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meetingSource = source;
     draftSave = null;
     recentRuns = [];
-    activeRun = false;
+    const target = runScope();
+    const pending = scopedActiveRun(item?.active_run, target.workspace, target.automation);
+    if (pending) watchedRuns.set(target.key, pending);
+    activeRun = Boolean(pending);
     runFingerprint = '';
     document.getElementById('run-list').textContent = '';
     document.getElementById('run-empty').hidden = true;
@@ -1249,12 +1273,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function loadList({startup} = {}) {
+  async function loadList({startup, quiet = false} = {}) {
+    globalThis.clearTimeout(listTimer);
     const id = workspaceId();
     if (!id) return;
     const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
+    const searchText = search.value;
+    const refreshPending = () => {
+      listTimer = globalThis.setTimeout(() => {
+        if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
+      }, document.hidden ? 12000 : 3500);
+    };
+    const renderItems = items => {
+      const fingerprint = JSON.stringify(items);
+      if (!quiet || listFingerprint !== fingerprint) {
+        const focused = document.activeElement?.dataset?.automationId;
+        listFingerprint = fingerprint;
+        renderList(items, list, empty, item => openEditor(item));
+        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
+      }
+      if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
+    };
     if (category === 'work' || category === 'life') {
       const render = () => {
         const loading = templateState === 'idle' || templateState === 'loading';
@@ -1279,26 +1320,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (projected) {
       empty.textContent = '这个分类下还没有自动化。';
       setBusy(empty, false);
-      renderList(projected, list, empty, item => openEditor(item));
+      renderItems(projected);
       return;
     }
-    setBusy(list, true);
-    list.textContent = '';
-    empty.hidden = false;
-    setBusy(empty, true);
-    empty.textContent = '正在加载自动化…';
+    if (!quiet) {
+      setBusy(list, true);
+      list.textContent = '';
+      empty.hidden = false;
+      setBusy(empty, true);
+      empty.textContent = '正在加载自动化…';
+    }
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
       .catch(() => ({status: 0, body: {}}));
     if (seq !== listRequest || workspaceId() !== id) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
+      if (quiet && ![401, 403, 404].includes(listed.status)) {
+        refreshPending();
+        return;
+      }
+      list.textContent = '';
       empty.hidden = false;
       empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       return;
     }
     empty.textContent = '这个分类下还没有自动化。';
-    renderList(listed.body.items || [], list, empty, item => openEditor(item));
+    renderItems(listed.body.items || []);
   }
 
   function fillWorkspaces(items) {
@@ -1676,6 +1724,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runSubmissions.clear();
     watchedRuns.clear();
     stopRunPoll();
+    globalThis.clearTimeout(listTimer);
     await load();
   });
 

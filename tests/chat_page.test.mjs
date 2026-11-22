@@ -863,12 +863,13 @@ test('an already running native reply resumes in its existing bubble and loads t
   const {doc, el, restore, fetcher} = nativeReplyChat((path, _opts, scope) => {
     if (path === '?limit=50') {
       historyReads += 1;
-      const current = polls < 2 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
+      const current = polls < 3 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
       return json(200, {...scope, items: [user, current]});
     }
-    assert.equal(path, '/reply-progress?key=' + key);
+    assert.equal(path, '/reply-progress?key=' + key + '&after=' + polls);
     polls += 1;
-    return json(200, polls === 1 ? {state: 'running', text: '正在继续回复'} : {state: 'succeeded'});
+    return json(200, polls === 1 ? {state:'running', revision:1, phase:'thinking', text:''}
+      : polls === 2 ? {state:'running', revision:2, phase:'writing', text:'正在继续回复'} : {state:'succeeded'});
   });
   try {
     await mount(doc, {fetcher});
@@ -877,14 +878,16 @@ test('an already running native reply resumes in its existing bubble and loads t
     assert.equal(pending.dataset.messageId, reply.id);
     t.mock.timers.tick(400); await settle();
     assert.equal(list.children.at(-1), pending);
+    assert.equal(pending.children.find(node => node.className === 'reply-state').textContent, '正在思考');
+    t.mock.timers.tick(50); await settle();
     assert.equal(pending.children.at(-1).textContent, '正在继续回复');
-    t.mock.timers.tick(400); await settle();
+    t.mock.timers.tick(50); await settle();
     assert.deepEqual(list.children.map(node => node.dataset.messageId), [user.id, reply.id]);
     assert.equal(list.children.at(-1).dataset.replyProgress, undefined);
     assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === '已保存的答复'));
     t.mock.timers.tick(3000); await settle();
     assert.equal(historyReads, 2);
-    assert.equal(polls, 2);
+    assert.equal(polls, 3);
   } finally { restore(); }
 });
 
@@ -1029,8 +1032,11 @@ test('group progress updates only the original job and attempt and clears stale 
     await mount(doc, {fetcher});
     const list = el('message-list');
     const original = list.children[0];
-    const jobs = descendants(original).filter(node => node.className === 'group-reply-job');
-    const [first, second] = jobs.map(row => row.children.find(node => node.className === 'group-reply-preview'));
+    const jobs = list.children.slice(1);
+    assert.ok(jobs.every(row => row.tagName === 'LI' && row.classList.contains('other')));
+    assert.deepEqual(jobs.map(row => row.children[0].textContent), ['助手一 · AI 智能体', '助手二 · AI 智能体']);
+    assert.ok(!descendants(original).some(node => node.dataset.replyJobId));
+    const [first, second] = jobs.map(row => row.children.find(node => node.classList.contains('group-reply-preview')));
     t.mock.timers.tick(500); await settle();
     assert.equal(list.children[0], original);
     assert.equal(first.textContent, '原样显示 <em>片段</em>');
@@ -1086,12 +1092,14 @@ test('a group reply already absent from the first progress poll refreshes its fa
   try {
     await mount(doc, {fetcher});
     const list = el('message-list');
-    const row = () => descendants(list.children[0]).find(node => node.className === 'group-reply-job');
+    const row = () => list.children.find(node => node.dataset.replyJobId === job.id);
+    const pendingRow = row();
     assert.equal(row().dataset.state, 'queued');
     t.mock.timers.tick(500); await settle();
     t.mock.timers.tick(350); await settle();
     assert.equal(historyReads, 2);
     assert.equal(list.children[0].dataset.messageId, source.id);
+    assert.equal(row(), pendingRow, 'terminal failure uses the original assistant row');
     assert.equal(row().dataset.state, 'failed');
     assert.ok(row().children.some(node => node.getAttribute('aria-label') === '重试 核对助手'));
     t.mock.timers.tick(9000); await settle();
@@ -1116,11 +1124,11 @@ test('group retry submits the displayed attempt and refreshes an outdated failur
   try {
     await mount(doc, {fetcher});
     const list = el('message-list');
-    const retry = descendants(list.children[0]).find(node => node.getAttribute('aria-label') === '重试 核对助手');
+    const retry = descendants(list).find(node => node.getAttribute('aria-label') === '重试 核对助手');
     await fire(retry, 'click');
     await settle();
     assert.deepEqual(attempts, [{job_id: job.id, attempt: 1}]);
-    const row = descendants(list.children[0]).find(node => node.className === 'group-reply-job');
+    const row = list.children.find(node => node.dataset.replyJobId === job.id);
     assert.equal(row.dataset.replyAttempt, '2');
   } finally { restore(); }
 });
@@ -1166,10 +1174,43 @@ test('manual group requests preserve a failed draft and append the eventual acce
     assert.equal(sends[0].key, sends[1].key);
     const original = el('message-list').children[0];
     assert.equal(original.dataset.messageId, message.id);
-    const preview = descendants(original).find(node => node.className === 'group-reply-preview');
+    const preview = descendants(el('message-list')).find(node => node.classList.contains('group-reply-preview'));
     t.mock.timers.tick(500); await settle();
     assert.equal(preview.textContent, '讨论要点');
     assert.equal(historyReads, 1);
+  } finally { restore(); }
+});
+
+test('only the matching same-name assistant row becomes the durable reply in transcript order', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const jobs = ['job-a', 'job-b'].map(id => ({id, attempt: 1, status: 'running', agent_name: '同名助手'}));
+  const source = {id: 'source', user_id: alice, body: '请两位协助', created: 1, seq: 1, reply_jobs: jobs};
+  const later = {id: 'later', user_id: alice, body: '另一条先保存的消息', created: 2, seq: 2};
+  const reply = {id: 'reply', reply_job_id: jobs[1].id, role: 'agent', agent_name: '同名助手',
+    body: '第二位助手的最终回复', created: 3, seq: 3};
+  const snapshot = job => ({id: job.id, message_id: source.id, attempt: job.attempt, text: job.id + ' 的片段'});
+  let progressReads = 0;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, _opts, conversation) => {
+    if (!path) return json(200, {conversation, items: progressReads < 2 ? [source] : [source, later, reply]});
+    assert.equal(path, '/reply-progress');
+    progressReads += 1;
+    return json(200, {items: (progressReads < 2 ? jobs : [jobs[0]]).map(snapshot)});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const [, first, second] = list.children;
+    t.mock.timers.tick(500); await settle();
+    t.mock.timers.tick(500); await settle();
+    const visiblePartial = descendants(second).find(node => node.classList.contains('group-reply-preview'));
+    assert.equal(visiblePartial.textContent, 'job-b 的片段', 'awaiting the committed message retains the last fragment');
+    t.mock.timers.tick(350); await settle();
+    assert.deepEqual(list.children.map(node => node.dataset.messageId), ['source', undefined, 'later', 'reply']);
+    assert.equal(list.children[1], first);
+    assert.equal(list.children[3], second);
+    assert.equal(second.dataset.state, 'replied');
+    assert.equal(second.children[0].textContent, '同名助手 · AI 智能体');
+    assert.equal(second.children[1].textContent, reply.body);
   } finally { restore(); }
 });
 

@@ -307,11 +307,21 @@ function replyClaimReceipt(ot: OtContext, job: ReplyJob) {
   return {ok: true, quoted_message: {author: author || "成员", text: original.body.slice(0, 1500).replace(/[\uD800-\uDBFF]$/, "")}};
 }
 
+function deliveredReplyJobId(ot: OtContext, message: any) {
+  if (message.author_kind !== "agent" || message.reply_mode !== "mention") return;
+  const match = /^job:(otj_[0-9A-HJKMNP-TV-Z]{26})$/.exec(message.client_key ?? "");
+  if (!match) return;
+  return ot.get<{id: string}>(`SELECT id FROM ot_agent_reply_jobs
+    WHERE id=? AND message_id=? AND owner_id=? AND agent_ref=? AND status='replied'`,
+    match[1], message.reply_to, message.author_id, message.agent_ref)?.id;
+}
+
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   ...(viewer === m.author_id && m.author_kind === "member" && m.client_key ? {client_key: m.client_key} : {}),
+  ...(viewer && m.author_kind === "agent" ? {reply_job_id: deliveredReplyJobId(ot, m)} : {}),
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
   ...(viewer && m.reply_to && !m.retracted ? {reply_preview: replyPreview(ot, m, viewer)} : {}),

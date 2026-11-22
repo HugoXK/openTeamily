@@ -176,13 +176,19 @@ function turnProgress(onProgress) {
 
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase } = {}) {
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
   return new Promise((resolve, reject) => {
     const sessionId = rt.chatOf(botId)
     const progress = turnProgress(onProgress)
     let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
     let revision = 0
+    let phase = 'preparing'
+    function emitPhase(next) {
+      if (next === phase || typeof onPhase !== 'function') return
+      phase = next
+      try { void Promise.resolve(onPhase(next)).catch(() => {}) } catch {}
+    }
     let settled = false
     const parts = []
     const listeners = []
@@ -203,6 +209,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
     function discardAttempt() {
       attempt = undefined
       progress?.discard()
+      emitPhase('preparing')
     }
     function resetTurn() {
       boundSession = undefined
@@ -210,6 +217,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
       attempt = undefined
       parts.length = 0
       progress?.reset()
+      emitPhase('preparing')
     }
     try {
       listeners.push(ctx.on('session/event', (session, event) => {
@@ -242,9 +250,9 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
         for (const item of rt.displayItems(sessionId, [event]) ?? []) {
           if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
         }
-        if (progress && event.type === 'assistant/message') {
+        if (event.type === 'assistant/message') {
           if (attempt?.step === event.data?.step) attempt = undefined
-          progress.commit(parts.slice(start))
+          progress?.commit(parts.slice(start))
         }
         if (event.type === 'turn/end') {
           const reply = parts.join('\n\n').trim()
@@ -252,7 +260,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
         }
       }))
-      if (progress) {
+      if (progress || typeof onPhase === 'function') {
         listeners.push(ctx.on('agent/assistant-stream', ({ agent, frame }) => {
           if (settled || !boundSession || boundTurn === undefined || agent?.id !== sessionId || agent?.session !== boundSession
               || !Number.isSafeInteger(frame?.revision)) return
@@ -271,7 +279,10 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           if (frame.type === 'end') {
             discardAttempt()
           } else if (frame.type === 'chunk' && frame.chunk?.type === 'text-delta' && typeof frame.chunk.text === 'string') {
-            progress.append(frame.chunk.text)
+            progress?.append(frame.chunk.text)
+            emitPhase('writing')
+          } else if (frame.type === 'chunk' && frame.chunk?.type === 'reasoning-delta') {
+            emitPhase('thinking')
           }
         }, { global: true }))
         listeners.push(ctx.on('agent/disposed', ({ agent }) => {
