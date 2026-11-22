@@ -10,6 +10,7 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, signupDraftScope, signupSessionError } from '../home/runtime-readiness.mjs';
+import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -2319,6 +2320,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.clearTimeout(watch.timer);
     globalThis.clearTimeout(watch.timeout);
     watch.controller?.abort();
+    closeReplyStream(watch);
   }
 
   function isCurrentReply(watch) {
@@ -2332,9 +2334,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function paintReplyProgress(view, snapshot) {
     const state = snapshot.state === 'running' ? 'running' : 'queued';
-    view.bubble.dataset.state = state;
+    if (view.bubble.dataset.state !== state) view.bubble.dataset.state = state;
     const label = snapshot.phase === 'thinking' ? uiLabel('正在思考', 'Thinking')
-      : state === 'queued' || snapshot.phase === 'preparing' ? uiLabel('正在准备回复', 'Preparing a reply')
+      : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
       : uiLabel('正在生成回复', 'Writing a reply');
     if (view.heading.textContent !== label) view.heading.textContent = label;
     if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
@@ -2348,6 +2350,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function scheduleReplyProgress(watch, delay = 400) {
     if (!isCurrentReply(watch)) return;
     watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
+  }
+
+  async function settleReplyProgress(watch) {
+    if (watch.posting) {
+      const queue = pendingSends.get(watch.scope);
+      const job = queue?.replying;
+      if (job?.key === watch.key && job.acceptReceipt) {
+        const pair = await confirmPostedSend(queue, job);
+        if (pair) job.acceptReceipt?.({status: 200, body: pair});
+        else scheduleReplyProgress(watch, 1200);
+      }
+      return;
+    }
+    await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+    scheduleReplyProgress(watch, 1500);
   }
 
   async function pollReplyProgress(watch) {
@@ -2369,24 +2386,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       scheduleReplyProgress(watch, changed ? 50 : unchangedDelay);
       return;
     }
-    const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
-    if (terminal && watch.posting) {
-      const queue = pendingSends.get(watch.scope);
-      const job = queue?.replying;
-      if (job?.key === watch.key && job.acceptReceipt) {
-        const pair = await confirmPostedSend(queue, job);
-        if (pair) job.acceptReceipt?.({status: 200, body: pair});
-        else scheduleReplyProgress(watch, 1200);
-      }
-      return;
-    }
+    if (['succeeded','failed','cancelled'].includes(snapshot?.state)) return settleReplyProgress(watch);
     watch.failures += 1;
-    if (terminal || (!watch.posting && watch.failures >= 4)) {
-      await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
-      scheduleReplyProgress(watch, 1500);
-      return;
-    }
+    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch);
     scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
+  }
+
+  function closeReplyStream(watch) {
+    globalThis.clearTimeout(watch.streamTimeout);
+    const source = watch.stream;
+    watch.stream = null;
+    source?.close();
+  }
+
+  function startReplyStream(watch) {
+    const EventSource = document.defaultView?.EventSource;
+    if (typeof EventSource !== 'function') return false;
+    const params = new URLSearchParams({workspace:workspaceId(),agent:currentAgent.id,
+      conversation:currentConversation.id,key:watch.key});
+    let source;
+    try { source = new EventSource('/b/api/openteamily/reply-stream?' + params); } catch { return false; }
+    watch.stream = source;
+    const active = () => watch.stream === source && isCurrentReply(watch);
+    const fallback = () => {
+      if (!active()) return;
+      closeReplyStream(watch);
+      scheduleReplyProgress(watch, 0);
+    };
+    const timeout = delay => {
+      globalThis.clearTimeout(watch.streamTimeout);
+      watch.streamTimeout = globalThis.setTimeout(fallback, delay);
+    };
+    const keepalive = () => { if (active()) timeout(16000); };
+    source.addEventListener('open', keepalive);
+    source.addEventListener('heartbeat', keepalive);
+    source.addEventListener('error', fallback);
+    source.addEventListener('message', event => {
+      if (!active()) return;
+      let data;
+      try { data = JSON.parse(event.data); } catch { return fallback(); }
+      if (['succeeded','failed','cancelled'].includes(data?.state)) {
+        closeReplyStream(watch);
+        void settleReplyProgress(watch);
+        return;
+      }
+      if (data?.state !== 'running' && data?.state !== 'pending') return fallback();
+      keepalive();
+      if (typeof data.text !== 'string' && typeof data.append !== 'string') return fallback();
+      const text = typeof data.text === 'string' ? data.text : (watch.snapshot?.text || '') + data.append;
+      if (text.length > 20000) return fallback();
+      if (Number.isSafeInteger(data.revision)) watch.revision = data.revision;
+      watch.snapshot = {state:data.state,phase:data.phase,text};
+      paintReplyProgress(watch.view, watch.snapshot);
+    });
+    timeout(6000);
+    return true;
   }
 
   function syncReplyProgress() {
@@ -2406,7 +2460,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopReplyProgress();
     const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
     replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0, revision:0};
-    scheduleReplyProgress(replyWatch);
+    if (!startReplyStream(replyWatch)) scheduleReplyProgress(replyWatch);
     return true;
   }
 
@@ -4948,12 +5002,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  function closeComposeMenu() {
-    const menu = document.getElementById('compose-menu');
-    const button = document.getElementById('new-conversation');
-    menu.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-  }
+  const composeMenuButton = document.getElementById('new-conversation');
+  const composeMenu = mountActionMenus(document).bind(composeMenuButton, document.getElementById('compose-menu'), {
+    onOpen() {
+      document.getElementById('compose-add-contact').hidden = inPersonalWorkspace();
+      const meetingNotes = document.getElementById('compose-meeting-notes');
+      if (meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
+    },
+  });
 
   function selectedMemberCount() {
     return document.querySelectorAll('#member-choices input:checked').length;
@@ -5046,12 +5102,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncComposeCreate();
   }
 
-  function closeComposeDialog() {
+  let composeOpener;
+  function closeComposeDialog({focus = false} = {}) {
+    const opener = composeOpener;
+    composeOpener = null;
     document.getElementById('compose-dialog').hidden = true;
     document.getElementById('compose-social-form').reset();
     setGroupMode('custom');
     applyMemberFilter();
     syncSelectedCount();
+    if (focus && opener?.isConnected !== false) opener?.focus({preventScroll: true});
   }
 
   function renderMemberChoices(single, preserveSelection = false) {
@@ -5092,8 +5152,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     refreshDirectorySearch();
   }
 
-  function openComposeDialog(mode) {
-    closeComposeMenu();
+  function openComposeDialog(mode, {keyboard = false} = {}) {
+    composeMenu.close({focus: true});
+    composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
@@ -5111,6 +5172,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupMode('custom');
     if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
+    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-title' : 'compose-dialog-title')
+      .focus({preventScroll: true});
   }
 
   function setSearchTab(name) {
@@ -5129,7 +5192,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = true;
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
-    closeComposeMenu();
+    composeMenu.close();
     // The panel is a child of the session pane, which the narrow stylesheet
     // paints only in the sessions-open state. Opening search has to reveal it
     // there, or the panel is laid out inside a display:none parent.
@@ -6620,24 +6683,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
   });
 
-  document.getElementById('new-conversation').addEventListener('click', event => {
-    event.stopPropagation();
-    const menu = document.getElementById('compose-menu');
-    const button = document.getElementById('new-conversation');
-    const open = menu.hidden;
-    document.getElementById('compose-add-contact').hidden = servedByDsbot
-      && workspaces.some(space => space.id === workspaceId() && space.kind === 'personal');
-    const meetingNotes = document.getElementById('compose-meeting-notes');
-    if (open && meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
-    menu.hidden = !open;
-    button.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
   for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
     const button = document.getElementById(id);
     button.hidden = !servedByDsbot;
     button.addEventListener('click', () => {
-      closeComposeMenu();
-      document.getElementById('new-conversation').focus();
+      composeMenu.close({focus: true});
       chatCalls.openMeeting(action);
     });
   }
@@ -6732,9 +6782,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已添加智能体。');
   });
 
-  document.getElementById('compose-new-group').addEventListener('click', () => openComposeDialog('group'));
+  document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
-  document.getElementById('compose-dialog-cancel').addEventListener('click', closeComposeDialog);
+  document.getElementById('compose-dialog-cancel').addEventListener('click', () => closeComposeDialog({focus: true}));
   document.getElementById('compose-mode-switch').addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
     if (!button || composeMode !== 'group') return;
@@ -7086,12 +7136,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  document.addEventListener('click', event => {
-    const menu = document.getElementById('compose-menu');
-    if (menu.hidden) return;
-    if (event.target.closest('.compose-menu')) return;
-    closeComposeMenu();
-  });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (chatMore?.getAttribute('aria-expanded') === 'true') {
@@ -7099,9 +7143,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatMore.focus();
       return;
     }
-    closeComposeMenu();
+    if (!document.getElementById('compose-dialog').hidden && !composing) {
+      event.preventDefault();
+      closeComposeDialog({focus: true});
+      return;
+    }
     if (isSearchOpen()) closeSearchPanel();
-    closeComposeDialog();
   });
 
   const plus = document.querySelector('details.composer-plus');

@@ -22,6 +22,7 @@
   <link rel="modulepreload" href="/shell/work-notification.mjs">
   <link rel="modulepreload" href="/shell/public-agent-link.mjs">
   <link rel="modulepreload" href="/shell/chat-utils.mjs">
+  <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
   <link rel="modulepreload" href="/look/app.mjs">
   <link rel="modulepreload" href="/home/runtime-readiness.mjs">
@@ -95,7 +96,7 @@
       </label>
       <div class="compose-menu">
         <button type="button" id="new-conversation" class="toolbar-add" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建" aria-label="创建" data-ui-title="chat.create" data-ui-label="chat.create">+</button>
-        <div id="compose-menu" role="menu" hidden>
+        <div id="compose-menu" role="menu" aria-labelledby="new-conversation" hidden>
           <a href="/agents" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 14 10 M14 4v2 M18 8h2 M17 5l1-1 M10 6l1 1 M17 11l1 1"/></svg><span data-ui-text="chat.compose.create_agent">创建智能体</span></a>
           <button type="button" role="menuitem" id="compose-new-group"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6 M16 4.5a3.5 3.5 0 0 1 0 7 M18 14c2 .8 3 2.8 3 6"/></svg><span data-ui-text="chat.compose.new_group">新建群组</span></button>
           <a href="/contacts" role="menuitem" data-ui-text="chat.compose.add_contact">添加联系人</a>
@@ -175,7 +176,7 @@
     </section>
     <section id="compose-dialog" hidden>
       <form id="compose-social-form">
-        <h2 id="compose-dialog-title"><span data-ui-text="chat.compose.new_group">新建群组</span></h2>
+        <h2 id="compose-dialog-title" tabindex="-1"><span data-ui-text="chat.compose.new_group">新建群组</span></h2>
         <p id="compose-intro" class="compose-intro" data-ui-text="chat.group.create_intro">添加名称，然后邀请好友并添加 AI 智能体。</p>
         <div id="compose-mode-switch" class="compose-mode-switch" role="tablist" aria-label="群组类型" data-ui-label="chat.group.kind">
           <button type="button" id="compose-mode-custom" role="tab" data-group-mode="custom" aria-selected="true">

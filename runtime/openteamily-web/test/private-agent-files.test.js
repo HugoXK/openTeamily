@@ -3,7 +3,7 @@ import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { createAgents } from '../features/agents/index.js'
 import { digest } from '../featurekit/http.js'
-import { createLegacyDispatch } from '../src/dispatch.js'
+import { createLegacyDispatch, createReplyStreamDispatch, REPLY_STREAM_PATH } from '../src/dispatch.js'
 import { sendPrivateAttachmentMessage } from '../../../openteamily/static/chat/files.mjs'
 
 const workspace = 'a'.repeat(32)
@@ -666,6 +666,31 @@ test('live replies reveal only the current native snapshot and keep the final re
   const request = legacyRequest(e)
   const key = 'live-reply-key-1234'
   const progress = (scope = convo, value = `key=${key}`) => request(scope+'/reply-progress',{},value)
+  const streamDispatch = createReplyStreamDispatch({endpoints:{
+    'agents/replyStream': (payload,call) => {
+      assert.equal(call.internal,true)
+      return e.replyStream(payload,call.request)
+    },
+  }})
+  const streamURL = 'http://dsbot' + REPLY_STREAM_PATH + '?' + new URLSearchParams({
+    workspace, agent:agent.id, conversation:conversation.id, key,
+  })
+  const openStream = options => streamDispatch(new Request(streamURL,options))
+  const nextEvent = async reader => {
+    while (true) {
+      const {value,done} = await reader.read()
+      assert.equal(done,false)
+      const text = new TextDecoder().decode(value)
+      if (text.startsWith('data: ')) return JSON.parse(text.slice(6))
+    }
+  }
+  assert.equal((await streamDispatch(new Request(streamURL+'&key='+key))).status,400)
+  assert.equal((await streamDispatch(new Request(streamURL.replace(workspace,'b'.repeat(32))))).status,404)
+  const abort = new AbortController()
+  const streaming = await openStream({signal:abort.signal})
+  assert.match(streaming.headers.get('content-type'), /^text\/event-stream/)
+  const reader = streaming.body.getReader()
+  assert.deepEqual(await nextEvent(reader),{state:'pending',append:''})
   assert.equal((await progress()).status,404)
   const send = () => request(convo+'/messages',{method:'POST',
     headers:{'Content-Type':'application/json','Idempotency-Key':key}, body:JSON.stringify({body:'Take your time'})})
@@ -685,8 +710,16 @@ test('live replies reveal only the current native snapshot and keep the final re
   }
   assert.deepEqual(await watch(0, () => onPhase('thinking')),
     {state:'running',text:'',phase:'thinking',revision:1})
+  const next = await nextEvent(reader)
+  assert.equal(next.state, 'running')
+  assert.equal(next.phase, 'thinking')
   assert.deepEqual(await watch(1, () => { update('实际输出'); onPhase('writing') }),
     {state:'running',text:'实际输出',phase:'writing',revision:3})
+  assert.deepEqual(await nextEvent(reader),{state:'running',phase:'writing',revision:3,append:'实际输出'})
+  abort.abort()
+  assert.equal((await reader.read()).done,true)
+  const reconnected = (await openStream()).body.getReader()
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:3,append:'实际输出'})
   const first = await progress()
   assert.equal(first.headers.get('cache-control'),'no-store')
   assert.deepEqual(await first.json(),{state:'running',text:'实际输出'})
@@ -709,9 +742,13 @@ test('live replies reveal only the current native snapshot and keep the final re
   const retry = send()
   update('')
   assert.deepEqual(await (await progress()).json(),{state:'running',text:''})
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:4,text:''})
   update('重新输出')
   assert.deepEqual(await (await progress()).json(),{state:'running',text:'重新输出'})
+  assert.deepEqual(await nextEvent(reconnected),{state:'running',phase:'writing',revision:5,append:'重新输出'})
   assert.deepEqual(await watch(5, () => completion.resolve('完整回复')),{state:'succeeded'})
+  assert.equal((await nextEvent(reconnected)).state,'succeeded')
+  assert.equal((await reconnected.read()).done,true)
   const [firstSend,retrySend] = await Promise.all([pending,retry])
   const result = await firstSend.json()
   assert.deepEqual(await retrySend.json(),result)

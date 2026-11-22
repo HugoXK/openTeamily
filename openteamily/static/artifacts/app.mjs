@@ -1,4 +1,5 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
+import { mountActionMenus } from '../shell/action-menu.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -467,6 +468,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const listPanel = document.getElementById('list-panel');
   const editorLoading = document.getElementById('editor-loading');
   const main = document.getElementById('main');
+  const actionMenus = mountActionMenus(document);
+  const newMenuButton = document.getElementById('new-menu-button');
+  const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
   const discoverEditable = document.getElementById('discover-editable-remix');
@@ -1118,10 +1122,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   function closeNewMenu() {
-    const menu = document.getElementById('new-menu');
-    const button = document.getElementById('new-menu-button');
-    if (menu) menu.hidden = true;
-    if (button) button.setAttribute('aria-expanded', 'false');
+    newMenu.close();
   }
 
   function worksPath() {
@@ -1552,14 +1553,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function closeSendDialog() {
     if (!sendDialog || sendingArtifact?.pending) return;
+    const trigger = sendingArtifact?.trigger;
     sendDialog.hidden = true;
     sendingArtifact = null;
+    if (trigger?.isConnected) trigger.focus({preventScroll: true});
   }
 
-  async function openSendDialog(item) {
+  async function openSendDialog(item, trigger) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     const wid = workspaceId();
-    const state = {item: {...item}, wid, destination: null, pending: false, keys: new Map()};
+    const state = {item: {...item}, wid, trigger, destination: null, pending: false, keys: new Map()};
     sendingArtifact = state;
     sendDialog.hidden = false;
     sendConfirm.textContent = '确认发送';
@@ -1659,21 +1662,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (event.target === sendDialog) closeSendDialog();
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !sendDialog?.hidden) closeSendDialog();
+    if (event.key === 'Escape' && !event.defaultPrevented && !sendDialog?.hidden) closeSendDialog();
   });
 
-  let openItemMenu = null;
-  function closeItemMenu() {
-    if (!openItemMenu) return;
-    openItemMenu.menu.hidden = true;
-    openItemMenu.menu.remove();
-    openItemMenu.button.setAttribute('aria-expanded', 'false');
-    openItemMenu = null;
+  function itemMenuOpen() {
+    return actionMenus.activeButton?.classList.contains('artifact-more');
   }
-  document.addEventListener('click', event => {
-    if (openItemMenu && !openItemMenu.menu.contains(event.target) && event.target !== openItemMenu.button) closeItemMenu();
-  });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeItemMenu(); });
+  function closeItemMenu() {
+    if (itemMenuOpen()) actionMenus.close();
+  }
 
   function canDuplicate(item) {
     return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
@@ -1768,13 +1765,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'artifact-more';
+    button.id = 'artifact-more-' + item.id;
     button.setAttribute('aria-haspopup', 'menu');
     button.setAttribute('aria-expanded', 'false');
     button.setAttribute('aria-label', item.title + '：更多操作');
     button.textContent = '⋯';
     const menu = document.createElement('div');
     menu.className = 'artifact-item-menu';
+    menu.id = 'artifact-item-actions-' + item.id;
     menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-labelledby', button.id);
+    button.setAttribute('aria-controls', menu.id);
     menu.hidden = true;
     const send = document.createElement('button');
     send.type = 'button';
@@ -1785,8 +1786,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       send.disabled = false;
       send.title = '把此作品的保存版本发到会话';
       send.addEventListener('click', () => {
-        closeItemMenu();
-        if (inScope()) void openSendDialog(item);
+        if (inScope()) void openSendDialog(item, button);
       });
     } else {
       send.disabled = true;
@@ -1798,7 +1798,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     rename.textContent = '重命名';
     rename.title = '打开文档并编辑标题';
     rename.addEventListener('click', async () => {
-      closeItemMenu();
       if (await onOpen(item)) {
         const title = form.elements.title;
         title?.focus();
@@ -1811,7 +1810,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     remove.className = 'artifact-menu-danger';
     remove.textContent = '删除';
     remove.addEventListener('click', async () => {
-      closeItemMenu();
       if (!inScope() || !item.id) return;
       if (typeof globalThis.confirm === 'function' && !globalThis.confirm('删除「' + item.title + '」？')) return;
       const result = await request('POST', path + '/remove', {}).catch(() => ({status: 0, body: {}}));
@@ -1821,7 +1819,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return;
       }
       show('ok', '已删除。');
+      const keepFocus = document.activeElement === button;
       await loadList();
+      if (keepFocus && document.activeElement === document.body) newMenuButton?.focus({preventScroll: true});
     });
     menu.append(send, rename);
     if (canDuplicate(item)) {
@@ -1830,28 +1830,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       copy.setAttribute('role', 'menuitem');
       copy.textContent = '复制为新作品';
       copy.addEventListener('click', () => {
-        closeItemMenu();
         if (inScope()) openDuplicateDialog(item,button);
       });
       menu.append(copy);
     }
     menu.append(remove);
-    button.addEventListener('click', event => {
-      event.stopPropagation();
-      const wasOpen = openItemMenu && openItemMenu.menu === menu;
-      closeItemMenu();
-      if (wasOpen) return;
-      document.body.appendChild(menu);
-      menu.hidden = false;
-      const anchor = button.getBoundingClientRect?.() || {right:0, top:0, bottom:0};
-      const viewport = document.defaultView;
-      const height = viewport?.visualViewport?.height || viewport?.innerHeight || 800;
-      const width = viewport?.visualViewport?.width || viewport?.innerWidth || 400;
-      const top = anchor.bottom + menu.offsetHeight + 8 > height ? anchor.top - menu.offsetHeight - 4 : anchor.bottom + 4;
-      menu.style.top = Math.max(8, top) + 'px';
-      menu.style.left = Math.max(8, Math.min(width - menu.offsetWidth - 8, anchor.right - menu.offsetWidth)) + 'px';
-      button.setAttribute('aria-expanded', 'true');
-      openItemMenu = {menu, button};
+    actionMenus.bind(button, menu, {
+      onOpen() {
+        document.body.appendChild(menu);
+        const anchor = button.getBoundingClientRect();
+        const viewport = document.defaultView;
+        const height = viewport?.visualViewport?.height || viewport?.innerHeight || 800;
+        const width = viewport?.visualViewport?.width || viewport?.innerWidth || 400;
+        const top = anchor.bottom + menu.offsetHeight + 8 > height ? anchor.top - menu.offsetHeight - 4 : anchor.bottom + 4;
+        menu.style.top = Math.max(8, Math.min(height - menu.offsetHeight - 8, top)) + 'px';
+        menu.style.left = Math.max(8, Math.min(width - menu.offsetWidth - 8, anchor.right - menu.offsetWidth)) + 'px';
+      },
+      onClose: () => menu.remove(),
     });
     wrap.append(button);
     return wrap;
@@ -2137,7 +2132,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog({preserve});
   }
 
-  async function openEditor(item, {workspace = workspaceId(), notice, saved = false} = {}) {
+  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
     if (!currentUser || !workspace || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
@@ -2147,7 +2142,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     hideEditor();
     closeNewMenu();
     show('', '');
-    const selection = {workspace, account: currentUser, controller: new AbortController(), reads: new Map(), catalogView};
+    const selection = {workspace, account: currentUser, controller: new AbortController(), reads: new Map(), catalogView, focusTitle};
     editor = selection;
     listPanel.hidden = true;
     if (main) main.scrollTop = 0;
@@ -2193,6 +2188,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.defaultView?.addEventListener?.('beforeunload', warnBeforeLeavingSpace);
     if (current?.id) recordEditorAddress(selection, current);
     if (notice) show(notice.kind, notice.text);
+    if (focusTitle) form.elements.title?.focus({preventScroll: true});
     return true;
   }
 
@@ -2447,7 +2443,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (workspace !== workspaceId() || snapshot.account !== currentUser || catalogKind === 'meetings') return 'defer';
       if (!listPanel.hidden) {
         if (!changed || catalog?.activityVersion === snapshot.version) return snapshot.version;
-        if (pendingBookmarks.size || openItemMenu || document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true' ||
+        if (pendingBookmarks.size || itemMenuOpen() || document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true' ||
             catalog?.state === 'loading' || catalog?.more) return 'defer';
         facets = null;
         return loadList({background: true, signal});
@@ -2683,7 +2679,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const listed = initial && !query && depth === CATALOG_PAGE_SIZE ? {status: 200, body: initial} :
       await readCatalogDepth(workspace, query, depth, requestSignal);
     if (catalog !== loading || !sameSelection(loading)) return 'defer';
-    if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || openItemMenu ||
+    if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || itemMenuOpen() ||
         bookmarkBefore !== bookmarkRevision ||
         document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true')) {
       catalog = before;
@@ -2941,33 +2937,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
   document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
 
-  document.getElementById('new-artifact').addEventListener('click', () => {
-    draftKind = 'document';
-    closeNewMenu();
-    openEditor({kind: 'document'});
-  });
-
   document.getElementById('new-website').addEventListener('click', () => {
     draftKind = 'website';
     openEditor({kind: 'website'});
-  });
-
-  document.getElementById('new-slides').addEventListener('click', () => {
-    draftKind = 'slides';
-    closeNewMenu();
-    openEditor({kind: 'slides'});
-  });
-
-  document.getElementById('new-dashboard').addEventListener('click', () => {
-    draftKind = 'dashboard';
-    closeNewMenu();
-    openEditor({kind: 'dashboard'});
-  });
-
-  document.getElementById('new-spreadsheet')?.addEventListener('click', () => {
-    draftKind = 'spreadsheet';
-    closeNewMenu();
-    openEditor({kind: 'spreadsheet'});
   });
 
   sendSpreadsheet?.addEventListener('click', () => openSendDialog(current));
@@ -3001,22 +2973,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderSlidesEditor(slidesState.slides.length - 1);
   });
 
-  document.getElementById('new-media').addEventListener('click', () => {
-    draftKind = 'media';
-    closeNewMenu();
-    openEditor({kind: 'media'});
-  });
-
-  document.getElementById('new-board').addEventListener('click', () => {
-    draftKind = 'whiteboard';
-    closeNewMenu();
-    openEditor({kind: 'whiteboard'});
-  });
-
   function bindCreate(id, start) {
     const button = document.getElementById(id);
     if (button) button.addEventListener('click', start);
   }
+
+  for (const [id, kind] of [
+    ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
+    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
+  ]) bindCreate(id, event => {
+    draftKind = kind;
+    void openEditor({kind}, {focusTitle: event.isTrusted && event.detail === 0});
+  });
 
   bindCreate('empty-new-document', () => {
     draftKind = 'document';
@@ -3029,26 +2997,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
   bindCreate('new-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
 
-  const newMenuButton = document.getElementById('new-menu-button');
-  if (newMenuButton) {
-    newMenuButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const menu = document.getElementById('new-menu');
-      if (!menu) return;
-      const open = menu.hidden;
-      menu.hidden = !open;
-      newMenuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-  }
-  document.addEventListener('click', (event) => {
-    const wrap = document.querySelector('.new-menu-wrap');
-    if (wrap && !wrap.contains(event.target)) closeNewMenu();
-  });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeNewMenu();
-      closeFilterPanel({focus: true});
-    }
+    if (event.key === 'Escape' && !event.defaultPrevented) closeFilterPanel({focus: true});
   });
 
   for (const button of document.querySelectorAll('.artifact-kinds [data-kind]')) {
@@ -3180,6 +3130,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function returnToCatalog() {
     if (approvedBack || !canLeaveEditor()) return false;
+    const focusNew = editor?.focusTitle && !editor?.catalogView?.focus;
     const history = document.defaultView?.history;
     if (spaceAddress?.entry.fromCatalog && typeof history?.back === 'function') {
       approvedBack = true;
@@ -3190,6 +3141,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     show('', '');
     if (artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     void loadList({reuse: true});
+    if (focusNew) newMenuButton?.focus({preventScroll: true});
     return true;
   }
 

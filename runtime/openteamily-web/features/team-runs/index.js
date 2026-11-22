@@ -3,7 +3,7 @@
 // agent, an instruction and earlier steps it depends on (acyclic by construction).
 // The DAG state, dependency resolution, cancel/retry and the executor all live in
 // this DS-Bot; each runnable step is one native DS-Bot turn of its agent
-// (agents/turn on session 'team-run:<run>:<step>'), with the goal and the
+// (agents/groupTurn on session 'team-run:<run>:<step>:<attempt>'), with the goal and the
 // dependencies' outputs in its prompt. A failed step blocks its dependants while
 // independent branches continue. No runtime_tasks row exists. Runs are private to
 // the owner; sharing a run with a team goes through Bot Social (phase C).
@@ -18,6 +18,7 @@ export const MAX_STEPS = 8
 export const LIMITS = { title: 80, goal: 2000, instruction: 1000, dependencyBudget: 1200, runs: 50, active: 5, attempts: 3 }
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
+const PREVIEW_MAX = 20_000
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -94,7 +95,10 @@ function teamRunsV1(endpoints, log) {
     route(detail + '/steps/([0-7])/(retry|artifact)', async (req, workspace_id, id, rawPosition, action) => {
       only(req, 'POST')
       const payload = {workspace_id, id, position: Number(rawPosition)}
-      if (action === 'retry') return {body: await endpoints.retry(payload)}
+      if (action === 'retry') {
+        const {attempt} = requireBodyKeys(await req.json(1024), ['attempt'])
+        return {body: await endpoints.retry({...payload, attempt})}
+      }
       const {status, artifact} = await endpoints['step-artifact'](payload)
       return {status, body: {artifact}}
     }),
@@ -107,6 +111,9 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
   const all = (sql, ...a) => db.prepare(sql).all(...a)
   const run = (sql, ...a) => db.prepare(sql).run(...a)
   const inflight = new Map() // `${run}:${pos}` -> promise
+  // A preview belongs to a process-local claim. Durable step output is written only on success.
+  const previews = new Map()
+  const stepKey = (runId, position) => `${runId}:${position}`
   const ws = (p) => { if (typeof p?.workspace_id !== 'string' || !ID.test(p.workspace_id)) fail('invalid', 'workspace_id required', 400); return p.workspace_id }
   async function workspace(p) {
     const id = ws(p)
@@ -137,9 +144,14 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     const keys = Object.keys(fields).sort()
     run(`UPDATE team_run_steps SET ${keys.map((k) => `${k}=?`).join(', ')} WHERE run_id=? AND position=?`, ...keys.map((k) => fields[k]), runId, position)
   }
-  const stepView = (s, depth) => ({ position: s.position, agent_id: s.agent_id, agent_name: s.agent_name, instruction: s.instruction,
-    depends_on: JSON.parse(s.depends), status: s.status, error_code: s.error_code, output: s.output, attempts: s.attempts,
-    started: s.started, finished: s.finished, stage: depth[s.position], ds_bot: JSON.parse(s.meta) })
+  function stepView(s, depth) {
+    const live = s.status === 'running' && previews.get(stepKey(s.run_id, s.position))
+    return { position: s.position, agent_id: s.agent_id, agent_name: s.agent_name, instruction: s.instruction,
+      depends_on: JSON.parse(s.depends), status: s.status, error_code: s.error_code,
+      output: s.status === 'succeeded' ? s.output : '', attempts: s.attempts,
+      started: s.started, finished: s.finished, stage: depth[s.position], ds_bot: JSON.parse(s.meta),
+      ...(live?.attempt === s.attempts && live.text ? {preview: live.text} : {}) }
+  }
   function view(row, withSteps = true) {
     const list = withSteps ? steps(row.id) : null
     const progress = list ? {succeeded: list.filter(s => s.status === 'succeeded').length, total: list.length}
@@ -152,7 +164,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
 
   // Launch one step as a DS-Bot turn of its agent; on completion advance the graph.
   function launch(runRow, step, list) {
-    const key = `${runRow.id}:${step.position}`
+    const key = stepKey(runRow.id, step.position)
     if (inflight.has(key)) return
     const attempt = step.attempts + 1
     const claim = run(`UPDATE team_run_steps SET status='running', started=?, attempts=?, error_code=NULL
@@ -160,12 +172,17 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     if (!claim.changes) return
     const currentAttempt = () => one(`SELECT 1 FROM team_run_steps
       WHERE run_id=? AND position=? AND status='running' AND attempts=?`, runRow.id, step.position, attempt)
+    const live = {attempt, text:''}
+    previews.set(key, live)
+    const onProgress = snapshot => {
+      if (previews.get(key) === live && typeof snapshot === 'string') live.text = snapshot.slice(0, PREVIEW_MAX).toWellFormed()
+    }
     const job = Promise.resolve().then(async () => {
       try {
         await workspace(runRow)
         if (!currentAttempt()) return
-        const reply = await host.call('agents/turn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
-          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}` })
+        const reply = await host.call('agents/groupTurn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
+          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`, onProgress })
         if (!currentAttempt()) return
         const output = String(reply?.text ?? '').trim()
         if (!output) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
@@ -184,7 +201,11 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         setStep(runRow.id, step.position, { status: 'failed', error_code: code, finished: clock() })
         log(`team run ${runRow.id} step ${step.position} failed (${code})`)
       }
-    }).finally(() => { inflight.delete(key); try { advance(runRow.id) } catch (error) { log('team run advance failed: ' + (error?.message ?? 'error')) } })
+    }).finally(() => {
+      previews.delete(key)
+      inflight.delete(key)
+      try { advance(runRow.id) } catch (error) { log('team run advance failed: ' + (error?.message ?? 'error')) }
+    })
     inflight.set(key, job)
   }
 
@@ -277,11 +298,14 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     },
     async cancel(p) {
       const row = loadRun(await workspace(p), p.id)
-      if (row.status === 'running') transaction(() => {
-        run(`UPDATE team_run_steps SET status='cancelled', error_code='cancelled', finished=?
-          WHERE run_id=? AND status IN ('waiting','queued','running')`, clock(), row.id)
-        run("UPDATE team_runs SET status='cancelled', updated=? WHERE id=?", clock(), row.id)
-      })
+      if (row.status === 'running') {
+        transaction(() => {
+          run(`UPDATE team_run_steps SET status='cancelled', error_code='cancelled', finished=?
+            WHERE run_id=? AND status IN ('waiting','queued','running')`, clock(), row.id)
+          run("UPDATE team_runs SET status='cancelled', updated=? WHERE id=?", clock(), row.id)
+        })
+        for (const {position} of steps(row.id)) previews.delete(stepKey(row.id, position))
+      }
       return { run: view(one('SELECT * FROM team_runs WHERE id=?', row.id)) }
     },
     async remove(p) {
@@ -295,6 +319,10 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const list = steps(row.id)
       const position = p.position
       if (!Number.isInteger(position) || position < 0 || position >= list.length || list[position].status !== 'failed') fail('conflict', 'Only a failed step can be retried', 409)
+      if (p.attempt !== undefined) {
+        if (!Number.isSafeInteger(p.attempt) || p.attempt < 1) fail('invalid', 'Invalid step attempt', 400)
+        if (p.attempt !== list[position].attempts) fail('conflict', 'The step attempt changed; refresh before retrying', 409)
+      }
       if (row.status === 'cancelled') fail('conflict', 'A cancelled run cannot be retried', 409)
       if (list[position].attempts >= LIMITS.attempts) fail('quota', 'This step reached its retry limit', 429)
       if (row.status !== 'running' && one("SELECT COUNT(*) AS n FROM team_runs WHERE workspace_id=? AND status='running'", row.workspace_id).n >= LIMITS.active) {

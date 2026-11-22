@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/artifacts/app.css">
   <link rel="modulepreload" href="/artifacts/notifications.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
+  <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/work-notification.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/shell/dsbot-api.mjs"></script>
@@ -202,7 +203,7 @@
             <span class="new-menu-label">+ 新建</span>
             <span class="new-menu-caret" aria-hidden="true">▾</span>
           </button>
-          <div id="new-menu" role="menu" hidden>
+          <div id="new-menu" role="menu" aria-labelledby="new-menu-button" hidden>
             <button type="button" id="new-artifact" role="menuitem">云文档</button>
             <button type="button" id="new-slides" role="menuitem">幻灯片</button>
             <button type="button" id="new-spreadsheet" role="menuitem">电子表格</button>

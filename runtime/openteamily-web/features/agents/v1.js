@@ -69,7 +69,7 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         }
         const {message, reply, ...progress} = await call('replyProgress', {
           workspace_id:workspaceId,id,conversation_id:conversationId,key,receipt:receipt === '1',
-          ...(after !== undefined ? {after:Number(after)} : {}),
+          ...(after !== undefined ? {after:Number(after),signal:req.signal} : {}),
         })
         return {body: message ? {...progress,...publicPair({message,reply}, workspaceId, id)} : progress}
       }) },

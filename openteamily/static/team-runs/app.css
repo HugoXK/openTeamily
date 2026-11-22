@@ -153,6 +153,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.result-step .step-preview-label { margin-block: .65rem .2rem; color: var(--ot-muted); font-size: .8125rem; }
+.step-preview .step-output { margin-block-start: 0; border-inline-start: 2px solid var(--ot-accent); }
 
 @media (max-width: 44rem) {
   .team-run-page { padding: .85rem .85rem 2rem; }

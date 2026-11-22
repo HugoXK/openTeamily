@@ -13,6 +13,35 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 
 const failure = (code, message) => json({ ok: false, error: { code, message, details: {} } })
 
+export const REPLY_STREAM_PATH = '/api/openteamily/reply-stream'
+const RUNTIME_ID = /^[a-f0-9]{32}$/
+const SEND_KEY = /^[A-Za-z0-9_-]{16,64}$/
+
+export function createReplyStreamDispatch({ endpoints }) {
+  const table = typeof endpoints === 'function' ? endpoints : async () => endpoints
+  return async request => {
+    if (request.method !== 'GET') return gatewayError(405, 'method', 'Only GET is supported')
+    const query = new URL(request.url).searchParams
+    const workspace_id = query.get('workspace') || ''
+    const id = query.get('agent') || ''
+    const conversation_id = query.get('conversation') || ''
+    const key = query.get('key') || ''
+    if (query.size !== 4 || ![workspace_id,id,conversation_id].every(value => RUNTIME_ID.test(value)) || !SEND_KEY.test(key)) {
+      return gatewayError(400, 'invalid', 'Invalid private reply stream')
+    }
+    try {
+      const handler = (await table())['agents/replyStream']
+      if (typeof handler !== 'function') return gatewayError(503, 'unavailable', 'Private reply stream is not available')
+      return await handler({workspace_id,id,conversation_id,key}, {request,internal:true})
+    } catch (error) {
+      const status = error?.status
+      if (status === 404) return gatewayError(404, 'not_found', 'Reply not found')
+      if (status === 429) return gatewayError(429, 'busy', 'Too many reply streams')
+      return gatewayError(500, 'unavailable', 'Private reply stream is not available')
+    }
+  }
+}
+
 // endpoints: a table or a function returning a table (or a promise of one), so the
 // route can be registered before features finish loading.
 export function createDispatch({ endpoints, host = null }) {
