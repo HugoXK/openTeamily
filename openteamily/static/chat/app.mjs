@@ -34,17 +34,28 @@ export function sessionPreview(row, fallback) {
   return text || fallback || '';
 }
 
+const PRIVATE_THREAD_ID = /^[a-f0-9]{32}$/;
+
+function privateThreadTitle(conversation, agent) {
+  return (conversation?.title_edited === true && conversation.title) || agent?.name || conversation?.title || '对话';
+}
+
 export function mergeSessions(agentRows, socialRows, currentUserId) {
   const sessions = [];
   for (const row of agentRows || []) {
+    if (row.archived === true) continue;
+    const title = privateThreadTitle(row, row.agent);
+    const renamed = row.title_edited === true;
+    const agentName = row.agent?.name !== title ? row.agent?.name : '';
+    const preview = sessionPreview(row, renamed ? agentName : row.title || '');
     sessions.push({
       source: 'agent',
       id: row.id,
       agent_id: row.agent_id || (row.agent && row.agent.id),
       agent: row.agent,
       kind: 'agent',
-      title: (row.agent && row.agent.name) || row.title || '对话',
-      preview: sessionPreview(row, row.title || ''),
+      title,
+      preview: renamed && preview === title ? agentName || '' : preview,
       unread_count: Number(row.unread_count) || 0,
       updated: row.updated || 0,
     });
@@ -780,8 +791,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const conversationPins = new Map();
   let pinReceipt = 0;
   let sessionTransition = null;
-  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const loadGroupManagement = deferModule('./group-management.mjs');
+  let groupManagement;
+  let lastGroupInfo = '';
+  const groupManagementReceipts = new Map();
+  const loadStickers = deferModule('./stickers.mjs');
+  let stickerPicker;
+  const stickerSaves = new Map();
+  const messageUtilities = mountMessageUtilities(document, {
+    request, notify: show,
+    composerContext: () => currentConversation || currentSource === 'agent' && currentAgent
+      ? {wid:workspaceId(), cid:currentConversation?.id, source:currentSource, scope:sendScope()} : null,
+    context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent
+      ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null,
+    stickersAvailable: () => Boolean(stickerContext()),
+    async activateStickers() {
+      const target = stickerContext();
+      if (!target) return;
+      const {mountChatStickers} = await loadStickers();
+      if (target.scope !== stickerContext()?.scope) return;
+      stickerPicker ||= mountChatStickers(document, {request, context:stickerContext, send:sendSticker});
+      return stickerPicker.open();
+    },
+    closeStickers: () => stickerPicker?.close(),
+  });
   const autoTranslation = mountGroupTranslation(document,{request});
   const callContext = () => {
     if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -928,11 +962,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let attachmentSender;
   const pendingSends = new Map();
   const privateReplyRetries = new Map();
+  const privateThreadWrites = new Map();
+  const privateThreadReceipts = new Map();
+  let privateThreadReceipt = 0;
   const agentReplyViews = new Map();
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
-  const publicDraft = mountPublicDraft(document);
+  const sessionRows = new Map();
+  const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
   const starterList = document.getElementById('agent-quick-starts-list');
   const starterStatus = document.getElementById('agent-quick-starts-status');
@@ -1058,6 +1096,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : Boolean(currentAgent?.archived || currentAgent?.native_deleted || currentConversation?.archived || currentConversation?.open === false));
   }
 
+  function stickerContext() {
+    if (!servedByDsbot || !currentUser || sendClosed() || currentConversation?.public_agent) return null;
+    if (currentSource === 'agent' ? !currentAgent : !currentConversation) return null;
+    return {owner:currentUser.id, scope:sendScope()};
+  }
+
+  function syncStickers() {
+    stickerPicker?.sync();
+    const scope = stickerContext()?.scope;
+    for (const [controller, origin] of stickerSaves) {
+      if (origin !== scope) controller.abort();
+    }
+  }
+
+  function resetStickerSurface() {
+    for (const controller of stickerSaves.keys()) controller.abort();
+    stickerPicker?.close();
+    const dialog = document.getElementById('composer-emoji-dialog');
+    if (dialog?.open) dialog.close();
+  }
+
+  function renderMessageFile(attachment) {
+    const card = renderChatFile(document, attachment);
+    const target = stickerContext();
+    if (!target || !['image/png','image/jpeg','image/gif','image/webp'].includes(attachment.mime)
+        || !attachment.bytes || attachment.bytes > 8 * 1024 * 1024 || !attachment.path) return card;
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.dataset.saveSticker = '1';
+    save.textContent = uiLabel('存为贴纸', 'Save as sticker');
+    save.addEventListener('click', async () => {
+      if (target.scope !== stickerContext()?.scope || save.disabled) return;
+      save.disabled = true;
+      const controller = new AbortController();
+      stickerSaves.set(controller, target.scope);
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
+      const scopedRequest = (...args) => {
+        if (target.scope !== stickerContext()?.scope) throw new Error('Sticker source changed');
+        return request(...args);
+      };
+      let result;
+      try {
+        const {saveChatSticker} = await loadStickers();
+        signal.throwIfAborted();
+        result = await saveChatSticker({request:scopedRequest, attachment, signal});
+      } catch {} finally {
+        stickerSaves.delete(controller);
+      }
+      if (target.scope !== stickerContext()?.scope || controller.signal.aborted) return;
+      const saved = [200, 201].includes(result?.status) && Boolean(result.body?.sticker?.id);
+      save.disabled = saved;
+      if (saved) save.textContent = uiLabel('已存为贴纸', 'Sticker saved');
+      show(saved ? 'ok' : 'error', saved ? uiLabel('已保存到贴纸库。', 'Saved to your stickers.')
+        : uiLabel('无法保存贴纸，请重试。', 'Couldn’t save the sticker. Try again.'), {announceOnly:saved});
+    });
+    card.append(save);
+    return card;
+  }
+
   function setAgentStarterStatus(message) {
     if (starterStatus.hidden && !message) return;
     starterStatus.textContent = message;
@@ -1134,8 +1231,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     const queue = pendingSends.get(scope);
     const closed = sendClosed();
+    document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncStickers();
+    syncPrivateThreadControls();
     syncMemoryRecall(scope);
     const replying = queue?.replying;
     if (replying && !replying.replyView) {
@@ -1161,7 +1261,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentSource === 'agent' && currentAgent) {
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
-      setChatSubtitle(pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot'), pending);
+      const label = pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
+      setChatSubtitle(currentConversation?.title_edited ? `${currentAgent.name} · ${pending ? label : 'DS-Bot'}` : label, pending);
     }
     const empty = document.getElementById('chat-empty');
     empty.dataset.agent = String(currentSource === 'agent' && Boolean(currentAgent));
@@ -1176,7 +1277,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
   }
 
-  function makeSendJob(queue, message, files, reply) {
+  function makeSendJob(queue, message, files, reply, sticker) {
     const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
@@ -1198,6 +1299,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actions.append(retry, discard);
     if (reply) bubble.append(quoteBlock(reply));
     bubble.append(body);
+    if (sticker) bubble.append(renderChatFile(document, {...sticker,sticker:true}, {pending:true}));
     const previews = [];
     const urls = document.defaultView?.URL;
     for (const file of files) {
@@ -1240,6 +1342,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pendingSends.clear();
     privateReplyRetries.clear();
+    privateThreadWrites.clear();
+    privateThreadReceipts.clear();
+    groupManagementReceipts.clear();
+    closePrivateThreadDialogs();
+    resetStickerSurface();
   }
 
   function pendingMessageKeys() {
@@ -1434,6 +1541,266 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let markingConversationsRead = false;
 
+  const privateRename = document.getElementById('private-thread-rename');
+  const privateArchive = document.getElementById('private-thread-archive');
+  const privateRestore = document.getElementById('private-thread-restore');
+  const privateArchivedState = document.getElementById('private-thread-archived-state');
+  const privateArchiveOpen = document.getElementById('private-archive-open');
+  const privateNameDialog = document.getElementById('private-thread-dialog');
+  const privateNameInput = document.getElementById('private-thread-name');
+  const privateNameStatus = document.getElementById('private-thread-name-status');
+  const privateNameSave = document.getElementById('private-thread-save-name');
+  const privateArchiveDialog = document.getElementById('private-archive-dialog');
+  const privateArchiveList = document.getElementById('private-archive-list');
+  const privateArchiveStatus = document.getElementById('private-archive-status');
+  const privateArchiveMore = document.getElementById('private-archive-more');
+  let renameTarget = null;
+  let archiveView = null;
+
+  const privateThreadKey = ({owner, wid, aid, cid}) => JSON.stringify([owner, wid, aid, cid]);
+  const currentThreadWorkspace = () => servedByDsbot && currentUser?.id && PRIVATE_THREAD_ID.test(workspaceId());
+  const threadWorkspaceMatches = target => target.owner === currentUser?.id && target.wid === workspaceId();
+  const threadMatches = target => threadWorkspaceMatches(target) && currentSource === 'agent' &&
+    target.aid === currentAgent?.id && target.cid === currentConversation?.id;
+
+  function currentPrivateThread() {
+    const wid = workspaceId(), aid = currentAgent?.id, cid = currentConversation?.id;
+    if (!currentThreadWorkspace() || currentSource !== 'agent' || !PRIVATE_THREAD_ID.test(aid || '') ||
+        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.workspace_id !== wid || currentConversation.agent_id !== aid ||
+        typeof currentConversation.archived !== 'boolean') return null;
+    return {owner: currentUser.id, wid, aid, cid, agent: currentAgent, conversation: currentConversation};
+  }
+
+  function syncPrivateThreadControls() {
+    if (!privateRename) return;
+    const target = currentPrivateThread();
+    const archived = target?.conversation.archived === true;
+    const writing = Boolean(target && privateThreadWrites.has(privateThreadKey(target)));
+    privateRename.hidden = !target || archived;
+    privateArchive.hidden = !target || archived;
+    privateArchivedState.hidden = !archived;
+    privateRename.disabled = privateArchive.disabled = privateRestore.disabled = writing;
+    if (target?.conversation.title_edited) {
+      document.getElementById('chat-title').textContent = privateThreadTitle(target.conversation, target.agent);
+    }
+  }
+
+  function threadAfterRead(conversation, target, since) {
+    if (!conversation) return conversation;
+    const receipt = privateThreadReceipts.get(privateThreadKey(target));
+    if (receipt && receipt.seq > since) return {...conversation, ...receipt.metadata};
+    return conversation;
+  }
+
+  function closePrivateThreadDialogs() {
+    renameTarget = archiveView = null;
+    if (privateNameDialog?.open) privateNameDialog.close();
+    if (privateArchiveDialog?.open) privateArchiveDialog.close();
+  }
+
+  async function organizePrivateThread(target, action, title) {
+    const key = privateThreadKey(target);
+    if (!threadWorkspaceMatches(target) || privateThreadWrites.has(key)) return null;
+    const operation = {target, action};
+    privateThreadWrites.set(key, operation);
+    syncPrivateThreadControls();
+    const result = await request('POST', agentConversationPath(target.wid, target.aid, target.cid),
+      {action, ...(action === 'rename' ? {title} : {})}, undefined, AbortSignal.timeout(10000)).catch(() => ({status: 0, body: {}}));
+    if (privateThreadWrites.get(key) !== operation) return null;
+    privateThreadWrites.delete(key);
+    if (!threadWorkspaceMatches(target)) return null;
+    const row = result.body.conversation;
+    if (result.status !== 200 || row?.id !== target.cid || row.workspace_id !== target.wid || row.agent_id !== target.aid ||
+        typeof row.archived !== 'boolean' || typeof row.title !== 'string') {
+      syncPrivateThreadControls();
+      return false;
+    }
+    const metadata = {title: row.title, title_edited: row.title_edited, archived: row.archived, archived_at: row.archived_at};
+    privateThreadReceipts.set(key, {seq: ++privateThreadReceipt, metadata, restored: action === 'restore'});
+    const previous = sessions.find(item => item.source === 'agent' && item.id === row.id);
+    sessions = sessions.filter(item => item !== previous);
+    if (!row.archived && !target.agent?.archived && !target.agent?.native_deleted) {
+      const preview = previous?.preview === target.conversation.title ? undefined : previous?.preview;
+      const activeRow = mergeSessions([{...row, agent: target.agent, preview, unread_count: previous?.unread_count}], [], target.owner)[0];
+      if (activeRow) sessions = sortSessions([...sessions, activeRow]);
+    }
+    if (threadMatches(target)) {
+      Object.assign(currentConversation, metadata);
+      renderPendingSend();
+      renderAgentQuickStarts(currentAgent);
+    }
+    renderSessions();
+    if (archiveView && threadWorkspaceMatches(archiveView.scope)) {
+      if (row.archived) archiveView.rows.set(row.id, {...row, agent: target.agent});
+      else archiveView.rows.delete(row.id);
+      renderPrivateArchive(archiveView);
+    }
+    return true;
+  }
+
+  function renderPrivateArchive(state) {
+    const rows = [...state.rows.values()].sort((a, b) => (b.archived_at || b.updated) - (a.archived_at || a.updated));
+    privateArchiveList.replaceChildren();
+    for (const row of rows) {
+      const target = {...state.scope, cid: row.id, aid: row.agent_id, conversation: row, agent: row.agent};
+      const item = document.createElement('li');
+      item.dataset.archivedConversation = row.id;
+      const copy = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = privateThreadTitle(row, row.agent);
+      copy.append(name);
+      if (row.agent?.name && row.agent.name !== name.textContent) {
+        const identity = document.createElement('span');
+        identity.textContent = row.agent.name;
+        copy.append(identity);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'private-thread-actions';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.textContent = uiLabel('查看', 'Open');
+      open.dataset.archiveAction = 'open';
+      open.setAttribute('aria-label', uiLabel(`查看「${name.textContent}」`, `Open “${name.textContent}”`));
+      open.addEventListener('click', async () => {
+        if (archiveView !== state || !threadWorkspaceMatches(target)) return;
+        privateArchiveDialog.close();
+        if (await openSessionTarget({source: 'agent', cid: row.id, agent: row.agent_id, title: name.textContent})) {
+          document.getElementById('chat-title').focus({preventScroll: true});
+        }
+      });
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.textContent = uiLabel('恢复', 'Restore');
+      restore.dataset.archiveAction = 'restore';
+      restore.setAttribute('aria-label', uiLabel(`恢复「${name.textContent}」`, `Restore “${name.textContent}”`));
+      restore.disabled = privateThreadWrites.has(privateThreadKey(target));
+      restore.addEventListener('click', async () => {
+        if (archiveView !== state || restore.disabled) return;
+        restore.disabled = true;
+        const result = await organizePrivateThread(target, 'restore');
+        if (archiveView !== state || result === null) return;
+        restore.disabled = false;
+        privateArchiveStatus.textContent = result ? uiLabel('已恢复到会话列表。', 'Restored to conversations.')
+          : uiLabel('无法确认恢复结果，请重试。', 'Couldn’t verify the restore. Try again.');
+        if (result) document.getElementById('private-archive-heading').focus({preventScroll: true});
+      });
+      actions.append(open, restore);
+      item.append(copy, actions);
+      privateArchiveList.append(item);
+    }
+    privateArchiveMore.hidden = !state.cursor && !state.failed;
+    privateArchiveMore.disabled = state.loading;
+    privateArchiveMore.textContent = state.failed ? uiLabel('重试', 'Retry') : uiLabel('加载更多', 'Load more');
+  }
+
+  async function loadPrivateArchive(state) {
+    if (archiveView !== state || state.loading || !threadWorkspaceMatches(state.scope)) return;
+    state.loading = true;
+    privateArchiveMore.disabled = true;
+    privateArchiveStatus.textContent = uiLabel('正在读取归档…', 'Loading archived conversations…');
+    const {owner, wid} = state.scope;
+    const since = privateThreadReceipt;
+    const params = new URLSearchParams({include: 'conversations', conversation_status: 'archived', include_archived: '1', limit: '100'});
+    if (state.cursor) params.set('cursor', state.cursor);
+    const result = await request('GET', `/v1/workspaces/${wid}/agents?${params}`, undefined, undefined,
+      AbortSignal.timeout(10000)).catch(() => ({status: 0, body: {}}));
+    if (archiveView !== state || !threadWorkspaceMatches(state.scope)) return;
+    state.loading = false;
+    state.failed = result.status !== 200 || !Array.isArray(result.body.items) || !Array.isArray(result.body.conversations);
+    if (state.failed) {
+      privateArchiveStatus.textContent = uiLabel('无法读取归档，请重试。', 'Couldn’t load archived conversations.');
+      renderPrivateArchive(state);
+      return;
+    }
+    const byAgent = new Map(result.body.items.map(agent => [agent.id, agent]));
+    for (const listed of result.body.conversations) {
+      const agent = byAgent.get(listed?.agent_id);
+      if (!agent || !PRIVATE_THREAD_ID.test(agent.id) || !PRIVATE_THREAD_ID.test(listed.id) ||
+          (listed.workspace_id && listed.workspace_id !== wid) || (agent.workspace_id && agent.workspace_id !== wid)) continue;
+      const row = threadAfterRead(listed, {owner, wid, aid: agent.id, cid: listed.id}, since);
+      if (row.archived === true) state.rows.set(row.id, {...row, agent});
+    }
+    const next = result.body.cursor;
+    state.cursor = /^\d{1,15}\.[a-f0-9]{32}$/.test(next || '') && next !== state.cursor ? next : '';
+    privateArchiveStatus.textContent = state.rows.size ? '' : state.cursor
+      ? uiLabel('当前没有结果，可以继续加载。', 'No results on this page. You can load more.')
+      : uiLabel('没有已归档的私聊。', 'No archived conversations.');
+    renderPrivateArchive(state);
+  }
+
+  privateRename?.addEventListener('click', () => {
+    const target = currentPrivateThread();
+    if (!target || target.conversation.archived || privateRename.disabled) return;
+    renameTarget = target;
+    privateNameInput.value = target.conversation.title_edited ? target.conversation.title : privateThreadTitle(target.conversation, target.agent);
+    privateNameInput.disabled = privateNameSave.disabled = false;
+    privateNameStatus.textContent = '';
+    privateNameDialog.showModal();
+    privateNameInput.focus();
+    privateNameInput.select();
+  });
+  document.getElementById('private-thread-cancel-name')?.addEventListener('click', () => privateNameDialog.close());
+  privateNameDialog?.addEventListener('close', () => {
+    const target = renameTarget;
+    renameTarget = null;
+    if (target && threadMatches(target)) (narrowScreen() ? document.getElementById('chat-more') : privateRename).focus();
+  });
+  document.getElementById('private-thread-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = renameTarget;
+    if (!target || !threadMatches(target) || privateNameSave.disabled) return;
+    const title = privateNameInput.value.trim();
+    if (!title || title.length > 120) {
+      privateNameStatus.textContent = uiLabel('请输入 1–120 个字符的对话名称。', 'Enter a conversation name of 1–120 characters.');
+      return;
+    }
+    privateNameSave.disabled = privateNameInput.disabled = true;
+    privateNameStatus.textContent = uiLabel('正在保存名称…', 'Saving name…');
+    const result = await organizePrivateThread(target, 'rename', title);
+    if (renameTarget !== target || !privateNameDialog.open || !threadMatches(target)) return;
+    if (result) {
+      privateNameDialog.close();
+      show('ok', uiLabel('对话名称已保存。', 'Conversation renamed.'), {announceOnly: true});
+    } else {
+      privateNameInput.disabled = privateNameSave.disabled = false;
+      privateNameStatus.textContent = uiLabel('无法确认名称是否已保存，请重试。', 'Couldn’t verify the new name. Try again.');
+    }
+  });
+  privateArchive?.addEventListener('click', async () => {
+    const target = currentPrivateThread();
+    if (!target || target.conversation.archived || privateArchive.disabled) return;
+    const opened = socialOpen;
+    const result = await organizePrivateThread(target, 'archive');
+    if (opened !== socialOpen || !threadMatches(target) || result === null) return;
+    if (result) {
+      show('ok', uiLabel('对话已归档。', 'Conversation archived.'), {announceOnly: true});
+      privateRestore.focus({preventScroll: true});
+    } else show('error', uiLabel('无法确认归档结果，请重试。', 'Couldn’t verify the archive. Try again.'));
+  });
+  privateRestore?.addEventListener('click', async () => {
+    const target = currentPrivateThread();
+    if (!target?.conversation.archived || privateRestore.disabled) return;
+    const opened = socialOpen;
+    const result = await organizePrivateThread(target, 'restore');
+    if (opened !== socialOpen || !threadMatches(target) || result === null) return;
+    if (result) {
+      show('ok', uiLabel('已恢复到会话列表。', 'Restored to conversations.'), {announceOnly: true});
+      document.getElementById('chat-title').focus({preventScroll: true});
+    } else show('error', uiLabel('无法确认恢复结果，请重试。', 'Couldn’t verify the restore. Try again.'));
+  });
+  privateArchiveOpen?.addEventListener('click', () => {
+    if (!currentThreadWorkspace()) return;
+    const scope = {owner: currentUser.id, wid: workspaceId()};
+    archiveView = {scope, rows: new Map(), cursor: '', loading: false, failed: false};
+    renderPrivateArchive(archiveView);
+    privateArchiveDialog.showModal();
+    document.getElementById('private-archive-heading').focus();
+    return loadPrivateArchive(archiveView);
+  });
+  privateArchiveMore?.addEventListener('click', () => { if (archiveView) return loadPrivateArchive(archiveView); });
+  document.getElementById('private-archive-close')?.addEventListener('click', () => privateArchiveDialog.close());
+  privateArchiveDialog?.addEventListener('close', () => { archiveView = null; });
+
   function sessionTargetMatches(target, row) {
     return target?.cid === row.dataset.conversation && target.source === row.dataset.source;
   }
@@ -1491,22 +1858,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (sessionTransition && !sessionTransition.pending) void openSessionTarget(sessionTransition);
   });
 
+  function draftScopeForSession(session) {
+    return JSON.stringify([currentUser?.id, workspaceId(), session.source, session.agent_id, session.id]);
+  }
+
+  function paintSessionPreview({button, preview, session}, value) {
+    const draft = value.trim().replace(/\s+/g, ' ').slice(0, 160);
+    if (draft) {
+      const mark = document.createElement('span');
+      mark.className = 'session-draft-label';
+      mark.textContent = uiLabel('草稿', 'Draft');
+      preview.replaceChildren(mark, document.createTextNode(draft));
+    } else fillBold(document, preview, session.preview || '');
+    button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
+      (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
+  }
+
+  function sessionDraftChanged(scope, text, previous) {
+    const row = sessionRows.get(scope);
+    if (document.getElementById('session-filter-value')?.value === 'drafts' && Boolean(text.trim()) !== Boolean(previous.trim())) {
+      if (row || sessions.some(session => draftScopeForSession(session) === scope)) renderSessions();
+    } else if (row) paintSessionPreview(row, text);
+  }
+
+  function clearComposerDrafts() {
+    publicDraft.clear();
+    for (const row of sessionRows.values()) paintSessionPreview(row, '');
+    sessionRows.clear();
+  }
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
+    if (privateArchiveOpen) privateArchiveOpen.hidden = !currentThreadWorkspace();
     list.replaceChildren();
+    sessionRows.clear();
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
+    const draftFor = item => currentUser ? publicDraft.lookup(draftScopeForSession(item), item.kind === 'public') : '';
     const visible = sessions.filter(item => filter === 'all'
       || (filter === 'agent' && item.source === 'agent')
       || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
+      || (filter === 'drafts' && Boolean(draftFor(item).trim()))
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversation-heading').textContent = uiLabel('对话 · ', 'Conversations · ') + visible.length;
+    const heading = filter === 'drafts' ? uiLabel('草稿', 'Drafts') : uiLabel('对话', 'Conversations');
+    document.getElementById('conversation-heading').textContent = `${heading} · ${visible.length}`;
     const empty = document.getElementById('conversations-empty');
     empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
-    if (!empty.hidden) empty.textContent = filter === 'all'
+    if (!empty.hidden) empty.textContent = filter === 'drafts' ? uiLabel('还没有未发送的草稿。', 'No unsent drafts.') : filter === 'all'
       ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
     const readAll = document.getElementById('conversations-read-all');
     if (readAll) {
@@ -1541,7 +1942,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.textContent = (session.pinned ? '置顶 · ' : '') + session.title;
       const preview = document.createElement('span');
       preview.className = 'preview';
-      fillBold(document, preview, session.preview || '');
+      const row = {button, preview, session};
+      sessionRows.set(draftScopeForSession(session), row);
+      paintSessionPreview(row, draftFor(session));
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
@@ -1561,7 +1964,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (group !== lastGroup) {
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
-      button.setAttribute('aria-label', group + '：' + session.title + (session.muted ? '，免打扰' : ''));
       li.append(button);
       list.append(li);
     }
@@ -1861,7 +2263,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (partial) replyView = {bubble, heading, body};
     }
     bubble.append(body);
-    for (const attachment of item.attachments || []) bubble.append(renderChatFile(document, attachment));
+    for (const attachment of item.attachments || []) bubble.append(renderMessageFile(attachment));
     const sources = memorySources(item);
     if (sources) bubble.append(sources);
     if (item.role === 'assistant' && saveableAgentMessage(item)) {
@@ -2859,7 +3261,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const model = models.get(item.id);
         const reuse = item.attachment.mime === 'model/gltf-binary'
           && model?.dataset.model3dSource === item.attachment.path;
-        li.insertBefore(reuse ? model : renderChatFile(document, item.attachment), time);
+        li.insertBefore(reuse ? model : renderMessageFile(item.attachment), time);
       } else if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
@@ -3223,6 +3625,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace) return;
     const cid = currentSource === 'social' && currentConversation?.id;
     const next = items.find(row => row.id === cid);
+    if (cid && !next && currentConversation.group_management &&
+        (items.length < 200 || socialConversations.some(row => row.id === cid))) {
+      const allowed = await refreshGroupManagement({...groupManagementContext(),conversationId:cid});
+      if (!allowed && currentSource !== 'social') return;
+    }
     if (next && viewingSocialMessages() && socialHistory?.cid === cid
       && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
       if (readingSocialContext()) {
@@ -3244,7 +3651,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readPinReceipt = pinReceipt;
     const result = await request('GET', `${socialBase()}?limit=100`);
     if (sequence !== sessionsRequest || user !== currentUser || wid !== workspaceId() || result.status !== 200) return;
-    const changed = (result.body.items || []).map(row => mergePinRead(row, user.id, wid, readPinReceipt));
+    const changed = (result.body.items || []).map(row => mergeGroupRead(
+      mergePinRead(row, user.id, wid, readPinReceipt), user.id, wid)).filter(Boolean);
     const incoming = changed.some(row => !listed.has(row.id) || row.last_seq > listed.get(row.id).last_seq);
     socialConversations = changed;
     sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], changed, user.id)]);
@@ -3275,6 +3683,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!id) return;
     const isLocalPersonal = inPersonalWorkspace();
+    const readThreadReceipt = nativeDirectory ? 0 : privateThreadReceipt;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const path = `/v1/workspaces/${id}`;
     const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
@@ -3327,27 +3736,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
     }
     const agentById = new Map(agents.map(agent => [agent.id, agent]));
-    const privateRows = rows.flatMap(row => {
-      const agent = agentById.get(row.agent_id);
-      return agent ? [{...row, agent}] : [];
-    });
-    if (isLocalPersonal && privateRows.length) {
-      applyReceipt('agent', privateRows);
-      sessions = mergeSessions(privateRows, socialConversations, user.id);
+    const privateRows = () => {
+      const included = new Set(rows.map(row => row.id));
+      const directory = [...rows];
+      // An active-only read can omit a thread restored after the request began.
+      for (const row of sessions) {
+        if (row.source !== 'agent' || included.has(row.id)) continue;
+        const receipt = privateThreadReceipts.get(privateThreadKey({owner: user.id, wid: id, aid: row.agent_id, cid: row.id}));
+        if (receipt?.restored && receipt.seq > readThreadReceipt) directory.push(row);
+      }
+      return directory.flatMap(row => {
+        const agent = agentById.get(row.agent_id);
+        if (!agent) return [];
+        const currentRow = threadAfterRead(row, {owner: user.id, wid: id, aid: agent.id, cid: row.id}, readThreadReceipt);
+        return currentRow.archived === true ? [] : [{...currentRow, agent}];
+      });
+    };
+    const localRows = isLocalPersonal ? privateRows() : [];
+    if (localRows.length) {
+      applyReceipt('agent', localRows);
+      sessions = mergeSessions(localRows, socialConversations, user.id);
       renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(privateRows.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(localRows.length ? sessions.find(row => row.source === 'agent') : null);
     }
     const social = await socialRequest;
     if (!current()) return;
     partial ||= social.status !== 200;
     socialConversations = social.status === 200
-      ? (social.body.items || []).map(row => mergePinRead(row, user.id, id, readPinReceipt))
+      ? (social.body.items || []).map(row => mergeGroupRead(
+        mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
       : [];
     applyReceipt('social', socialConversations);
-    applyReceipt('agent', privateRows);
-    sessions = mergeSessions(privateRows, socialConversations, user.id);
+    const finalPrivateRows = privateRows();
+    applyReceipt('agent', finalPrivateRows);
+    sessions = mergeSessions(finalPrivateRows, socialConversations, user.id);
     setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
     if (currentSource === 'social') syncConversationPin(currentConversation);
@@ -3373,6 +3797,113 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     text.append(strong, small);
     row.append(avatar, text);
     return row;
+  }
+
+  function groupManagementContext() {
+    return servedByDsbot && currentUser && currentSource === 'social' && currentConversation?.group_management
+      ? {owner:currentUser.id, workspace:workspaceId(), conversation:currentConversation} : null;
+  }
+
+  const groupReceiptKey = (owner, workspace, id) => JSON.stringify([owner,workspace,id]);
+  const groupWorkspaceMatches = target => target.owner === currentUser?.id && target.workspace === workspaceId();
+  const groupMatches = target => groupWorkspaceMatches(target) && currentSource === 'social'
+    && currentConversation?.id === target.conversationId;
+
+  function mergeGroupRead(row, owner, workspace) {
+    if (!row?.group_management) return row;
+    const key = groupReceiptKey(owner, workspace, row.id);
+    const receipt = groupManagementReceipts.get(key);
+    if (!receipt) return row;
+    if (receipt.revision > row.group_management.revision || (receipt.left && receipt.revision === row.group_management.revision)) {
+      return receipt.left ? null : {...row,...receipt.fields};
+    }
+    if (receipt.revision < row.group_management.revision) groupManagementReceipts.delete(key);
+    return row;
+  }
+
+  function reportGroupChange(conversation, target) {
+    if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
+        conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
+    const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
+    const fields = Object.fromEntries(['title','members','agent_members','group_management','updated'].map(name => [name,conversation[name]]));
+    const revision = conversation.group_management.revision;
+    if (revision < (groupManagementReceipts.get(key)?.revision ?? -1)) return;
+    groupManagementReceipts.set(key,{revision,fields});
+    socialConversations = socialConversations.map(row => row.id === conversation.id ? {...row,...fields} : row);
+    sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], socialConversations, target.owner)]);
+    renderSessions();
+    if (!groupMatches(target) || currentConversation.group_management.revision > revision) return;
+    Object.assign(currentConversation, fields);
+    applyChatIdentity(document, conversationLabel(currentConversation,currentUser.id), currentConversation);
+    setChatSubtitle(groupInfoCounts(currentConversation).text);
+    setGroupInfo(currentConversation);
+  }
+
+  function forgetGroup(target, revoked = false) {
+    if (!groupWorkspaceMatches(target)) return;
+    const id = target.conversationId;
+    groupManagementReceipts.set(groupReceiptKey(target.owner,target.workspace,id), {
+      left:true, revision:target.conversation.group_management.revision,
+    });
+    socialConversations = socialConversations.filter(row => row.id !== id);
+    sessions = sessions.filter(row => row.source !== 'social' || row.id !== id);
+    if (groupMatches(target)) {
+      const exactScope = sendScope();
+      const pending = pendingSends.get(exactScope);
+      if (pending) {
+        for (const job of pending.jobs.slice()) removeSendJob(pending,job);
+        pendingSends.delete(exactScope);
+      }
+      replyDrafts.delete(exactScope);
+      publicDraft.forget(exactScope);
+      attachmentSender?.forget?.(exactScope);
+      voiceRecorder.clear();
+      lastSocialItems = [];
+      clearChatScope();
+      setGroupInfo(null);
+      setSocialHeaderTools(false);
+      for (const dialogId of ['announcement-dialog','message-assist-dialog']) {
+        const dialog = document.getElementById(dialogId);
+        if (dialog?.open) dialog.close();
+      }
+      writeHash({workspace:target.workspace});
+      setSessionsOpen(true);
+      const list = document.getElementById('conversation-list');
+      list.tabIndex = -1;
+      list.focus({preventScroll:true});
+      show(revoked ? 'error' : 'ok', revoked ? uiLabel('你已无法访问此群聊。','You no longer have access to this group.')
+        : uiLabel('已退出群聊。','You left the group.'));
+    }
+    renderSessions();
+  }
+
+  async function refreshGroupManagement(target) {
+    if (!target || !groupMatches(target)) return false;
+    const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversationId}/management`;
+    const result = await request('GET', path).catch(() => ({status:0,body:{}}));
+    if (!groupMatches(target)) return false;
+    if ([403,404].includes(result.status)) {
+      forgetGroup(target,true);
+      return false;
+    }
+    if (result.status !== 200 || result.body?.conversation?.id !== target.conversationId) return false;
+    reportGroupChange(result.body.conversation,target);
+    return true;
+  }
+
+  async function initializeGroupManagement() {
+    if (groupManagement) return;
+    const target = groupManagementContext();
+    if (!target) return;
+    const {mountGroupManagement} = await loadGroupManagement();
+    if (groupManagement || !groupMatches({...target,conversationId:target.conversation.id}) ||
+        document.getElementById('group-info-panel').hidden) return;
+    groupManagement = mountGroupManagement(document, {
+      request, context:groupManagementContext, notify:show,
+      onChanged:reportGroupChange, onLeft:forgetGroup,
+      onRefresh:refreshGroupManagement,
+    });
+    setGroupInfo(currentConversation);
   }
 
   function setGroupInfoTab(which) {
@@ -3553,6 +4084,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function setGroupInfo(conversation) {
     if (!conversation) autoTranslation.open(null);
     syncConversationPin(conversation);
+    groupManagement?.sync();
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
@@ -3578,8 +4110,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
     if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
     const peopleList = document.getElementById('group-info-people');
-    peopleList.replaceChildren(...(conversation.members || []).map(member =>
-      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : (conversation.account_group ? '群成员' : '工作区成员'), 'person')));
+    peopleList.replaceChildren(...(conversation.members || []).map(member => {
+      const row = memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你'
+        : (conversation.account_group ? '群成员' : '工作区成员'), 'person');
+      return groupManagement?.decorateMember(row, member) ?? row;
+    }));
   }
 
   function setGroupInfoOpen(open) {
@@ -3588,6 +4123,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!toggle || !panel) return;
     panel.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      const group = groupManagementContext()?.conversation;
+      if (group && group.id !== lastGroupInfo) {
+        lastGroupInfo = group.id;
+        setGroupInfoTab(group.agent_members?.length ? 'agents' : 'people');
+      }
+      void initializeGroupManagement().catch(() => {});
+    }
   }
 
   function showPublicChatState(state) {
@@ -3718,6 +4261,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const open = nativeRefresh ? socialOpen : ++socialOpen;
     const refreshId = nativeRefresh ? ++privateRefresh : null;
+    const readThreadReceipt = startupSnapshot ? 0 : privateThreadReceipt;
     const wid = workspaceId();
     const owner = currentUser;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
@@ -3747,7 +4291,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const listedAgent = agents.find(item => item.id === agentId);
     const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
-    const conversation = result.body.conversation;
+    const conversation = threadAfterRead(result.body.conversation, {owner: owner?.id, wid, aid: agentId, cid: conversationId}, readThreadReceipt);
     if (!agent || conversation?.id !== conversationId || (link && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
@@ -3824,15 +4368,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
+        const target = groupManagementContext();
+        if (target?.conversation.id === conversationId && [403,404].includes(result.status)) {
+          forgetGroup({...target,conversationId}, true);
+          return false;
+        }
         scheduleSocialPoll(currentConversation);
         return false;
       }
-      show('error', messageFor(result.body.error, '无法打开会话。'));
+      show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
+        : messageFor(result.body?.error, '无法打开会话。'));
       if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
-    const updated = mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt);
+    const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
     if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
@@ -4658,7 +5208,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
-      publicDraft.clear();
+      clearComposerDrafts();
       renderReplyDraft();
       currentConversation = null;
       chatCalls.sync();
@@ -4689,7 +5239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
-      publicDraft.clear();
+      clearComposerDrafts();
       renderReplyDraft();
     }
     const owner = session.body.user;
@@ -5079,6 +5629,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    closePrivateThreadDialogs();
+    resetStickerSurface();
     clearSessionTransition();
     cancelStartupLink();
     stopReplyProgress();
@@ -5093,6 +5645,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = null;
     syncConversationPin(null);
     currentSource = 'agent';
+    lastGroupInfo = '';
+    groupManagement?.sync();
     renderAgentQuickStarts();
     publicDraft.enter(sendScope());
     syncCaptureButton();
@@ -5423,7 +5977,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+      if (event.key === 'Escape' && !document.getElementById('group-management-dialog')?.open &&
+          !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
     });
   }
   let searchScrollSnapshot = null;
@@ -5832,6 +6387,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请输入 1–4000 字符的消息。');
       return;
     }
+    queueChatMessage(message, files, reply);
+  }
+
+  function sendSticker(sticker, target) {
+    const active = stickerContext();
+    if (!active || target?.scope !== active.scope || target.owner !== active.owner ||
+        !PRIVATE_THREAD_ID.test(sticker?.id ?? '') || sticker.path !== `/v1/stickers/${sticker.id}/file`) return false;
+    const social = currentSource === 'social';
+    const reply = social ? replyDrafts.get(active.scope) : undefined;
+    const message = social ? {} : messagePayload('', chatLanguage);
+    if (reply) message.reply_to = reply.message_id;
+    queueChatMessage({...message,sticker_id:sticker.id}, [], reply, sticker);
+    return true;
+  }
+
+  function queueChatMessage(message, files, reply, sticker) {
+    const field = document.getElementById('chat-body');
+    const social = currentSource === 'social';
+    const scope = sendScope();
     let queue = pendingSends.get(scope);
     if (!queue) {
       queue = {
@@ -5843,13 +6417,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       };
       pendingSends.set(scope, queue);
     }
-    const job = makeSendJob(queue, message, files, reply);
+    const job = makeSendJob(queue, message, files, reply, sticker);
     if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
     queue.jobs.push(job);
-    field.value = '';
-    publicDraft.persist();
-    field.focus({preventScroll: true});
-    if (social) agentMentions.clear();
+    if (!sticker) {
+      field.value = '';
+      publicDraft.persist({now: false});
+      field.focus({preventScroll: true});
+      if (social) agentMentions.clear();
+    }
     consumeReplyDraft(scope, reply);
     if (files.length) attachmentSender.clearDraft(scope, files);
     show('', '');
@@ -5872,6 +6448,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           job.state = state;
           if (isCurrent()) paintSendJob(job);
         };
+        if (!queue.social && privateThreadReceipts.get(privateThreadKey({owner: queue.owner, wid: queue.wid,
+          aid: queue.agentId, cid: queue.conversationId}))?.metadata.archived) {
+          job.failed = true;
+          feedback(uiLabel('对话已归档，恢复后可以重试。', 'Conversation archived. Restore it to retry.'));
+          continue;
+        }
         const beginReply = () => {
           if (!servedByDsbot || queue.social || queue.replying === job) return;
           queue.replying = job;
@@ -5889,7 +6471,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
-            job.message = messagePayload(job.message.body, chatLanguage);
+            job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
             job.preferences = null;
           }
           if (!queue.conversationId) {
@@ -5970,6 +6552,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               void openSocialConversation(queue.conversationId, {refresh:true});
             }
             throw new Error(result.status === 413 ? '附件合计不能超过 8 MB。'
+              : code === 'conversation_archived' ? uiLabel('对话已归档，恢复后可以重试。', 'Conversation archived. Restore it to retry.')
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
           }
@@ -6050,6 +6633,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const field = document.getElementById('chat-body');
       const selection = wrapBold(field.value || '', field.selectionStart, field.selectionEnd);
       field.value = selection.text;
+      publicDraft.persist({now: false});
       field.focus();
       if (typeof field.setSelectionRange === 'function') {
         field.setSelectionRange(selection.start, selection.end);

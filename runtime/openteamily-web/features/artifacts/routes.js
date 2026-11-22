@@ -3,7 +3,7 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
-  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
+  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
   unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
@@ -103,6 +103,11 @@ export async function dispatch(req, workspaceId, artifactId, action) {
       return createMedia(context, workspaceId, {
         title: upload.fields.title, data: upload.data, filename: upload.filename, mime, key: req.headers.get('idempotency-key'),
       })
+    }
+    if (raw.duplicate_from !== undefined) {
+      const {title, duplicate_from} = requireBodyKeys(raw,['title','duplicate_from'])
+      const source = requireBodyKeys(duplicate_from,['artifact_id','revision'])
+      return duplicateArtifact(context,workspaceId,{...source,title},req.headers.get('idempotency-key'))
     }
     const body = requireBodyKeys(raw, ['title', 'body', 'kind', 'board', 'slides', 'dashboard', 'spreadsheet', 'source'])
     return createArtifact(context, workspaceId, body, req.headers.get('idempotency-key'))

@@ -11,6 +11,7 @@ import { actor, recallWorkspace } from './common.js'
 import { captureRoutes, captureWorker } from './capture.js'
 import { actionDraftRoutes } from './action-drafts.js'
 import { requireMemoryWorkspace } from './access.js'
+import { saveMeetingNote } from './meeting-notes.js'
 
 const routes = [...extraRoutes, ...pageRoutes, ...captureRoutes].map(route => ({
   pattern: route.pattern,
@@ -28,6 +29,7 @@ export default defineFeature({
   routes: [...actionDraftRoutes, ...routes],
   endpoints: ({ store, owner, host }) => ({
     ...captureWorker({store,host}),
+    saveMeetingNote: (payload, call) => saveMeetingNote({store, owner, host}, payload, call),
     async pages(payload) {
       await requireMemoryWorkspace(host, recallWorkspace(payload))
       return allPages(store, payload)

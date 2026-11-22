@@ -96,6 +96,7 @@ const FEATURE = /^[a-z][a-z0-9-]{0,39}$/
 const V1_PATH = /^\/v1\/[A-Za-z0-9/_.-]{1,240}$/
 const CHAT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations\/[A-Za-z0-9._-]{1,80}\/messages$/
 const AGENT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/messages$/
+const STICKER_FILE = /^\/v1\/stickers\/[0-9a-f]{32}\/file$/
 const CHAT_FILE_MAX = 8 * 1024 * 1024
 
 async function composeAttachments(request, agent) {
@@ -126,6 +127,11 @@ function fileResponse(request, {data, content_type, filename, inline}) {
     'content-security-policy': "default-src 'none'; sandbox",
   }
   const bytes = Buffer.from(data, 'base64')
+  if (request.method === 'HEAD') {
+    headers['content-length'] = String(bytes.length)
+    if (inline) headers['accept-ranges'] = 'bytes'
+    return new Response(null, {status:200, headers})
+  }
   if (inline) {
     headers['accept-ranges'] = 'bytes'
     // A single byte range is enough for native media playback and seeking.
@@ -188,7 +194,8 @@ export function createLegacyDispatch({ endpoints }) {
     }
     try {
       const idempotency_key = request.headers.get('idempotency-key') || undefined
-      const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
+      const stickerHead = request.method === 'HEAD' && feature === 'stickers' && STICKER_FILE.test(path)
+      const result = await handler({ method: stickerHead ? 'GET' : request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
       if (result?.download && status === 200) {
         // The interactive document has its own opaque origin. No other
@@ -209,7 +216,7 @@ export function createLegacyDispatch({ endpoints }) {
         }
         return fileResponse(request, result.download)
       }
-      return new Response(status === 204 ? null : JSON.stringify(result?.body ?? {}), {
+      return new Response(status === 204 || stickerHead ? null : JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })
     } catch (error) {

@@ -6,11 +6,19 @@ const ORIGIN = 'https://openteamily.example';
 const WS = 'a'.repeat(32);
 const ID = 'b'.repeat(32);
 
+test('the personal sticker library routes only canonical paths to the owner runtime', () => {
+  for (const path of ['/v1/stickers?limit=20', `/v1/stickers/${ID}`, `/v1/stickers/${ID}/file`]) {
+    assert.deepEqual(movedTarget(path, ORIGIN), {feature:'stickers', path});
+  }
+  assert.equal(movedTarget('/v1/stickers/other/file', ORIGIN), null);
+});
+
 test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot', () => {
   assert.deepEqual(movedTarget(`/v1/workspaces/${WS}/meetings?limit=20`, ORIGIN),
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/artifact`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/memory`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/action?index=0&revision=1`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');

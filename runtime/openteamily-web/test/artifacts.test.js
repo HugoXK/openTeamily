@@ -17,6 +17,82 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
+test('copying a saved work version creates a separate private artifact and replays after the source is removed', async () => {
+  const owner = await boot()
+  const other = await boot()
+  const call = (...args) => owner.call('artifacts',...args)
+  const literal = JSON.stringify({schema:'openteamily.slides.v1',slides:[{title:'JSON example',bullets:['literal document text']}]})
+  const original = (await call('POST',base(),{title:'Notes',body:literal,
+    source:{kind:'agent_message',id:'b'.repeat(32),conversation_id:'c'.repeat(32)}},key())).body.artifact
+  assert.equal(original.source.kind,'agent_message')
+  const path = '/' + original.id
+  await call('POST',base(path),{revision:1,changes:{body:'Newer original'}},key())
+  await call('POST',base(path+'/favorite'),{enabled:true})
+  const input = {title:'Notes copy',duplicate_from:{artifact_id:original.id,revision:1}}
+  const receipt = key()
+  assert.equal((await other.call('artifacts','POST',base(),input,receipt)).status,404)
+  assert.equal((await call('POST',base('','d'.repeat(32)),input,receipt)).status,404)
+  assert.equal((await call('POST',base(),{...input,duplicate_from:{...input.duplicate_from,revision:4}},receipt)).body.error.code,'version_not_found')
+  const result = await call('POST',base(),input,receipt)
+  assert.equal(result.status,201,JSON.stringify(result.body))
+  const {artifact:copy} = result.body
+  assert.notEqual(copy.id,original.id)
+  assert.deepEqual([copy.kind,copy.title,copy.body,copy.revision],['document','Notes copy',literal,1])
+  assert.equal(copy.source,undefined)
+  assert.deepEqual((await call('GET',base('/'+copy.id+'/shares'))).body.items,[])
+  assert.deepEqual((await call('GET',base()+'?scope=favorites')).body.items.map(row => row.id),[original.id])
+  assert.equal((await call('POST',base(),{...input,title:'Different'},receipt)).status,409)
+  assert.equal((await call('POST',base(),input,key())).body.error.code,'title_conflict')
+  const revised = await call('POST',base('/'+copy.id),{revision:1,changes:{body:'Only edited in copy'}})
+  assert.equal(revised.body.artifact.body,'Only edited in copy')
+  assert.equal((await call('GET',base(path))).body.artifact.body,'Newer original')
+  assert.deepEqual((await call('GET',base(path+'/versions'))).body.items.map(row => row.revision),[2,1])
+  await call('POST',base(path+'/remove'),{})
+  const replay = await call('POST',base(),input,receipt)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.artifact.id,copy.id)
+  assert.equal(replay.body.artifact.body,'Only edited in copy')
+})
+
+test('saved website, structured work and historical media copies keep their native content', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts',...args)
+  const payloads = [
+    {title:'Website',kind:'website',body:'<h1>Blueprint</h1><style>h1{color:blue}</style>'},
+    {title:'Slides',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'First',bullets:['Important']}] }},
+    {title:'Board',kind:'whiteboard',board:{schema:'openteamily.whiteboard.v1',width:800,height:600,strokes:[]}},
+    {title:'Dashboard',kind:'dashboard',dashboard:{schema:'openteamily.dashboard.v1',widgets:[{type:'metric',title:'Total',value:'15'}]}},
+    {title:'Workbook',kind:'spreadsheet',spreadsheet:{schema:'openteamily.spreadsheet.v1',sheets:[
+      {name:'Costs',rows:[['2'],['=SUM(A1:A1)']]},{name:'Notes',rows:[['Retained']]}]}},
+  ]
+  for (const payload of payloads) {
+    const saved = await call('POST',base(),payload,key())
+    assert.equal(saved.status,201,JSON.stringify(saved.body))
+    const original = saved.body.artifact
+    await call('POST',base('/'+original.id),{revision:1,changes:{title:original.title+' updated'}})
+    const result = await call('POST',base(),{title:original.title+' copy',duplicate_from:{artifact_id:original.id,revision:1}},key())
+    assert.equal(result.status,201,JSON.stringify(result.body))
+    const copy = result.body.artifact
+    const field = payload.kind === 'website' ? 'body' : payload.kind === 'whiteboard' ? 'board' : payload.kind
+    assert.deepEqual([copy.kind,copy[field],copy.revision],[original.kind,original[field],1])
+  }
+  const upload = (title, bytes, filename, revision) => ({
+    _multipart:true,fields:{title,...(revision ? {revision:String(revision)} : {})},
+    files:{file:{filename,data:bytes.toString('base64')}},
+  })
+  const original = (await call('POST',base(),upload('Image',PNG,'original.png'),key())).body.artifact
+  const path = '/' + original.id
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7','base64')
+  assert.equal((await call('POST',base(path+'/file'),upload('Image',gif,'later.gif',1))).body.artifact.revision,2)
+  const copied = await call('POST',base(),{title:'Earlier image',duplicate_from:{artifact_id:original.id,revision:1}},key())
+  assert.equal(copied.status,201,JSON.stringify(copied.body))
+  assert.equal(copied.body.artifact.media.filename,'original.png')
+  await call('POST',base(path+'/remove'),{})
+  const file = await call('GET',base('/'+copied.body.artifact.id+'/file'))
+  assert.equal(file.status,200)
+  assert.deepEqual(Buffer.from(file.download.data,'base64'),PNG)
+})
+
 test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)

@@ -32,6 +32,7 @@ function ownerRuntime(testContext) {
   const { endpoints } = createAgents({ db, host })
   return {
     bots, db, host, runtime,
+    endpoints,
     importAgents: agents => endpoints.import({agents}),
     sessions: () => sessions,
     request: (method, path, body, idempotency_key) => endpoints.v1({ method, path, body, idempotency_key }),
@@ -91,6 +92,116 @@ test('the owner’s native Chat directory and thread detail share the latest sav
   assert.deepEqual((await runtime.request('GET', directory(WORKSPACE))).body.items[0].quick_starts, [])
 })
 
+test('private conversation organization preserves its owner, native session and historical entry', async t => {
+  const owner = ownerRuntime(t)
+  const agent = await createAgent(owner, WORKSPACE, 'Organizer', [])
+  const neighbor = await createAgent(owner, WORKSPACE, 'Neighbor', [])
+  const agentPath = agentBase(WORKSPACE) + '/' + agent.id
+  const thread = await openThread(owner, agentPath)
+  const id = thread.split('/').at(-1)
+  const original = (await owner.request('GET', thread)).body.conversation
+  const otherThread = (await owner.request('POST', agentPath+'/conversations', {title:'Also active'}, 'fixture-other-thread')).body.conversation.id
+  const organize = (action, fields = {}) => owner.request('POST', thread, {action,...fields})
+  const search = conversation_id => owner.endpoints.searchMessages({workspace_id:WORKSPACE,q:'Keep this',limit:10,conversation_id})
+  const startup = conversation_id => owner.endpoints.startupEntry({workspace_id:WORKSPACE,agent_id:agent.id,conversation_id},{internal:true})
+  const messageId = 'f'.repeat(32)
+  owner.db.prepare(`INSERT INTO agent_messages (id,conversation_id,role,text,status,created)
+    VALUES (?,?,'user','Keep this note','sent',3)`).run(messageId,id)
+  owner.db.prepare('UPDATE agent_conversations SET updated=10 WHERE id=?').run(id)
+  owner.db.prepare('UPDATE agent_conversations SET updated=5 WHERE id=?').run(otherThread)
+  assert.equal((await startup()).conversation.id,id)
+  assert.equal((await search()).items[0].id,messageId)
+  assert.equal(original.title_edited,false)
+  assert.equal((await organize('rename',{title:'   '})).status,400)
+  assert.equal((await organize('rename',{title:original.title})).body.conversation.title_edited,true)
+  const renamed = await organize('rename',{title:'  Sprint notes  '})
+  assert.equal(renamed.status,200)
+  assert.equal(renamed.body.conversation.title,'Sprint notes')
+  assert.equal(renamed.body.conversation.title_edited,true)
+  assert.equal(renamed.body.conversation.updated,10)
+  assert.equal((await owner.request('POST',thread.replace(agent.id,neighbor.id),{action:'archive'})).status,404)
+  assert.equal((await owner.request('POST',thread.replace(WORKSPACE,OTHER_WORKSPACE),{action:'archive'})).status,404)
+
+  const archived = await organize('archive')
+  assert.equal(archived.status,200)
+  assert.equal(archived.body.conversation.archived,true)
+  assert.ok(archived.body.conversation.archived_at > 0)
+  assert.deepEqual((await organize('archive')).body,archived.body)
+  assert.equal((await owner.request('GET',agentPath+'/conversations?archived=1')).body.items[0].id,id)
+  assert.deepEqual((await owner.request('GET',agentPath+'/conversations')).body.items.map(row => row.id),[otherThread])
+  assert.deepEqual((await owner.request('GET',directory(WORKSPACE))).body.conversations.map(row => row.id),[otherThread])
+  const summaries = (await owner.request('GET',directory(WORKSPACE)+'&conversation_status=archived')).body.conversations
+  assert.deepEqual(summaries.map(row => [row.id,row.title,row.archived,row.title_edited]),[[id,'Sprint notes',true,true]])
+  assert.deepEqual((await search()).items,[])
+  assert.equal((await search(id)).items[0].id,messageId)
+  assert.equal((await startup()).conversation.id,otherThread)
+  assert.equal((await startup(id)).conversation.archived,true)
+  const detail = (await owner.request('GET',thread+'?limit=1')).body
+  assert.equal(detail.conversation.native_session_id,original.native_session_id)
+  assert.equal(detail.items[0].id,messageId)
+
+  const replay = await owner.request('POST',agentPath+'/conversations',{title:'Fixture thread'},'fixture-conversation')
+  assert.equal(replay.status,201)
+  assert.deepEqual([replay.body.conversation.id,replay.body.conversation.title,replay.body.conversation.archived],[id,'Sprint notes',true])
+  assert.equal((await owner.request('POST',agentPath+'/conversations',{title:'Sprint notes'},'fixture-conversation')).status,409)
+  const restored = await organize('restore')
+  assert.equal(restored.body.conversation.archived,false)
+  assert.equal(restored.body.conversation.archived_at,null)
+  assert.deepEqual((await organize('restore')).body,restored.body)
+  assert.equal((await search()).items[0].id,messageId)
+  assert.equal((await startup()).conversation.id,id)
+  assert.equal(owner.sessions(),2)
+})
+
+test('archiving imported history does not bind a replacement native session during adoption or reads', async t => {
+  const owner = ownerRuntime(t)
+  const agent = await createAgent(owner, WORKSPACE, 'Personal chat', [])
+  const id = 'f'.repeat(32), message = 'a'.repeat(32)
+  const legacy = {workspace_id:WORKSPACE,id:agent.id,conversations:[{id,title:'Legacy topic',created:1,updated:2,
+    messages:[{id:message,role:'user',text:'Retained message',created:2}]}]}
+  await owner.endpoints['adopt-personal-chat'](legacy,false)
+  const thread = agentBase(WORKSPACE)+'/'+agent.id+'/conversations/'+id
+  assert.equal((await owner.request('POST',thread,{action:'rename',title:'Retained topic'})).status,200)
+  assert.equal((await owner.request('POST',thread,{action:'archive'})).status,200)
+  await owner.endpoints['adopt-personal-chat'](legacy)
+  await owner.endpoints.reconcile()
+  const archived = (await owner.request('GET',thread)).body
+  assert.equal(archived.conversation.archived,true)
+  assert.equal(archived.conversation.title,'Retained topic')
+  assert.equal(archived.conversation.native_session_id,null)
+  assert.deepEqual(archived.items.map(row => row.id),[message])
+  assert.equal(owner.sessions(),0)
+})
+
+test('archive pagination keeps every same-second conversation reachable without exposing agent instructions', async t => {
+  const owner = ownerRuntime(t)
+  const agent = await createAgent(owner,WORKSPACE,'Large archive',[])
+  const other = await createAgent(owner,OTHER_WORKSPACE,'Other archive',[])
+  const insert = owner.db.prepare(`INSERT INTO agent_conversations
+    (id,agent_id,title,created,updated,archived_at) VALUES (?,?,'Archived',1,2,3)`)
+  for (let i = 0; i < 205; i++) insert.run(i.toString(16).padStart(32,'0'),agent.id)
+  insert.run('f'.repeat(32),other.id)
+  const aggregate = directory(WORKSPACE)+'&conversation_status=archived'
+  const perAgent = agentBase(WORKSPACE)+'/'+agent.id+'/conversations?archived=1&limit=100'
+  for (const [path,key] of [[aggregate,'conversations'],[perAgent,'items']]) {
+    const seen = []
+    let cursor = null
+    do {
+      const response = await owner.request('GET',path + (cursor ? '&cursor='+cursor : ''))
+      assert.equal(response.status,200)
+      assert.ok(response.body[key].every(row => row.agent_id === agent.id))
+      if (key === 'conversations') assert.deepEqual(response.body.items,[{
+        id:agent.id,workspace_id:WORKSPACE,name:'Large archive',archived:0,native_deleted:false,served_by:'ds-bot',
+      }])
+      seen.push(...response.body[key].map(row => row.id))
+      cursor = response.body.cursor
+    } while (cursor)
+    assert.deepEqual(seen,Array.from({length:205},(_,i) => (204-i).toString(16).padStart(32,'0')))
+  }
+  assert.equal((await owner.request('GET',aggregate+'&cursor='+agent.id)).status,400)
+  assert.equal(owner.sessions(),0)
+})
+
 test('archived and deleted agents cannot supply starter chips from old Chat rows', async t => {
   const runtime = ownerRuntime(t)
   const agent = await createAgent(runtime, WORKSPACE, 'Archived agent', ['Saved archive starter'])
@@ -147,8 +258,9 @@ test('the native Chat directory pages durable data before the runtime attaches',
     {id: second, workspace_id: WORKSPACE, name: 'Second agent'},
     {id: foreign, workspace_id: OTHER_WORKSPACE, name: 'Other workspace'},
   ])
-  owner.db.prepare('INSERT INTO agent_conversations VALUES (?, ?, ?, 1, 1)').run(thread, personal, 'Retained conversation')
-  owner.db.prepare('INSERT INTO agent_conversations VALUES (?, ?, ?, 1, 1)').run(foreign, foreign, 'Other thread')
+  const insert = owner.db.prepare('INSERT INTO agent_conversations (id,agent_id,title,created,updated) VALUES (?, ?, ?, 1, 1)')
+  insert.run(thread, personal, 'Retained conversation')
+  insert.run(foreign, foreign, 'Other thread')
   owner.db.prepare('INSERT INTO native_personal_binding VALUES (1, ?, ?)').run(WORKSPACE, personal)
   owner.db.prepare('INSERT INTO native_agent_objects VALUES (?, ?, ?)').run(personal, 'saved-bot-id', 'Personal agent')
   owner.db.exec('PRAGMA query_only=ON')
@@ -170,7 +282,7 @@ test('the native Chat directory pages durable data before the runtime attaches',
     [[personal, 'saved-bot-id', ['Start an outline'], false]])
   assert.equal(first.body.cursor, personal)
   assert.deepEqual(first.body.conversations.map(row => ({...row})),
-    [{id: thread, agent_id: personal, title: 'Retained conversation', updated: 1}])
+    [{id: thread, agent_id: personal, title: 'Retained conversation', updated: 1, archived_at:null, archived:false, title_edited:false}])
 
   const next = await owner.request('GET', url + '&cursor=' + first.body.cursor)
   assert.equal(next.status, 200)

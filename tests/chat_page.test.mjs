@@ -94,6 +94,21 @@ test('mergeSessions prefers a last-message preview from the listing', () => {
   ]);
 });
 
+test('mergeSessions keeps archived private threads out of the inbox and named threads distinct from their previews', () => {
+  const agent = {id: 'ag', name: 'Helper'};
+  const sessions = mergeSessions([
+    {id: 'archived', agent, title: 'Archived', title_edited: true, archived: true},
+    {id: 'renamed', agent, title: 'Quarterly review', title_edited: true, preview: 'Latest assistant reply', updated: 30},
+    {id: 'duplicated', agent, title: 'Project notes', title_edited: true, preview: 'Project notes', updated: 20},
+    {id: 'legacy', agent, title: 'Old thread', title_edited: false, updated: 10},
+  ], [], alice);
+  assert.deepEqual(sessions.map(row => [row.id, row.title, row.preview]), [
+    ['renamed', 'Quarterly review', 'Latest assistant reply'],
+    ['duplicated', 'Project notes', 'Helper'],
+    ['legacy', 'Helper', 'Old thread'],
+  ]);
+});
+
 
 test('messageSearchQuery adds only an explicit conversation scope and encodes keywords', async () => {
   const {messageSearchQuery} = await import('../openteamily/static/chat/app.mjs');
@@ -1614,6 +1629,65 @@ test('public draft preserves the edited text for its owner and thread, clearing 
   field('chat-body').value = '';
   restored.persist();
   assert.equal(saved.size,0);
+});
+
+test('authenticated composer drafts flush on page exit and remain scoped to account, workspace and conversation', async () => {
+  const saved = new Map();
+  const view = new EventTarget();
+  view.sessionStorage = {getItem: key => saved.get(key) || null,
+    setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)};
+  function drafts(onChange) {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.defaultView = view;
+    return {composer: mountPublicDraft(doc, {onChange}), field: el('chat-body')};
+  }
+  const group = JSON.stringify(['alice', 'workspace', 'social', null, 'group']);
+  const otherGroup = JSON.stringify(['alice', 'workspace', 'social', null, 'other-group']);
+  const otherWorkspace = JSON.stringify(['alice', 'another-workspace', 'social', null, 'group']);
+  const otherAccount = JSON.stringify(['bob', 'workspace', 'social', null, 'group']);
+  const changes = [];
+  const {composer, field} = drafts((...values) => changes.push(values));
+  composer.enter(group);
+  field.value = '不发送。<草稿>';
+  await fire(field, 'input');
+  assert.deepEqual(changes, [[group, field.value, '']]);
+  assert.equal(saved.size, 0, 'typing avoids a synchronous storage write');
+  view.dispatchEvent(new Event('pagehide'));
+  const reopened = drafts();
+  assert.equal(reopened.composer.lookup(otherWorkspace), '');
+  assert.equal(reopened.composer.lookup(otherAccount), '');
+  reopened.composer.enter(otherGroup);
+  assert.equal(reopened.field.value, '');
+  reopened.composer.enter(group);
+  assert.equal(reopened.field.value, field.value);
+  reopened.field.value = '';
+  reopened.composer.persist();
+  assert.equal(drafts().composer.lookup(group), '');
+});
+
+test('new scoped private drafts move to the committed conversation in storage and can be forgotten', async () => {
+  const saved = new Map();
+  const defaultView = {sessionStorage: {getItem: key => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)}};
+  function drafts() {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    doc.defaultView = defaultView;
+    return {composer: mountPublicDraft(doc), field: el('chat-body')};
+  }
+  const newScope = JSON.stringify(['alice', 'workspace', 'agent', 'agent', null]);
+  const savedScope = JSON.stringify(['alice', 'workspace', 'agent', 'agent', 'exact']);
+  const {composer, field} = drafts();
+  composer.enter(newScope);
+  field.value = '第一条正在发送时写的第二条';
+  await fire(field, 'input');
+  composer.move(newScope, savedScope);
+  const reopened = drafts();
+  assert.equal(reopened.composer.lookup(newScope), '');
+  reopened.composer.enter(savedScope);
+  assert.equal(reopened.field.value, field.value);
+  reopened.composer.forget(savedScope);
+  assert.equal(reopened.field.value, '');
+  assert.equal(drafts().composer.lookup(savedScope), '');
 });
 
 test('draft typing during native conversation creation follows the committed thread', async () => {

@@ -494,6 +494,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const dateStart = document.getElementById('filter-date-start');
   const dateEnd = document.getElementById('filter-date-end');
   const dateMessage = document.getElementById('filter-date-message');
+  const duplicateDialog = document.getElementById('duplicate-artifact-dialog');
+  const duplicateForm = document.getElementById('duplicate-artifact-form');
+  const duplicateTitle = document.getElementById('duplicate-artifact-title');
+  const duplicateSource = document.getElementById('duplicate-artifact-source');
+  const duplicateStatus = document.getElementById('duplicate-artifact-status');
+  const duplicateCancel = document.getElementById('duplicate-artifact-cancel');
+  const duplicateSubmit = document.getElementById('duplicate-artifact-submit');
+  let duplicateState = null;
   let currentUser = null;
   let workspaceLoad = 0;
   let current = null;
@@ -1660,6 +1668,93 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape') closeItemMenu(); });
 
+  function canDuplicate(item) {
+    return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
+      Number.isSafeInteger(item.revision) && item.revision > 0;
+  }
+
+  function setDuplicateStatus(text, kind = '') {
+    duplicateStatus.hidden = !text;
+    duplicateStatus.dataset.kind = kind;
+    duplicateStatus.textContent = text;
+  }
+
+  function closeDuplicateDialog({focus = false} = {}) {
+    const previous = duplicateState;
+    duplicateState = null;
+    if (duplicateDialog?.open) duplicateDialog.close();
+    if (focus && previous?.trigger?.isConnected) previous.trigger.focus();
+  }
+
+  function suggestedDuplicateTitle(title) {
+    const used = new Set(allItems.map(item => item.title.toLocaleLowerCase('en-US')));
+    const stem = title.replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+    for (let index = 1; ; index += 1) {
+      const suffix = index === 1 ? ' · 副本' : ' · 副本 ' + index;
+      const candidate = stem.slice(0,80 - suffix.length).replace(/[\uD800-\uDBFF]$/, '') + suffix;
+      if (!used.has(candidate.toLocaleLowerCase('en-US'))) return candidate;
+    }
+  }
+
+  function openDuplicateDialog(item, trigger) {
+    if (!currentUser || !workspaceId() || !canDuplicate(item) || duplicateDialog.open) return;
+    duplicateState = {source:item, account:currentUser, workspace:workspaceId(), trigger, keys:new Map()};
+    duplicateSource.textContent = `「${item.title}」的修订 ${item.revision}`;
+    duplicateTitle.value = suggestedDuplicateTitle(item.title);
+    duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = false;
+    duplicateSubmit.textContent = '创建副本';
+    duplicateCancel.textContent = '取消';
+    setDuplicateStatus('');
+    duplicateDialog.showModal();
+    duplicateTitle.focus();
+    duplicateTitle.select();
+  }
+
+  duplicateDialog?.addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!duplicateState?.pending) closeDuplicateDialog({focus:true});
+  });
+  duplicateCancel?.addEventListener('click', () => closeDuplicateDialog({focus:true}));
+  duplicateForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = duplicateState;
+    if (!state || state.pending) return;
+    const {source,workspace,account} = state;
+    if (workspace !== workspaceId() || account !== currentUser) return;
+    const openCopy = () => openEditor(state.created,{workspace,saved:true,notice:{kind:'ok',text:'已创建副本。'}});
+    if (state.created) { await openCopy(); return; }
+    const title = duplicateTitle.value.trim();
+    if (!title) { setDuplicateStatus('请输入新作品名称。','error'); duplicateTitle.focus(); return; }
+    let key = state.keys.get(title);
+    if (!key) { key = idempotencyKey(); state.keys.set(title,key); }
+    state.pending = true;
+    duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = true;
+    duplicateSubmit.textContent = '正在创建…';
+    setDuplicateStatus('');
+    const result = await request('POST',`/v1/workspaces/${workspace}/artifacts`,
+      {title,duplicate_from:{artifact_id:source.id,revision:source.revision}}, {'Idempotency-Key':key},
+      AbortSignal.timeout(12000)).catch(() => ({status:0,body:{}}));
+    if (duplicateState !== state || currentUser !== account || workspaceId() !== workspace) return;
+    state.pending = false;
+    const copied = result.body.artifact;
+    if (![200,201].includes(result.status) || !canDuplicate(copied) || copied.workspace_id !== workspace || copied.id === source.id) {
+      duplicateTitle.disabled = duplicateSubmit.disabled = duplicateCancel.disabled = false;
+      duplicateSubmit.textContent = result.status === 0 || result.status >= 500 ? '重试' : '创建副本';
+      setDuplicateStatus(messageFor(result.body.error,'暂时无法确认副本是否创建成功，可以重试。'),'error');
+      if (result.body.error?.code === 'title_conflict') { duplicateTitle.focus(); duplicateTitle.select(); }
+      return;
+    }
+    state.created = copied;
+    catalog = null;
+    facets = null;
+    duplicateSubmit.disabled = duplicateCancel.disabled = false;
+    duplicateSubmit.textContent = '打开副本';
+    duplicateCancel.textContent = '返回原作品';
+    setDuplicateStatus('副本已创建，你可以继续编辑原作品。','ok');
+    if (!editor?.saving && !hasEditorDraft()) await openCopy();
+    else duplicateSubmit.focus();
+  });
+
   function itemMenu(item, onOpen, inScope, path) {
     const wrap = document.createElement('span');
     wrap.className = 'artifact-more-wrap';
@@ -1721,7 +1816,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('ok', '已删除。');
       await loadList();
     });
-    menu.append(send, rename, remove);
+    menu.append(send, rename);
+    if (canDuplicate(item)) {
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.setAttribute('role', 'menuitem');
+      copy.textContent = '复制为新作品';
+      copy.addEventListener('click', () => {
+        closeItemMenu();
+        if (inScope()) openDuplicateDialog(item,button);
+      });
+      menu.append(copy);
+    }
+    menu.append(remove);
     button.addEventListener('click', event => {
       event.stopPropagation();
       const wasOpen = openItemMenu && openItemMenu.menu === menu;
@@ -1968,6 +2075,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function hideEditor() {
     if (pendingDeleteCancel) pendingDeleteCancel();
+    closeDuplicateDialog();
     editor?.controller.abort();
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
@@ -2015,7 +2123,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog({preserve});
   }
 
-  async function openEditor(item, {workspace = workspaceId(), notice} = {}) {
+  async function openEditor(item, {workspace = workspaceId(), notice, saved = false} = {}) {
     if (!currentUser || !workspace || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
@@ -2029,7 +2137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     editor = selection;
     listPanel.hidden = true;
     if (main) main.scrollTop = 0;
-    if (item?.id) {
+    if (item?.id && !saved) {
       editorLoading.hidden = false;
       // The catalog can identify the editor before the exact record arrives.
       void editorTools(item)?.prepare().catch(() => {});
@@ -2245,6 +2353,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       download.href = exportHref(item.revision);
       download.textContent = '导出';
       row.appendChild(download);
+      const copySource = {...artifact,title:item.title || artifact.title,revision:item.revision};
+      if (canDuplicate(copySource)) {
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = '复制为新作品';
+        copy.addEventListener('click', () => {
+          if (activeEditor(selection) && current.id === artifact.id) openDuplicateDialog(copySource,copy);
+        });
+        row.appendChild(copy);
+      }
       if (item.revision !== current.revision) {
         const restore = document.createElement('button');
         restore.type = 'button';

@@ -74,6 +74,12 @@ CREATE TABLE memory_action_draft_saves (
   PRIMARY KEY (workspace_id,owner_id,key_hash));
 `, `
 CREATE INDEX IF NOT EXISTS memory_page_workspace_recent ON memory_pages(workspace_id, updated DESC, id);
+`, `
+CREATE TABLE memory_meeting_sources (
+  workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL,
+  page_id TEXT NOT NULL UNIQUE REFERENCES memory_pages(id) ON DELETE CASCADE,
+  meeting_revision INTEGER NOT NULL, page_revision INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id, meeting_id));
 `]
 
 export const IMPORT_TABLES = {

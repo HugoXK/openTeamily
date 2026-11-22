@@ -1274,6 +1274,16 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: 1.05rem;
 }
 
+#duplicate-artifact-dialog {
+  width: min(26rem, calc(100% - 2rem));
+  margin: auto;
+  border: 1px solid var(--ot-line);
+}
+
+#duplicate-artifact-dialog::backdrop { background: rgb(15 23 42 / 32%); }
+#duplicate-artifact-source { overflow-wrap: anywhere; }
+#duplicate-artifact-title { width: 100%; margin-top: .3rem; }
+
 #send-to-chat-list {
   list-style: none;
   margin: 0.75rem 0;

@@ -85,7 +85,7 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3a6 6 0 0 0-6 6v3.6L4.3 16h15.4L18 12.6V9a6 6 0 0 0-6-6zm-2.2 15a2.3 2.3 0 0 0 4.4 0H9.8z"/></svg>
         <span id="notification-count" class="unread-badge" hidden></span>
       </button><label id="session-filter-label" hidden><span data-ui-text="chat.sessions.type">会话类型</span>
-      <select id="session-filter-value"><option value="all" data-ui-text="chat.all">全部</option><option value="agent" data-ui-text="chat.nav.agents">智能体</option><option value="personal" data-ui-text="chat.sessions.personal_agent">个人智能体</option><option value="group" data-ui-text="chat.sessions.group_chat">群聊</option><option value="dm" data-ui-text="chat.sessions.direct_chat">单聊</option><option value="unread" data-ui-text="chat.sessions.unread">未读</option><option value="read" data-ui-text="chat.sessions.read">已读</option><option value="pinned" data-ui-text="chat.sessions.pinned_filter">已置顶（单聊/群聊）</option></select></label>
+      <select id="session-filter-value"><option value="all" data-ui-text="chat.all">全部</option><option value="agent" data-ui-text="chat.nav.agents">智能体</option><option value="personal" data-ui-text="chat.sessions.personal_agent">个人智能体</option><option value="group" data-ui-text="chat.sessions.group_chat">群聊</option><option value="dm" data-ui-text="chat.sessions.direct_chat">单聊</option><option value="unread" data-ui-text="chat.sessions.unread">未读</option><option value="read" data-ui-text="chat.sessions.read">已读</option><option value="drafts" data-ui-text="chat.sessions.drafts">草稿</option><option value="pinned" data-ui-text="chat.sessions.pinned_filter">已置顶（单聊/群聊）</option></select></label>
       <label class="session-search">
         <span class="visually-hidden" data-ui-text="chat.search">搜索</span>
         <span class="search-icon" aria-hidden="true">
@@ -162,6 +162,7 @@
     <section class="session-group" id="conversation-group">
       <div class="inbox-conversations-head">
         <h2 id="conversation-heading"><span data-ui-text="chat.sessions.conversations">对话</span></h2>
+        <button type="button" id="private-archive-open" aria-haspopup="dialog" hidden>已归档</button>
         <button type="button" id="conversations-read-all" hidden data-ui-text="chat.sessions.mark_read">单聊和群聊已读</button>
       </div>
       <div id="session-transition" class="session-transition" hidden>
@@ -249,6 +250,8 @@
           <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发" data-ui-title="chat.messages.multi_select_help"><span data-ui-text="chat.messages.multi_select">多选</span></button>
           <button type="button" id="pin-conversation" hidden><span data-ui-text="chat.sessions.pin">置顶会话</span></button>
           <button type="button" id="mute-conversation" aria-pressed="false" hidden><span data-ui-text="chat.sessions.mute">免打扰</span></button>
+          <button type="button" id="private-thread-rename" aria-haspopup="dialog" hidden>重命名</button>
+          <button type="button" id="private-thread-archive" hidden>归档</button>
           <button type="button" id="conversation-search-open" class="icon-action" title="搜索当前会话" aria-label="搜索当前会话" data-ui-title="chat.search.conversation" data-ui-label="chat.search.conversation"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z m-1 5 6 6"/></svg><span class="chat-action-label" data-ui-text="chat.search.conversation">搜索当前会话</span></button>
           <button type="button" id="message-search" class="icon-action" title="在侧栏搜索消息" aria-label="在侧栏搜索消息" data-ui-title="chat.search.from_sidebar" data-ui-label="chat.search.from_sidebar"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3z M9 4v16 M13 9h5 M13 13h4"/></svg><span class="chat-action-label" data-ui-text="chat.search.from_sidebar">在侧栏搜索消息</span></button>
           <button type="button" id="history-capture-open" aria-haspopup="dialog" hidden data-ui-text="chat.memory.capture_history">提炼历史记忆</button>
@@ -256,6 +259,10 @@
         </div>
       </div>
     </header>
+    <section id="private-thread-archived-state" aria-label="归档对话" hidden>
+      <p id="private-thread-archived-note">此对话已归档。</p>
+      <button type="button" id="private-thread-restore">恢复对话</button>
+    </section>
     <section id="agent-quick-starts" aria-labelledby="agent-quick-starts-label" hidden>
       <h2 id="agent-quick-starts-label" data-ui-text="chat.agent.quick_starts">快捷开场</h2>
       <div id="agent-quick-starts-list"></div>
@@ -267,12 +274,24 @@
         <span id="group-info-avatar" class="group-info-avatar" aria-hidden="true"></span>
         <h2 id="group-info-title"><span data-ui-text="chat.group.info">群信息</span></h2>
         <p id="group-info-count" class="group-info-count"></p>
+        <button type="button" id="group-management-rename" class="group-info-link" aria-haspopup="dialog" data-ui-text="chat.group.rename" hidden>编辑群名</button>
       </div>
       <button type="button" id="group-info-search" class="group-info-row group-info-search" aria-label="搜索聊天记录" data-ui-label="chat.search.history" data-ui-text="chat.search.history">搜索聊天记录</button>
       <button type="button" id="group-memory-open" class="group-info-row" aria-haspopup="dialog" hidden data-ui-text="chat.group.memory">群记忆</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading" data-ui-text="chat.group.announcement">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open" data-ui-text="chat.group.view_edit">查看 / 编辑</button></div>
         <p class="group-info-sub" id="group-announcement-preview"><span data-ui-text="chat.group.loading_announcement">正在读取公告…</span></p>
+      </section>
+      <section class="group-info-card" aria-label="成员" data-ui-label="chat.group.members">
+        <div class="group-info-tabs" role="tablist">
+          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
+          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
+        </div>
+        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
+        <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
+        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
+        <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog" data-ui-text="chat.group.add_members">添加成员</button>
+        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>
       <section class="group-info-card group-info-list" aria-label="通话" data-ui-label="chat.call.call">
         <button type="button" class="group-info-row" id="group-call-video" data-ui-text="chat.call.video">视频通话</button>
@@ -290,18 +309,31 @@
         <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.mute">消息免打扰</strong><small data-ui-text="chat.group.mute_help">保留未读消息，静音此会话。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰" data-ui-label="chat.group.mute"></button></div>
         <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.pin">置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天" data-ui-label="chat.group.pin"></button></div>
       </section>
-      <section class="group-info-card" aria-label="成员" data-ui-label="chat.group.members">
-        <div class="group-info-tabs" role="tablist">
-          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
-          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
-        </div>
-        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
-        <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
-        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
-        <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog" data-ui-text="chat.group.add_members">添加成员</button>
-        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
-      </section>
+      <div id="group-management-footer" class="group-info-card" hidden>
+        <button type="button" id="group-management-leave" class="group-info-row" aria-haspopup="dialog" data-ui-text="chat.group.leave">退出群聊</button>
+      </div>
     </aside>
+    <dialog id="group-management-dialog" aria-labelledby="group-management-heading" aria-describedby="group-management-description">
+      <form id="group-management-form" novalidate>
+        <h2 id="group-management-heading"></h2>
+        <p id="group-management-description"></p>
+        <label id="group-management-name-row" hidden>
+          <span data-ui-text="chat.group.name">群组名称</span>
+          <input id="group-management-name" maxlength="80" autocomplete="off" required>
+        </label>
+        <div id="group-management-member-actions" hidden>
+          <button type="button" id="group-management-transfer" data-ui-text="chat.group.transfer">转让群主</button>
+          <button type="button" id="group-management-remove" data-ui-text="chat.group.remove_member">移除成员</button>
+        </div>
+        <p id="group-management-status" role="status"></p>
+        <div class="group-management-actions">
+          <button type="button" id="group-management-cancel" data-ui-text="chat.cancel">取消</button>
+          <button type="button" id="group-management-choose-owner" data-ui-text="chat.group.choose_owner" hidden>选择新群主</button>
+          <button type="button" id="group-management-refresh" data-ui-text="chat.group.refresh_management" hidden>刷新群信息</button>
+          <button type="submit" id="group-management-confirm" hidden></button>
+        </div>
+      </form>
+    </dialog>
     <aside id="chat-call-incoming" class="chat-strip" hidden>
       <span id="chat-call-incoming-label"></span>
       <button type="button" id="chat-call-join" data-ui-text="chat.call.join">加入通话</button>
@@ -704,7 +736,7 @@
               <p class="format-hint" data-ui-text="chat.format.select_first">先选中文字再点；发出的消息里显示为粗体。</p>
             </div>
           </div>
-          <button type="button" id="composer-emoji-open" title="插入表情" aria-haspopup="dialog" data-ui-title="chat.emoji.insert"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only" data-ui-text="chat.emoji.emoji">表情</span></button>
+          <button type="button" id="composer-emoji-open" title="表情和贴纸" aria-haspopup="dialog" data-ui-title="chat.emoji.picker"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only" data-ui-text="chat.emoji.emoji">表情</span></button>
           <button type="button" id="voice-record" aria-label="录制语音" title="录制语音" hidden data-ui-title="chat.voice.record" data-ui-label="chat.voice.record"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only" data-ui-text="chat.voice.record">录制语音</span></button>
           <select id="agent-memory-recall" aria-label="记忆检索范围" title="跨工作区时，智能体可参考你仍有权访问的工作区记忆和行动项" hidden data-ui-title="chat.memory.cross_workspace_help" data-ui-label="chat.memory.scope">
             <option value="workspace" data-ui-text="chat.memory.current_workspace">记忆 · 本工作区</option>
@@ -799,6 +831,61 @@
 <p data-ui-text="chat.resources.review_before_sending">读取工作区文档或记忆的已保存内容。选中后放入输入框；你检查并发送后，当前会话成员和所选模型才会收到这段内容。不会自动发送。</p>
 <label><span data-ui-text="chat.resources.source">来源</span><select id="resource-picker-kind"><option value="artifacts" data-ui-text="chat.document">文档</option><option value="memory" data-ui-text="chat.nav.memory">记忆</option></select></label>
 <ul id="resource-picker-list"></ul><button id="resource-picker-more" type="button" hidden data-ui-text="chat.load_more">加载更多</button><p id="resource-picker-status" role="status"></p><button type="button" id="resource-picker-close" data-ui-text="chat.close">关闭</button></dialog>
-<dialog id="composer-emoji-dialog" aria-labelledby="composer-emoji-heading"><h2 id="composer-emoji-heading" data-ui-text="chat.emoji.insert">插入表情</h2><p data-ui-text="chat.emoji.review_before_sending">放入输入框供你检查，不会自动发送。</p><div id="composer-emoji-list" class="composer-emoji-grid"></div><button type="button" id="composer-emoji-close" data-ui-text="chat.close">关闭</button></dialog>
+<dialog id="composer-emoji-dialog" aria-labelledby="composer-emoji-heading">
+  <div class="composer-media-header">
+    <h2 id="composer-emoji-heading" data-ui-text="chat.emoji.picker">表情和贴纸</h2>
+    <button type="button" id="composer-emoji-close" data-ui-title="chat.close" data-ui-label="chat.close" title="关闭" aria-label="关闭">×</button>
+  </div>
+  <div id="composer-media-tabs" role="tablist" aria-labelledby="composer-emoji-heading" hidden>
+    <button type="button" id="composer-emoji-tab" role="tab" aria-selected="true" aria-controls="composer-emoji-panel" data-ui-text="chat.emoji.emoji">表情</button>
+    <button type="button" id="composer-sticker-tab" role="tab" aria-selected="false" aria-controls="composer-sticker-panel" tabindex="-1" data-ui-text="chat.stickers.tab">贴纸</button>
+  </div>
+  <div id="composer-emoji-panel">
+    <p data-ui-text="chat.emoji.review_before_sending">放入输入框供你检查，不会自动发送。</p>
+    <div id="composer-emoji-list" class="composer-emoji-grid"></div>
+  </div>
+  <div id="composer-sticker-panel" role="tabpanel" aria-labelledby="composer-sticker-tab" hidden>
+    <div id="composer-sticker-library">
+      <div class="composer-sticker-actions">
+        <button type="button" id="composer-sticker-upload" data-ui-text="chat.stickers.upload">添加贴纸</button>
+        <input type="file" id="composer-sticker-file" accept="image/png,image/jpeg,image/gif,image/webp" aria-labelledby="composer-sticker-upload" hidden>
+        <button type="button" id="composer-sticker-manage" aria-pressed="false" data-ui-text="chat.stickers.manage">管理</button>
+      </div>
+      <p id="composer-sticker-empty" data-ui-text="chat.stickers.empty" hidden>添加 PNG、JPEG、GIF 或 WebP 图片，保存为你的贴纸。</p>
+      <ul id="composer-sticker-list" aria-labelledby="composer-sticker-tab"></ul>
+      <button type="button" id="composer-sticker-more" data-ui-text="chat.load_more" hidden>加载更多</button>
+    </div>
+    <div id="composer-sticker-preview" hidden>
+      <figure><img id="composer-sticker-preview-image" alt=""><figcaption id="composer-sticker-preview-title"></figcaption></figure>
+      <div class="composer-sticker-actions">
+        <button type="button" id="composer-sticker-preview-close" data-ui-text="chat.stickers.back">返回贴纸</button>
+        <button type="button" id="composer-sticker-send" data-ui-text="chat.stickers.send">发送贴纸</button>
+      </div>
+    </div>
+    <p id="composer-sticker-status" role="status"></p>
+    <button type="button" id="composer-sticker-retry" data-ui-text="chat.stickers.retry" hidden>重试</button>
+  </div>
+</dialog>
+<dialog id="private-thread-dialog" aria-labelledby="private-thread-heading">
+  <form id="private-thread-form">
+    <h2 id="private-thread-heading">重命名对话</h2>
+    <label><span id="private-thread-name-label">对话名称</span><input id="private-thread-name" required maxlength="120" autocomplete="off"></label>
+    <p id="private-thread-name-status" class="note" role="status"></p>
+    <div class="private-thread-actions">
+      <button type="button" id="private-thread-cancel-name">取消</button>
+      <button type="submit" id="private-thread-save-name">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="private-archive-dialog" aria-labelledby="private-archive-heading">
+  <header class="private-archive-header">
+    <h2 id="private-archive-heading" tabindex="-1">已归档的私聊</h2>
+    <button type="button" id="private-archive-close">关闭</button>
+  </header>
+  <p id="private-archive-status" class="note" role="status"></p>
+  <ul id="private-archive-list"></ul>
+  <button type="button" id="private-archive-more" hidden>加载更多</button>
+</dialog>
 </body>
 </html>

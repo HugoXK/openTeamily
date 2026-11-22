@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 //   DS-Bot's. No runtime_tasks row and no server queue are involved.
 import { createHash } from 'node:crypto'
 import { TEMPLATES, INTENTS } from './templates.js'
-import { dueAt, normalizeSchedule, validSchedule } from './schedule.js'
+import { dueAt, nextScheduledSlot, normalizeSchedule, validSchedule } from './schedule.js'
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
@@ -155,6 +155,27 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
+  const existingSlot = db.prepare('SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND due_at=?')
+
+  function scheduleStatus(item, at = clock()) {
+    if (!item.enabled) return {state:'paused'}
+    if (!validSchedule(item.schedule)) return null
+    const schedule = normalizeSchedule(item.schedule)
+    const once = schedule.kind === 'now' || schedule.kind === 'once'
+    const due = dueAt(schedule, at)
+    if (due !== null) {
+      if (!existingSlot.get(item.id, due)) return {state:'due'}
+      if (once) return {state:'once_triggered'}
+    }
+    const next = nextScheduledSlot(schedule, at)
+    if (next === null) return null
+    if (once && existingSlot.get(item.id, next)) return {state:'once_triggered'}
+    return {state:'scheduled', at:next}
+  }
+
+  function projected(item, at) {
+    return {...item, schedule_status:scheduleStatus(item, at)}
+  }
 
   // This feature is loaded once in the runtime that owns the volume. A previous
   // process's claimed turn may have already made calls or changed state.
@@ -305,7 +326,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (existing) {
       const replay = existing.template_id === REMINDER && templateId === REMINDER
       if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, automation: view(existing) }
+      return { status: 200, automation: projected(view(existing)) }
     }
     if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
       refuse(409, 'conflict', 'An automation with this title already exists')
@@ -317,7 +338,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
       JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
       intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
-    return { status: 201, automation: view(one('SELECT * FROM ot_automations WHERE id=?', id)) }
+    return { status: 201, automation: projected(view(one('SELECT * FROM ot_automations WHERE id=?', id)), now) }
   }
 
   function createOnboarding(payload) {
@@ -383,7 +404,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
         next.title, sha(next.title.toLowerCase()), next.prompt, JSON.stringify(next.schedule),
         JSON.stringify(next.participants.map((username) => ({ username }))), next.enabled ? 1 : 0, next.intent, next.scope,
         JSON.stringify(next.agents), compiled ? 1 : 0, clock(), row.id)
-      return { automation: view(one('SELECT * FROM ot_automations WHERE id=?', row.id)) }
+      return { automation: projected(view(one('SELECT * FROM ot_automations WHERE id=?', row.id))) }
     })
   }
 
@@ -395,13 +416,14 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (category && !['work', 'life', 'custom', 'mine'].includes(category)) refuse(400, 'invalid', 'Invalid automation request')
     const me = String(payload.username ?? '').toLowerCase()
     const items = []
+    const at = clock()
     for (const row of all('SELECT * FROM ot_automations WHERE workspace_id=? ORDER BY id', workspaceId)) {
       const item = view(row)
       if (needle && !item.title.toLowerCase().includes(needle) && !item.prompt.toLowerCase().includes(needle)) continue
       const template = TEMPLATES[item.template_id] ?? TEMPLATES.custom
       if (category === 'mine') { if (!item.participants.some((p) => p.username.toLowerCase() === me)) continue }
       else if (category && template.category !== category) continue
-      items.push(item)
+      items.push(projected(item, at))
     }
     return { items }
   }
@@ -426,7 +448,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
-    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null, has_pending: hasActiveRun(row.id) }
+    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null,
+      has_pending: hasActiveRun(row.id), schedule_status: scheduleStatus(view(row)), schedule_revision: row.revision }
   }
 
   async function saveRun(payload) {
@@ -527,7 +550,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   const endpoints = {
     'automations/templates': () => ({ items: Object.values(TEMPLATES).map((t) => ({ ...t })) }),
     'automations/list': list,
-    'automations/get': (p) => ({ automation: view(load(workspaceOf(p), p?.id)) }),
+    'automations/get': (p) => ({ automation: projected(view(load(workspaceOf(p), p?.id))) }),
     'automations/create': (p) => tx(db, () => createInTransaction(p)),
     'automations/createOnboarding': createOnboarding,
     'automations/update': update,

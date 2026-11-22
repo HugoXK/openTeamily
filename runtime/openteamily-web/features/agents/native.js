@@ -9,12 +9,53 @@ export function nativeAgents({ host, db }) {
   db.exec(`CREATE TABLE IF NOT EXISTS native_agent_objects (
     agent_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL UNIQUE, last_name TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS native_agent_sessions (
-    conversation_key TEXT PRIMARY KEY, agent_id TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE);`)
+    conversation_key TEXT PRIMARY KEY, agent_id TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE);
+    CREATE TABLE IF NOT EXISTS native_agent_pending_titles (
+    conversation_id TEXT PRIMARY KEY REFERENCES agent_conversations(id) ON DELETE CASCADE, title TEXT NOT NULL);`)
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
   let queue = Promise.resolve()
   const serial = fn => { const next = queue.then(fn, fn); queue = next.catch(() => {}); return next }
   const services = async () => { const s = await host.runtime(); await s.mainBot(); return s }
+  const titleJobs = new Map()
+  const pendingTitle = (id, agentId) => one(`SELECT p.title FROM native_agent_pending_titles p
+    JOIN agent_conversations c ON c.id=p.conversation_id WHERE c.id=? AND c.agent_id=?`, id, agentId)?.title
+
+  function markSessionTitle(conversationId, title) {
+    run(`INSERT INTO native_agent_pending_titles VALUES (?,?)
+      ON CONFLICT(conversation_id) DO UPDATE SET title=excluded.title`, conversationId, title)
+  }
+
+  function renameSession(row, key) {
+    const prefix = `agent:${row.id}:`
+    if (!key.startsWith(prefix)) return
+    const id = key.slice(prefix.length)
+    if (!pendingTitle(id, row.id)) return
+    const prior = titleJobs.get(key) || Promise.resolve()
+    const job = prior.then(async () => {
+      const title = pendingTitle(id, row.id)
+      if (!title) return
+      const mapping = mappedSession(row, key)
+      if (!mapping) return
+      const { rt, ctx } = await host.runtime()
+      const bot = rt.botOf(mapping.native_bot_id)
+      if (!bot || (rt.chatOwners?.has(mapping.native_session_id)
+          && rt.chatOwners.get(mapping.native_session_id) !== bot.id)) return
+      const target = await rt.resolveAgent(mapping.native_session_id)
+      await ctx.sessionTitle.rename(target.session, title)
+      run('DELETE FROM native_agent_pending_titles WHERE conversation_id=? AND title=?', id, title)
+    }).catch(() => host.log?.('Native session title will be retried after the session is available.'))
+    titleJobs.set(key, job)
+    void job.then(() => { if (titleJobs.get(key) === job) titleJobs.delete(key) })
+    return job
+  }
+
+  // A runtime can stop between saving a conversation title and updating its native Session.
+  for (const { id, agent_id } of db.prepare(`SELECT c.id,c.agent_id FROM native_agent_pending_titles p
+    JOIN agent_conversations c ON c.id=p.conversation_id`).all()) {
+    void renameSession({ id: agent_id }, `agent:${agent_id}:${id}`)
+  }
+
   const nativeName = (rt, row) => {
     const plain = row.name.slice(0, 40)
     const taken = Object.values(rt.state.bots).some(b => b.name === plain && b.openteamily?.agent_id !== row.id)
@@ -93,6 +134,7 @@ export function nativeAgents({ host, db }) {
       m = { session_id: sessionId }
     } else if (adopted.length) await rt.save()
     await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id, secondarySessionIds: adopted })
+    void renameSession(row, key)
     return { native_bot_id: mapped.native_bot_id, native_session_id: m.session_id, native_name: mapped.native_name }
   }
   async function session(row, key, title) {
@@ -114,5 +156,5 @@ export function nativeAgents({ host, db }) {
     return mappedSession(row, key) || session(row, key, title)
   }
   return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)),
-    session, readSession, mappedSession }
+    session, readSession, mappedSession, markSessionTitle, renameSession }
 }

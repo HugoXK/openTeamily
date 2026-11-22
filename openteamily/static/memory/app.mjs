@@ -1910,7 +1910,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const href = sourceHref(workspaceId(), page.source);
     if (source) source.hidden = !href;
     if (groupShareButton) groupShareButton.hidden = !href || page.source.kind !== 'group';
-    if (href) document.getElementById('memory-page-chat-link').href = href;
+    if (href) {
+      const link = document.getElementById('memory-page-chat-link');
+      link.href = href;
+      link.textContent = page.source.kind === 'meeting' ? '查看原会议纪要' : '查看来源消息';
+    }
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;

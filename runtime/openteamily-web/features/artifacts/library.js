@@ -192,7 +192,7 @@ function attachWorkbook(store,id,workbook) {
     DO UPDATE SET workbook=excluded.workbook`,id,JSON.stringify(workbook))
 }
 
-export function recordVersion(store, row) {
+function versionSnapshot(row) {
   const kind = publicKind(row)
   const storedKind = ['slides','dashboard','spreadsheet'].includes(kind) ? 'document' : kind
   let body = ''
@@ -200,14 +200,17 @@ export function recordVersion(store, row) {
   else if (kind === 'dashboard') body = row.dashboard_json || dashboardJson(emptyDashboard()) || ''
   else if (kind === 'spreadsheet') body = row.spreadsheet_json
   else if (kind === 'document' || kind === 'website') body = row.body ?? ''
+  return {kind:storedKind,body,board:kind === 'whiteboard' ? row.board_json : null,
+    mime:kind === 'media' ? row.media_mime : null,byte_count:kind === 'media' ? row.media_bytes : null,
+    sha256:kind === 'media' ? row.media_sha256 : null,filename:kind === 'media' ? row.media_filename : null}
+}
+
+export function recordVersion(store, row) {
+  const snapshot = versionSnapshot(row)
   store.run(
     'INSERT OR IGNORE INTO artifact_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-    row.id, row.revision, row.title, storedKind, body,
-    kind === 'whiteboard' ? row.board_json : null,
-    kind === 'media' ? row.media_mime : null,
-    kind === 'media' ? row.media_bytes : null,
-    kind === 'media' ? row.media_sha256 : null,
-    kind === 'media' ? row.media_filename : null,
+    row.id, row.revision, row.title, snapshot.kind, snapshot.body,
+    snapshot.board, snapshot.mime, snapshot.byte_count, snapshot.sha256, snapshot.filename,
     row.updated, row.updated_by,
   )
 }
@@ -362,6 +365,58 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
     attachSource(store, id, workspaceId, now, source)
     void featureDir
     return saved(store, workspaceId, id, 201)
+  })
+}
+
+export function duplicateArtifact({store, owner, featureDir}, workspaceId, {artifact_id: sourceId, revision, title}, key) {
+  if (typeof sourceId !== 'string' || !HEX32.test(sourceId) || !Number.isSafeInteger(revision) || revision < 1 || !validTitle(title)
+      || /[\x00-\x1f\x7f]/.test(title)) refuse(400, 'invalid', '请选择已保存的版本并输入副本名称。')
+  if (!KEY.test(key ?? '')) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+  const trimmed = title.trim()
+  const hash = titleHash(trimmed)
+  const keyHash = digest('artifact:' + key)
+  const requestHash = digest(stableJson({duplicate_from:sourceId, revision, title:trimmed}))
+  return store.transaction(() => {
+    const prior = store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (prior) {
+      if (prior.request_hash !== requestHash) refuse(409,'conflict','这次请求已用于创建其他作品。')
+      return {status:200,body:{artifact:view(load(store,workspaceId,prior.id))}}
+    }
+    const source = store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', sourceId,workspaceId)
+    if (!source) refuse(404,'not_found','找不到要复制的作品。')
+    const current = source.revision === revision
+    const snapshot = current ? versionSnapshot(source)
+      : store.get('SELECT kind,body,board,mime,byte_count,sha256,filename FROM artifact_versions WHERE artifact_id=? AND revision=?',source.id,revision)
+    if (!snapshot) refuse(404,'version_not_found','这个保存版本已不可用。')
+    if (store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) {
+      refuse(409,'title_conflict','已存在同名作品，请换一个名称。')
+    }
+    if (store.get('SELECT COUNT(*) AS n FROM artifacts WHERE workspace_id=?', workspaceId).n >= PER_WORKSPACE) {
+      refuse(429,'quota','该资料空间已达到作品容量上限。')
+    }
+    const sourceKind = publicKind(source)
+    let kind = current ? sourceKind : snapshot.kind
+    let structured = null
+    if (snapshot.kind === 'document' && sourceKind !== 'document') {
+      const [decodedKind, decoded] = decodeStructured(snapshot.body)
+      if (decodedKind) { kind = decodedKind; structured = decoded }
+      else if (current && kind !== 'document') refuse(409,'version_unavailable','该作品的保存内容暂时无法复制。')
+    }
+    if (kind === 'media') {
+      try { readMediaBytes(featureDir,workspaceId,snapshot.sha256,snapshot.byte_count,snapshot.mime) }
+      catch { refuse(409,'version_unavailable','该版本的媒体文件暂时无法复制。') }
+    }
+    const body = kind === 'website' || kind === 'document' ? snapshot.body : ''
+    const id = newId(), now = nowSeconds()
+    store.run('INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+      id,workspaceId,trimmed,hash,'document',body,now,now,owner,owner,keyHash,requestHash)
+    attachKind(store,id,kind,{
+      board:kind === 'whiteboard' ? decodeBoard(snapshot.board) ?? emptyBoard() : undefined,
+      slides:kind === 'slides' ? structured : undefined, dashboard:kind === 'dashboard' ? structured : undefined,
+    })
+    if (kind === 'spreadsheet') attachWorkbook(store,id,structured)
+    if (kind === 'media') attachMedia(store,id,snapshot.mime,snapshot.byte_count,snapshot.sha256,snapshot.filename)
+    return saved(store,workspaceId,id,201)
   })
 }
 

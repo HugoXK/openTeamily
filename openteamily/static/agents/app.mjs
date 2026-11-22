@@ -1,7 +1,7 @@
 import { createLookAvatar } from '../look/app.mjs';
-import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../shell/chat-utils.mjs';
+import { csrfCookie, canManage, idempotencyKey } from '../shell/chat-utils.mjs';
 
-export { csrfCookie, canManage, idempotencyKey, statusLabel };
+export { csrfCookie, canManage, idempotencyKey, statusLabel } from '../shell/chat-utils.mjs';
 
 // Two-letter card monogram ("Slides Assistant" -> "SA"; CJK names keep one glyph).
 export function agentMonogram(name) {
@@ -162,8 +162,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentAgent = null;
   let personalAgentId = '';
   let personalLook = null;
-  let currentConversation = null;
-  let pollTimer = 0;
+  let agentSelection = 0;
+  let sessionLoad = 0;
+  let workspaceLoad = 0;
+  let loadedWorkspace = '';
   let directoryLoaded = false;
   fillCategoryOptions(createForm.elements.category, document);
   fillCategoryOptions(editForm.elements.category, document);
@@ -312,15 +314,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return `/v1/workspaces/${workspaceId()}/agents/${currentAgent && currentAgent.id}`;
   }
 
-  function stopPolling() {
-    if (pollTimer) {
-      globalThis.clearTimeout(pollTimer);
-      pollTimer = 0;
-    }
-  }
-
   async function load() {
-    const session = await request('GET', '/v1/auth/session');
+    const seq = ++sessionLoad;
+    workspaceLoad += 1;
+    agentSelection += 1;
+    const unavailable = {status: 0, body: {}};
+    const session = await request('GET', '/v1/auth/session').catch(() => unavailable);
+    if (seq !== sessionLoad) return;
     if (session.status !== 200) {
       currentUser = null;
       loginPanel.hidden = false;
@@ -331,21 +331,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    // The saved Personal Agent look is an optional identity detail. Never let
-    // this auxiliary read break the directory if an older server lacks it.
-    try {
-      const personal = await request('GET', '/v1/personal-agent');
+    personalAgentId = '';
+    personalLook = null;
+    directoryLoaded = false;
+    loadedWorkspace = '';
+    directoryAgents = [];
+    editForm.hidden = true;
+    chatPanel.hidden = true;
+    document.getElementById('agent-list').replaceChildren();
+    void request('GET', '/v1/personal-agent').catch(() => unavailable).then(personal => {
+      if (seq !== sessionLoad) return;
       const found = personal.status === 200 && personal.body.personal_agent;
-      personalAgentId = found && found.agent ? found.agent.id : '';
+      personalAgentId = found?.agent?.id || '';
       personalLook = found ? found.look || null : null;
-    } catch (error) {
-      personalAgentId = '';
-      personalLook = null;
-    }
+      if (directoryLoaded && personalAgentId) renderDirectory();
+    });
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录为 ' + currentUser.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
+    const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => unavailable);
+    if (seq !== sessionLoad) return;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const previous = workspaceSelect.value;
     workspaceSelect.replaceChildren();
@@ -373,8 +378,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       createForm.hidden = true;
       editForm.hidden = true;
       chatPanel.hidden = true;
-    if (runtimePanel) runtimePanel.hidden = true;
-      show('', '');
+      if (runtimePanel) runtimePanel.hidden = true;
+      show(listed.status === 200 ? '' : 'error', listed.status === 200 ? '' : '无法加载工作区。请刷新后重试。');
       return;
     }
     await loadWorkspace();
@@ -469,17 +474,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadWorkspace() {
     const id = workspaceId();
     if (!id) return;
+    const seq = ++workspaceLoad;
+    const user = currentUser?.id;
     currentAgent = null;
-    currentConversation = null;
-    stopPolling();
+    agentSelection += 1;
     chatPanel.hidden = true;
+    editForm.hidden = true;
     if (runtimePanel) runtimePanel.hidden = true;
-    const detail = await request('GET', `/v1/workspaces/${id}`);
+    if (id !== loadedWorkspace) {
+      directoryLoaded = false;
+      directoryAgents = [];
+      loadedWorkspace = '';
+      createForm.hidden = true;
+      document.getElementById('agent-list').replaceChildren();
+      document.getElementById('agents-empty').hidden = true;
+      document.getElementById('role-note').textContent = '';
+      show('loading', '正在加载智能体…');
+    }
+    const unavailable = {status: 0, body: {}};
+    const base = `/v1/workspaces/${id}`;
+    const [detail, members, listed] = await Promise.all([
+      request('GET', base).catch(() => unavailable),
+      request('GET', base + '/members').catch(() => unavailable),
+      request('GET', base + '/agents?limit=100').catch(() => unavailable),
+    ]);
+    if (seq !== workspaceLoad || id !== workspaceId() || user !== currentUser?.id) return;
     if (detail.status !== 200) {
       show('error', messageFor(detail.body.error, '无法打开工作区。'));
       return;
     }
-    const members = await request('GET', `/v1/workspaces/${id}/members`);
     memberNames = new Map(members.status === 200
       ? (members.body.items || []).map(row => [row.user_id, row.username])
       : []);
@@ -493,13 +516,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? '你是管理员，可以创建和归档智能体，并与自己的智能体对话。'
         : '你是成员，可以查看目录并与自己的智能体对话，但不能改目录。';
     createForm.hidden = !canManage(actor);
-    editForm.hidden = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
     }
     directoryAgents = listed.body.items || [];
+    loadedWorkspace = id;
     directoryLoaded = true;
     fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
     selectedCreator = creatorFilter ? creatorFilter.value : '';
@@ -583,8 +605,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function loadRuntime() {
     if (!currentAgent || !runtimePanel) return;
-    const result = await request('GET', `${agentBase()}/runtime`);
-    if (result.status === 501) {
+    const selected = agentSelection;
+    const result = await request('GET', `${agentBase()}/runtime`).catch(() => ({status: 0, body: {}}));
+    if (selected !== agentSelection) return;
+    if (result.status !== 200) {
       runtimePanel.hidden = true;
       return;
     }
@@ -593,7 +617,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('bind-runtime').hidden = !bindable;
     document.getElementById('unbind-runtime').hidden = !bindable;
     document.getElementById('runtime-instance').disabled = !bindable;
-    const listed = bindable ? await request('GET', `/v1/workspaces/${workspaceId()}/instances?limit=100`) : {status: 200, body: {items: []}};
+    const listed = bindable ? await request('GET', `/v1/workspaces/${workspaceId()}/instances?limit=100`)
+      .catch(() => ({status: 0, body: {}})) : {status: 200, body: {items: []}};
+    if (selected !== agentSelection) return;
     const items = listed.status === 200 ? (listed.body.items || []) : [];
     const select = document.getElementById('runtime-instance');
     const current = result.body.runtime;
@@ -614,84 +640,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : '尚未绑定容器。成员对话仍可回退到自己的已连接机器。';
   }
 
-
-  function renderMessages(items) {
-    const list = document.getElementById('message-list');
-    list.replaceChildren();
-    let pending = false;
-    for (const item of items || []) {
-      const li = document.createElement('li');
-      const role = document.createElement('p');
-      role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : '智能体';
-      const body = document.createElement('p');
-      const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
-      const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = waiting ? 'pending' : (failed ? 'failed' : '');
-      body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
-      li.append(role, body);
-      if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.dataset.save = item.id;
-        save.textContent = '保存到作品库';
-        li.append(save);
-      }
-      list.append(li);
-      if (waiting) pending = true;
-    }
-    return pending;
-  }
-
-  async function loadConversations() {
-    if (!currentAgent) return;
-    const listed = await request('GET', `${agentBase()}/conversations?limit=100`);
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载对话。'));
-      return;
-    }
-    const items = listed.body.items || [];
-    const list = document.getElementById('conversation-list');
-    list.replaceChildren();
-    for (const item of items) {
-      const li = document.createElement('li');
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'link';
-      button.dataset.conversation = item.id;
-      button.textContent = item.title || '对话';
-      li.append(button);
-      list.append(li);
-    }
-    document.getElementById('conversations-empty').hidden = items.length > 0;
-    if (!currentConversation && items.length) {
-      await openConversation(items[0].id);
-    } else if (currentConversation) {
-      await openConversation(currentConversation.id);
-    } else {
-      document.getElementById('message-list').replaceChildren();
-    }
-  }
-
-  function schedulePoll() {
-    stopPolling();
-    pollTimer = globalThis.setTimeout(() => {
-      if (currentConversation) openConversation(currentConversation.id);
-    }, 2000);
-  }
-
-  async function openConversation(id) {
-    if (!currentAgent) return;
-    const result = await request('GET', `${agentBase()}/conversations/${id}`);
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
-      return;
-    }
-    currentConversation = result.body.conversation;
-    const pending = renderMessages(result.body.items);
-    if (pending) schedulePoll();
-    else stopPolling();
-  }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -714,22 +662,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('agent-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-id]');
     if (!button) return;
-    const id = workspaceId();
-    const result = await request('GET', `/v1/workspaces/${id}/agents/${button.dataset.id}`);
+    const workspace = workspaceId();
+    const user = currentUser?.id;
+    const selected = ++agentSelection;
+    const result = await request('GET', `/v1/workspaces/${workspace}/agents/${button.dataset.id}`);
+    if (selected !== agentSelection || workspace !== workspaceId() || user !== currentUser?.id) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法打开这个智能体。'));
       return;
     }
-    currentConversation = null;
-    stopPolling();
     fillEdit(result.body.agent);
-    await loadConversations();
-  });
-
-  document.getElementById('conversation-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-conversation]');
-    if (!button) return;
-    await openConversation(button.dataset.conversation);
   });
 
   const bindButton = document.getElementById('bind-runtime');
@@ -763,72 +705,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuntime();
   });
 
-  document.getElementById('new-conversation').addEventListener('click', async () => {
-    if (!currentAgent) return;
-    const result = await request('POST', `${agentBase()}/conversations`, {title: '新对话'}, {
-      'Idempotency-Key': idempotencyKey('chat-'),
-    });
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法创建对话。'));
-      return;
-    }
-    currentConversation = result.body.conversation;
-    document.getElementById('message-list').replaceChildren();
-    show('ok', '已开始新对话。');
-    await loadConversations();
-  });
-
-  document.getElementById('chat-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    if (!currentAgent) return;
-    const text = document.getElementById('chat-body').value;
-    if (!text.trim()) {
-      show('error', '请填写消息。');
-      return;
-    }
-    if (!currentConversation) {
-      const created = await request('POST', `${agentBase()}/conversations`, {title: '新对话'}, {
-        'Idempotency-Key': idempotencyKey('chat-'),
-      });
-      if (created.status !== 201 && created.status !== 200) {
-        show('error', messageFor(created.body.error, '无法创建对话。'));
-        return;
-      }
-      currentConversation = created.body.conversation;
-    }
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages`,
-      {body: text},
-      {'Idempotency-Key': idempotencyKey('msg-')},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法发送。'));
-      return;
-    }
-    document.getElementById('chat-body').value = '';
-    show(result.body.reply && result.body.reply.error_code === 'no_agent' ? 'error' : 'ok',
-         result.body.reply && result.body.reply.error_code === 'no_agent'
-           ? '消息已保存，正在等待已连接的运行时。'
-           : '已发送。');
-    await loadConversations();
-  });
-
-  document.getElementById('message-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-save]');
-    if (!button || !currentConversation) return;
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages/${button.dataset.save}/artifact`,
-      {},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法保存到作品库。'));
-      return;
-    }
-    show('ok', '已保存到作品库。');
-  });
-
   function invalidQuickStarts(starts) {
     if (!starts || (starts.length <= 5 && starts.every(line => line.length <= 80))) return false;
     show('error', '快捷开场最多 5 条，每条不超过 80 字。');
@@ -855,10 +731,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.reset();
     show('ok', '已保存到目录。对话仍由已连接的运行时执行。');
     await loadWorkspace();
-    if (result.body.agent) {
-      fillEdit(result.body.agent);
-      await loadConversations();
-    }
+    if (result.body.agent && id === workspaceId()) fillEdit(result.body.agent);
   });
 
   editForm.addEventListener('submit', async event => {
@@ -878,11 +751,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     show('ok', '已更新。之后的对话会使用新的说明。');
-    const keep = currentConversation && currentConversation.id;
     await loadWorkspace();
-    fillEdit(result.body.agent);
-    if (keep) currentConversation = {id: keep, ...currentConversation};
-    await loadConversations();
+    if (id === workspaceId()) fillEdit(result.body.agent);
   });
 
   document.getElementById('archive-button').addEventListener('click', async () => {
@@ -912,8 +782,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (homepagePanel) homepagePanel.hidden = true;
     if (runtimePanel) runtimePanel.hidden = true;
     currentAgent = null;
-    currentConversation = null;
-    stopPolling();
+    agentSelection += 1;
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

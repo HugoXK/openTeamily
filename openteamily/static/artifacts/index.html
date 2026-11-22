@@ -434,7 +434,7 @@
       <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
       <details id="version-panel" class="artifact-editor-panel" hidden>
         <summary>版本与导出</summary>
-        <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>
+        <p class="note">每次保存都会保留一个版本，可以复制为新作品、导出或恢复。</p>
         <p id="version-status" class="note" role="status" hidden></p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
@@ -481,6 +481,19 @@
       </div>
     </div>
   </div>
+  <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
+    <form id="duplicate-artifact-form">
+      <h2 id="duplicate-artifact-heading">复制为新作品</h2>
+      <p id="duplicate-artifact-source" class="note"></p>
+      <label for="duplicate-artifact-title">新作品名称</label>
+      <input id="duplicate-artifact-title" autocomplete="off" maxlength="80" required autofocus>
+      <p id="duplicate-artifact-status" class="note" role="status" hidden></p>
+      <div class="space-action-row">
+        <button type="button" id="duplicate-artifact-cancel">取消</button>
+        <button type="submit" class="primary" id="duplicate-artifact-submit">创建副本</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="artifact-notifications" aria-labelledby="artifact-notifications-heading">
     <div class="artifact-notifications-head">
       <h2 id="artifact-notifications-heading">作品通知</h2>

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
-import { dueAt, validSchedule, zonedEpoch } from '../features/automations/schedule.js'
+import { dueAt, nextScheduledSlot, validSchedule, zonedEpoch } from '../features/automations/schedule.js'
 import { createAutomations, dsBotTurn } from '../features/automations/automations.js'
 import { TEMPLATES } from '../features/automations/templates.js'
 import { featureHost, loadFeatures, registerFeature } from '../src/features.js'
@@ -28,6 +28,43 @@ function fixture(turn, at = 1_800_000_000, saveArtifact) {
   })
   return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
+
+test('next recurring slot follows local weekdays, month lengths and DST', () => {
+  const seconds = iso => Date.parse(iso) / 1000
+  const weekly = {kind:'weekly', weekday:1, time:'09:00', time_zone:'America/New_York'}
+  assert.equal(nextScheduledSlot(weekly, seconds('2027-03-13T16:00:00Z')), seconds('2027-03-15T13:00:00Z'))
+  const weekdays = {kind:'weekdays', time:'09:00', time_zone:'UTC'}
+  assert.equal(nextScheduledSlot(weekdays, seconds('2027-02-26T09:00:00Z')), seconds('2027-03-01T09:00:00Z'))
+  const monthly = {kind:'monthly', day:31, time:'09:00', time_zone:'Asia/Shanghai'}
+  assert.equal(nextScheduledSlot(monthly, seconds('2027-03-31T01:00:00Z')), seconds('2027-05-31T01:00:00Z'))
+})
+
+test('scheduler projections distinguish one-time trigger, pause, and the next slot after execution', async () => {
+  const at = Date.parse('2027-02-26T09:00:00Z') / 1000
+  const {e, feature, clock} = fixture(undefined, at)
+  const daily = {kind:'weekdays', time:'09:00', time_zone:'UTC'}
+  const once = {kind:'now', time_zone:'UTC'}
+  const create = (title, schedule, enabled) => e['automations/create']({workspace_id:W, title, schedule, enabled,
+    prompt:'Record a result', template_id:'custom', participants:['alice'], idempotency_key:`fixture-key-for-${title}`}).automation
+  const recurring = create('Recurring',daily,true)
+  const single = create('Single',once,true)
+  const paused = create('Paused',daily,false)
+  assert.deepEqual(recurring.schedule_status, {state:'due'})
+  assert.deepEqual(single.schedule_status, {state:'due'})
+  assert.deepEqual(paused.schedule_status, {state:'paused'})
+  const fired = feature.tick(W)
+  assert.equal(fired.length,2)
+  await Promise.all(feature.inflight.values())
+  const status = id => e['automations/get']({workspace_id:W,id}).automation.schedule_status
+  assert.deepEqual(status(single.id), {state:'once_triggered'})
+  const next = {state:'scheduled', at:Date.parse('2027-03-01T09:00:00Z') / 1000}
+  assert.deepEqual(status(recurring.id),next)
+  assert.deepEqual(e['automations/runs']({workspace_id:W,id:recurring.id}).schedule_status,next)
+  const {items} = e['automations/list']({workspace_id:W,category:'mine',username:'alice'})
+  assert.deepEqual(items.find(item => item.id === recurring.id).schedule_status,next)
+  clock.now = next.at
+  assert.deepEqual(status(recurring.id), {state:'due'})
+})
 
 test('a successful native run saves a durable, idempotent document from its own output', async () => {
   const table = {}
@@ -240,7 +277,7 @@ test('manual execution queues only the named automation and leaves its scheduled
   assert.equal(detail.body.run.status, 'running')
   assert.equal((await e['automations/v1']({method: 'GET', path: runsPath + '?status=running'})).body.items[0].id, accepted.body.run.id)
   assert.deepEqual((await e['automations/v1']({method: 'GET', path: runsPath + '?status=queued'})).body,
-    {items: [], cursor: null, has_pending: true})
+    {items: [], cursor: null, has_pending: true, schedule_status: {state:'paused'}, schedule_revision: 1})
   assert.equal((await e['automations/v1'](req)).body.run.id, accepted.body.run.id)
   assert.equal((await e['automations/v1']({...req, idempotency_key: 'x'.repeat(16)})).status, 409)
   assert.equal(calls.length, 1)

@@ -22,6 +22,7 @@ const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
+const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:''}
 const DISCOVER_MEDIA_KINDS = new Map([
   ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
   ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
@@ -96,8 +97,10 @@ function requestItem(row, workspaceId) {
 }
 
 function conversationItem(row, me, env, workspaceId) {
+  const management = row.kind === 'group' && !row.public_agent ? row.group_management : null
   const members = (row.members || []).map((m) => ({
     ...memberItem({ ...m, role: m.role || 'member' }, me, env),
+    ...(management && m.owner_id ? {group_member_id: m.owner_id} : {}),
   }))
   return {
     id: row.id,
@@ -106,6 +109,7 @@ function conversationItem(row, me, env, workspaceId) {
     ...(row.public_agent ? {public_agent: row.public_agent} : {}),
     ...(row.direct ? {direct: row.direct} : {}),
     ...(row.account_group ? {account_group: true} : {}),
+    ...(management ? {group_management: management} : {}),
     native_room_id: row.native_room_id || null,
     native_session_id: row.native_session_id || null,
     title: row.title || '',
@@ -123,8 +127,9 @@ function conversationItem(row, me, env, workspaceId) {
   }
 }
 
-function attachmentItem({ title, mime, bytes, resource }, workspaceId, conversationId, messageId) {
+function attachmentItem({ title, mime, bytes, resource, sticker }, workspaceId, conversationId, messageId) {
   return { title, mime, bytes, id: messageId, ...(resource ? {resource} : {}),
+    ...(sticker === true ? {sticker:true} : {}),
     path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(conversationId)}/messages/${seg(messageId)}/file`,
   }
 }
@@ -230,6 +235,9 @@ function rethrow(error) {
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
+    group_management_conflict: 'group_management_conflict',
+    group_owner_transfer_required: 'group_owner_transfer_required',
+    member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
     quick_start_changed: 'quick_start_changed',
@@ -711,6 +719,7 @@ function messengerRoutes(host, wakeReplies) {
   const env = process.env
   const convPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations$/
   const onePath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})$/
+  const managementPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/management$/
   return [
     {
       method: 'GET', path: convPath,
@@ -779,6 +788,48 @@ function messengerRoutes(host, wakeReplies) {
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
           }]
+        })
+      },
+    },
+    {
+      method: 'GET', path: managementPath,
+      async handle({match}) {
+        return wrap(async () => {
+          const bs = client(host)
+          const group = await requireSharedGroupScope(host,bs,match[1],match[2])
+          if (!group.group_management) throw new Fault(404,'not_found','无法管理此群聊。')
+          return [200,{conversation:conversationItem(group,await meOf(bs,env),env,match[1])}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: managementPath,
+      async handle({match,body}) {
+        return wrap(async () => {
+          const [ , workspace, id ] = match
+          const {action, revision, title, member_id:memberId} = body || {}
+          const field = typeof action === 'string' && Object.hasOwn(GROUP_MANAGEMENT_FIELDS,action) ? GROUP_MANAGEMENT_FIELDS[action] : null
+          if (field === null || !Number.isSafeInteger(revision) || revision < 0 ||
+              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field) ||
+              (field === 'title' && (typeof title !== 'string' || !title.trim() || title.length > 80)) ||
+              (field === 'member_id' && (typeof memberId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(memberId)))) {
+            throw new Fault(400, 'invalid', '群聊管理请求无效。')
+          }
+          const bs = client(host)
+          const binding = await host.call('agents/personal-binding', {})
+          const direct = binding?.workspace_id === workspace
+          const result = await bs.post(`/v1/ot/conversations/${seg(id,'conversation_id')}/management`, {
+            action, revision, ...(field ? {[field]:body[field]} : {}), ...(direct ? {direct:true} : {workspace}),
+          })
+          if (action === 'leave') {
+            if (result.left === true && result.conversation_id === id) return [200,{left:true,conversation_id:id}]
+            throw new Fault(502,'unavailable','无法确认退群结果。')
+          }
+          if (result.conversation?.id !== id || !result.conversation.group_management) {
+            throw new Fault(502, 'unavailable', '无法确认群聊管理结果。')
+          }
+          const me = await meOf(bs, env)
+          return [200, {conversation:conversationItem(result.conversation, me, env, workspace)}]
         })
       },
     },
@@ -870,7 +921,21 @@ function messengerRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           let attachment
-          if (body?.artifact_id !== undefined) {
+          let stickerReplay = false
+          if (body?.sticker_id !== undefined) {
+            if (typeof body.sticker_id !== 'string' || !HEX.test(body.sticker_id) || !idempotency_key ||
+                body.artifact_id !== undefined || body.attachment !== undefined || body.voice !== undefined ||
+                scope.conversation?.public_agent) {
+              throw new Fault(400, 'invalid', '请选择一张可发送到此会话的贴纸。')
+            }
+            try {
+              const snapshot = await host.call('stickers/attachment', {id:body.sticker_id})
+              attachment = {...snapshot.attachment,sticker:true}
+            } catch (error) {
+              if (error?.status !== 404) throw error
+              stickerReplay = true
+            }
+          } else if (body?.artifact_id !== undefined) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
@@ -883,7 +948,12 @@ function messengerRoutes(host, wakeReplies) {
             attachment = {title,mime,data}
           }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, {
+            workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key,
+            ...(stickerReplay ? {sticker_replay:true} : {
+              body:body?.body,voice:body?.voice,attachment,mentions:body?.mentions,agent_mentions:body?.agent_mentions,reply_to:body?.reply_to,
+            }),
+          })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
