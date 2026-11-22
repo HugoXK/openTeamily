@@ -11,25 +11,27 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
-    <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
-    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
-    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
-<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
-    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
-    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
-    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
-    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
-    <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
+    <div class="rail-actions">
+      <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
+      <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+      <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+      <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+      <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+      <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+      <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+      <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+      <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
+    </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
-      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <button type="button" id="account-menu-button" class="account-trigger" data-account-icon aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" aria-label="账户菜单" title="账户菜单">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
+      </button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
         <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
@@ -67,13 +69,19 @@
   <section id="main-panel" hidden>
     <header class="memory-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
-      <h1 class="visually-hidden">记忆</h1>
+      <h1 class="visually-hidden memory-main-title">记忆</h1>
       <p id="view-title" class="memory-view-title">总览</p>
       <p id="whoami" class="visually-hidden"></p>
-      <label class="workspace-picker">工作区
+      <label class="workspace-picker"><span class="workspace-caption">工作区</span>
         <select id="workspace"></select>
       </label>
+      <button type="button" id="memory-mobile-graph" class="memory-mobile-tool" aria-expanded="false" aria-controls="overview-panel">图谱</button>
+      <button type="button" id="memory-mobile-refresh" class="memory-mobile-tool">刷新</button>
       <p id="graph-counts" class="memory-counts"></p>
+      <div id="memory-citation" class="memory-citation" hidden>
+        <a id="memory-citation-return">返回原对话</a>
+        <p id="memory-citation-status" class="note" role="status"></p>
+      </div>
     </header>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
@@ -84,13 +92,14 @@
           </button>
         </div>
         <button type="button" id="new-page" disabled>+ 新建</button>
-        <label class="dir-search">
-          <span class="visually-hidden">搜索主题</span>
-          <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
-        </label>
+        <div class="dir-search">
+          <label for="search" class="visually-hidden">搜索记忆标题、正文或标签</label>
+          <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索标题、正文或标签">
+          <button type="button" id="memory-search-clear" aria-label="清除搜索" hidden>×</button>
+        </div>
         <div class="memory-filters" role="group" aria-label="筛选">
-          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count">0</span></button>
-          <button type="button" data-filter="updated" title="按最近更新排序；数字是最近 7 天更新过的页面数（还没有已读状态接口，所以不是未读数）。">更新 <span id="filter-updated-count" class="filter-count">0</span></button>
+          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count" hidden></span></button>
+          <button type="button" data-filter="updated" aria-pressed="false">近 7 天</button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
@@ -104,8 +113,11 @@
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
           <a href="/space?view=meetings"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>我的会议</a>
         </nav>
-        <ul id="memory-list"></ul>
+        <p id="memory-directory-status" class="memory-directory-status" role="status"></p>
+        <ul id="memory-list" aria-busy="false"></ul>
         <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
+        <button type="button" id="memory-directory-retry" class="memory-directory-button" aria-controls="memory-list" hidden>重试</button>
+        <button type="button" id="memory-load-more" class="memory-directory-button" aria-controls="memory-list" hidden>加载更多</button>
       </aside>
       <section id="overview-panel" class="memory-center">
         <label class="topic-search">搜索主题
@@ -250,8 +262,19 @@
           <p id="preference-status" role="status"></p>
         </section>
       </section>
+    <section id="memory-citation-preview" class="memory-editor" aria-labelledby="memory-citation-title" hidden>
+      <header class="memory-citation-preview-head">
+        <button type="button" id="close-memory-citation-preview" class="memory-editor-back">‹ 返回列表</button>
+        <p id="memory-citation-version" class="note"></p>
+        <h2 id="memory-citation-title" tabindex="-1">引用的记忆</h2>
+        <button type="button" id="memory-citation-edit" hidden>编辑当前版本</button>
+        <button type="button" id="memory-citation-retry" hidden>重试</button>
+      </header>
+      <div id="memory-citation-body" class="memory-citation-body"></div>
+    </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
       <div class="editor-topbar">
+        <button type="button" id="close-editor" class="memory-editor-back">‹ 返回列表</button>
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
@@ -261,6 +284,14 @@
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <section id="memory-page-draft" class="memory-page-draft" hidden>
+        <p id="memory-page-draft-status" role="status"></p>
+        <details id="memory-page-draft-details" hidden>
+          <summary>查看旧草稿</summary>
+          <textarea id="memory-page-draft-copy" aria-label="旧草稿内容" rows="5" readonly></textarea>
+        </details>
+        <button type="button" id="memory-page-draft-discard">清除草稿</button>
+      </section>
       <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
         <header class="page-history-head">
@@ -326,7 +357,6 @@
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
-        <button type="button" id="close-editor">返回列表</button>
       </div>
       <div id="page-delete-confirm" role="alertdialog" aria-labelledby="page-delete-question" hidden>
         <p id="page-delete-question"></p>
@@ -350,6 +380,7 @@
       </form>
     </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
+      <button type="button" id="close-action-editor" class="memory-editor-back">‹ 返回列表</button>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
       <label>状态
@@ -365,10 +396,10 @@
         </select>
       </label>
       <p id="action-editor-meta" class="note"></p>
+      <p id="action-editor-source" class="note" hidden><a id="action-source-meeting"></a></p>
       <div class="actions">
         <button type="submit" id="save-action">保存</button>
         <button type="button" id="delete-action">删除</button>
-        <button type="button" id="close-action-editor">返回列表</button>
       </div>
       <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
         <p id="action-delete-question"></p>
@@ -381,5 +412,6 @@
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

@@ -3,6 +3,7 @@
 Serves only an exact asset allowlist. API security stays in App; this wrapper
 does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 """
+from hashlib import sha256
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,18 @@ import stat
 from urllib.parse import parse_qsl, urlsplit
 
 from . import discover
+
+
+_OPAQUE_ETAG = r'"[\x21\x23-\x7e\x80-\xff]*"'
+_ETAG_LIST = re.compile(rf'(?:W/)?{_OPAQUE_ETAG}(?:[ \t]*,[ \t]*(?:W/)?{_OPAQUE_ETAG})*')
+_ETAG_VALUES = re.compile(_OPAQUE_ETAG)
+
+
+def _matches_asset_etag(value, opaque_tag):
+    value = value.strip(' \t')
+    if value == '*':
+        return True
+    return bool(_ETAG_LIST.fullmatch(value) and opaque_tag in _ETAG_VALUES.findall(value))
 
 
 class SettingsPage:
@@ -38,6 +51,7 @@ class SettingsPage:
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
         '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/automations/studio-share.mjs': ('automations', 'studio-share.mjs', 'text/javascript; charset=utf-8'),
         '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
@@ -48,10 +62,16 @@ class SettingsPage:
         '/contacts/app.css': ('contacts', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
         '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/members/group-invite.mjs': ('members', 'group-invite.mjs', 'text/javascript; charset=utf-8'),
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/shared-studio.mjs': ('artifacts', 'shared-studio.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-merge.mjs': ('artifacts', 'studio-merge.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
@@ -59,6 +79,7 @@ class SettingsPage:
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
         '/memory/candidates.mjs': ('memory', 'candidates.mjs', 'text/javascript; charset=utf-8'),
+        '/memory/action-review.mjs': ('memory', 'action-review.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
@@ -72,17 +93,25 @@ class SettingsPage:
         '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/studio-link.mjs': ('shell', 'studio-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-share.mjs': ('shell', 'public-agent-share.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/discover-link.mjs': ('shell', 'discover-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/group-invite-link.mjs': ('shell', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/group-management.mjs': ('chat', 'group-management.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/group-invite-link.mjs': ('chat', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/stickers.mjs': ('chat', 'stickers.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/startup.mjs': ('chat', 'startup.mjs', 'text/javascript; charset=utf-8'),
@@ -99,6 +128,7 @@ class SettingsPage:
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/discussion.mjs': ('meetings', 'discussion.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -130,6 +160,7 @@ class SettingsPage:
         '/home': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
+        '/home/auth.css': ('home', 'auth.css', 'text/css; charset=utf-8'),
     }
     PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/contacts', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
@@ -151,17 +182,20 @@ class SettingsPage:
 
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
+        engine = directory == 'shell' and name.startswith('model3d-engine-') and name.endswith('.mjs')
+        chat_entry = directory == 'chat' and name == 'app.mjs'
+        limit = 1024 * 1024 if engine or chat_entry else 256 * 1024
         folder = self.root / directory
         root_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
             try:
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_size > 262144:
+                if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
                     raise OSError('Invalid asset')
                 with os.fdopen(fd, 'rb', closefd=False) as file:
-                    data = file.read(262145)
-                if len(data) > 262144:
+                    data = file.read(limit + 1)
+                if len(data) > limit:
                     raise OSError('Invalid asset')
                 return data
             finally:
@@ -184,6 +218,10 @@ class SettingsPage:
             identifier = r'[0-9a-f]{32}'
             if re.fullmatch(rf'workspace={identifier}&artifact={identifier}|artifact={identifier}&workspace={identifier}', query):
                 return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}|studio={identifier}&workspace={identifier}', query):
+                return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}&studio_revision=[1-9][0-9]{{0,15}}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
@@ -198,11 +236,22 @@ class SettingsPage:
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
         if path == '/discover':
-            if query in ('tab=agents', 'tab=agents&section=groups'):
-                return True
+            pairs = parse_qsl(query, keep_blank_values=True)
+            filters = dict(pairs)
+            if filters.get('tab') == 'agents':
+                if len(filters) != len(pairs) or not all(filters.values()):
+                    return False
+                text = filters.get('q', '')
+                if 'section' in filters:
+                    return (filters['section'] == 'groups' and filters.keys() <= {'tab', 'section', 'q'}
+                            and len(text) <= 60 and not any(ord(ch) < 32 for ch in text))
+                return (filters.keys() <= {'tab', 'category', 'q', 'creator'}
+                        and ('creator' not in filters or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', filters['creator']))
+                        and ('category' not in filters or filters['category'] in discover.AGENT_CATEGORY_SLUGS)
+                        and len(text) <= 80 and not any(ord(ch) < 32 for ch in text))
             # Feed filters and work detail links use the same management page.
             seen = set()
-            for key, value in parse_qsl(query, keep_blank_values=True):
+            for key, value in pairs:
                 if key in seen or not value:
                     return False
                 seen.add(key)
@@ -214,23 +263,36 @@ class SettingsPage:
                     return False
                 if key == 'sort' and value != 'popular':
                     return False
-                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
+                if key == 'kind' and value not in ('document', 'website', 'whiteboard', 'image', 'audio', 'slides',
+                                                       'video', 'dashboard', 'spreadsheet', 'model3d'):
+                    return False
+                if key == 'creator' and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', value):
                     return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
+                elif key not in ('feed', 'kind', 'sort', 'creator', 'work', 'comments', 'share'):
                     return False
             panels = seen.intersection({'comments', 'share'})
             return (bool(seen)
-                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind', 'creator'}))
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
-            return query in ('page=profile', 'page=todos')
+            # The memory directory and reply citations open exact records. Only
+            # accept the URL shapes produced by those pages. Each read still
+            # goes through the user's authenticated runtime.
+            identifier = r'[0-9a-f]{32}'
+            workspace = rf'workspace={identifier}'
+            views = r'page=(?:profile|todos|candidates)'
+            if re.fullmatch(rf'{views}(?:&{workspace})?|{workspace}(?:&{views})?', query):
+                return True
+            origin = rf'(?:&from={identifier}(?:\.{identifier}){{2,3}})?'
+            citation = rf'(?:page=profile|page=todos&action={identifier}|page={identifier}(?:&revision=[1-9][0-9]{{0,7}})?)'
+            return bool(re.fullmatch(rf'{workspace}&{citation}{origin}', query))
         if path == '/guide':
             # Deep links: one non-empty q, one non-empty category, or both, each
             # named at most once. An unknown category id is served anyway and the
@@ -257,10 +319,13 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path == '/discover':
+            csp += "; media-src 'self'"
         if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
             csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'
-        headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
+        cache_control = 'no-store'
+        headers = [('X-Content-Type-Options', 'nosniff'),
                    ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
                    ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
@@ -288,6 +353,16 @@ class SettingsPage:
             except OSError:
                 status, data = '503 Service Unavailable', b'UI asset unavailable'
                 content_type = 'text/plain; charset=utf-8'
-        headers += [('Content-Type', content_type), ('Content-Length', str(len(data)))]
+            else:
+                if name.endswith(('.css', '.js', '.mjs')):
+                    cache_control = 'private, no-cache'
+                    opaque_tag = f'"sha256-{sha256(data).hexdigest()}"'
+                    # Proxies may encode these same package bytes with gzip or zstd.
+                    headers.append(('ETag', 'W/' + opaque_tag))
+                    if _matches_asset_etag(env.get('HTTP_IF_NONE_MATCH', ''), opaque_tag):
+                        start_response('304 Not Modified', headers + [('Cache-Control', cache_control)])
+                        return []
+        headers += [('Cache-Control', cache_control), ('Content-Type', content_type),
+                    ('Content-Length', str(len(data)))]
         start_response(status, headers)
         return [] if env.get('REQUEST_METHOD') == 'HEAD' else [data]

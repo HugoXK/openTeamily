@@ -1,12 +1,18 @@
-import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
+import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
+import { csrfCookie } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
+import { discoverLoginHref } from '../shell/discover-link.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
-import { renderThumb, thumbModel } from '../shell/thumb.mjs';
+import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const AGENT_COPY_GRANT = /^otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
+const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
+const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
+const SEARCH_DELAY = 300;
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -54,7 +60,7 @@ export function catalogQuery(text = '', cursor = '', category = 'all', creator =
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品'];
+export const FEED_CATEGORIES = ['网页', '文档', '图片', '音乐', '幻灯片', '视频', '3D 作品', '白板', '看板', '电子表格'];
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
@@ -71,7 +77,9 @@ export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显�
 export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
 export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
-export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video', 'model3d'];
+export const FEED_KINDS = [
+  '', 'website', 'document', 'image', 'audio', 'slides', 'video', 'model3d', 'whiteboard', 'dashboard', 'spreadsheet',
+];
 
 export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '') {
   const params = new URLSearchParams({limit: '12'});
@@ -98,7 +106,7 @@ export function feedStateFromSearch(search) {
     tab,
     kind,
     sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
-    query: (params.get('q') || '').slice(0, 80),
+    query: (params.get('q') || '').slice(0, 80).trim(),
     ...(creator ? {creator} : {}),
   };
 }
@@ -157,7 +165,10 @@ export function coverPattern(title) {
   return String(hash % 8);
 }
 
-const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',model3d:'3D 作品',whiteboard:'白板',dashboard:'看板',media:'媒体'};
+const KIND_LABELS = {
+  document: '文档', website: '网页', image: '图片', slides: '幻灯片', audio: '音频', video: '视频',
+  model3d: '3D 作品', whiteboard: '白板', dashboard: '看板', spreadsheet: '电子表格', media: '媒体',
+};
 
 // Native public works expose plain text. Other public previews can include a
 // structured thumbnail. Normalize both while keeping the listing body-free.
@@ -178,7 +189,7 @@ export function attachFeedThumb(document, cover, preview) {
 }
 
 export function feedPreviewPath(item) {
-  if (!item || item.kind === 'image' || item.kind === 'model3d' || !validSlug(item.slug)) return '';
+  if (!item || Object.hasOwn(MEDIA_LABELS, item.kind) || item.kind === 'model3d' || !validSlug(item.slug)) return '';
   return '/w/' + item.slug + '/preview';
 }
 
@@ -216,10 +227,41 @@ export function detailExcerpt(preview) {
   return kept;
 }
 
+function creatorHandle(item) {
+  const handle = item?.creator?.handle;
+  return typeof handle === 'string' && CREATOR_HANDLE.test(handle) ? handle.toLowerCase() : '';
+}
+
+function authorName(item) {
+  return item.creator?.name || item.author || creatorHandle(item);
+}
+
+function creatorDirectoryHref(handle, directory = 'works') {
+  const params = new URLSearchParams();
+  if (directory === 'agents') params.set('tab', 'agents');
+  if (handle) params.set('creator', handle);
+  return '/discover' + (params.size ? '?' + params : '');
+}
+
+function workAuthorLink(document, item) {
+  const link = document.createElement('a');
+  link.className = 'work-author-link';
+  link.href = creatorDirectoryHref(creatorHandle(item));
+  link.textContent = authorName(item);
+  link.setAttribute('aria-label', '查看 ' + link.textContent + ' 的公开作品');
+  return link;
+}
+
+function sameWorkCreator(first, second) {
+  const handle = creatorHandle(first);
+  const other = creatorHandle(second);
+  return handle || other ? Boolean(handle && handle === other) : Boolean(first.author && first.author === second.author);
+}
+
 export function detailMetaText(item) {
   return [
     item.kind_label || KIND_LABELS[item.kind] || item.kind || '',
-    item.author || '',
+    authorName(item),
     formatFeedTime(item.updated),
   ].filter(Boolean).join(' · ');
 }
@@ -230,35 +272,54 @@ function publicWorkPath(item) {
   return item.path === '/social' + path ? item.path : path;
 }
 
-export function renderFeedCard(document, item) {
-  const card = document.createElement('a');
-  card.className = 'feed-card';
-  card.href = publicWorkPath(item) || '/discover';
-  const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
-  cover.className = 'work-cover';
-  cover.dataset.kind = item.kind || 'work';
-  cover.dataset.pattern = coverPattern(item.title || item.slug || '');
-  if (item.kind === 'image') {
-    cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
-    cover.alt = ''; cover.loading = 'lazy';
-  } else {
-    cover.setAttribute('aria-hidden', 'true');
-    attachFeedThumb(document, cover, item.preview);
+function workMediaPath(item, legacyImage) {
+  if (!Object.hasOwn(MEDIA_LABELS, item.kind)) return '';
+  const workPath = publicWorkPath(item);
+  if (!workPath) return '';
+  const hasFile = item.file_available === true &&
+    (!item.file_mime || (typeof item.file_mime === 'string' && item.file_mime.startsWith(item.kind + '/')));
+  const oldImage = legacyImage && item.kind === 'image' && item.file_available === undefined;
+  return hasFile || oldImage ? workPath + '/file' : '';
+}
+
+function mediaFileSize(bytes) {
+  if (!Number.isSafeInteger(bytes) || bytes < 1) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function workMatch(match) {
+  if (!MATCH_KINDS.has(match?.kind) || typeof match.text !== 'string' || !match.text.trim()) return;
+  const {text, start, end} = match;
+  if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && start < end && end <= text.length) {
+    return match;
   }
-  const kind = document.createElement('p');
-  kind.className = 'kind';
-  kind.textContent = item.kind_label || KIND_LABELS[item.kind] || item.kind || '';
-  const title = document.createElement('h3');
-  title.textContent = item.title || '';
+}
+
+function appendMatch(document, target, {text, start, end}) {
+  const mark = document.createElement('mark');
+  mark.textContent = text.slice(start, end);
+  target.append(text.slice(0, start), mark, text.slice(end));
+}
+
+function renderFeedByline(document, item, {linkAuthor = false} = {}) {
   const meta = document.createElement('p');
-  meta.className = 'meta';
+  meta.className = 'meta feed-byline';
   const mark = document.createElement('span');
   mark.className = 'feed-author-mark avatar';
-  mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
-  mark.textContent = catalogMonogram(item.author || item.title || '');
+  mark.setAttribute('aria-hidden', 'true');
+  const author = authorName(item);
+  mark.dataset.tone = String(catalogTone(author || item.title || ''));
+  mark.textContent = catalogMonogram(author || item.title || '');
   const who = document.createElement('span');
   const when = formatFeedTime(item.updated);
-  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
+  if (linkAuthor) {
+    who.append(workAuthorLink(document, item));
+    if (when) who.append(' · ' + when);
+  } else {
+    who.textContent = [author, when].filter(Boolean).join(' · ');
+  }
   meta.append(mark, who);
   if (item.likes != null) {
     const likes = document.createElement('span');
@@ -266,7 +327,50 @@ export function renderFeedCard(document, item) {
     likes.textContent = '♡ ' + (item.likes || 0);
     meta.append(likes);
   }
-  card.append(cover, kind, title, meta);
+  return meta;
+}
+
+export function renderFeedCard(document, item, {legacyImage = false, includeByline = true} = {}) {
+  const card = document.createElement('a');
+  card.className = 'feed-card';
+  card.href = publicWorkPath(item) || '/discover';
+  const cover = document.createElement('div');
+  cover.className = 'work-cover';
+  cover.dataset.kind = item.kind || 'work';
+  cover.dataset.pattern = coverPattern(item.title || item.slug || '');
+  cover.setAttribute('aria-hidden', 'true');
+  const imageFile = item.kind === 'image' && workMediaPath(item, legacyImage);
+  if (imageFile) {
+    const image = document.createElement('img');
+    image.className = 'work-cover-image';
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.fetchPriority = 'low';
+    image.width = 320;
+    image.height = 200;
+    image.addEventListener('error', () => { image.hidden = true; });
+    image.src = imageFile;
+    cover.append(image);
+  } else if (!Object.hasOwn(MEDIA_LABELS, item.kind)) {
+    attachFeedThumb(document, cover, item.preview);
+  }
+  const kind = document.createElement('p');
+  kind.className = 'kind';
+  kind.textContent = item.kind_label || KIND_LABELS[item.kind] || item.kind || '';
+  const title = document.createElement('h3');
+  const match = workMatch(item.match);
+  const titleMatch = match?.kind === 'title' && match.text === item.title;
+  if (titleMatch) appendMatch(document, title, match);
+  else title.textContent = item.title || '';
+  card.append(cover, kind, title);
+  if (match && !titleMatch) {
+    const excerpt = document.createElement('p');
+    excerpt.className = 'feed-search-excerpt';
+    appendMatch(document, excerpt, match);
+    card.append(excerpt);
+  }
+  if (includeByline) card.append(renderFeedByline(document, item));
   return card;
 }
 
@@ -348,6 +452,11 @@ function messageFor(error, fallback) {
 export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location, history = globalThis.history, window = globalThis } = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
+  const loginLink = document.getElementById('discover-login');
+  function syncLoginLink() {
+    if (loginLink) loginLink.href = discoverLoginHref(location?.search);
+  }
+  syncLoginLink();
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   const nativeCatalog = servedByDsBot(document);
@@ -362,9 +471,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let cursor = '';
   let activeQuery = '';
   let activeCategory = categoryFromSearch(location?.search);
-  let activeCreator = null;
   let remix = null;
-  let remixLoading = false;
   let manageRequest = 0;
   let catalogRequest = 0;
   let directoryItems = [];
@@ -373,11 +480,48 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const joiningTeams = new Set();
   const agentsView = isAgentsCatalog(location);
   const manageParams = new URLSearchParams(location?.search || '');
+  const requestedAuthor = agentsView && manageParams.get('creator');
+  let activeCreator = CREATOR_HANDLE.test(requestedAuthor || '')
+    ? {handle: requestedAuthor.toLowerCase(), name: '@' + requestedAuthor.toLowerCase()} : null;
   const manageWorkspace = manageParams.get('workspace');
   const manageAgent = manageParams.get('agent');
+  const agentShare = agentsView && nativeCatalog && manageParams.getAll('share').length === 1 &&
+    AGENT_COPY_GRANT.test(manageParams.get('share')) ? manageParams.get('share') : null;
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
+  const catalogSearch = document.getElementById('catalog-query');
+  if (catalogView) catalogSearch.value = (manageParams.get('q') || '').trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
+
+  function saveCatalogQuery() {
+    const params = new URLSearchParams(location?.search);
+    const query = catalogSearch.value.trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
+    if (query === (params.get('q') || '')) return;
+    if (query) params.set('q', query);
+    else params.delete('q');
+    history?.replaceState?.(null, '', '/discover?' + params.toString());
+    syncLoginLink();
+  }
+
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
+  const feedSections = document.getElementById('feed-sections');
+  const directoryTabs = document.getElementById('discover-tabs');
+  if (!catalogView && feedSections && directoryTabs) {
+    feedSections.append(directoryTabs);
+    mainPanel.classList?.add('discover-feed-mode');
+    const toolbar = feedSections.parentElement;
+    const search = document.getElementById('feed-search');
+    const compact = document.defaultView?.matchMedia?.('(max-width: 45rem)');
+    if (toolbar && search && compact) {
+      const orderControls = ({matches}) => {
+        const [first, last] = matches ? [feedSections, search] : [search, feedSections];
+        if (toolbar.firstElementChild === first) return;
+        if (first.contains(document.activeElement)) toolbar.append(last);
+        else toolbar.prepend(first);
+      };
+      orderControls(compact);
+      compact.addEventListener('change', orderControls);
+    }
+  }
 
   function setCurrent(id, on) {
     const node = document.getElementById(id);
@@ -385,6 +529,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (on) node.setAttribute('aria-current', 'page');
     else if (typeof node.removeAttribute === 'function') node.removeAttribute('aria-current');
     else if (node.attributes) delete node.attributes['aria-current'];
+  }
+
+  function setCreatorDirectoryTabs(handle) {
+    const feed = document.getElementById('catalog-tab-feed');
+    const agents = document.getElementById('catalog-tab-agents');
+    if (feed) feed.href = creatorDirectoryHref(handle);
+    if (agents) agents.href = creatorDirectoryHref(handle, 'agents');
   }
 
   function applyCatalogChrome() {
@@ -515,24 +666,38 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
+  let feedReader;
   let feedViewer;
+  let feedPages = 0;
+  let feedFailure;
+  let feedRestore;
+  let searchTimer;
+  let composingQuery = false;
+  const feedPositions = new Map();
   const feedActions = new Map();
   const commentButtons = new Map();
   const workTriggers = new Map();
+  const searchInput = document.getElementById('feed-query');
+  const clearSearch = document.getElementById('feed-clear');
+  const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open',
-    'like', 'collect', 'follow', 'comments', 'share', 'previous', 'next',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
+    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
     .map(name => [name, document.getElementById('work-share-' + name)]));
+  const workRemix = Object.fromEntries(['dialog','form','source','name','name-field','status','close','refresh','submit','open']
+    .map(name => [name,document.getElementById('work-remix-'+name)]));
   const detailPanel = document.getElementById('work-detail');
   const initialView = document.getElementById('main');
   const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
   let activeWork;
+  let activeRemix;
   let feedReturn;
 
   const workComments = mountWorkComments(document, {
     request,
+    loginHref: slug => discoverLoginHref(workDetailSearchText(feedState, {slug, comments: true})),
     onCount(slug, count) {
       const item = feedState.items.find(work => work.slug === slug);
       if (item) item.comment_count = count;
@@ -554,7 +719,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function disposeWorkPreview() {
     activeWork?.model?.setSource('');
+    if (activeWork?.media) {
+      const player = activeWork.media;
+      activeWork.media = null;
+      player.pause?.();
+      player.removeAttribute('src');
+      player.load?.();
+    }
     detail.preview.replaceChildren();
+  }
+
+  function restoreFeedPosition(position) {
+    const control = position.focusId && document.getElementById(position.focusId);
+    const target = position.trigger?.isConnected ? position.trigger :
+      workTriggers.get(position.slug) || (control && !control.hidden ? control : null);
+    initialView.scrollTop = position.scroll;
+    (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
   }
 
   function closeWorkDetail({restore = true} = {}) {
@@ -562,17 +742,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
+    closeWorkRemix();
     activeWork = null;
     setWorkView(false);
-    if (restore && feedReturn) {
-      const target = feedReturn.trigger?.isConnected
-        ? feedReturn.trigger : workTriggers.get(feedReturn.slug) || document.getElementById('discover-title');
-      initialView.scrollTop = feedReturn.scroll;
-      target?.focus?.({preventScroll: true});
-    } else {
-      initialView.scrollTop = 0;
-      document.getElementById('discover-title')?.focus?.({preventScroll: true});
-    }
+    restoreFeedPosition(restore && feedReturn ? feedReturn : {scroll: 0});
     feedReturn = null;
   }
 
@@ -598,6 +771,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   async function openWorkDetail(intent, {item, trigger, navigate = false} = {}) {
     if (!intent || !validSlug(intent.slug)) return;
+    cancelSearch();
     const existing = activeWork;
     if (!existing) {
       feedReturn = {scroll: initialView.scrollTop || 0, trigger, slug: intent.slug};
@@ -606,17 +780,19 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const url = workUrl(intent);
       if (existing) history?.replaceState?.(history.state, '', url);
       else history?.pushState?.({discoverWork: true}, '', url);
+      syncLoginLink();
     }
 
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
+    closeWorkRemix();
     const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading'};
     activeWork = entry;
     setWorkView(true);
     initialView.scrollTop = 0;
     detail.title.textContent = item?.title || '作品详情';
-    detail.meta.textContent = item ? detailMetaText(item) : '';
+    renderWorkMeta(item);
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
     detail.actions.hidden = true;
@@ -660,7 +836,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadPublicWork(entry) {
-    const path = '/w/' + entry.slug + (nativeCatalog ? '?view=preview' : '');
+    const path = '/w/' + entry.slug + '?view=preview';
     const result = await request('GET', path).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
@@ -673,19 +849,42 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return result;
   }
 
+  function renderWorkMeta(work) {
+    if (!work || !creatorHandle(work)) {
+      detail.meta.textContent = work ? detailMetaText(work) : '';
+      return;
+    }
+    const type = work.kind_label || KIND_LABELS[work.kind] || work.kind || '';
+    const when = formatFeedTime(work.updated);
+    detail.meta.replaceChildren();
+    if (type) detail.meta.append(type + ' · ');
+    detail.meta.append(workAuthorLink(document, work));
+    if (when) detail.meta.append(' · ' + when);
+  }
+
   function showWork(entry, work, inlinePreview) {
     entry.item = work;
     detail.title.textContent = work.title || work.slug;
-    detail.meta.textContent = detailMetaText(work);
+    renderWorkMeta(work);
     detail.open.href = publicWorkPath(work);
+    const file = workMediaPath(work, !nativeCatalog);
+    detail.download.hidden = !file;
+    if (file) {
+      detail.download.href = file;
+      detail.download.download = '';
+      const size = mediaFileSize(work.file_bytes);
+      detail.download.textContent = size ? '下载原文件 · ' + size : '下载原文件';
+    } else {
+      detail.download.removeAttribute('href');
+    }
     detail.actions.hidden = false;
     detail.paper.setAttribute('aria-busy', 'false');
     const key = JSON.stringify([work.slug, work.kind, work.title, work.updated, work.site_available === true,
-      work.kind === 'model3d' ? publicWorkPath(work) : '']);
+      work.kind === 'model3d' ? publicWorkPath(work) : file]);
     if (key !== entry.previewKey) {
       disposeWorkPreview();
       entry.previewKey = key;
-      entry.preview = renderWorkPreview(entry, work, key, inlinePreview);
+      entry.preview = renderWorkPreview(entry, work, key, inlinePreview, file);
     }
   }
 
@@ -722,6 +921,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
+    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage || entry.item?.remix_available !== true;
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
@@ -731,6 +931,102 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
       }
     }
+  }
+
+  function closeWorkRemix() {
+    activeRemix?.read?.abort();
+    activeRemix = null;
+    if (workRemix.dialog?.open) workRemix.dialog.close();
+  }
+
+  function sameWorkRemix(state) {
+    return state === activeRemix && state.viewer === currentUser && activeWorkEntry(state.entry) && workRemix.dialog.open;
+  }
+
+  async function readWorkRemix(state) {
+    state.template = null;
+    state.read?.abort();
+    const controller = new AbortController();
+    state.read = controller;
+    workRemix.submit.disabled = true;
+    workRemix.refresh.hidden = true;
+    workRemix.status.textContent = '正在读取公开版本…';
+    const result = await request('GET',state.path,undefined,{},controller.signal).catch(() => ({status:0}));
+    if (!sameWorkRemix(state) || state.read !== controller) return;
+    const template = result.body?.template;
+    if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
+        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(template.revision || '')) {
+      workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
+      workRemix.refresh.hidden = result.status === 404;
+      return;
+    }
+    const previous = state.suggestion;
+    state.suggestion = template.title.slice(0,75).replace(/[\uD800-\uDBFF]$/,'').trimEnd() + ' · 副本';
+    if (!workRemix.name.value || workRemix.name.value === previous) workRemix.name.value = state.suggestion;
+    const size = template.kind === 'media' ? mediaFileSize(template.media?.bytes) : '';
+    workRemix.source.textContent = `「${template.title}」${size ? '（' + size + '）' : ''}将保存到你的个人资料空间。`;
+    state.template = template;
+    workRemix.submit.disabled = false;
+    workRemix.status.textContent = '';
+  }
+
+  function openWorkRemix() {
+    const entry = activeWork;
+    if (!nativeCatalog || !entry?.ready || entry.viewer !== currentUser || !entry.viewer || entry.item?.remix_available !== true ||
+        !workRemix.dialog || workRemix.dialog.open) return;
+    const state = {entry,viewer:entry.viewer,path:`/v1/discover/works/${entry.slug}/remix`,keys:new Map()};
+    activeRemix = state;
+    workRemix.source.textContent = '';
+    workRemix.name.value = '';
+    workRemix.name.disabled = false;
+    workRemix['name-field'].hidden = false;
+    workRemix.open.hidden = true;
+    workRemix.open.removeAttribute('href');
+    workRemix.close.disabled = workRemix.submit.hidden = false;
+    workRemix.close.textContent = '取消';
+    workRemix.submit.textContent = '创建副本';
+    workRemix.dialog.showModal();
+    void readWorkRemix(state);
+  }
+
+  async function submitWorkRemix(event) {
+    event.preventDefault();
+    const state = activeRemix;
+    const title = workRemix.name.value.trim();
+    if (!state || !sameWorkRemix(state) || !state.template || state.pending || !title) return;
+    const {revision} = state.template;
+    const stamp = JSON.stringify([revision,title]);
+    const key = state.keys.get(stamp) || reuseKey();
+    state.keys.set(stamp,key);
+    state.pending = true;
+    workRemix.submit.disabled = workRemix.close.disabled = workRemix.name.disabled = true;
+    workRemix.status.textContent = '正在创建副本…';
+    const result = await request('POST',state.path,{title,revision},{'Idempotency-Key':key},AbortSignal.timeout(12000))
+      .catch(() => ({status:0}));
+    if (!sameWorkRemix(state)) return;
+    state.pending = false;
+    workRemix.close.disabled = workRemix.name.disabled = false;
+    const artifact = result.body?.artifact;
+    if ([200,201].includes(result.status) && matchesNativeViewer(result.body?.viewer_username,state.viewer)
+        && /^[a-f0-9]{32}$/.test(artifact?.workspace_id || '') && /^[a-f0-9]{32}$/.test(artifact?.id || '')
+        && artifact.kind === state.template.kind) {
+      state.template = null;
+      workRemix['name-field'].hidden = workRemix.submit.hidden = true;
+      workRemix.open.href = spaceHref(artifact.workspace_id,artifact.id);
+      workRemix.open.hidden = false;
+      workRemix.close.textContent = '完成';
+      workRemix.status.textContent = '已保存到个人资料空间。';
+      workRemix.open.focus();
+      return;
+    }
+    const unavailable = result.status === 404 || result.body?.error?.code === 'listing_changed';
+    workRemix.status.textContent = result.status === 404 ? '这个作品已下架或没有可复制的公开版本。'
+      : messageFor(result.body?.error,'暂时无法确认是否已创建副本，可以重试。');
+    workRemix.submit.disabled = unavailable;
+    workRemix.refresh.hidden = result.body?.error?.code !== 'listing_changed';
+    if (unavailable) state.template = null;
+    if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
 
   async function updateWorkEngagement(action, flag) {
@@ -750,7 +1046,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.item[flag] = changes[flag] ?? enabled;
       if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
       for (const item of feedState.items) {
-        if (item.slug === entry.slug || (action === 'follow' && entry.item.author && item.author === entry.item.author)) {
+        if (item.slug === entry.slug || (action === 'follow' && sameWorkCreator(entry.item, item))) {
           item[flag] = entry.item[flag];
           if (action === 'like') item.likes = entry.item.likes;
         }
@@ -759,7 +1055,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
       }
       if (action === 'follow' && !enabled && feedState.tab === 'following') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && (!entry.item.author || item.author !== entry.item.author));
+        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && !sameWorkCreator(entry.item, item));
       }
       renderFeed();
     }
@@ -800,6 +1096,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     history?.replaceState?.(null, '', feedUrl());
+    syncLoginLink();
     closeWorkDetail();
   });
   for (const name of ['previous', 'next']) {
@@ -813,6 +1110,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (activeWork?.ready && activeWorkEntry(activeWork)) return workComments.open(activeWork.item, detail.comments);
   });
   detail.share.addEventListener('click', openWorkShare);
+  detail.remix?.addEventListener('click',openWorkRemix);
+  workRemix.form?.addEventListener('submit',submitWorkRemix);
+  workRemix.close?.addEventListener('click',closeWorkRemix);
+  workRemix.refresh?.addEventListener('click',() => activeRemix && readWorkRemix(activeRemix));
+  workRemix.dialog?.addEventListener('cancel',event => {
+    event.preventDefault();
+    if (!activeRemix?.pending) closeWorkRemix();
+  });
   for (const [action, flag] of engagement) {
     detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
   }
@@ -828,13 +1133,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   });
 
-  function loadDiscoverRoute() {
-    const intent = workDetailFromSearch(location?.search);
-    if (intent) return Promise.all([loadFeed(), openWorkDetail(intent)]);
-    closeWorkDetail();
-    return loadFeed();
-  }
-
   function applyFeedChrome({restoreQuery = false} = {}) {
     for (const name of ['following', 'activity', 'collected']) {
       const button = document.getElementById('feed-tab-' + name);
@@ -844,8 +1142,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const popularButton = document.getElementById('feed-sort-popular');
     if (popularButton) {
       popularButton.hidden = feedState.tab !== 'activity' || Boolean(feedState.creator);
-      popularButton.setAttribute('aria-current', String(popular));
+      setFeedCategory(popularButton, popular);
     }
+    setCreatorDirectoryTabs(feedState.creator);
     const creatorFilter = document.getElementById('feed-creator-filter');
     if (creatorFilter) {
       creatorFilter.hidden = !feedState.creator;
@@ -854,12 +1153,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     for (const kind of FEED_KINDS) {
       const node = document.getElementById('feed-kind-' + (kind || 'all'));
-      if (node) node.setAttribute('aria-current', String(!popular && kind === feedState.kind));
+      if (node) setFeedCategory(node, !popular && kind === feedState.kind);
     }
-    if (restoreQuery) {
-      const input = document.getElementById('feed-query');
-      if (input) input.value = feedState.query;
+    const filters = document.getElementById('feed-filters');
+    if (filters?.scrollWidth > filters.clientWidth) {
+      const selected = popular ? popularButton : document.getElementById('feed-kind-' + (feedState.kind || 'all'));
+      const strip = filters.getBoundingClientRect();
+      const chip = selected?.getBoundingClientRect();
+      if (chip?.right > strip.right) filters.scrollLeft += chip.right - strip.right;
+      if (chip?.left < strip.left) filters.scrollLeft += chip.left - strip.left;
     }
+    if (restoreQuery && searchInput) searchInput.value = feedState.query;
+    if (clearSearch) clearSearch.hidden = !searchInput?.value;
+  }
+
+  function setFeedCategory(button, current) {
+    button.setAttribute('aria-current', String(current));
+    if (current && (currentUser || feedState.tab === 'activity')) button.setAttribute('aria-description', '重新加载分类');
+    else button.removeAttribute?.('aria-description');
   }
 
   function feedUrl() {
@@ -867,25 +1178,115 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return pathname + feedSearchText(feedState);
   }
 
-  function pushFeedUrl() {
-    if (catalogView || !history || typeof history.pushState !== 'function') return;
-    history.pushState(null, '', feedUrl());
+  function cancelSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  function rememberFeedPosition() {
+    if (!feedPages || feedRestore) return;
+    const key = feedSearchText(feedState);
+    const focused = document.activeElement;
+    const position = activeWork ? feedReturn : {
+      scroll: initialView.scrollTop || 0,
+      slug: focused?.closest?.('.feed-entry')?.dataset.slug,
+      focusId: focused?.id?.startsWith('feed-') && focused.id,
+    };
+    if (!position) return;
+    feedPositions.delete(key);
+    feedPositions.set(key, {
+      pageCount: feedPages, scroll: position.scroll, slug: position.slug, focusId: position.focusId,
+    });
+    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
+  }
+
+  async function readFeedPosition(position) {
+    if (!position || sessionPending) return loadFeed();
+    const restoring = {position};
+    feedRestore = restoring;
+    let loaded = await loadFeed();
+    for (let page = 1; page < position.pageCount && loaded && feedRestore === restoring && feedState.cursor; page++) {
+      loaded = await loadFeed({append: true});
+    }
+    if (feedRestore !== restoring) return;
+    feedRestore = null;
+    updateFeedStatus();
+    if (!activeWork) restoreFeedPosition(position);
+  }
+
+  function applyFeedFilters(changes, {refresh = false} = {}) {
+    cancelSearch();
+    const current = feedSearchText(feedState);
+    const next = {...feedState, ...changes};
+    if (feedSearchText(next) === current) {
+      if (refresh && !feedState.loading && !feedRestore && (currentUser || feedState.tab === 'activity')) {
+        return loadFeed({refresh: true});
+      }
+      return;
+    }
+    rememberFeedPosition();
+    feedRestore = null;
+    Object.assign(feedState, changes);
+    applyFeedChrome({restoreQuery: true});
+    history?.pushState?.(null, '', feedUrl());
+    syncLoginLink();
+    initialView.scrollTop = 0;
+    return loadFeed();
+  }
+
+  function searchText() {
+    return (searchInput?.value || '').trim().slice(0, 80);
+  }
+
+  function commitSearch() {
+    const query = searchText();
+    if (searchInput) searchInput.value = query;
+    if (clearSearch) clearSearch.hidden = !query;
+    return applyFeedFilters({query});
+  }
+
+  function scheduleSearch() {
+    cancelSearch();
+    if (clearSearch) clearSearch.hidden = !searchInput?.value;
+    if (!composingQuery && searchText() !== feedState.query) {
+      searchTimer = setTimeout(commitSearch, SEARCH_DELAY);
+    }
+  }
+
+  function clearFeedSearch() {
+    if (!searchInput) return;
+    searchInput.value = '';
+    searchInput.focus?.();
+    return commitSearch();
   }
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
+    if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('popstate', () => {
+      syncLoginLink();
+      cancelSearch();
       const next = feedStateFromSearch(location?.search);
-      const feedChanged = feedSearchText(next) !== feedSearchText(feedState);
+      const nextKey = feedSearchText(next);
+      const feedChanged = nextKey !== feedSearchText(feedState);
+      if (feedChanged) {
+        rememberFeedPosition();
+        feedRestore = null;
+      }
       Object.assign(feedState, {creator: '', ...next});
       applyFeedChrome({restoreQuery: true});
       const intent = workDetailFromSearch(location?.search);
-      if (!intent) {
+      if (feedChanged || !intent) {
         workComments.close();
         closeWorkDetail({restore: !feedChanged});
       }
       if (feedChanged) {
-        feedReturn = null;
-        return loadDiscoverRoute();
+        initialView.scrollTop = 0;
+        const position = feedPositions.get(nextKey);
+        const loaded = readFeedPosition(position);
+        if (!intent) return loaded;
+        const opened = openWorkDetail(intent);
+        if (position) feedReturn = position;
+        return Promise.all([loaded, opened]);
       }
       if (intent) return openWorkDetail(intent);
     });
@@ -896,15 +1297,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !feedState.items.length && !feedState.loading);
+    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' &&
+      !feedState.query && !feedState.items.length && !feedState.loading && !feedFailure);
     if (gridSection) gridSection.hidden = false;
     if (searchNote) searchNote.hidden = true;
     if (!note) return;
-    if (feedState.loading) {
+    if (feedState.loading || feedFailure) {
       note.textContent = '';
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
     else note.textContent = (feedState.query || feedState.kind || feedState.creator) && !feedState.items.length
@@ -998,7 +1401,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
   }
 
-  async function renderWorkPreview(entry, item, key, inlinePreview) {
+  function renderMediaPreview(entry, item, file, stillShowing) {
+    const status = document.createElement('p');
+    status.className = 'work-media-status';
+    status.setAttribute('role', 'status');
+    const label = MEDIA_LABELS[item.kind];
+    if (!file) {
+      status.textContent = '这件作品暂无可用的' + label + '文件。';
+      detail.preview.append(status);
+      return;
+    }
+    const image = item.kind === 'image';
+    const player = document.createElement(image ? 'img' : item.kind);
+    player.className = 'work-detail-' + item.kind;
+    if (image) {
+      player.alt = item.title || '公开作品图片';
+      player.decoding = 'async';
+    } else {
+      player.controls = true;
+      player.preload = 'none';
+      player.setAttribute('aria-label', label + '预览 · ' + (item.title || item.slug));
+      if (item.kind === 'video') player.playsInline = true;
+      entry.media = player;
+    }
+    player.addEventListener('error', () => {
+      if (!stillShowing() || (!image && entry.media !== player)) return;
+      player.hidden = true;
+      status.textContent = '无法预览' + label + '，可以尝试下载原文件。';
+    });
+    player.src = file;
+    detail.preview.append(player, status);
+  }
+
+  async function renderWorkPreview(entry, item, key, inlinePreview, file) {
     const stillShowing = () => activeWorkEntry(entry) && entry.previewKey === key && entry.outcome !== 'denied';
     if (item.kind === 'website' && item.site_available === true) {
       const frame = document.createElement('iframe');
@@ -1016,15 +1451,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.model.setSource(file);
       return;
     }
-    if (item.kind === 'image') {
-      const image = document.createElement('img');
-      image.src = '/w/' + item.slug + '/file';
-      image.alt = item.title || '公开作品图片';
-      image.className = 'work-detail-image';
-      image.addEventListener('error', () => {
-        if (stillShowing()) detail.preview.textContent = '暂时无法显示图片。';
-      });
-      detail.preview.append(image);
+    if (Object.hasOwn(MEDIA_LABELS, item.kind)) {
+      renderMediaPreview(entry, item, file, stillShowing);
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
@@ -1113,12 +1541,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
-      const card = renderFeedCard(document, item);
+      const linkedAuthor = Boolean(creatorHandle(item));
+      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog, includeByline: !linkedAuthor});
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
       const entry = document.createElement('article');
       entry.className = 'feed-entry';
+      entry.dataset.slug = item.slug || '';
       entry.append(card);
+      if (linkedAuthor) entry.append(renderFeedByline(document, item, {linkAuthor: true}));
       const actions = document.createElement('div');
       actions.className = 'feed-card-actions';
       if (validSlug(item.slug)) {
@@ -1146,73 +1577,97 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function updateFeedStatus() {
-    document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(feedState.loading));
+    const results = document.getElementById('feed-activity-empty');
+    results?.setAttribute('aria-busy', String(Boolean(feedRestore || feedState.loading)));
+    if (results) results.dataset.initialLoading = String(feedState.loading && !feedState.items.length);
+    const filters = document.getElementById('feed-filters');
+    if (filters) filters.dataset.refreshing = String(Boolean(feedState.refreshing));
     const count = document.getElementById('feed-count');
     if (count) {
-      if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
+      if (feedRestore) count.textContent = '正在恢复浏览位置…';
+      else if (feedState.refreshing) count.textContent = '正在刷新作品…';
+      else if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
       else if (feedState.loading && !feedState.items.length) count.textContent = '正在加载作品…';
-      else count.textContent = feedState.items.length ? '已显示 ' + feedState.items.length + ' 件公开作品' : '';
+      else if (feedState.items.length) count.textContent =
+        '已显示 ' + feedState.items.length + (feedState.query ? ' 件匹配作品' : ' 件公开作品');
+      else count.textContent = '';
     }
     const more = document.getElementById('feed-more');
     if (more) {
       more.hidden = !feedState.cursor;
-      more.disabled = feedState.loading || Boolean(nativeCatalog && sessionPending);
+      more.disabled = feedState.loading || Boolean(feedRestore || (nativeCatalog && sessionPending));
     }
     applyFeedNote();
   }
 
-  async function loadFeed({append = false, retainItems = false, retryViewer = true} = {}) {
+  function setFeedError(message, retry) {
+    const error = document.getElementById('feed-error');
+    feedFailure = retry;
+    if (error) {
+      error.hidden = !message;
+      error.textContent = message;
+    }
+    if (retryFeed) retryFeed.hidden = !retry;
+  }
+
+  function mismatchedNativeFeed(viewer) {
+    if (!nativeCatalog) return false;
+    if (currentUser) return !matchesFeedViewer(viewer);
+    return !sessionPending && viewer !== null;
+  }
+
+  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
-    if (!append) {
+    const scope = sessionRequest;
+    feedReader?.abort();
+    if (!append && !refresh) {
       if (!retainItems) feedState.items = [];
       feedState.cursor = '';
       feedViewer = undefined;
+      feedPages = 0;
     }
     const needsViewer = feedState.tab !== 'activity';
     const waitingForViewer = needsViewer && !currentUser;
     feedState.loading = !waitingForViewer || Boolean(sessionPending);
-    const error = document.getElementById('feed-error');
-    if (error) {
-      error.hidden = true;
-      error.textContent = '';
-    }
-    if (append || retainItems) updateFeedStatus();
+    feedState.refreshing = refresh;
+    setFeedError('');
+    if (append || retainItems || refresh) updateFeedStatus();
     else renderFeed();
     if (waitingForViewer) return;
     // The native all-works route includes the same viewer state as /me/works?tab=all.
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
     const sort = needsViewer ? 'latest' : feedState.sort;
-    const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort, feedState.creator);
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
+    const reader = new AbortController();
+    feedReader = reader;
     let result;
-    try { result = await request('GET', path); }
+    try { result = await request('GET', path, undefined, undefined, reader.signal); }
     catch { result = {status: 0, body: {}}; }
-    if (seq !== feedRequest) return;
+    if (seq !== feedRequest || scope !== sessionRequest) return;
+    feedReader = null;
     feedState.loading = false;
+    feedState.refreshing = false;
     if (append && sort === 'popular' && result.status === 409 && result.body?.error?.code === 'popularity_expired') {
       return loadFeed();
     }
     if (result.status !== 200) {
-      if (error) {
-        error.hidden = false;
-        error.textContent = (result.body && result.body.error && result.body.error.message)
-          || '无法加载公开作品。';
-      }
+      const message = result.body?.error?.message || '无法加载公开作品。';
+      const position = feedRestore?.position;
+      const retry = position ? () => readFeedPosition(position) : () => loadFeed({append, retainItems, refresh});
+      setFeedError(message, retry);
       updateFeedStatus();
       return;
     }
     const name = result.body?.viewer_username;
     const nativeViewer = typeof name === 'string' && VIEWER_USERNAME.test(name) ? name : null;
-    const mismatch = nativeCatalog && currentUser && !matchesFeedViewer(nativeViewer);
+    const mismatch = mismatchedNativeFeed(nativeViewer);
     if (mismatch && (needsViewer || append)) {
-      if (retryViewer) return loadFeed({retryViewer: false});
-      if (error) {
-        error.hidden = false;
-        error.textContent = '登录状态已变化，刷新页面后重试。';
-      }
+      if (retryViewer) return loadFeed({retryViewer: false, refresh});
+      setFeedError('登录状态已变化，重新检查后可再试。', () => load());
       updateFeedStatus();
       return;
     }
@@ -1230,8 +1685,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     feedViewer = nativeCatalog ? nativeViewer : (privateFeed ? viewer : null);
     feedState.cursor = mismatch ? '' : result.body?.cursor || '';
+    if (!mismatch) feedPages = (append ? feedPages : 0) + 1;
     renderFeed(start);
+    if (refresh && !mismatch && !activeWork) initialView.scrollTop = 0;
     if (mismatch && retryViewer) return loadFeed({retainItems: true, retryViewer: false});
+    if (mismatch) {
+      setFeedError('登录状态已变化，重新检查后可再试。', () => load());
+      updateFeedStatus();
+    }
+    return !mismatch;
   }
 
   function show(kind, text) {
@@ -1239,13 +1701,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders = {}) {
+  async function request(method, path, body, extraHeaders = {}, signal) {
     const headers = Object.assign(
       { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) }, extraHeaders);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(signal && {signal}),
     });
     let parsed = {};
     try { parsed = await response.json(); } catch { parsed = {}; }
@@ -1253,6 +1716,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogFilters() {
+    setCreatorDirectoryTabs(activeCreator?.handle);
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.setAttribute('aria-pressed', String(chip.dataset.catalogCategory === activeCategory));
     }
@@ -1268,6 +1732,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (category === 'all') params.delete('category');
       else params.set('category', category);
       history.replaceState(null, '', '/discover?' + params.toString());
+      syncLoginLink();
     }
     return loadCatalog();
   }
@@ -1298,8 +1763,87 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const remixWorkspace = document.getElementById('catalog-remix-workspace');
   const remixStatus = document.getElementById('catalog-remix-status');
   const remixSubmit = document.getElementById('catalog-remix-submit');
+  const remixRefresh = document.getElementById('catalog-remix-refresh');
+  const remixCancel = document.getElementById('catalog-remix-cancel');
+  const shareSender = document.getElementById('catalog-remix-share-sender');
+  const remixLabel = (zh, en) => document.documentElement?.lang?.startsWith('en') ? en : zh;
+  const receivedShares = document.getElementById('received-agent-shares');
+  const receivedList = document.getElementById('received-agent-shares-list');
+  const receivedStatus = document.getElementById('received-agent-shares-status');
+  const receivedMore = document.getElementById('received-agent-shares-more');
+  let receivedView;
+
+  function renderReceived(state) {
+    receivedList.replaceChildren(...[...state.items.values()].map(grant => {
+      const item = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = grant.agent_name + ' · ' + (grant.sender?.display_name || grant.sender?.handle || '');
+      item.append(label);
+      const action = document.createElement(grant.state === 'active' ? 'a' : 'span');
+      if (grant.state === 'active') {
+        action.href = '/discover?' + new URLSearchParams({tab:'agents', share:grant.id});
+        action.textContent = remixLabel('查看并复制','Review and copy');
+      } else action.textContent = grant.state === 'revoked' ? remixLabel('已撤销','Revoked') : remixLabel('已关闭','Closed');
+      item.append(action);
+      return item;
+    }));
+  }
+
+  async function loadReceived({reset = false} = {}) {
+    if (!nativeCatalog || !currentUser || !receivedShares.open) return;
+    if (reset || !receivedView) {
+      receivedView = {viewer:currentUser, items:new Map(), cursor:''};
+      receivedList.replaceChildren();
+      receivedMore.hidden = true;
+    }
+    const state = receivedView;
+    if (state.loading) return;
+    state.loading = true;
+    const params = new URLSearchParams({direction:'received', limit:'30'});
+    if (state.cursor) params.set('after',state.cursor);
+    receivedMore.disabled = true;
+    receivedStatus.textContent = remixLabel('正在读取收到的分享…','Loading received shares…');
+    const result = await request('GET','/v1/agent-copy-grants?' + params).catch(() => ({status:0}));
+    if (receivedView !== state || currentUser !== state.viewer || !receivedShares.open) return;
+    state.loading = false;
+    receivedMore.disabled = false;
+    if (result.status !== 200) {
+      receivedStatus.textContent = remixLabel('无法读取分享，请重试。','Could not load shares. Try again.');
+      receivedMore.textContent = remixLabel('重试','Try again');
+      receivedMore.hidden = false;
+      return;
+    }
+    for (const grant of result.body.items || []) if (AGENT_COPY_GRANT.test(grant.id)) state.items.set(grant.id,grant);
+    state.cursor = result.body.next_cursor || '';
+    renderReceived(state);
+    receivedMore.textContent = remixLabel('加载更多','Load more');
+    receivedMore.hidden = !state.cursor;
+    receivedStatus.textContent = state.items.size ? '' : remixLabel('还没有收到的分享。','No shares received yet.');
+  }
+
+  function currentRemix(entry) {
+    return remix === entry && entry.viewer === currentUser && remixDialog.open;
+  }
+
+  function closeAgentRemix() {
+    remix?.read?.abort();
+    remix = null;
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
+    document.getElementById('catalog-remix-summary').textContent = '';
+    if (remixDialog.open) remixDialog.close();
+  }
+
+  function updateRemixControls() {
+    const pending = Boolean(remix?.pending);
+    remixSubmit.disabled = !remix?.template || (!remix.shareId && !remixWorkspace.value) || !remixName.value.trim() || pending;
+    remixName.disabled = remixWorkspace.disabled = remixCancel.disabled = pending;
+    remixSubmit.textContent = pending ? '正在创建…' : '创建副本';
+  }
 
   function syncRemixWorkspaces() {
+    if (remix?.shareId) { updateRemixControls(); return; }
     const previous = remixWorkspace.value || workspaceSelect.value;
     remixWorkspace.replaceChildren(...Array.from(workspaceSelect.options, option => {
       const choice = document.createElement('option');
@@ -1308,7 +1852,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return choice;
     }));
     if (Array.from(remixWorkspace.options).some(option => option.value === previous)) remixWorkspace.value = previous;
-    remixSubmit.disabled = !remix?.template || !remixWorkspace.value || remixLoading;
+    updateRemixControls();
     if (remix?.template && !remixWorkspace.value) {
       remixStatus.textContent = {
         loading: '正在读取可用工作区…', failed: '无法读取工作区。请刷新后重试。', ready: '暂无可用工作区。',
@@ -1318,72 +1862,144 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  async function openRemix(item) {
-    if (!canUseCatalogItem(item)) {
-      if (sessionState === 'guest') show('error', '请登录后复制智能体。');
+  function renderAgentRemixContent(template) {
+    const instructions = document.getElementById('catalog-remix-instructions');
+    const prompt = template?.instructions || '';
+    document.getElementById('catalog-remix-prompt').textContent = prompt;
+    instructions.hidden = !prompt;
+    instructions.open = false;
+    const quickStarts = Array.isArray(template?.quick_starts)
+      ? template.quick_starts.filter(start => typeof start === 'string' && start.trim()) : [];
+    const quickStartsList = document.getElementById('catalog-remix-quick-starts-list');
+    quickStartsList.replaceChildren(...quickStarts.map(text => {
+      const line = document.createElement('li');
+      line.setAttribute('dir', 'auto');
+      line.textContent = text;
+      return line;
+    }));
+    document.getElementById('catalog-remix-quick-starts').hidden = !quickStarts.length;
+    document.getElementById('catalog-remix-quick-starts-heading').textContent =
+      remixLabel('将复制的快捷开场', 'Quick starts included in the copy');
+    const description = document.getElementById('catalog-remix-description');
+    if (!template) { description.textContent = ''; return; }
+    const instructionsNote = prompt ? (remix?.shareId ? remixLabel('副本包含分享者选择的指令。', 'The copy includes the instructions selected by the sender.')
+      : remixLabel('副本包含发布的指令，可在自己的工作区修改。', 'The copy includes the published instructions. You can edit them in your workspace.'))
+      : remixLabel('创建后可补充自己的指令。', 'You can add your own instructions after creating the copy.');
+    description.textContent = instructionsNote + remixLabel('工具可在新副本中另行配置。', ' Configure tools separately in the new copy.');
+  }
+
+  async function readAgentRemix(entry) {
+    entry.template = null;
+    entry.read?.abort();
+    const controller = new AbortController();
+    entry.read = controller;
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
+    remixRefresh.hidden = true;
+    remixStatus.textContent = entry.shareId ? remixLabel('正在读取分享…','Loading share…') : '正在读取发布内容…';
+    updateRemixControls();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
+    const result = await request('GET', entry.path, undefined, {}, signal).catch(() => ({status: 0}));
+    if (!currentRemix(entry) || entry.read !== controller) return;
+    const template = result.body?.template;
+    const grant = result.body?.grant;
+    if (result.status !== 200 || !template?.revision || typeof template.name !== 'string' ||
+        (entry.shareId && (grant?.id !== entry.shareId || grant?.state !== 'active'))) {
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : messageFor(result.body?.error, entry.shareId ? remixLabel('无法读取分享，请重试。','Could not load the share. Try again.') : '无法读取发布内容，请重试。');
+      remixRefresh.textContent = '重新读取';
+      remixRefresh.hidden = [404,410].includes(result.status);
       return;
     }
-    const entry = {slug: item.slug, key: reuseKey(), template: null, viewer: currentUser};
-    remix = entry;
-    remixName.value = item.name;
-    document.getElementById('catalog-remix-summary').textContent = item.summary || '';
-    const instructions = document.getElementById('catalog-remix-instructions');
-    instructions.hidden = true;
-    instructions.open = false;
-    const description = document.getElementById('catalog-remix-description');
-    description.textContent = '';
-    remixStatus.textContent = '正在读取发布内容…';
-    syncRemixWorkspaces();
-    if (!remixDialog.open) remixDialog.showModal();
-    try {
-      const result = await request('GET', '/v1/discover/agents/' + entry.slug + '/remix');
-      if (remix !== entry || !remixDialog.open || currentUser !== entry.viewer) return;
-      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法读取发布内容。'));
-      const template = result.body.template;
-      entry.template = template;
-      remixName.value = template.name;
-      document.getElementById('catalog-remix-summary').textContent = template.summary;
-      document.getElementById('catalog-remix-prompt').textContent = template.instructions;
-      instructions.hidden = !template.instructions;
-      description.textContent = template.instructions
-        ? '副本包含发布的指令，可在自己的工作区修改。'
-        : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
-      remixStatus.textContent = '';
-      syncRemixWorkspaces();
-    } catch (error) {
-      if (remix === entry && remixDialog.open) remixStatus.textContent = error.message;
+    if (remixName.value === entry.suggestion) remixName.value = template.name;
+    entry.suggestion = template.name;
+    entry.template = template;
+    document.getElementById('catalog-remix-summary').textContent = template.summary;
+    if (entry.shareId) {
+      const name = grant.sender?.display_name || grant.sender?.handle || '';
+      shareSender.textContent = remixLabel('来自 ' + name, 'Shared by ' + name);
+      shareSender.hidden = false;
     }
+    renderAgentRemixContent(template);
+    remixStatus.textContent = '';
+    syncRemixWorkspaces();
+  }
+
+  function openRemix(item) {
+    if (!canUseCatalogItem(item) || remixDialog.open) return;
+    const entry = {path: '/v1/discover/agents/' + item.slug + '/remix', viewer: currentUser,
+      suggestion: item.name, keys: new Map()};
+    return showRemix(entry, item.summary);
+  }
+
+  function showRemix(entry, summary = '') {
+    remix = entry;
+    remixName.value = entry.suggestion;
+    document.getElementById('catalog-remix-summary').textContent = summary || '';
+    document.getElementById('catalog-remix-title').textContent = entry.shareId
+      ? remixLabel('复制私下分享的智能体','Copy privately shared agent') : remixLabel('复制智能体','Copy agent');
+    document.getElementById('catalog-remix-workspace-field').hidden = Boolean(entry.shareId);
+    remixWorkspace.required = !entry.shareId;
+    const destination = document.getElementById('catalog-remix-personal-destination');
+    destination.hidden = !entry.shareId;
+    destination.textContent = remixLabel('副本会保存到你的个人工作区。','The copy will be saved in your personal workspace.');
+    syncRemixWorkspaces();
+    remixDialog.showModal();
+    return readAgentRemix(entry);
   }
 
   async function submitRemix(event) {
     event.preventDefault();
     const entry = remix;
-    if (remixLoading || !entry?.template || entry.viewer !== currentUser || !remixWorkspace.value) return;
-    remixLoading = true;
-    remixSubmit.disabled = true;
+    const name = remixName.value.trim();
+    if (!entry?.template || !currentRemix(entry) || entry.pending || (!entry.shareId && !remixWorkspace.value) || !name) return;
+    const payload = {revision:entry.template.revision, ...(entry.shareId ? {} : {workspace_id:remixWorkspace.value}), name};
+    const stamp = JSON.stringify(payload);
+    const key = entry.keys.get(stamp) || reuseKey();
+    entry.keys.set(stamp, key);
+    entry.pending = true;
+    updateRemixControls();
     remixStatus.textContent = '正在创建副本…';
-    try {
-      const result = await request('POST', '/v1/discover/agents/' + entry.slug + '/remix', {
-        revision: entry.template.revision, workspace_id: remixWorkspace.value, name: remixName.value.trim(),
-      }, {'Idempotency-Key': entry.key});
-      if (remix !== entry || currentUser !== entry.viewer) return;
-      if (![200, 201].includes(result.status)) {
-        if (result.body.error?.code === 'listing_changed') {
-          entry.template = null;
-          throw new Error('发布内容已更新。关闭后重新预览。');
-        }
-        throw new Error(messageFor(result.body.error, '无法创建副本，请重试。'));
-      }
-      const agent = result.body.agent;
+    const result = await request('POST', entry.path, payload, {'Idempotency-Key': key}, AbortSignal.timeout(12000))
+      .catch(() => ({status: 0}));
+    if (!currentRemix(entry)) return;
+    entry.pending = false;
+    const agent = result.body?.agent;
+    if ([200,201].includes(result.status) && agent?.id && (entry.shareId ? /^[a-f0-9]{32}$/.test(agent.workspace_id) : agent.workspace_id === payload.workspace_id)) {
+      entry.template = null;
+      updateRemixControls();
+      remixStatus.textContent = '已创建副本，正在打开对话…';
       const hash = new URLSearchParams({workspace: agent.workspace_id, agent: agent.id});
       location.assign('/chat#' + hash.toString());
-    } catch (error) {
-      if (remix === entry) remixStatus.textContent = error.message;
-    } finally {
-      if (remix === entry && currentUser === entry.viewer) {
-        remixLoading = false;
-        syncRemixWorkspaces();
+      return;
+    }
+    const error = result.body?.error;
+    if (error?.code === 'listing_changed' || (entry.shareId && error?.code === 'agent_copy_changed')) {
+      entry.template = null;
+      renderAgentRemixContent();
+      remixRefresh.textContent = '查看新版本';
+      remixRefresh.hidden = false;
+      remixStatus.textContent = '发布内容已更新，请先查看新版本。';
+      remixRefresh.focus();
+    } else {
+      if ([404,410].includes(result.status)) {
+        entry.template = null;
+        renderAgentRemixContent();
+        shareSender.textContent = '';
+        shareSender.hidden = true;
+        document.getElementById('catalog-remix-summary').textContent = '';
       }
+      const fallback = '暂时无法确认是否已创建副本，可以重试。';
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : result.status >= 500 ? fallback : messageFor(error, fallback);
+    }
+    updateRemixControls();
+    if (error?.code === 'name_conflict') {
+      remixName.focus();
+      remixName.select();
     }
   }
 
@@ -1423,6 +2039,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       holder.replaceChildren();
       holder.hidden = !viewer && !guest;
       if (holder.hidden) continue;
+      if (guest) {
+        const chatEnabled = item.chat_enabled === true;
+        const link = document.createElement('a');
+        link.href = '/a/' + item.slug + (chatEnabled ? '#conversation-title' : '');
+        link.className = 'catalog-chat';
+        link.textContent = chatEnabled ? '聊天' : '查看主页';
+        const label = item.name || item.slug;
+        link.setAttribute('aria-label', chatEnabled ? '和 ' + label + ' 聊天' : '查看 ' + label + ' 的主页');
+        holder.append(link);
+        continue;
+      }
       const use = document.createElement('button');
       use.type = 'button';
       use.className = 'catalog-use';
@@ -1483,16 +2110,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         tag.textContent = categoryLabel(item.category);
         if (tag.textContent) meta.append(tag);
       }
-      if (item.creator?.handle) {
-        const creator = document.createElement('button');
-        creator.type = 'button';
+      const handle = creatorHandle(item);
+      if (handle) {
+        const creator = document.createElement('a');
         creator.className = 'catalog-author';
-        creator.textContent = item.creator.name || item.creator.handle;
-        creator.title = '查看此创建者的智能体';
-        creator.addEventListener('click', () => {
-          activeCreator = item.creator;
-          loadCatalog();
-        });
+        const filters = new URLSearchParams(location?.search);
+        filters.set('creator', handle);
+        creator.href = '/discover?' + filters.toString();
+        creator.textContent = item.creator.name || handle;
+        creator.setAttribute('aria-label', '查看 ' + creator.textContent + ' 的公开智能体');
         meta.append(creator);
       }
       if (meta.childElementCount) copy.append(meta);
@@ -1546,6 +2172,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalog.push(item);
       }
       cursor = listed.body.cursor || '';
+      if (activeCreator) {
+        const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
+        if (author) {
+          activeCreator.name = author.creator.name || activeCreator.name;
+          applyCatalogFilters();
+        }
+      }
       renderCatalog(catalog, start);
       more.hidden = !cursor;
       document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
@@ -1723,11 +2356,19 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const attempt = ++sessionRequest;
     currentUser = null;
     sessionState = 'pending';
+    cancelSearch();
+    composingQuery = false;
+    feedRestore = null;
+    feedPositions.clear();
+    feedReturn = null;
     workComments.setActor('');
+    closeWorkRemix();
     syncCatalogActions();
-    if (remixDialog.open) remixDialog.close();
-    remix = null;
-    remixLoading = false;
+    closeAgentRemix();
+    receivedView = null;
+    receivedShares.hidden = true;
+    receivedShares.open = false;
+    receivedList.replaceChildren();
     manageRequest++;
     document.getElementById('catalog-manage').hidden = true;
     if (agentsView) {
@@ -1752,6 +2393,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
     if (!teamsView) mainPanel.hidden = false;
+    if (!catalogView) applyFeedChrome({restoreQuery: true});
     const feedLoad = catalogView ? null : loadFeed();
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
@@ -1761,10 +2403,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     mainPanel.hidden = false;
     show('', '');
     if (!catalogView) {
-      if (feedState.tab !== 'activity') return Promise.all([loadFeed(), detailLoad]);
+      if (feedState.tab !== 'activity') {
+        applyFeedChrome();
+        return Promise.all([loadFeed(), detailLoad]);
+      }
       if (currentUser && !nativeCatalog) return Promise.all([loadFeed({retainItems: true}), detailLoad]);
-      if (nativeCatalog && currentUser && feedViewer !== undefined) {
-        if (!matchesFeedViewer(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
+      if (nativeCatalog && feedViewer !== undefined) {
+        if (mismatchedNativeFeed(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
         for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
       }
       updateFeedStatus();
@@ -1776,6 +2421,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     document.getElementById('catalog-manage').hidden = !agentsView;
+    receivedShares.hidden = !agentsView || !nativeCatalog;
+    const sharedPreview = agentShare ? showRemix({path:`/v1/agent-copy-grants/${agentShare}/remix`, viewer:currentUser,
+      suggestion:'', shareId:agentShare, keys:new Map()}) : null;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0}));
       if (attempt !== sessionRequest) return;
@@ -1795,21 +2443,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     if (teamsView) await loadTeams();
-    await directoryLoad;
+    await Promise.all([directoryLoad, sharedPreview]);
   }
-
-  document.getElementById('login-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    const result = await request('POST', '/v1/auth/login', {
-      username: document.getElementById('username').value.trim(),
-      password: document.getElementById('password').value,
-    });
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '登录失败。'));
-      return;
-    }
-    await load();
-  });
 
   workspaceSelect.addEventListener('change', loadManage);
   const manage = document.getElementById('catalog-manage');
@@ -1828,22 +2463,37 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('catalog-category-close').addEventListener('click', () => categoryDialog.close());
     document.getElementById('catalog-clear-creator').addEventListener('click', () => {
       activeCreator = null;
+      const params = new URLSearchParams(location?.search);
+      params.delete('creator');
+      history?.replaceState?.(null, '', '/discover?' + params.toString());
+      syncLoginLink();
       loadCatalog();
     });
     document.getElementById('catalog-remix-form').addEventListener('submit', submitRemix);
-    document.getElementById('catalog-remix-cancel').addEventListener('click', () => {
-      if (!remixLoading) remixDialog.close();
+    remixName.addEventListener('input', updateRemixControls);
+    remixWorkspace.addEventListener('change', updateRemixControls);
+    remixRefresh.addEventListener('click', () => remix && readAgentRemix(remix));
+    remixCancel.addEventListener('click', closeAgentRemix);
+    document.getElementById('received-agent-shares-label').textContent = remixLabel('收到的智能体分享','Received agent shares');
+    receivedShares.addEventListener('toggle', () => {
+      if (receivedShares.open) void loadReceived({reset:true});
+      else receivedView = null;
     });
-    remixDialog.addEventListener('cancel', event => { if (remixLoading) event.preventDefault(); });
-    remixDialog.addEventListener('close', () => { remix = null; });
+    receivedMore.addEventListener('click', () => void loadReceived());
+    remixDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      if (!remix?.pending) closeAgentRemix();
+    });
   }
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
+    saveCatalogQuery();
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
-    document.getElementById('catalog-query').value = '';
+    catalogSearch.value = '';
+    saveCatalogQuery();
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });
@@ -1854,63 +2504,67 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
-    button.addEventListener('click', () => {
-      feedState.kind = kind;
-      feedState.sort = 'latest';
-      applyFeedChrome();
-      pushFeedUrl();
-      return loadFeed();
-    });
+    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}, {refresh: true}));
   }
   document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
     if (feedState.tab !== 'activity') return;
-    if (feedState.sort === 'popular') {
-      if (!feedState.loading) return loadFeed();
-      return;
-    }
-    feedState.kind = '';
-    feedState.sort = 'popular';
-    applyFeedChrome();
-    pushFeedUrl();
-    return loadFeed();
+    return applyFeedFilters({kind: '', sort: 'popular', query: searchText()}, {refresh: true});
   });
   document.getElementById('feed-creator-filter')?.addEventListener('click', () => {
-    feedState.creator = '';
-    applyFeedChrome();
-    pushFeedUrl();
+    const loaded = applyFeedFilters({creator: '', query: searchText()});
     document.getElementById('feed-tab-' + feedState.tab)?.focus?.();
-    return loadFeed();
+    return loaded;
   });
-  const feedSearch = document.getElementById('feed-search');
-  if (feedSearch) {
-    feedSearch.addEventListener('submit', event => {
-      event.preventDefault();
-      const input = document.getElementById('feed-query');
-      feedState.query = input ? (input.value || '').trim() : '';
-      pushFeedUrl();
-      return loadFeed();
-    });
-  }
+  document.getElementById('feed-search')?.addEventListener('submit', event => {
+    event.preventDefault();
+    if (composingQuery) return;
+    return commitSearch() || feedFailure?.();
+  });
+  searchInput?.addEventListener('input', scheduleSearch);
+  searchInput?.addEventListener('compositionstart', () => {
+    composingQuery = true;
+    cancelSearch();
+  });
+  searchInput?.addEventListener('compositionend', () => {
+    composingQuery = false;
+    scheduleSearch();
+  });
+  searchInput?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || composingQuery || event.isComposing || (!searchInput.value && !feedState.query)) return;
+    event.preventDefault();
+    return clearFeedSearch();
+  });
+  clearSearch?.addEventListener('click', clearFeedSearch);
+  retryFeed?.addEventListener('click', () => {
+    const retry = feedFailure;
+    if (!retry) return;
+    const last = workTriggers.get(feedState.items.at(-1)?.slug);
+    (last || searchInput)?.focus?.({preventScroll: true});
+    return retry();
+  });
   const feedMore = document.getElementById('feed-more');
   if (feedMore) {
-    feedMore.addEventListener('click', () => {
-      if (!feedMore.disabled && feedState.cursor) loadFeed({append: true});
+    feedMore.addEventListener('click', async event => {
+      if (feedMore.disabled || !feedState.cursor) return;
+      const start = feedState.items.length;
+      const loaded = await loadFeed({append: true});
+      const next = feedState.items[start];
+      if (loaded && event?.detail === 0 && next) workTriggers.get(next.slug)?.focus?.();
     });
   }
   for (const tab of ['following', 'activity', 'collected']) {
     const button = document.getElementById('feed-tab-' + tab);
-    if (button) button.addEventListener('click', () => {
-      feedState.tab = tab;
-      if (tab !== 'activity') feedState.sort = 'latest';
-      applyFeedChrome();
-      pushFeedUrl();
-      return loadFeed();
-    });
+    if (button) button.addEventListener('click', () =>
+      applyFeedFilters({tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText()}));
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();
-    await request('POST', '/v1/auth/logout', {});
+    const result = await request('POST', '/v1/auth/logout', {});
+    if (result.status >= 200 && result.status < 300 && typeof location?.reload === 'function') {
+      location.reload();
+      return;
+    }
     await load();
   });
 

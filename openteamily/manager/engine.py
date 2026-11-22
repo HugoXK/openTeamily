@@ -288,8 +288,7 @@ class Runner:
     def __init__(self, registry, *, enabled=False):
         self.registry, self.enabled = registry, enabled
         self.home = registry.root / 'docker-home'
-        if not self.home.exists():
-            self.home.mkdir(mode=0o700)
+        self.home.mkdir(mode=0o700, exist_ok=True)
         trusted_path(str(self.home), directory=True, private=True)
 
     def run(self, args, *, heartbeat=lambda: None, timeout=10, stdin=subprocess.DEVNULL):
@@ -547,12 +546,16 @@ class ComposeEngine:
         if running:
             require(isinstance(started, str) and re.fullmatch(r'20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z', started), 'process_identity')
             ref = hashlib.sha256((ids[0] + '\n' + started).encode()).hexdigest()[:32]
+        settings = container.get('NetworkSettings')
+        networks = settings.get('Networks') if isinstance(settings, dict) else None
+        network = networks.get('ot-' + iid + '_default') if isinstance(networks, dict) else None
+        private_ip = network.get('IPAddress') if isinstance(network, dict) else None
         health = state.get('Health')
         return {'present': True, 'stopped': state.get('Running') is False and state.get('Status') in ('created', 'exited') and not state.get('Restarting'),
                 'healthy': running and isinstance(health, dict) and health.get('Status') == 'healthy', 'process_ref': ref,
                 'status': state.get('Status') if state.get('Status') in ('running', 'created', 'exited', 'dead', 'paused', 'restarting', 'removing') else 'unknown',
                 'health': health.get('Status') if isinstance(health, dict) and health.get('Status') in ('healthy', 'unhealthy', 'starting') else 'unknown',
-                'needs_recreate': needs_recreate, 'volume': 'ot-' + iid}
+                'needs_recreate': needs_recreate, 'volume': 'ot-' + iid, 'private_ip': private_ip}
 
     def wait(self, iid, action, previous=None, heartbeat=lambda: None, timeout=30):
         deadline = time.monotonic() + timeout

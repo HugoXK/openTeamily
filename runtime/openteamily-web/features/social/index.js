@@ -8,6 +8,7 @@ import { HEX32 } from '../../featurekit/http.js'
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/
 const CONVERSATION = /^otc_[0-9A-HJKMNP-TV-Z]{26}$/
 const MESSAGE = /^otm_[0-9A-HJKMNP-TV-Z]{26}$/
+const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 
 function notificationKind(kind) {
   if (kind === undefined || kind === 'work') return kind
@@ -28,6 +29,13 @@ function notificationItem(notification, workspace) {
     if (typeof share_id !== 'string' || !HEX32.test(share_id) || (workspace_id && workspace_id !== workspace)) return null
     const hash = new URLSearchParams({workspace,shared:share_id})
     return {...header,share_id,title,organizer,workspace_id:workspace,path:'/meetings#' + hash}
+  }
+  if (kind === 'team.run_shared') {
+    const {share_id, title, owner, workspace_id} = data ?? {}
+    if (!TEAM_RUN_SHARE.test(share_id || '') || (workspace_id && workspace_id !== workspace)) return null
+    const hash = new URLSearchParams({workspace, shared: share_id})
+    return {...header, share_id, title, actor_username: owner?.display_name || owner?.handle,
+      workspace_id: workspace, path: '/team-runs#' + hash}
   }
   if (kind === 'discover.published') {
     const {slug,title,creator,listing_kind = data?.kind} = data ?? {}

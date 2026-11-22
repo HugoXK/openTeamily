@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
+import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
+import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
+
+test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
+  const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],
+    action_items:[{text:'Check proof', owner:'Rae', due_date:'2026-11-25', done:false}, {text:'Closed task', done:true}]};
+  const {text,clipped} = discussionContext(meeting);
+  assert.match(text,/Review.*3/);
+  assert.match(text,/Saved notes/);
+  assert.match(text,/Check proof.*Rae.*2026-11-25/);
+  assert.doesNotMatch(text,/Private transcript|Private attendee|Closed task/);
+  assert.equal(clipped,false);
+  assert.match(discussionContext(meeting,true).text,/Private transcript/);
+  const transcriptOnly = {...meeting,summary:'',action_items:[]};
+  assert.equal(discussionContext(transcriptOnly).text,'');
+  assert.match(discussionContext(transcriptOnly,true).text,/Private transcript/);
+});
+
+test('meeting discussion preview leaves enough room for the editable question', () => {
+  const large = '😀'.repeat(4000);
+  const meeting = {title:'Review',revision:7,summary:large,transcript:large,action_items:[{text:large}]};
+  const {text,clipped} = discussionContext(meeting,true);
+  assert.equal(clipped,true);
+  assert.ok(text.length + 1002 <= 4000);
+  assert.match(text,/摘要\n[\s\S]+未完成的行动项\n[\s\S]+转写 \/ 正文/);
+  assert.equal(text.isWellFormed(),true);
+});
 
 test('parseAttendees trims, dedupes and splits both comma forms', () => {
   assert.deepEqual(parseAttendees('alice, bob，alice'), ['alice', 'bob']);
@@ -36,6 +63,36 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('meeting transcript locate uses literal matches and never changes the saved text', () => {
+  const document = meetingDocument();
+  const element = id => document.getElementById('meeting-transcript-' + id);
+  const transcript = document.createElement('textarea');
+  const source = '😀 预计 [v2] 周一上线。\n确认 [V2] 的结果。';
+  transcript.value = source;
+  transcript.setSelectionRange = (start, end) => { transcript.selected = transcript.value.slice(start, end); };
+  transcript.scrollIntoView = () => {};
+  const search = mountTranscriptSearch(document, transcript);
+  search.open('[v2]');
+  const passage = element('hit');
+  assert.equal(passage.focused, true);
+  assert.equal(passage.children[1].tag, 'mark');
+  assert.equal(passage.children[1].textContent, '[v2]');
+  assert.match(element('search-status').textContent, /第 1 处，共 2 处/);
+  element('next').fire('click');
+  assert.equal(passage.children[1].textContent, '[V2]');
+  element('location').fire('click');
+  assert.equal(transcript.focused, true);
+  assert.equal(transcript.selected, '[V2]');
+  assert.equal(transcript.value, source);
+  element('next').fire('click');
+  assert.match(element('search-status').textContent, /第 1 处/);
+  element('prev').fire('click');
+  assert.match(element('search-status').textContent, /第 2 处/);
+  search.reset();
+  assert.equal(passage.hidden, true);
+  assert.deepEqual(passage.children, []);
+});
 
 test('meeting sharing sends only the saved revision and selected account, then confirms revocation', async () => {
   const document = meetingDocument();
@@ -122,12 +179,12 @@ test('a receipt renders the shared summary and action status as read-only text',
   renderSharedMeeting(document, {
     title: '只读复盘', organizer: '分享者', revision: 2,
     started_at: 1700000000, summary: '<em>保留原文</em>',
-    transcript: 'private transcript', action_items: [{text: '核对版本', owner: '成员甲', done: true}],
+    transcript: 'private transcript', action_items: [{text: '核对版本', owner: '成员甲', due_date: '2032-02-29', done: true}],
   });
   assert.equal(element('shared-meeting-detail').hidden, false);
   assert.equal(element('shared-meeting-title').textContent, '只读复盘');
   assert.match(element('shared-meeting-meta').textContent, /组织者 分享者.*版本 2/);
   assert.equal(element('shared-meeting-summary').textContent, '<em>保留原文</em>');
   assert.deepEqual(element('shared-meeting-actions').children[0].children.map(node => [node.tag, node.textContent]),
-    [['p', '核对版本'], ['p', '负责人 成员甲 · 已完成']]);
+    [['p', '核对版本'], ['p', '负责人 成员甲 · 截止日期 2032-02-29 · 已完成']]);
 });

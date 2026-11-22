@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
@@ -17,7 +18,143 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
-test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async () => {
+test('Studio copy verifies the reviewed private revision and keeps a stable per-version receipt', async (t) => {
+  const bot = await boot()
+  const other = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const privateBody = 'Reviewed body\n\n'
+  const created = await call('POST', base(), {
+    title: 'Team   notes', body: privateBody, kind: 'document',
+    source: {kind:'agent_message', id:'b'.repeat(32), conversation_id:'c'.repeat(32)},
+  }, key())
+  assert.equal(created.status, 201)
+  const original = created.body.artifact
+  const path = base('/' + original.id + '/studio-copy')
+  const input = {revision: original.revision, title:'Team notes', body:privateBody}
+  const outgoing = []
+  const studioId = 'e'.repeat(32)
+  setSharedBotSocial({
+    request: async (method, target, payload) => {
+      assert.equal(method, 'POST')
+      assert.equal(target, '/v1/ot/teams/' + WS + '/studio/documents')
+      outgoing.push(payload)
+      if (outgoing.length === 1) throw Error('Lost acknowledgment')
+      return {document:{id:studioId}}
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  assert.equal((await call('POST', path, {...input, body:'Unreviewed body'})).body.error.code, 'source_changed')
+  assert.equal((await other.call('artifacts', 'POST', path, input)).status, 404)
+  assert.equal(outgoing.length, 0)
+  assert.equal((await call('POST', path, input)).body.error.code, 'studio_copy_unconfirmed')
+  assert.deepEqual((await call('POST', path, input)).body, {id:studioId})
+  assert.deepEqual(outgoing[0], {title:input.title, body:privateBody, client_key:outgoing[1].client_key})
+  assert.match(outgoing[1].client_key, /^[a-f0-9]{64}$/)
+  const originalPath = base('/' + original.id)
+  assert.deepEqual((await call('GET', originalPath)).body.artifact, original)
+
+  assert.equal((await call('POST', originalPath, {revision:original.revision, changes:{body:'Updated later'}})).status, 200)
+  assert.equal((await call('POST', path, input)).body.error.code, 'source_changed')
+  assert.equal(outgoing.length, 2)
+  await call('POST', path, {...input, revision:original.revision + 1, body:'Updated later'})
+  assert.notEqual(outgoing[2].client_key, outgoing[1].client_key)
+})
+
+test('copying a saved work version creates a separate private artifact and replays after the source is removed', async () => {
+  const owner = await boot()
+  const other = await boot()
+  const call = (...args) => owner.call('artifacts',...args)
+  const literal = JSON.stringify({schema:'openteamily.slides.v1',slides:[{title:'JSON example',bullets:['literal document text']}]})
+  const original = (await call('POST',base(),{title:'Notes',body:literal,
+    source:{kind:'agent_message',id:'b'.repeat(32),conversation_id:'c'.repeat(32)}},key())).body.artifact
+  assert.equal(original.source.kind,'agent_message')
+  const path = '/' + original.id
+  await call('POST',base(path),{revision:1,changes:{body:'Newer original'}},key())
+  await call('POST',base(path+'/favorite'),{enabled:true})
+  const input = {title:'Notes copy',duplicate_from:{artifact_id:original.id,revision:1}}
+  const receipt = key()
+  assert.equal((await other.call('artifacts','POST',base(),input,receipt)).status,404)
+  assert.equal((await call('POST',base('','d'.repeat(32)),input,receipt)).status,404)
+  assert.equal((await call('POST',base(),{...input,duplicate_from:{...input.duplicate_from,revision:4}},receipt)).body.error.code,'version_not_found')
+  const result = await call('POST',base(),input,receipt)
+  assert.equal(result.status,201,JSON.stringify(result.body))
+  const {artifact:copy} = result.body
+  assert.notEqual(copy.id,original.id)
+  assert.deepEqual([copy.kind,copy.title,copy.body,copy.revision],['document','Notes copy',literal,1])
+  assert.equal(copy.source,undefined)
+  assert.deepEqual((await call('GET',base('/'+copy.id+'/shares'))).body.items,[])
+  assert.deepEqual((await call('GET',base()+'?scope=favorites')).body.items.map(row => row.id),[original.id])
+  assert.equal((await call('POST',base(),{...input,title:'Different'},receipt)).status,409)
+  assert.equal((await call('POST',base(),input,key())).body.error.code,'title_conflict')
+  const revised = await call('POST',base('/'+copy.id),{revision:1,changes:{body:'Only edited in copy'}})
+  assert.equal(revised.body.artifact.body,'Only edited in copy')
+  assert.equal((await call('GET',base(path))).body.artifact.body,'Newer original')
+  assert.deepEqual((await call('GET',base(path+'/versions'))).body.items.map(row => row.revision),[2,1])
+  await call('POST',base(path+'/remove'),{})
+  const replay = await call('POST',base(),input,receipt)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.artifact.id,copy.id)
+  assert.equal(replay.body.artifact.body,'Only edited in copy')
+})
+
+test('saved website, structured work and historical media copies keep their native content', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts',...args)
+  const payloads = [
+    {title:'Website',kind:'website',body:'<h1>Blueprint</h1><style>h1{color:blue}</style>'},
+    {title:'Slides',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'First',bullets:['Important']}] }},
+    {title:'Board',kind:'whiteboard',board:{schema:'openteamily.whiteboard.v1',width:800,height:600,strokes:[]}},
+    {title:'Dashboard',kind:'dashboard',dashboard:{schema:'openteamily.dashboard.v1',widgets:[{type:'metric',title:'Total',value:'15'}]}},
+    {title:'Workbook',kind:'spreadsheet',spreadsheet:{schema:'openteamily.spreadsheet.v1',sheets:[
+      {name:'Costs',rows:[['2'],['=SUM(A1:A1)']]},{name:'Notes',rows:[['Retained']]}]}},
+  ]
+  for (const payload of payloads) {
+    const saved = await call('POST',base(),payload,key())
+    assert.equal(saved.status,201,JSON.stringify(saved.body))
+    const original = saved.body.artifact
+    await call('POST',base('/'+original.id),{revision:1,changes:{title:original.title+' updated'}})
+    const result = await call('POST',base(),{title:original.title+' copy',duplicate_from:{artifact_id:original.id,revision:1}},key())
+    assert.equal(result.status,201,JSON.stringify(result.body))
+    const copy = result.body.artifact
+    const field = payload.kind === 'website' ? 'body' : payload.kind === 'whiteboard' ? 'board' : payload.kind
+    assert.deepEqual([copy.kind,copy[field],copy.revision],[original.kind,original[field],1])
+  }
+  const upload = (title, bytes, filename, revision) => ({
+    _multipart:true,fields:{title,...(revision ? {revision:String(revision)} : {})},
+    files:{file:{filename,data:bytes.toString('base64')}},
+  })
+  const original = (await call('POST',base(),upload('Image',PNG,'original.png'),key())).body.artifact
+  const path = '/' + original.id
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7','base64')
+  assert.equal((await call('POST',base(path+'/file'),upload('Image',gif,'later.gif',1))).body.artifact.revision,2)
+  const copied = await call('POST',base(),{title:'Earlier image',duplicate_from:{artifact_id:original.id,revision:1}},key())
+  assert.equal(copied.status,201,JSON.stringify(copied.body))
+  assert.equal(copied.body.artifact.media.filename,'original.png')
+  await call('POST',base(path+'/remove'),{})
+  const file = await call('GET',base('/'+copied.body.artifact.id+'/file'))
+  assert.equal(file.status,200)
+  assert.deepEqual(Buffer.from(file.download.data,'base64'),PNG)
+})
+
+test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async (t) => {
+  const published = new Set()
+  let offline = false
+  let revocations = 0
+  setSharedBotSocial({
+    request: async (method, path, snapshot) => {
+      if (method === 'PUT') {
+        published.add(snapshot.token_hash)
+        return { published: true }
+      }
+      assert.equal(method, 'DELETE')
+      revocations++
+      if (offline) throw Error('controlled Bot Social outage')
+      assert.ok(published.delete(path.split('/').at(-1)))
+      return { revoked: true }
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
   const created = await call('POST', base(), { title: '周报', body: '本周完成迁移。', kind: 'document' }, key())
@@ -75,8 +212,24 @@ test('document, website, slides, dashboard and whiteboard CRUD, favorites, versi
   assert.equal(share.body.share.token.length, 43)
   const listedShares = await call('GET', base(`/${doc.id}/shares`))
   assert.equal(listedShares.body.items.length, 1)
-  const revoked = await call('POST', base(`/${doc.id}/shares/${share.body.share.id}/revoke`), {})
+  assert.equal(listedShares.body.items[0].path, undefined)
+  assert.equal(listedShares.body.items[0].token, undefined)
+  const revokePath = base(`/${doc.id}/shares/${share.body.share.id}/revoke`)
+  offline = true
+  const pendingRevoke = await call('POST', revokePath, {})
+  assert.equal(pendingRevoke.status, 503)
+  assert.equal(pendingRevoke.body.error.code, 'share_revoke_unconfirmed')
+  assert.equal(published.size, 1)
+  const pending = (await call('GET', base(`/${doc.id}/shares`))).body.items[0]
+  assert.equal(pending.revoked, false)
+  assert.equal(pending.revocation_pending, true)
+  offline = false
+  const revoked = await call('POST', revokePath, {})
   assert.equal(revoked.body.share.revoked, true)
+  assert.equal(revoked.body.share.revocation_pending, false)
+  assert.equal(published.size, 0)
+  assert.equal((await call('POST', revokePath, {})).body.share.revoked, true)
+  assert.equal(revocations, 2)
 
   assert.equal((await call('POST', base(`/${doc.id}/remove`), {})).status, 200)
   assert.equal((await call('GET', base('/' + doc.id))).status, 404)
@@ -88,12 +241,12 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   const created = await call('POST', base(), {
     _multipart: true,
     fields: { title: '封面', kind: 'media' },
-    files: { file: { filename: 'dot.png', content_type: 'image/png', data: PNG.toString('base64') } },
+    files: { file: { filename: '色块 验收.png', content_type: 'image/png', data: PNG.toString('base64') } },
   }, key())
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const item = created.body.artifact
   assert.equal(item.kind, 'media')
-  assert.equal(item.media.filename, 'dot.png')
+  assert.equal(item.media.filename, '色块 验收.png')
   assert.equal(item.media.mime, 'image/png')
   const imageCatalog = await call('GET', base() + '?type=image&type=video')
   assert.deepEqual(imageCatalog.body.items.map(row => row.id), [item.id])
@@ -103,6 +256,9 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   const file = await call('GET', base(`/${item.id}/file`))
   assert.equal(file.status, 200)
   assert.equal(file.download.content_type, 'image/png')
+  assert.equal(file.download.filename, '色块 验收.png')
+  const exported = await call('GET', base(`/${item.id}/export`))
+  assert.equal(exported.download.filename, '色块 验收.png')
   const files = await bot.endpoint('artifacts/files', { workspace_id: WS, q: '封面', limit: 20 })
   assert.equal(files.ok, true)
   assert.equal(files.value.items[0].id, item.id)
@@ -153,6 +309,99 @@ test('Space catalog paginates through Unicode title matches and keeps scoped pre
   }
   assert.equal(first.activity_version, allFirst.activity_version)
   assert.equal(last.activity_version, allFirst.activity_version)
+})
+
+test('Space catalog finds deep document and structured text with bounded original match offsets', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  async function create(fields, workspace = WS) {
+    const result = await call('POST', base('', workspace), fields, key())
+    assert.equal(result.status, 201, JSON.stringify(result.body))
+    return result.body.artifact.id
+  }
+  const document = await create({
+    title: '全文归档',
+    body: `${'😀 普通前文 '.repeat(90)} İSTANBUL \n星海季度更新 ${'😀 普通后文 '.repeat(90)}`,
+  })
+  const site = await create({
+    title: '发布站点', kind: 'website',
+    body: [
+      '<h1 data-label="attribute-secret">星海<strong>季度</strong>更新 &amp; 明细</h1>',
+      '<script>const script-secret = "private"</script><style>.style-secret{display:none}</style>',
+      '<span hidden><b>hidden-secret</b></span>',
+      '<div style="color:red; display: none">css-hidden-secret</div>',
+      '<template><template>template-secret</template>nested-hidden-secret</template>',
+      '<!-- comment-secret --><script>unclosed-secret',
+    ].join(''),
+  })
+  const slides = await create({
+    title: '路演', kind: 'slides',
+    slides: {schema:'openteamily.slides.v1', slides:[
+      {title:'首页', bullets:['背景']},
+      {title:'收尾', bullets:['星海季度更新']},
+    ]},
+  })
+  const sheet = await create({
+    title:'账簿', kind:'spreadsheet', spreadsheet:{schema:'openteamily.spreadsheet.v1',sheets:[
+      {name:'模板',rows:[['汇总轴']]}, {name:'第二工作表',rows:[['A列','星海季度更新']]},
+    ]},
+  })
+  await create({
+    title:'项目看板', kind:'dashboard', dashboard:{schema:'openteamily.dashboard.v1',widgets:[
+      {type:'metric', title:'总体', value:'8', note:'已验收'},
+      {type:'bar', title:'投入', labels:['业务支持'], values:[10]},
+      {type:'table', title:'本周', columns:['事项'], rows:[['星海季度更新']]},
+    ]},
+  })
+  await create({
+    title:'方案草图', kind:'whiteboard', board:{width:800, height:600, strokes:[
+      {id:'shape-text',type:'text',x:30,y:40,text:'星海季度更新'},
+    ]},
+  })
+  const photo = await create({_multipart:true, fields:{title:'封面'},
+    files:{file:{filename:'star-quarter-map.png',content_type:'image/png',data:PNG.toString('base64')}}})
+  await create({title:'其他工作区',body:'星海季度更新'}, 'b'.repeat(32))
+
+  const list = async (query, options = {}) => {
+    const params = new URLSearchParams({order:'recent',q:query,...options})
+    const result = await call('GET', base('?' + params))
+    assert.equal(result.status,200)
+    return result.body
+  }
+  const first = await list('星海季度更新', {limit:2})
+  const second = await list('星海季度更新', {limit:2,cursor:first.cursor})
+  const third = await list('星海季度更新', {limit:2,cursor:second.cursor})
+  const matches = [...first.items,...second.items,...third.items]
+  assert.equal(third.cursor,null)
+  assert.equal(new Set(matches.map(item => item.id)).size,6)
+  assert.equal(first.activity_version,third.activity_version)
+  for (const item of matches) {
+    assert.equal(item.workspace_id,WS)
+    assert.equal(item.body,undefined)
+    assert.equal(item.match.kind,'body')
+    assert.equal(item.match.text.slice(item.match.start,item.match.end),'星海季度更新')
+    assert.ok(item.match.text.length <= 160)
+    assert.ok(!/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/u.test(item.match.text))
+  }
+  const unicode = (await list(' İstanbul 星海季度更新 ')).items[0]
+  assert.equal(unicode.id,document)
+  assert.equal(unicode.match.text.slice(unicode.match.start,unicode.match.end),'İSTANBUL 星海季度更新')
+  assert.ok(unicode.match.text.startsWith('…'))
+  assert.equal((await list('星海季度更新 & 明细')).items[0].id,site)
+  assert.match((await list('星海季度更新',{kind:'website'})).items[0].match.text, /& 明细/)
+  assert.deepEqual((await list('secret')).items,[])
+  const filename = await list('quarter-map', {type:'image'})
+  assert.deepEqual(filename.items.map(item => item.id),[photo])
+  assert.deepEqual(filename.items[0].match,{kind:'filename',text:'star-quarter-map.png',start:5,end:16})
+
+  await call('POST',base('/' + slides + '/favorite'),{enabled:true})
+  await call('POST',base('/' + sheet + '/favorite'),{enabled:true})
+  assert.deepEqual((await list('星海季度更新',{scope:'favorites',type:'slides'})).items.map(item => item.id),[slides])
+  const updated = await call('POST',base('/' + document),{revision:1,changes:{body:'更新后的关键词'}})
+  assert.equal(updated.status,200)
+  assert.ok(!(await list('星海季度更新')).items.some(item => item.id === document))
+  assert.deepEqual((await list('更新后的关键词')).items.map(item => item.id),[document])
+  assert.ok((await list('')).items.every(item => !Object.hasOwn(item,'match')))
 })
 
 test('Space recent pages, scopes and facets include matches beyond the first page', async () => {
@@ -326,9 +575,11 @@ test('chat attachments export the selected saved version and require an internal
   const historical = await bot.call('artifacts','GET',base('/'+artifact.id+'/versions/1/export?format=docx'))
   assert.deepEqual(Buffer.from(snapshot.attachment.data,'base64'),Buffer.from(historical.download.data,'base64'))
   assert.equal(snapshot.body,'发给群聊 · 版本 1')
+  assert.equal(snapshot.context_excerpt,'Saved version one')
   assert.equal(snapshot.attachment.title,'发给群聊-v1.docx')
   assert.deepEqual(snapshot.attachment.resource,{kind:'document',title:'发给群聊',revision:1})
-  const updated = (await resolve({...input,revision:2})).attachment
+  const {attachment:updated,context_excerpt:excerpt} = await resolve({...input,revision:2})
+  assert.equal(excerpt,'Saved version two')
   assert.deepEqual(updated.resource,{kind:'document',title:'新标题',revision:2})
   assert.notEqual(updated.data,snapshot.attachment.data)
   await assert.rejects(resolve({...input,workspace_id:'f'.repeat(32)}),error=>error.status===404)
@@ -343,11 +594,14 @@ test('chat attachments export the selected saved version and require an internal
   for (const [payload, suffix, mime] of examples) {
     const result = await bot.call('artifacts','POST',base(),payload,key())
     assert.equal(result.status,201,JSON.stringify(result.body))
-    const {attachment} = await resolve({...input,artifact_id:result.body.artifact.id})
+    const {attachment,context_excerpt} = await resolve({...input,artifact_id:result.body.artifact.id})
     assert.ok(attachment.title.endsWith('.' + suffix))
     assert.match(attachment.mime,mime)
     assert.deepEqual(attachment.resource,{kind:result.body.artifact.kind,title:result.body.artifact.title,revision:1})
     if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
+    if (suffix === 'pptx') assert.equal(context_excerpt,'开场 计划')
+    if (suffix === 'xlsx') assert.equal(context_excerpt?.trim(),'参会人数 3')
+    if (suffix === 'png') assert.equal(context_excerpt,undefined)
   }
 })
 

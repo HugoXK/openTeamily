@@ -6,10 +6,12 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
-import { DEFAULT_ATTACHMENT_LIMITS } from "../attachments.js";
-import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
+import { CHAT_FILE_BODY_LIMIT, CHAT_FILE_MAX_BYTES, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
+import { WORK_SEARCH_SCHEMA, publicWorkText, registerWorkSearch, saveWorkSearch, workBodyCondition, workSearchMatch, workSearchQuery } from "./discover-work-search.js";
+import { PUBLIC_MEDIA_SCHEMA, decodePublishedMedia, downloadName, isMediaWork, publishedMediaView, savePublishedMedia, sendPublishedMedia } from "./discover-media.js";
+import { EDITABLE_WORK_SCHEMA, editableRelease, editableWorkKind, hasEditableRelease } from "./discover-editable.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
   snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
   chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  publication_revision INTEGER NOT NULL DEFAULT 1,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -27,10 +30,13 @@ CREATE TABLE IF NOT EXISTS ot_listing_models (
   owner_id TEXT NOT NULL, content BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
+${PUBLIC_MEDIA_SCHEMA}
+${EDITABLE_WORK_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_listing_sites (
   listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
   html TEXT NOT NULL
 );
+${WORK_SEARCH_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -47,13 +53,17 @@ ${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
-export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d"];
+export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.(otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})\.([a-f0-9]{24})$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
 const WORK_PREVIEW_MAX = 2_000;
+const REMIX_BODY_LIMIT = 8_000;
+const REMIX_REVISION = /^[0-9a-f]{64}$/;
 const MODEL_MIME = "model/gltf-binary";
 const MAX_SITE_BYTES = 32 * 1024;
 const SITE_POLICY = [
@@ -99,6 +109,7 @@ const LISTING_CARD_COLUMNS = `l.id, l.owner_id, l.kind, l.slug, l.title, l.summa
 const listingFields = (ot: OtContext, l: any) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   updated_at: l.updated_at, created_at: l.created_at, path: listingPath(ot, l),
+  ...publishedMediaView(ot, l),
 });
 
 const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
@@ -139,14 +150,26 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
 
 function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
+  const creatorHandle = view.creator?.handle;
+  const author = CREATOR_HANDLE.test(creatorHandle || "")
+    ? `<a href="/discover?creator=${encodeURIComponent(creatorHandle)}">${escapeHtml(creator)}</a>`
+    : escapeHtml(creator);
   const title = String(view.title || view.slug);
   const site = l.kind === "work" && view.site_available === true;
+  const media = view.file_available ? view.file_mime.split("/")[0] : null;
   const agent = l.kind === "agent";
   const canChat = agent && Boolean(l.chat_enabled);
   const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
-    + (site ? " frame-src 'self';" : "") + (agent ? " script-src 'self';" : "");
+    + (site ? " frame-src 'self';" : "") + (media === "audio" || media === "video" ? " media-src 'self';" : "")
+    + (agent ? " script-src 'self';" : "");
   if (l.kind === "work") {
-    const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
+    const filePath = `/w/${encodeURIComponent(l.slug)}/file`;
+    const download = l.work_kind === "model3d" ? `<p><a href="${filePath}">下载 GLB</a></p>`
+      : media ? `<p><a href="${filePath}" download>下载作品</a></p>` : "";
+    const player = media === "image" ? `<img class="work-media" src="${filePath}" alt="${escapeHtml(title)}" decoding="async">`
+      : media === "audio" || media === "video"
+        ? `<${media} class="work-media" controls preload="none"${media === "video" ? " playsinline" : ""} src="${filePath}"></${media}>`
+        : "";
     const comments = workCommentsPage(ot, l, null, {limit: "4"});
     const recent = comments.items.map(item => item.removed
       ? '<li><span class="meta">评论已移除</span></li>'
@@ -159,9 +182,9 @@ function publicPage(ot: OtContext, l: any, view: any) {
       : `<span aria-disabled="true">${label}</span>`;
     const content = site
       ? `<iframe class="work-site-frame" src="/w/${encodeURIComponent(l.slug)}/site" title="${escapeHtml(title)} 的互动预览" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`
-      : l.snapshot && !String(l.snapshot).startsWith("{")
+      : player || (l.snapshot && !String(l.snapshot).startsWith("{")
         ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
-        : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
+        : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : ""));
     return `<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -176,6 +199,8 @@ a:focus-visible{outline:2px solid #176750;outline-offset:3px}
 h1{overflow-wrap:anywhere}
 body.interactive-work{max-width:64rem}
 .work-site-frame{display:block;box-sizing:border-box;width:100%;height:clamp(26rem,72vh,56rem);border:1px solid #cbdad3;border-radius:.6rem;background:#fff}
+.work-media{display:block;max-width:100%;max-height:72vh;margin:1rem 0;border-radius:.6rem}
+audio.work-media,video.work-media{width:100%}
 .work-nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
 .work-nav>*{display:inline-flex;align-items:center;min-height:2.75rem;padding:.35rem .85rem;border:1px solid #cbdad3;border-radius:.6rem}
 .work-nav a{background:#edf6ee}
@@ -184,7 +209,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;
 .comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
 </head><body${site ? ' class="interactive-work"' : ""}>
-<p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
+<p class="meta">作品${creator ? " · " + author : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 <nav class="work-nav" aria-label="浏览公开作品">
 ${adjacent(previous, "prev", "上一件")}
@@ -217,7 +242,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
     const content = escapeHtml(choice);
     if (!canChat) return `<li class="starter-preview">${content}</li>`;
     const href = escapeHtml(`${chatHref}&quick-start=${index}&quick-start-version=${version}`);
-    return `<li><a class="starter" href="${href}"><span>${content}</span><span aria-hidden="true">↗</span></a></li>`;
+    return `<li><a class="starter" href="${href}" data-public-agent-starter><span>${content}</span></a></li>`;
   }).join("");
   const startList = choiceItems ? `
 <section class="starters" aria-labelledby="quick-starts">
@@ -243,13 +268,13 @@ a:focus-visible{outline:2px solid #176750;outline-offset:4px}
 .brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);font-weight:750;text-decoration:none}
 .brand-mark{display:grid;place-items:center;width:1.85rem;height:1.85rem;border-radius:.55rem;background:var(--green);color:#fff;font-weight:800}
 .discover{font-size:.9rem;text-underline-offset:3px}
-.agent-home{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
-.profile{min-width:0}
+.agent-home{display:grid;grid-template:"profile conversation" max-content "description conversation" 1fr / minmax(0,1fr) minmax(0,1.1fr);align-items:start;gap:1.1rem clamp(1.5rem,6vw,5rem);max-width:68rem;margin:auto;padding:clamp(2rem,8vw,6.5rem) 1.25rem}
+.profile{grid-area:profile;min-width:0}
 .avatar{display:grid;place-items:center;width:4rem;height:4rem;border:1px solid #bacfc3;border-radius:1.15rem;background:#e0eee3;color:#1b503f;font-weight:760;font-size:1.7rem}
 h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;letter-spacing:-.035em;overflow-wrap:anywhere}
 h2,h3,p{margin:0}
 .creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
-.description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.description{grid-area:description;white-space:pre-wrap;overflow-wrap:anywhere}
 .profile-share{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.35rem .75rem;margin-top:.85rem}
 .profile-share [hidden]{display:none}
 .profile-share button,.profile-share summary{min-height:2.75rem;padding:.55rem .7rem;border-radius:.55rem;font:inherit;font-size:.9rem;cursor:pointer}
@@ -263,7 +288,7 @@ h2,h3,p{margin:0}
 .profile-share input{display:block;width:100%;margin:.25rem 0 .55rem;padding:.45rem .55rem;border:1px solid #98bead;border-radius:.4rem;color:var(--ink);font:inherit}
 .profile-share details a,[data-copy-profile-status]{font-size:.85rem}
 [data-copy-profile-status]{flex-basis:100%;color:var(--muted)}
-.conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
+.conversation{grid-area:conversation;min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
 .chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
@@ -277,13 +302,22 @@ h2,h3,p{margin:0}
 #public-agent-composer button:disabled{opacity:.55;cursor:default}
 #public-agent-composer-status{font-size:.9rem;color:#914224}
 .chat-fallback{font-size:.9rem;justify-self:start;text-underline-offset:3px}
-.starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
-.starters h3{margin-bottom:.7rem;font-size:.97rem}
-.starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
-.starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
-.starter{text-decoration:none}
-.starter:hover{border-color:#98bead;background:#edf6ed}
-@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+.starters{margin:0 0 1rem}
+.starters h3{margin-bottom:.45rem;font-size:.92rem}
+.starters ul{display:flex;flex-wrap:wrap;gap:.45rem;list-style:none;margin:0;padding:0}
+.starters li{min-width:0;max-width:100%}
+.starter,.starter-preview{display:inline-block;max-width:100%;min-height:2.75rem;padding:.55rem .7rem;border:1px solid var(--line);border-radius:.55rem;background:#f8faf8;font:inherit;font-size:.9rem;text-align:start;overflow-wrap:anywhere}
+.starter{color:var(--green);text-decoration:none;cursor:pointer}
+.starter:hover,.starter[aria-pressed="true"]{border-color:#98bead;background:#edf6ed}
+.starter:focus-visible{outline:2px solid #176750;outline-offset:3px}
+@media(max-width:44rem){.agent-home{grid-template:"profile" "conversation" "description" / minmax(0,1fr);padding:1.25rem 1rem 2rem;gap:1rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.05rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
+@media(max-width:44rem){
+  .profile{display:grid;grid-template-columns:auto minmax(0,1fr);place-items:start;column-gap:.75rem}
+  .avatar{grid-row:1/span 2}
+  .profile h1{grid-column:2;margin:0;font-size:clamp(1.4rem,7vw,1.8rem);align-self:center}
+  .profile .creator{grid-column:2}
+  .profile-share{grid-column:1/-1;width:100%;margin-top:.65rem}
+}
 </style>
 </head><body>
 <header class="site-header"><div class="topbar">
@@ -294,7 +328,7 @@ h2,h3,p{margin:0}
 <section class="profile" aria-labelledby="profile-title">
 <div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
 <h1 id="profile-title">${escapeHtml(title)}</h1>
-${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+${creator ? `<p class="creator">发布者 · ${author}</p>` : ""}
 <div id="public-agent-share" class="profile-share" data-profile-path="${profilePath}">
   <button type="button" data-copy-profile disabled hidden>复制主页链接</button>
   <details data-copy-profile-fallback>
@@ -304,14 +338,14 @@ ${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
   </details>
   <p data-copy-profile-status role="status" aria-live="polite" hidden></p>
 </div>
-${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">
 <h2 id="conversation-title">网页对话</h2>
 <p class="help">${canChat ? "登录后确认发送。发送的消息会与智能体发布者共享。" : "该智能体暂未开放访客聊天。"}</p>
-${composer}
 ${startList}
+${composer}
 </section>
+${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </main>
 </body></html>
 `;
@@ -324,6 +358,39 @@ function listedBySlug(ot: OtContext, slug: string) {
   return l;
 }
 
+function publicRemixSource(ot: OtContext, listing: {id: string; work_kind: string | null}) {
+  const kind = listing.work_kind;
+  const content = kind === "website"
+    ? ot.get<{body: string}>("SELECT html AS body FROM ot_listing_sites WHERE listing_id=? AND length(html)<=?", listing.id, REMIX_BODY_LIMIT)
+    : kind === "document"
+      ? ot.get<{body: string}>("SELECT snapshot AS body FROM ot_listings WHERE id=? AND length(snapshot)<=?", listing.id, REMIX_BODY_LIMIT)
+      : undefined;
+  if (!content?.body?.trim() || content.body.length > REMIX_BODY_LIMIT || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content.body)
+      || (kind !== "document" && kind !== "website")) return null;
+  if (kind === "document" && /^[{\[]/.test(content.body.trimStart())) {
+    try {
+      const decoded = JSON.parse(content.body);
+      if (decoded && typeof decoded === "object") return null;
+    } catch { /* A document may begin with literal punctuation. */ }
+  }
+  return {kind,body:content.body};
+}
+
+const remixBytes = (bytes: unknown) => typeof bytes === "number" && Number.isSafeInteger(bytes) &&
+  bytes >= 12 && bytes <= CHAT_FILE_MAX_BYTES;
+
+function publicRemixFile(ot: OtContext, work: {id: string; slug: string; title: string; work_kind: string | null; listed: number}) {
+  if (work.work_kind === "model3d") {
+    const model = ot.get<{bytes: number}>("SELECT length(content) AS bytes FROM ot_listing_models WHERE listing_id=?", work.id);
+    if (!model || !remixBytes(model.bytes)) return null;
+    return {table:"ot_listing_models",mime:MODEL_MIME,filename:work.title.replace(/[\x00-\x1f\x7f/\\]/g,"_")+".glb",bytes:model.bytes};
+  }
+  const advertised = publishedMediaView(ot,work);
+  if (!advertised.file_available || !remixBytes(advertised.file_bytes)) return null;
+  const row = ot.get<{filename: string}>("SELECT filename FROM ot_listing_media WHERE listing_id=?",work.id);
+  return row ? {table:"ot_listing_media",mime:advertised.file_mime,filename:row.filename,bytes:advertised.file_bytes} : null;
+}
+
 type FeedScope = { where: string; args: unknown[] };
 type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
@@ -334,25 +401,27 @@ function publicWorkPreview(ot: OtContext, slug: string) {
   const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS}, substr(l.snapshot, 1, ?) AS snapshot
     FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, WORK_PREVIEW_MAX, slug);
   assert(work, 404, "listing_not_found", "no such work");
-  const {creator, title, work_kind, updated_at, path, likes, collections, comment_count, site_available} =
+  const {creator, title, work_kind, updated_at, path, likes, collections, comment_count, site_available, file_available, file_mime, file_bytes} =
     listingView(ot, work, null);
   const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
   return {
-    slug, title, kind: work_kind || "document", author,
+    slug, title, kind: work_kind || "document", author, creator: {handle: creator.handle, name: creator.display_name || author},
     updated: Math.floor(updated_at > 1e12 ? updated_at / 1000 : updated_at),
     path, likes, collections, comment_count, site_available,
+    ...(file_available ? {file_available, file_mime, file_bytes} : {}),
     preview: workExcerpt(work, site_available === true),
   };
 }
 
-function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
+function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string | null) {
   const kind = one(input.kind, "kind");
   const tab = one(input.tab, "tab") ?? "all";
   const sort = one(input.sort, "sort") ?? "latest";
   const category = one(input.category, "category");
   const workKind = one(input.work_kind, "work_kind");
   const creator = one(input.creator, "creator");
-  const search = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+  const term = one(input.q, "q") ?? "";
+  const workSearch = kind === "work" ? workSearchQuery(term) : "";
   assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
   assert(sort !== "popular" || (kind === "work" && tab === "all"), 400, "invalid_request", "popularity sorting applies to the all works feed");
 
@@ -379,11 +448,50 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   } else {
     assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
   }
-  if (search) {
-    conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
-    args.push(search, search, search, search);
+  if (workSearch) {
+    const body = workBodyCondition(workSearch);
+    conditions.push(`(instr(ot_work_search_fold(l.title), ?) > 0
+      OR (instr(ot_work_search_fold(l.summary), ?) > 0 AND (l.work_kind IS NOT 'website'
+        OR NOT EXISTS (SELECT 1 FROM ot_listing_sites s WHERE s.listing_id = l.id)))
+      OR instr(ot_work_search_fold(p.handle), ?) > 0
+      OR instr(ot_work_search_fold(p.display_name), ?) > 0
+      OR ${body.sql})`);
+    args.push(workSearch, workSearch, workSearch, workSearch, body.term);
+  } else if (kind !== "work") {
+    const search = term.trim().toLowerCase().slice(0, 60);
+    if (search) {
+      conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
+      args.push(search, search, search, search);
+    }
   }
-  return {sort, where: conditions.join(" AND "), args};
+  return {kind, sort, where: conditions.join(" AND "), args, workSearch};
+}
+
+function discoverCard(ot: OtContext, row: any, viewer: string | null, search: string) {
+  const card = listingView(ot, row, viewer);
+  if (!search) return card;
+  const match = workSearchMatch("title", card.title, search)
+    ?? (card.site_available ? undefined : workSearchMatch("summary", card.summary, search))
+    ?? workSearchMatch("creator", card.creator.display_name, search)
+    ?? workSearchMatch("creator", card.creator.handle, search)
+    ?? workSearchMatch("body", ot.get<{body: string}>("SELECT body FROM ot_discover_work_search WHERE listing_id = ?", row.id)?.body ?? null, search);
+  return match ? {...card, match} : card;
+}
+
+function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
+  const {slug, title, creator, updated_at: timestamp} = card;
+  const updated = Math.floor(timestamp > 1e12 ? timestamp / 1000 : timestamp);
+  const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
+  if (card.kind === "agent") {
+    return {slug, name:title, summary:card.summary, category:card.category || "", updated,
+      chat_enabled:card.chat_enabled, creator:{handle:creator.handle, name:creator.display_name || author}};
+  }
+  return {slug, title, kind:card.work_kind || "document", author, updated, path:card.path,
+    creator:{handle:creator.handle, name:creator.display_name || author},
+    likes:card.likes, collections:card.collections, comment_count:card.comment_count,
+    ...(card.site_available ? {site_available:true} : {}),
+    ...(card.file_available ? {file_available:true, file_mime:card.file_mime, file_bytes:card.file_bytes} : {}),
+    ...("match" in card && card.match ? {match:card.match} : {})};
 }
 
 function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
@@ -430,7 +538,7 @@ function popularWorks(ot: OtContext) {
   type Ranking = { context: string; keys: string; expires: number };
   const rankings = new Map<string, Ranking>();
 
-  return (where: string, args: unknown[], viewer: string, limit: number, cursor: string | undefined) => {
+  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string | null, limit: number, cursor: string | undefined) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
     const now = ot.now();
     let token: string;
@@ -466,7 +574,7 @@ function popularWorks(ot: OtContext) {
       }
       rankings.set(token, ranking);
     }
-    return { items: rows.slice(0, limit).map(row => listingView(ot, row, viewer)),
+    return { items: rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch)),
       next_cursor: next ? `${token}.${next.position}` : null };
   };
 }
@@ -539,15 +647,18 @@ function profileSocialPage<T extends ProfileSocialKey, R>(rows: T[], limit: numb
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const popular = popularWorks(ot);
+  const publicPopular = popularWorks(ot);
   registerWorkComments(app, ot);
   ot.db.function("ot_profile_fold", {deterministic: true}, foldProfileSearch);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+  if (!columns.has("publication_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 1");
   const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
   }
+  registerWorkSearch(ot);
 
   app.put("/v1/ot/listings", {
     bodyLimit: CHAT_FILE_BODY_LIMIT,
@@ -558,13 +669,16 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
     assert(typeof b.ref === "string" && REF.test(b.ref), 400, "invalid_request", "ref is invalid");
     const title = text(b.title, "title", { min: 1, max: 80 });
-    const summary = optText(b.summary, "summary", { max: 500, multiline: true }) ?? "";
+    const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
     const category = b.category == null || b.category === "" ? null : String(b.category);
     assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
-    const workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
+    let workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
     if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
     const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
+    const media = decodePublishedMedia(workKind, b);
+    if (media && workKind === "media") workKind = media.mime.split("/")[0];
+    const editable = editableRelease(workKind,b.editable_snapshot);
     const site = b.site_html;
     if (site !== undefined) {
       assert(workKind === "website" && typeof site === "string" && site.trim().length > 0,
@@ -573,6 +687,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     }
     const snapshot = site !== undefined || b.snapshot == null
       ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
+    const searchableBody = workKind === null ? null : publicWorkText(workKind, snapshot, site ?? null);
+    const summary = suppliedSummary
+      ?? (site === undefined ? "" : (searchableBody ?? "").slice(0, 300).replace(/[\uD800-\uDBFF]$/u, ""));
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
@@ -587,20 +704,35 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const id = existing?.id ?? newId("otl");
     ot.tx(() => {
       if (existing) {
-        ot.run("UPDATE ot_listings SET slug = ?, title = ?, summary = ?, category = ?, work_kind = ?, snapshot = ?, listed = 1, chat_enabled = ?, chat_from = ?, updated_at = ? WHERE id = ?", slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
+        ot.run(`UPDATE ot_listings SET slug=?, title=?, summary=?, category=?, work_kind=?, snapshot=?, listed=1,
+          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1 WHERE id=?`,
+        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
         ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
       }
+      const fileSize = model?.length ?? media?.data.length;
+      if (fileSize !== undefined) {
+        const budget = ot.get<{bytes: number}>(`SELECT
+          (SELECT COALESCE(SUM(length(content)),0) FROM ot_listing_models WHERE owner_id = ? AND listing_id <> ?) +
+          (SELECT COALESCE(SUM(bytes),0) FROM ot_listing_media WHERE owner_id = ? AND listing_id <> ?) AS bytes`,
+        me.ownerId, id, me.ownerId, id);
+        assert((budget?.bytes ?? 0) + fileSize <= ot.platform.attachmentLimits.ownerBudgetBytes,
+          413, "attachment_storage_full", "public work file storage is full");
+      }
       if (model) {
-        const budget = ot.get<{bytes: number}>(`SELECT COALESCE(SUM(length(content)),0) AS bytes
-          FROM ot_listing_models WHERE owner_id = ? AND listing_id <> ?`, me.ownerId, id);
-        assert((budget?.bytes ?? 0) + model.length <= DEFAULT_ATTACHMENT_LIMITS.ownerBudgetBytes,
-          413, "attachment_storage_full", "public model storage is full");
         ot.run(`INSERT INTO ot_listing_models (listing_id, owner_id, content) VALUES (?,?,?)
           ON CONFLICT(listing_id) DO UPDATE SET content=excluded.content`, id, me.ownerId, model);
       } else if (existing?.work_kind === "model3d") {
         ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      }
+      if (media) savePublishedMedia(ot, id, me.ownerId, media);
+      else if (existing && isMediaWork(existing.work_kind)) ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
+      if (editable) {
+        ot.run(`INSERT INTO ot_listing_editable(listing_id,kind,content) VALUES(?,?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET kind=excluded.kind,content=excluded.content`,id,editable.kind,editable.content);
+      } else if (existing && editableWorkKind(existing.work_kind)) {
+        ot.run("DELETE FROM ot_listing_editable WHERE listing_id=?",id);
       }
       if (site !== undefined) {
         ot.run(`INSERT INTO ot_listing_sites (listing_id, html) VALUES (?,?)
@@ -608,6 +740,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       } else if (existing?.work_kind === "website") {
         ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
       }
+      if (searchableBody !== null) saveWorkSearch(ot, id, searchableBody);
       if (!existing || !existing.listed) {
         const followers = ot.all<{follower_id: string}>("SELECT follower_id FROM ot_follows WHERE creator_id = ? AND (? <> 'work' OR work_notices = 1) LIMIT 5000",
           me.ownerId, b.kind);
@@ -617,7 +750,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
       }
     });
-    return listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true);
+    return {...listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true),
+      ...(editable ? {editable_remix:true} : {})};
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
@@ -626,36 +760,75 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), id, me.ownerId);
       assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
       ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_media WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_editable WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_discover_work_search WHERE listing_id = ?", id);
     });
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
     const me = ot.me(req);
-    const rows = ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId);
-    return { listings: rows.map((l) => ({ ...listingView(ot, l, me.ownerId), ref: l.ref })) };
+    const rows = ot.all<any>(`SELECT l.*,e.listing_id IS NOT NULL AS editable
+      FROM ot_listings l LEFT JOIN ot_listing_editable e ON e.listing_id=l.id AND e.kind=l.work_kind
+      WHERE l.owner_id=? ORDER BY l.updated_at DESC`, me.ownerId);
+    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
+      ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
-  app.get("/v1/ot/discover", async (req) => {
-    const me = ot.me(req);
-    const q = query(req);
-    const {sort, where, args} = discoverScope(ot, q, me.ownerId);
+  const readFeed = (q: Record<string, unknown>, viewer: string | null) => {
+    const scope = discoverScope(ot, q, viewer);
+    const {kind, sort, where, args, workSearch} = scope;
     const cursor = one(q.cursor, "cursor");
-    const limit = intParam(q.limit, "limit", 30, 100);
+    const pagination = one(q.pagination, "pagination");
+    const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
     if (sort === "popular") {
-      assert(q.before === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
-      return popular(where, args, me.ownerId, Math.max(1, limit), cursor);
+      assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
+      return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor);
     }
-    assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
-    const before = intParam(q.before, "before", 0);
-    const boundary = before ? " AND l.updated_at < ?" : "";
+    const keyset = pagination === "keyset" && (kind === "work" || viewer === null);
+    assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
+    assert(cursor === undefined || (keyset && q.before === undefined), 400, "invalid_request", "invalid latest works pagination");
+    const before = intParam(q.before, "before", 0, Number.MAX_SAFE_INTEGER);
+    const boundary: unknown[] = before ? [before] : [];
+    let condition = before ? " AND l.updated_at < ?" : "";
+    const scopeKey = keyset ? hashCode(JSON.stringify([viewer, where, args])).slice(0, 24) : "";
+    if (cursor !== undefined) {
+      const match = LATEST_WORK_CURSOR.exec(cursor);
+      assert(match && Number.isSafeInteger(Number(match[1])), 400, "invalid_request", "invalid latest works cursor");
+      assert(match[3] === scopeKey, 400, "invalid_request", "cursor belongs to another feed");
+      boundary.push(Number(match[1]), match[2]);
+      condition = " AND (l.updated_at, l.id) < (?, ?)";
+    }
     const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE ${where}${boundary} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...(before ? [before] : []), limit);
-    return { items: rows.map((l) => listingView(ot, l, me.ownerId)), next_before: rows.length === limit ? rows[rows.length - 1].updated_at : null };
+      WHERE ${where}${condition} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
+    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch));
+    const last = rows[limit - 1] as WorkAnchor | undefined;
+    const nextBefore = last?.updated_at ?? null;
+    return keyset
+      ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.updated_at}.${last.id}.${scopeKey}` : null}
+      : {items: cards, next_before: nextBefore};
+  };
+  app.get("/v1/ot/discover", async (req) => readFeed(query(req), ot.me(req).ownerId));
+  app.get("/v1/ot/public/discover/:directory", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const {directory} = params(req);
+    assert(directory === "works" || directory === "agents", 404, "listing_not_found", "no such public directory");
+    const q = query(req);
+    const works = directory === "works";
+    const allowed = works ? ["limit", "cursor", "q", "creator", "sort", "kind"] : ["limit", "cursor", "q", "creator", "category"];
+    assert(Object.keys(q).every(key => allowed.includes(key)), 400, "invalid_request", "unknown public directory filter");
+    const ranked = q.sort === "popular";
+    const result = readFeed({
+      kind:works ? "work" : "agent", q:q.q, creator:q.creator, work_kind:q.kind, category:q.category,
+      sort:q.sort, cursor:q.cursor, pagination:ranked ? undefined : "keyset",
+      limit:String(Math.max(1,intParam(q.limit, "limit", 12, 24))),
+    }, null);
+    return {items:result.items.map(guestDiscoverCard), cursor:"next_cursor" in result ? result.next_cursor : null};
   });
   app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
     const me = ot.me(req);
     const q = query(req);
-    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q", "creator"].includes(key)),
+    assert(Object.keys(q).every(key => ["tab", "sort", "category", "work_kind", "q", "creator"].includes(key)),
       400, "invalid_request", "unknown work detail filter");
     const scope = discoverScope(ot, {...q, kind: "work"}, me.ownerId);
     const slug = params(req).slug;
@@ -663,7 +836,14 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
     assert(work, 404, "listing_not_found", "no such work");
     reply.header("Cache-Control", "no-store");
-    const detail = {work: listingView(ot, work, me.ownerId), previous: null, next: null};
+    const view = listingView(ot, work, me.ownerId);
+    const remixable = editableWorkKind(work.work_kind) ? hasEditableRelease(ot,work)
+      : view.file_available ? remixBytes(view.file_bytes)
+      : work.work_kind === "model3d" ? Boolean(publicRemixFile(ot,work)) : Boolean(publicRemixSource(ot,work));
+    const detail = {
+      work: {...view, ...(remixable ? {remix_available:true} : {})},
+      previous: null, next: null,
+    };
     if (scope.sort === "popular") {
       const ids = rankedWorkIds(ot, scope);
       const position = ids.indexOf(work.id);
@@ -676,6 +856,50 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
       WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
     return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
+  });
+  app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
+    ot.me(req);
+    reply.header("Cache-Control", "no-store");
+    const q = query(req);
+    assert(Object.keys(q).every(key => key === "revision") &&
+      (q.revision === undefined || (typeof q.revision === "string" && REMIX_REVISION.test(q.revision))),
+    400,"invalid_request","Invalid work copy revision");
+    return ot.tx(() => {
+      const work = listedBySlug(ot, params(req).slug);
+      assert(work.kind === "work",404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      if (editableWorkKind(work.work_kind)) {
+        const kind = work.work_kind;
+        assert(hasEditableRelease(ot,work),404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,kind]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind,revision};
+        if (!q.revision) return {template};
+        const release = ot.get<{content: string}>("SELECT content FROM ot_listing_editable WHERE listing_id=? AND kind=?",work.id,kind);
+        assert(release,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind,[kind === "slides" ? "slides" : "board"]:JSON.parse(release.content)}};
+      }
+      const file = publicRemixFile(ot,work);
+      if (file) {
+        const {table,mime,filename,bytes} = file;
+        // Publishing updates the listing revision and its file in one transaction.
+        // Only a confirmed copy reads the BLOB.
+        const revision = hashCode(JSON.stringify([work.id,work.slug,work.publication_revision,work.title,mime,filename,bytes]));
+        assert(q.revision === undefined || q.revision === revision,
+          409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+        const template = {title:work.title,kind:"media",revision,media:{mime,filename,bytes}};
+        if (!q.revision) return {template};
+        const stored = ot.get<{content: Buffer}>(`SELECT content FROM ${table} WHERE listing_id=?`,work.id);
+        assert(stored?.content.length === bytes,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+        return {template,source:{kind:"media",mime,filename,bytes,data:stored.content.toString("base64")}};
+      }
+      const source = publicRemixSource(ot,work);
+      assert(source,404,"remix_unavailable","这个作品暂无可复制的公开版本。");
+      const revision = hashCode(JSON.stringify([work.id,work.slug,work.updated_at,work.title,source]));
+      assert(q.revision === undefined || q.revision === revision,
+        409,"listing_changed","公开作品已更新，请重新查看后再复制。");
+      return {template:{title:work.title,kind:source.kind,revision},...(q.revision ? {source} : {})};
+    });
   });
   app.get("/v1/ot/discover/:slug", async (req) => {
     const me = ot.me(req);
@@ -784,19 +1008,27 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   };
   app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
   app.get("/w/:slug", async (req, reply) => sendPublic(req, reply, "work"));
-  app.get("/w/:slug/file", async (req, reply) => {
-    const slug = params(req).slug;
-    const model = ot.get<{title: string; content: Buffer}>(`SELECT l.title, m.content FROM ot_listing_models m
-      JOIN ot_listings l ON l.id = m.listing_id
-      WHERE l.slug = ? AND l.listed = 1 AND l.kind = 'work' AND l.work_kind = 'model3d'`, slug);
-    reply.header("Cache-Control", "no-store");
-    assert(model, 404, "listing_not_found", "no such public model");
-    const name = encodeURIComponent(model.title.replace(/[\ud800-\udfff]/gu, "\ufffd") + ".glb").replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16));
-    return reply.type(MODEL_MIME)
-      .header("Content-Disposition", `attachment; filename="${slug}.glb"; filename*=UTF-8''${name}`)
-      .header("X-Content-Type-Options", "nosniff")
-      .header("Content-Security-Policy", "default-src 'none'; sandbox")
-      .send(model.content);
+  app.route({
+    method: ["GET", "HEAD"], url: "/w/:slug/file", exposeHeadRoute: false,
+    async handler(req, reply) {
+      const slug = params(req).slug;
+      reply.header("Cache-Control", "no-store");
+      const media = sendPublishedMedia(ot, req, reply);
+      if (media) return media;
+      const model = ot.get<{title: string; bytes: number; content: Buffer | null}>(`
+        SELECT l.title, length(m.content) AS bytes, CASE WHEN ? THEN NULL ELSE m.content END AS content
+        FROM ot_listing_models m JOIN ot_listings l ON l.id = m.listing_id
+        WHERE l.slug = ? AND l.listed = 1 AND l.kind = 'work' AND l.work_kind = 'model3d'`,
+      Number(req.method === "HEAD"), slug);
+      assert(model, 404, "listing_not_found", "no such public file");
+      const name = downloadName(model.title + ".glb");
+      return reply.type(MODEL_MIME)
+        .header("Content-Length", model.bytes)
+        .header("Content-Disposition", `attachment; filename="${slug}.glb"; filename*=UTF-8''${name}`)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .send(model.content ?? undefined);
+    },
   });
   app.get("/w/:slug/site", async (req, reply) => {
     reply.header("Cache-Control", "no-store");

@@ -30,7 +30,7 @@ test('works-library search matches saved body text, case-insensitively', async (
   assert.deepEqual(miss.body.items, [])
 })
 
-test('non-text payloads are not searched as prose', async () => {
+test('structured payloads are matched by their own text, not raw JSON', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
   const deck = await call('POST', base(), {
@@ -44,7 +44,11 @@ test('non-text payloads are not searched as prose', async () => {
   }, key())
   assert.equal(board.status, 201, JSON.stringify(board.body))
 
-  assert.deepEqual((await call('GET', base() + '?q=alpha-slide-token')).body.items, [])
+  // Live main indexes the text of slides, boards and other structured kinds,
+  // so a slide bullet is a body match rather than an excluded payload.
+  const hit = await call('GET', base() + '?q=alpha-slide-token')
+  assert.deepEqual(hit.body.items.map((item) => item.title), ['Board deck'])
+  assert.equal(hit.body.items[0].match.kind, 'body')
   // A title hit on a structured kind still works.
   assert.deepEqual((await call('GET', base() + '?q=Board deck')).body.items.map((item) => item.title), ['Board deck'])
 })
