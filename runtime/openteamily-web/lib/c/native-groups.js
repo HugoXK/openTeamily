@@ -8,6 +8,21 @@ const installed = new WeakMap()
 const replyModes = new Set(['default', 'everyone', 'lead'])
 const groupAgentId = /^[A-Za-z0-9._:-]{1,80}$/
 const objectId = /^[0-9a-f]{32}$/
+// The native picker's inline chip uses a text codec. Preserve ordinary code
+// samples and links, and let Bot Social validate the exact selections.
+const nativeMention = /```[\s\S]*?(?:```|$)|`[^`\n]*`|@\[(?:\\[\\[\]]|[^\\\]\n])+\]\(ot-agent:([A-Za-z0-9._:-]{1,80})\/([A-Za-z0-9._:-]{1,80})\)|\[[^\]\n]*\]\([^\s)]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g
+
+function nativeGroupMessage(text) {
+  const targets = new Map()
+  const body = text.replace(nativeMention, (value, owner_id, agent_id) => {
+    if (!owner_id) return value
+    targets.set(owner_id + '/' + agent_id, {owner_id, agent_id})
+    return ' '
+  })
+  if (!targets.size) return {body:text}
+  if (!body.trim()) throw Object.assign(new Error('Add a message for the selected agents.'), {code:'bot/invalid'})
+  return {body:body.trim(), agent_mentions:[...targets.values()]}
+}
 
 function replyTarget(value) {
   if (!value || typeof value.owner_id !== 'string' || !groupAgentId.test(value.owner_id) ||
@@ -22,7 +37,8 @@ function projectedReplyPolicy(conversation, revision = conversation.group_manage
   const lead = replyTarget(policy.lead)
   const targets = (conversation.agents || []).flatMap(agent => {
     const pair = replyTarget({owner_id:agent.owner?.owner_id, agent_id:agent.agent_ref})
-    return pair ? [{...pair, name:agent.name, owner_name:agent.owner.display_name || agent.owner.handle}] : []
+    return pair ? [{...pair, name:agent.name, owner_name:agent.owner.display_name || agent.owner.handle,
+      owner_handle:agent.owner.handle}] : []
   })
   return {mode:policy.mode, ...(lead ? {lead} : {}),
     ...(policy.lead_unavailable === true ? {lead_unavailable:true} : {}),
@@ -149,7 +165,7 @@ export function nativeGroupClient(host, raw) {
       if (!cid) return originalSend(p)
       if (!Array.isArray(p.content) || p.content.some(c => c.type !== 'text')) throw new Error('Shared groups currently accept text only')
       return raw.post('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages', {
-        body:p.content.map(c => c.text).join('\n'), client_key:String(p.requestId || randomUUID()).slice(0,80),
+        ...nativeGroupMessage(p.content.map(c => c.text).join('\n')), client_key:String(p.requestId || randomUUID()).slice(0,80),
       })
     }
     const originalUpdate = rt.updateRoom.bind(rt)

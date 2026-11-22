@@ -160,6 +160,18 @@ test('sending plain text from the native room uses the same shared group and rep
   assert.equal(opened.native_room_id, 'native-group-id')
   assert.equal(await rt.sendUser({sessionId:opened.native_room_id, content:[{type:'text',text:message.body}], requestId:'native-plain-key'}), receipt)
   assert.deepEqual(calls, [{target:path + '/messages', payload:{body:message.body, client_key:'native-plain-key'}}])
+  const chosen = String.raw`@[Shared \[draft\]](ot-agent:other.owner/shared:agent)`
+  const example = '```text\n' + chosen + '\n```'
+  const send = text => rt.sendUser({sessionId:opened.native_room_id, content:[{type:'text',text}], requestId:'native-mention-key'})
+  assert.equal(await send(chosen + ' ' + chosen + ' 回复这段示例\n' + example), receipt)
+  assert.deepEqual(calls.at(-1), {target:path + '/messages', payload:{
+    body:'回复这段示例\n' + example, client_key:'native-mention-key',
+    agent_mentions:[{owner_id:'other.owner',agent_id:'shared:agent'}],
+  }})
+  assert.equal(await send('仅显示 ' + '`' + chosen + '`'), receipt)
+  assert.deepEqual(calls.at(-1).payload, {body:'仅显示 ' + '`' + chosen + '`', client_key:'native-mention-key'})
+  await assert.rejects(send(chosen), {code:'bot/invalid'})
+  assert.equal(calls.length,3)
   const live = await rt.mobileEndpoint('room-chat',{roomId:opened.native_room_id})
   assert.deepEqual(live.items.map(item => ({id:item.source_message_id,text:item.text})), [{id:message.id,text:message.body}])
 })
@@ -173,7 +185,7 @@ test('native shared group policy projects exact remote leads and saves through t
     ...group('Policy group',revision), team_id:team, account_group:team === null,
     activity_version:`10.${activity}.0.0`,
     agents:[{agent_ref:ownId,name:'Shared name',mine:true,owner:{owner_id:'social_member',display_name:'Owner'}},
-      {agent_ref:remoteId,name:'Shared name',mine:false,owner:{owner_id:lead.owner_id,display_name:'Teammate'}}],
+      {agent_ref:remoteId,name:'Shared name',mine:false,owner:{owner_id:lead.owner_id,display_name:'Teammate',handle:'team.home'}}],
     group_agent_routing:{mode:'personal',default:'all',policy,can_edit:canEdit},
   })
   let conversation = groupWith(2,{mode:'lead',lead})
@@ -220,6 +232,7 @@ test('native shared group policy projects exact remote leads and saves through t
   assert.equal(rt.roomOf(id).admin,null,'A reply lead has no native administrator privileges')
   assert.deepEqual(policy().lead,lead)
   assert.deepEqual(policy().targets.map(item => item.owner_name),['Owner','Teammate'])
+  assert.equal(policy().targets[1].owner_handle,'team.home')
   assert.equal(policy().revision,2)
 
   const direct = {openteamilyReplyPolicy:{mode:'everyone',revision:2}}
