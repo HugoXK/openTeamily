@@ -127,6 +127,7 @@ function conversationItem(row, me, env, workspaceId) {
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
     ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
+    ...(row.group_agent_routing ? {group_agent_routing: row.group_agent_routing} : {}),
     ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
     agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
       mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',

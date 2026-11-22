@@ -10,7 +10,7 @@ export function activeMentionQuery(text, caret) {
   return match ? {start: caret - match[1].length - 1, query: match[1]} : null;
 }
 
-export function mountAgentMentions(doc, context) {
+export function mountAgentMentions(doc, context, onSelectionChange = () => {}) {
   const input = doc.getElementById('chat-body');
   const list = doc.getElementById('chat-agent-mention-options');
   const chips = doc.getElementById('chat-agent-mentions');
@@ -77,6 +77,7 @@ export function mountAgentMentions(doc, context) {
     if (stale) input.setAttribute('aria-describedby', 'chat-agent-mention-status');
     else input.removeAttribute('aria-describedby');
     nextFocus?.focus({preventScroll: true});
+    onSelectionChange([...selected.values()], stale);
   }
 
   function remember() {

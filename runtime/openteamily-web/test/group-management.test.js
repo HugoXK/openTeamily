@@ -119,3 +119,47 @@ test('a saved group stays visible in the plugin while the native room projection
   assert.equal((await client.get(`${path}/${room}`)).native_room_id, 'native-2')
   assert.deepEqual([writes, sessions], [1, 2])
 })
+
+test('sending plain text from the native room uses the same shared group and reply receipt', async () => {
+  const conversation = group('Product team', 1)
+  const path = `/v1/ot/conversations/${room}`
+  const message = {id:'otm_plain_text', body:'你们好', mine:true, created_at:1, revision:1}
+  const receipt = {...message, reply_jobs:[{id:'job-shared', status:'queued'}]}
+  const rt = {
+    state:{rooms:{}}, roomOf(id) { return this.state.rooms[id] },
+    async createSession() { return 'native-group-id' },
+    async save() {}, mobileEndpoint() {}, updateRoom() {}, deleteRoom() {},
+    sendUser() { assert.fail('the projected room should send through its shared conversation') },
+  }
+  const calls = []
+  const raw = {
+    async get(target) {
+      if (target === path) return conversation
+      if (target === path + '/announcement') return {announcement:{body:''}}
+      assert.equal(target, path + '/messages?limit=100')
+      return {messages:[message]}
+    },
+    async request(method,target) {
+      assert.deepEqual([method,target], ['GET',path])
+      return conversation
+    },
+    async post(target,payload) {
+      calls.push({target,payload})
+      return receipt
+    },
+  }
+  const host = {
+    currentRuntime:() => ({rt}),
+    async call(operation,payload) {
+      assert.deepEqual([operation,payload], ['agents/groupActivity',{conversation_id:room}])
+      return {running:[], speaking:[]}
+    },
+  }
+  const client = nativeGroupClient(host, raw)
+  const opened = await client.get(path)
+  assert.equal(opened.native_room_id, 'native-group-id')
+  assert.equal(await rt.sendUser({sessionId:opened.native_room_id, content:[{type:'text',text:message.body}], requestId:'native-plain-key'}), receipt)
+  assert.deepEqual(calls, [{target:path + '/messages', payload:{body:message.body, client_key:'native-plain-key'}}])
+  const live = await rt.mobileEndpoint('room-chat',{roomId:opened.native_room_id})
+  assert.deepEqual(live.items.map(item => ({id:item.source_message_id,text:item.text})), [{id:message.id,text:message.body}])
+})

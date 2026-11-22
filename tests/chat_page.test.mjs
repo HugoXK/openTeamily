@@ -3887,7 +3887,7 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     assert.equal(el('group-agent-action').hidden, false);
     assert.equal(el('group-agent-form').hidden, true);
     assert.equal(el('group-studio').hidden, true);
-    assert.equal(el('conversation-agents-label').textContent, '私聊智能体');
+    assert.equal(el('conversation-agents-text').textContent, '私聊智能体');
     assert.equal(fixture.calls.some(call => call.path === catalogue), false);
     const sheet = el('conversation-agents-sheet');
     sheet.open = true;
@@ -3897,7 +3897,8 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     el('group-agent-add').value = linkAgent;
     await fire(el('group-agent-add-submit'), 'click');
     const rosterRows = el('group-agent-chips');
-    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice,bob]);
+    const removeControl = row => row.children.find(child => child.tagName === 'BUTTON');
+    assert.deepEqual(rosterRows.children.map(row => removeControl(row).dataset.agentOwnerId), [alice,bob]);
 
     const composer = el('chat-body');
     composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
@@ -3920,17 +3921,56 @@ test('direct chat uses the personal catalogue and sends or removes only the sele
     assert.equal(el('message-list').children.find(row => row.dataset.replyJobId === 'direct-job').children[0].textContent,
       '相同名称 · 小周 · AI 智能体');
 
-    const removePeer = rosterRows.children[1].children[1];
+    const removePeer = removeControl(rosterRows.children[1]);
     await fire(rosterRows, 'click', {target:removePeer});
     assert.equal(fixture.calls.some(call => call.path.endsWith('/remove')), false);
     await fire(rosterRows.children.at(-1).children[2], 'click');
-    assert.deepEqual(rosterRows.children.map(row => row.children[1].dataset.agentOwnerId), [alice]);
+    assert.deepEqual(rosterRows.children.map(row => removeControl(row).dataset.agentOwnerId), [alice]);
     await choose(0);
     await send('目标在发送前离开了');
     assert.equal(composer.value, '目标在发送前离开了');
     assert.equal(el('chat-agent-mention-status').hidden, false);
     await send(composer.value);
     assert.equal(sendPostBodies.length,3);
+  } finally {restore();}
+});
+
+test('group chat keeps roster tools near the header and shows the authority for ordinary, quoted and selected replies', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, restore} = fixture;
+  const reviewer = {id:linkAgent, name:'产品校对', owner_id:alice, mine:true};
+  const designer = {id:'design-agent', name:'设计助理', owner_id:bob, owner_name:'小周', mine:false};
+  const conversation = {id:linkSocial, workspace_id:linkTeam, title:'设计复盘', kind:'group', members:[linkMember],
+    agent_members:[reviewer, designer], group_agent_requests:true, group_agent_routing:{mode:'personal',default:'all'}};
+  const reply = {id:linkSocialLatest, role:'agent', agent_id:designer.id, agent_name:designer.name, agent_owner_id:bob,
+    reply_job_id:'design-reply', body:'已核对设计稿', created:1, seq:1};
+  routes.set(linkBase(linkTeam) + linkSocialPath, () => json(200, {conversation, items:[reply]}));
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    assert.equal(el('main-panel').dataset.chatKind, 'group');
+    assert.equal(el('chat-subtitle').textContent, '1 人 · 2 位智能体');
+    assert.equal(el('conversation-agents-count').textContent, '2');
+    assert.deepEqual(el('conversation-agents-preview').children.map(chip => chip.textContent), [reviewer.name, designer.name]);
+    assert.equal(el('conversation-agents-sheet').open, false);
+    await fire(el('chat-more'), 'click');
+    assert.equal(el('chat-more').getAttribute('aria-expanded'), 'true');
+    await fire(el('group-agent-manage'), 'click');
+    assert.equal(el('group-info-panel').hidden, false);
+    assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
+    assert.match(el('group-composer-routing-text').textContent, /群内智能体会回复/);
+    const agentRow = el('message-list').children.find(row => row.dataset.replyJobId === 'design-reply');
+    assert.equal(agentRow.dataset.chatAuthor, 'agent');
+    await fire(agentRow.children.find(child => child.getAttribute('aria-label') === '回复 设计助理'), 'click');
+    assert.match(el('group-composer-routing-text').textContent, /设计助理.*引用/);
+    const composer = el('chat-body');
+    composer.setSelectionRange = (start, end) => { composer.selectionStart = start; composer.selectionEnd = end; };
+    composer.value = '@产品';
+    composer.setSelectionRange(3, 3);
+    await fire(composer, 'input');
+    await fire(el('chat-agent-mention-options').children[0], 'click');
+    assert.match(el('group-composer-routing-text').textContent, /已指定 1 位智能体/);
+    assert.equal(el('group-composer-routing').dataset.kind, 'targeted');
   } finally {restore();}
 });
 
