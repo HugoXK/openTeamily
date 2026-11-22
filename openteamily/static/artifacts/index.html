@@ -573,6 +573,7 @@
       <div class="studio-actions">
         <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
         <div class="studio-actions">
+          <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
           <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
           <button type="submit" id="studio-save">保存</button>
         </div>
@@ -594,9 +595,45 @@
       <input id="studio-title" maxlength="120" required autocomplete="off">
       <label for="studio-body">正文</label>
       <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
-      <p id="studio-revision" class="note"></p>
+      <div class="studio-actions">
+        <p id="studio-revision" class="note"></p>
+        <button type="button" id="studio-history-open" class="secondary" aria-haspopup="dialog" hidden>版本历史</button>
+      </div>
       <button type="button" id="studio-delete" class="danger" hidden>删除团队文档</button>
     </form>
+  </dialog>
+  <dialog id="studio-discussion-dialog" aria-labelledby="studio-discussion-title">
+    <h2 id="studio-discussion-title">与个人智能体讨论</h2>
+    <p id="studio-discussion-source" class="note"></p>
+    <form id="studio-discussion-form">
+      <label for="studio-discussion-question">你的问题</label>
+      <textarea id="studio-discussion-question" rows="3" maxlength="1000" required></textarea>
+      <label class="studio-discussion-choice"><input type="checkbox" id="studio-discussion-include">附上已保存的正文片段</label>
+      <div id="studio-discussion-preview-wrap" hidden>
+        <label for="studio-discussion-preview">将附到草稿的内容</label>
+        <textarea id="studio-discussion-preview" rows="6" readonly></textarea>
+        <p id="studio-discussion-notice" class="note"></p>
+      </div>
+      <p id="studio-discussion-status" role="status" aria-live="polite"></p>
+      <div class="studio-actions">
+        <button type="button" id="studio-discussion-cancel" class="secondary">返回文档</button>
+        <button type="submit" id="studio-discussion-submit">打开私人草稿</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="studio-history" aria-labelledby="studio-history-heading">
+    <header class="studio-header">
+      <h2 id="studio-history-heading">团队文档版本历史</h2>
+      <button type="button" id="studio-history-close" class="secondary">关闭</button>
+    </header>
+    <p id="studio-history-status" role="status"></p>
+    <button type="button" id="studio-history-refresh" class="secondary">刷新版本</button>
+    <ul id="studio-history-list" aria-label="已保存的版本"></ul>
+    <section id="studio-history-preview" hidden aria-labelledby="studio-history-title">
+      <h3 id="studio-history-title"></h3>
+      <pre id="studio-history-body"></pre>
+      <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
+    </section>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

@@ -140,6 +140,8 @@ test('Space activity stays in the owner artifact feature and does not reuse mana
 test('team studio is dispatched to the account runtime with its revision query', () => {
   const path = `/v1/workspaces/${WS}/studio/documents/${ID}?revision=3`;
   assert.deepEqual(movedTarget(path, ORIGIN), {feature:'studio',path});
+  const revision = `/v1/workspaces/${WS}/studio/documents/${ID}/versions/3`;
+  assert.deepEqual(movedTarget(revision, ORIGIN), {feature:'studio',path:revision});
 });
 
 test('answers become ordinary responses, downloads keep their name', async () => {

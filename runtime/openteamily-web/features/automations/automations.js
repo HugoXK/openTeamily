@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS ot_automation_manual_runs (
  automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
  key_hash TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
  PRIMARY KEY(automation_id, key_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_studio_runs (
+ run_id TEXT PRIMARY KEY REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, document_id TEXT);
 `
 
 const sha = (text) => createHash('sha256').update(String(text)).digest('hex')
@@ -153,7 +156,7 @@ export function runView(row) {
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact, readMeetingAction }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact, readMeetingAction, studioRequest }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -549,6 +552,54 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     })
   }
 
+  async function studioCopy(payload, publish = false) {
+    const row = load(workspaceOf(payload), payload.id)
+    const saved = runView(loadRun(row, payload.run_id))
+    if (saved.status !== 'succeeded' || typeof saved.result?.text !== 'string' || !saved.result.text.trim()) {
+      refuse(409, 'result_unavailable', '这次运行没有可共享的文字结果。')
+    }
+    const prior = one('SELECT title, document_id FROM ot_automation_studio_runs WHERE run_id=?', saved.id)
+    const path = `/v1/workspaces/${row.workspace_id}/studio/documents`
+    const title = prior?.title ?? `${row.title} · 自动化结果 ${saved.id.slice(0, 8)}`
+    const body = saved.result.text
+    const key = sha(JSON.stringify([saved.id, title, body, prior?.document_id ?? null]))
+
+    const studio = async (method, target, data) => {
+      const result = await studioRequest?.({method, path: target, ...(data ? {body: data} : {})})
+      if (!result) refuse(503, 'unavailable', '团队协作暂时不可用。')
+      return result
+    }
+    const rejected = ({status, body: response}) => {
+      if ([401, 403, 404].includes(status)) refuse(403, 'forbidden', '当前账号无法访问该团队的协作文档。')
+      if (response?.error?.code === 'document_limit') refuse(409, 'document_limit', '团队文档已达到上限。')
+      refuse(503, 'unavailable', '暂时无法确认共享，请重试。')
+    }
+    if (prior?.document_id) {
+      const existing = await studio('GET', `${path}/${prior.document_id}`)
+      if (existing.status === 200) return {document_id: prior.document_id}
+      if (existing.status !== 404) rejected(existing)
+    }
+    if (publish && payload.review !== key) refuse(409, 'review_changed', '共享内容已变化，请重新查看。')
+    if (!publish) {
+      const access = await studio('GET', path)
+      if (access.status !== 200) rejected(access)
+      return {title, body, review: key}
+    }
+
+    // Pin the title before sending so a lost reply and a concurrent rename do
+    // not turn another confirmation of the same run into a different document.
+    run('INSERT OR IGNORE INTO ot_automation_studio_runs (run_id,title) VALUES(?,?)', saved.id, title)
+    const pinned = one('SELECT title, document_id FROM ot_automation_studio_runs WHERE run_id=?', saved.id)
+    if (pinned.title !== title || pinned.document_id !== (prior?.document_id ?? null)) {
+      refuse(409, 'review_changed', '共享状态已变化，请重新查看。')
+    }
+    const result = await studio('POST', path, {title, body, client_key: key})
+    const id = result.body?.document?.id
+    if (![200, 201].includes(result.status) || !HEX32.test(id || '')) rejected(result)
+    run('UPDATE ot_automation_studio_runs SET document_id=? WHERE run_id=? AND document_id IS ?', id, saved.id, pinned.document_id)
+    return {document_id: id}
+  }
+
   function submittedRun(automationId, key, source) {
     if (source) {
       return one(`SELECT r.* FROM ot_automation_retries t JOIN ot_automation_runs r ON r.id=t.new_run_id
@@ -661,6 +712,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     },
     'automations/runs': runs,
     'automations/saveRun': saveRun,
+    'automations/studioPreview': studioCopy,
+    'automations/studioPublish': (p) => studioCopy(p, true),
     'automations/runNow': runNow,
     'automations/receipt': receipt,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
@@ -686,6 +739,7 @@ export default async function automations(host) {
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
     personalBinding: () => host.call('agents/personal-binding', {}),
     saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload),
+    studioRequest: payload => host.call('studio/v1', payload),
     readMeetingAction: (workspace, {meeting_id, revision, action_index}) => host.call('meetings/v1', {
       method: 'GET', path: `/v1/workspaces/${workspace}/meetings/${meeting_id}/action?index=${action_index}&revision=${revision}`,
     }) })

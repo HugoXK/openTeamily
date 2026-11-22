@@ -1,7 +1,16 @@
 import { idempotencyKey, pagination, refuse, requireBodyKeys } from '../../featurekit/http.js'
 import { qs, sharedBotSocial } from '../../lib/c/bot-social.js'
+import { CALL_ID } from './call-source.js'
 
 const MEMBER_ID = /^[A-Za-z0-9._-]{1,80}$/
+
+function shareAudience({conversation_id, call_id}) {
+  if (call_id === undefined && typeof conversation_id === 'string' && MEMBER_ID.test(conversation_id)) {
+    return {conversation_id}
+  }
+  if (conversation_id === undefined && typeof call_id === 'string' && CALL_ID.test(call_id)) return {call_id}
+  refuse(400, 'invalid', '请选择会话或通话参会人。')
+}
 
 async function social(req, workspace, method, suffix, body) {
   const binding = await req.host.call('agents/personal-binding', {})
@@ -19,11 +28,9 @@ async function social(req, workspace, method, suffix, body) {
 
 async function recipients(req, workspace) {
   if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
-  const conversation = req.query.get('conversation_id')
-  if (!MEMBER_ID.test(conversation ?? '') || [...req.query.keys()].length !== 1) {
-    refuse(400, 'invalid', '请选择会话。')
-  }
-  return {body:await social(req, workspace, 'GET', '/meeting-share-recipients' + qs({conversation_id:conversation}))}
+  if (req.query.size !== 1) refuse(400, 'invalid', '请选择会话或通话参会人。')
+  const audience = shareAudience(Object.fromEntries(req.query))
+  return {body:await social(req, workspace, 'GET', '/meeting-share-recipients' + qs(audience))}
 }
 
 async function shared(req, workspace) {
@@ -55,21 +62,24 @@ async function outgoing(req, workspace, meetingId) {
     }))}
   }
   if (req.method !== 'POST' || req.queryString) refuse(405, 'method', 'Method not supported')
-  const snapshot = req.store.get(`SELECT title,started_at,summary,action_items,revision
+  const snapshot = req.store.get(`SELECT title,started_at,summary,action_items,revision,source_call_id
     FROM meetings WHERE workspace_id=? AND id=?`, workspace, meetingId)
   if (!snapshot) refuse(404, 'not_found', '找不到这份会议纪要。')
-  const {revision,conversation_id,recipient_ids} = requireBodyKeys(await req.json(), ['revision','conversation_id','recipient_ids'])
-  if (!Number.isSafeInteger(revision) || revision < 1 || typeof conversation_id !== 'string' || !MEMBER_ID.test(conversation_id)
+  const {revision,conversation_id,call_id,recipient_ids} = requireBodyKeys(await req.json(), ['revision','conversation_id','call_id','recipient_ids'])
+  const audience = shareAudience({conversation_id,call_id})
+  if (call_id !== undefined && snapshot.source_call_id !== call_id) refuse(404, 'not_found', '这份纪要不属于这场通话。')
+  if (!Number.isSafeInteger(revision) || revision < 1
       || !Array.isArray(recipient_ids) || recipient_ids.length < 1 || recipient_ids.length > 50
       || new Set(recipient_ids).size !== recipient_ids.length
       || recipient_ids.some(id => typeof id !== 'string' || !MEMBER_ID.test(id))) {
     refuse(400, 'invalid', '请选择会话、参会人和已保存版本。')
   }
   if (snapshot.revision !== revision) refuse(409, 'conflict', '纪要已更新。请刷新后分享当前保存版本。')
+  const {title,started_at,summary} = snapshot
   const action_items = JSON.parse(snapshot.action_items)
-  if (!snapshot.summary.trim() && !action_items.length) refuse(400, 'invalid', '请先保存摘要或行动项。')
+  if (!summary.trim() && !action_items.length) refuse(400, 'invalid', '请先保存摘要或行动项。')
   const result = await social(req, workspace, 'POST', '/meeting-shares', {
-    ...snapshot, action_items, source_id:meetingId, conversation_id, recipient_ids, client_key:idempotencyKey(req.headers),
+    title,started_at,summary,revision,action_items,source_id:meetingId,...audience,recipient_ids,client_key:idempotencyKey(req.headers),
   })
   return {status:result.replayed ? 200 : 201,body:{meeting:result.meeting}}
 }

@@ -629,7 +629,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       request(method, path, body, undefined, options.signal, options.keepalive),
   });
   const studio = mountSharedStudio(document, {
-    request: (method, path, body, {signal} = {}) => request(method, path, body, undefined, signal),
+    request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
     onClose() {
       if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },

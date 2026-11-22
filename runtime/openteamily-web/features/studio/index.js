@@ -5,18 +5,20 @@ import { bodyOf, Fault } from '../../lib/b4/http.js'
 const collection = /^\/v1\/workspaces\/([0-9a-f]{32})\/studio\/documents$/
 const document = /^\/v1\/workspaces\/([0-9a-f]{32})\/studio\/documents\/([0-9a-f]{32})$/
 const deletion = /^\/v1\/workspaces\/([0-9a-f]{32})\/studio\/documents\/([0-9a-f]{32})\/remove$/
+const history = /^\/v1\/workspaces\/([0-9a-f]{32})\/studio\/documents\/([0-9a-f]{32})\/versions(?:\/([1-9][0-9]{0,15}))?$/
+const restore = /^\/v1\/workspaces\/([0-9a-f]{32})\/studio\/documents\/([0-9a-f]{32})\/restore$/
 
 export default function studio(host) {
   // The account's own connector carries its identity. Only explicitly shared
   // documents cross this boundary, with membership checked by Bot Social.
-  const route = (method, path, upstreamMethod, fields = []) => ({
+  const route = (method, path, upstreamMethod, fields = [], suffix = '') => ({
     method, path,
-    async handle({match: [, workspace, id], query, body}) {
-      if (query && (method !== 'GET' || !id || !/^revision=[1-9][0-9]{0,15}$/.test(query))) {
+    async handle({match: [, workspace, id, version], query, body}) {
+      if (query && (path !== document || !/^revision=[1-9][0-9]{0,15}$/.test(query))) {
         throw new Fault(400, 'invalid', 'Invalid studio document query')
       }
       const base = `/v1/ot/teams/${workspace}/studio/documents`
-      const target = (id ? base + '/' + id : base) + (query ? '?' + query : '')
+      const target = (id ? base + '/' + id : base) + suffix + (version ? '/' + version : '') + (query ? '?' + query : '')
       const payload = fields.length ? bodyOf(body, fields) : undefined
       try {
         return [200, await sharedBotSocial(host).request(upstreamMethod, target, payload)]
@@ -34,5 +36,7 @@ export default function studio(host) {
     route('GET', document, 'GET'),
     route('POST', document, 'PUT', ['title', 'body', 'revision']),
     route('POST', deletion, 'DELETE', ['revision']),
+    route('GET', history, 'GET', [], '/versions'),
+    route('POST', restore, 'POST', ['revision', 'to'], '/restore'),
   ]) } }
 }

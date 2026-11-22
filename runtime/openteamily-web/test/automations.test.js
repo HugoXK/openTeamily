@@ -130,6 +130,56 @@ test('a successful native run saves a durable, idempotent document from its own 
   await assert.rejects(() => artifacts.endpoints.saveAutomationRun({}, {internal: false}), /Save results/)
 })
 
+test('team publication reviews only the stored output and recovers a lost share without a duplicate', async () => {
+  const collection = `/v1/workspaces/${W}/studio/documents`
+  const documents = new Map()
+  const writes = []
+  let denied = false, loseResponse = true, turns = 0
+  const {endpoints: e, inflight} = createAutomations({
+    db: new DatabaseSync(':memory:'),
+    turn: async () => { turns++; return {text:'完成验收，下一步核对资料。', model:'private-model', session_id:'private-session'} },
+    studioRequest: async ({method,path,body}) => {
+      if (denied) return {status:404, body:{}}
+      if (method === 'GET' && path === collection) return {status:200, body:{items:[]}}
+      if (method === 'GET') return {status:[...documents.values()].some(id => path === collection+'/'+id) ? 200 : 404,body:{}}
+      assert.equal(path,collection)
+      writes.push(body)
+      const id = documents.get(body.client_key) || String(documents.size+1).padStart(32,'0')
+      documents.set(body.client_key,id)
+      if (loseResponse) { loseResponse=false; return {status:503,body:{}} }
+      return {status:200,body:{document:{id}}}
+    },
+  })
+  const {automation} = e['automations/create']({
+    workspace_id:W,title:'结果验收',prompt:'Private prompt',template_id:'custom',
+    participants:['alice'],schedule:{kind:'now',time_zone:'UTC'},idempotency_key:'studio-create-automation',
+  })
+  const {run} = e['automations/runNow']({workspace_id:W,id:automation.id,idempotency_key:'studio-automation-first-run'})
+  await inflight.get(run.id)
+  const path = `/v1/workspaces/${W}/automations/${automation.id}/runs/${run.id}/studio`
+  const get = () => e['automations/v1']({method:'GET',path})
+  const save = body => e['automations/v1']({method:'POST',path,body})
+  assert.equal((await e['automations/v1']({method:'GET',path:path.replace(W,'b'.repeat(32))})).status,404)
+  assert.equal((await save({review:'0'.repeat(64),body:'should never be published'})).status,400)
+  assert.equal((await save({review:'0'.repeat(64)})).body.error.code,'review_changed')
+  const preview = (await get()).body
+  assert.equal(preview.body,'完成验收，下一步核对资料。')
+  assert.match(preview.title,/^结果验收/)
+  assert.equal(writes.length,0)
+  assert.equal((await save({review:preview.review})).status,503)
+  e['automations/update']({workspace_id:W,id:automation.id,revision:1,changes:{title:'私下改名'}})
+  assert.deepEqual((await get()).body,preview)
+  const retry = await save({review:preview.review})
+  assert.equal(retry.status,200)
+  assert.equal(documents.size,1)
+  assert.deepEqual(writes,[0,1].map(() => ({title:preview.title,body:preview.body,client_key:preview.review})))
+  assert.deepEqual((await get()).body,retry.body)
+  assert.deepEqual((await save({review:preview.review})).body,retry.body)
+  denied = true
+  assert.equal((await get()).status,403)
+  assert.equal(turns,1)
+})
+
 test('schedule slots match the server rules across time zones', () => {
   const zone = 'Asia/Shanghai'
   const nine = zonedEpoch(zone, 2027, 1, 4, 9, 0) // Monday

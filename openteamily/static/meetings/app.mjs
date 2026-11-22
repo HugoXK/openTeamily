@@ -160,6 +160,11 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
 
   const call = (method, path, body, headers, signal) => request(method, path, body, headers, signal)
     .catch(() => ({status: 0, body: {}}));
+  function selectedAudience(state) {
+    const id = state.meeting.source_call_id;
+    return isMeetingCallId(id) && select.value === 'call:' + id
+      ? {call_id: id} : {conversation_id: select.value};
+  }
   function isCurrent(state) {
     if (!dialog.open || view !== state || !state) return false;
     if (state.historyOnly) return historyWorkspace() === state.workspace;
@@ -277,8 +282,14 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     select.replaceChildren();
     const option = document.createElement('option');
     option.value = '';
-    option.textContent = '请选择会话';
+    option.textContent = isMeetingCallId(state.meeting.source_call_id) ? '请选择接收范围' : '请选择会话';
     select.append(option);
+    if (isMeetingCallId(state.meeting.source_call_id)) {
+      const callOption = document.createElement('option');
+      callOption.value = 'call:' + state.meeting.source_call_id;
+      callOption.textContent = '这场通话的参会人';
+      select.append(callOption);
+    }
     select.value = '';
     choices.replaceChildren();
     sent.replaceChildren();
@@ -291,11 +302,7 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     const path = `/v1/workspaces/${state.workspace}/social/conversations?limit=100`;
     const result = await call('GET', path, undefined, undefined, state.controller.signal);
     if (!isCurrent(state)) return;
-    if (result.status !== 200) {
-      feedback.textContent = messageFor(result.body.error, '无法加载会话。关闭后可重新打开。');
-      return;
-    }
-    for (const row of result.body.items || []) {
+    for (const row of (result.status === 200 ? result.body.items || [] : [])) {
       if (!['group', 'dm'].includes(row.kind) || row.public_agent || row.direct?.open === false) continue;
       const entry = document.createElement('option');
       entry.value = row.id;
@@ -303,7 +310,11 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
         || (row.kind === 'group' ? '群聊' : '单聊');
       select.append(entry);
     }
-    feedback.textContent = select.options.length > 1 ? '' : '当前工作区没有可分享的会话。';
+    if (!select.value) {
+      feedback.textContent = select.options.length > 1 ? '' : result.status !== 200
+        ? messageFor(result.body.error, '无法加载会话。关闭后可重新打开。')
+        : '当前工作区没有可分享的会话。';
+    }
     syncForm(state);
   }
   trigger.addEventListener('click', () => open(context()));
@@ -322,11 +333,15 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
     feedback.textContent = conversation ? '正在加载接收人…' : '';
     if (!conversation) return;
     const controller = state.recipientRequest = new AbortController();
-    const query = new URLSearchParams({conversation_id: conversation});
+    const audience = selectedAudience(state);
+    const query = new URLSearchParams(audience);
     const result = await call('GET', `${state.base}/share-recipients?${query}`, undefined, undefined, controller.signal);
     if (!isCurrent(state) || state.recipientRequest !== controller || select.value !== conversation) return;
     if (result.status !== 200) {
-      feedback.textContent = messageFor(result.body.error, '无法加载接收人，请重新选择会话。');
+      feedback.textContent = result.body.error?.code === 'meeting_call_active'
+        ? '通话结束后才能分享纪要。' : result.body.error?.code === 'call_record_not_found'
+          ? '无法访问这场通话的参会记录。'
+          : messageFor(result.body.error, '无法加载接收人，请重新选择接收范围。');
       return;
     }
     for (const item of result.body.items || []) {
@@ -350,14 +365,15 @@ export function mountMeetingShares(document, {request, context, historyWorkspace
       label.append(box, document.createTextNode(item.name));
       choices.append(label);
     }
-    feedback.textContent = choices.children.length ? '' : '这个会话中没有可选择的其他接收人。';
+    feedback.textContent = choices.children.length ? '' : audience.call_id
+      ? '这场通话没有可选择的其他参会人。' : '这个会话中没有可选择的其他接收人。';
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const state = view;
     if (!state || state.historyOnly || !isCurrent(state) || state.busy || !select.value || !state.selected.size) return;
-    const body = {revision: state.meeting.revision, conversation_id: select.value, recipient_ids: [...state.selected].sort()};
+    const body = {revision: state.meeting.revision, ...selectedAudience(state), recipient_ids: [...state.selected].sort()};
     const fingerprint = JSON.stringify([state.path, body]);
     if (fingerprint !== attempt?.fingerprint) attempt = {fingerprint, key: key()};
     state.busy = true;

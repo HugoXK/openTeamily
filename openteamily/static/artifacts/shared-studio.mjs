@@ -1,4 +1,6 @@
 import {studioDocumentHref} from '../shell/studio-link.mjs';
+import {mountStudioHistory} from './studio-history.mjs';
+import {mountStudioDiscussion} from './studio-discussion.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
 const ROLES = new Set(['owner', 'admin', 'member']);
@@ -21,6 +23,7 @@ export function mountSharedStudio(document, {request, onClose}) {
   const closeButton = get('close');
   const add = get('add');
   const copyLink = get('copy-link');
+  const discuss = get('discuss');
   const linkWrap = get('link-wrap');
   const view = document.defaultView;
   let scope = null;
@@ -41,12 +44,54 @@ export function mountSharedStudio(document, {request, onClose}) {
   const isDirty = state => !form.hidden && (state?.base
     ? !sameContent(content(), state.base)
     : Boolean(titleInput.value.trim() || bodyInput.value));
+  const canDiscuss = state => state?.base && !state.busy && !state.remote && !state.blocked &&
+    !state.unavailable && !isDirty(state);
+  const discussion = mountStudioDiscussion(document, {
+    request,
+    source: () => dialog.open && scope && canDiscuss(screen)
+      ? {owner:scope.account, workspace:scope.id, document:screen.base} : null,
+    openChat: path => view.location.assign(path),
+  });
+  discuss?.addEventListener('click', () => discussion?.open());
 
   function send(method, path, body, signal) {
     const timeout = AbortSignal.timeout(12000);
     return request(method, path, body, {signal: signal ? AbortSignal.any([signal, timeout]) : timeout})
       .catch(() => ({status: 0, body: {}}));
   }
+
+  const history = mountStudioHistory(document, {
+    context: () => screen?.base && isCurrent(screen) ? {
+      path:documentPath(screen), revision:screen.base.revision, dirty:isDirty(screen),
+      busy:screen.busy, blocked:screen.blocked || Boolean(screen.remote), unavailable:screen.unavailable,
+    } : null,
+    send,
+    async restoreVersion(path, revision, to) {
+      const state = screen;
+      if (!state?.base || !isCurrent(state) || state.busy || state.blocked || state.remote ||
+          state.unavailable || isDirty(state) || state.base.revision !== revision || documentPath(state) !== path) {
+        return 'conflict';
+      }
+      state.busy = true;
+      clearPoll();
+      controls(state);
+      const result = await send('POST', path + '/restore', {revision,to}, state.controller.signal);
+      if (!isCurrent(state)) return '';
+      state.busy = false;
+      const item = responseDocument(result, state.base.id);
+      if (item) {
+        showForm(state, item);
+        show('已恢复为版本 ' + item.revision + '。', 'success');
+        queueUpdate(state);
+        return 'restored';
+      }
+      const conflict = result.status === 409;
+      if (conflict) state.blocked = true;
+      controls(state);
+      void checkUpdates(state, true);
+      return conflict ? 'conflict' : '';
+    },
+  });
 
   function controls(state) {
     const {base, busy, remote, blocked, unavailable} = state;
@@ -57,14 +102,21 @@ export function mountSharedStudio(document, {request, onClose}) {
     remove.hidden = !base?.can_delete || unavailable;
     remove.disabled = busy || Boolean(remote || blocked);
     copyLink.hidden = !base || unavailable;
+    if (discuss) {
+      discuss.hidden = !base || unavailable;
+      discuss.disabled = !canDiscuss(state);
+    }
     get('conflict').hidden = !remote;
     get('use-server').disabled = get('rebase').disabled = busy || unavailable;
     get('revision').textContent = base
       ? '版本 ' + base.revision + (base.updated_by ? ' · ' + base.updated_by : '')
       : '保存后，此工作区成员可一起编辑。';
+    history.sync();
   }
 
   function stopScreen() {
+    discussion?.close();
+    history.dismiss();
     clearPoll();
     screen?.controller.abort();
     screen = null;

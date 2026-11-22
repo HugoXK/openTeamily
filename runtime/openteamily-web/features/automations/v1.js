@@ -52,6 +52,16 @@ export function automationsV1({ endpoints, log, personalBinding }) {
       const result = action === 'cancel' ? await call('cancel', payload) : await call('retry', payload)
       return { status: result.status ?? 200, body: { run: result.run, ...(result.retried ? { retried: result.retried } : {}) } }
     }) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/studio$`), handle: wrap(async (req, workspaceId, id, runId) => {
+      const target = {workspace_id: workspaceId, id, run_id: runId}
+      if (req.query.size) throw new FeatureError(400, 'invalid', 'Invalid studio request')
+      if (req.method === 'GET') return {status: 200, body: await call('studioPreview', target)}
+      const body = await req.json(512)
+      if (Object.keys(body).length !== 1 || typeof body.review !== 'string' || !/^[a-f0-9]{64}$/.test(body.review)) {
+        throw new FeatureError(400, 'invalid', 'Review the result before sharing')
+      }
+      return {status: 200, body: await call('studioPublish', {...target, review: body.review})}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id, runId) => {
       if (runId) return { status: 200, body: await call('run', { workspace_id: workspaceId, id, run_id: runId }) }
       const limit = req.query.get('limit')

@@ -1,5 +1,6 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
+import { mountStudioShare } from './studio-share.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -577,6 +578,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // Which rows the reader opened. Kept outside the render so the 3s poll and
   // the filter switches do not close a row under the reader.
   const expandedRuns = new Set();
+  const teamNames = new Map();
+  const studioShare = mountStudioShare(document, {
+    request: (method, path, body, signal) => request(method, path, body, undefined, signal),
+    isCurrent: currentRunScope,
+  });
 
   function pushRunFilter(filter) {
     if (!view || !view.history || !view.location) return;
@@ -841,7 +847,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const target = runScope();
     const submission = runSubmissions.get(target.key);
     const hasRetry = visible.some(retryAllowed);
-    const fingerprint = JSON.stringify([target.editor, runFilter, visible, hasRetry && activeRun,
+    const fingerprint = JSON.stringify([target.editor, teamNames.get(target.workspace), runFilter, visible, hasRetry && activeRun,
       hasRetry && submission?.state, hasRetry && submission?.source,
       visible.map(({id}) => [savedRunResults.get(id), savingRunResults.has(id), cancellingRuns.has(`${target.key}/${id}`)])]);
     if (runFingerprint === fingerprint) return;
@@ -915,6 +921,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           action.addEventListener('click', () => saveRunResult(action, item, target));
         }
         detail.appendChild(action);
+        const team = teamNames.get(target.workspace);
+        if (studioShare && native && team) {
+          const share = document.createElement('button');
+          share.type = 'button';
+          share.className = 'secondary run-share-team';
+          share.dataset.runControl = 'studio';
+          share.textContent = '分享至团队协作';
+          share.setAttribute('aria-haspopup', 'dialog');
+          if (restore && focusRow.dataset.runId === item.id && focusedControl === 'studio') nextFocus = share;
+          share.addEventListener('click', () => studioShare.open(share, target, item.id, team));
+          detail.appendChild(share);
+        }
       }
       if (item.error_code === 'model_unconfigured') {
         const settings = document.createElement('a');
@@ -1466,11 +1484,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function fillWorkspaces(items) {
     const previous = workspaceId();
     workspaceSelect.textContent = '';
+    teamNames.clear();
     for (const item of items) {
       const option = document.createElement('option');
       option.value = item.id;
       option.textContent = item.name;
       workspaceSelect.appendChild(option);
+      if (item.kind === 'team' && item.name) teamNames.set(item.id, item.name);
     }
     if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
   }

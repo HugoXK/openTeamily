@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
+import { STUDIO_SCHEMA } from "../src/openteamily/studio.js";
 
 test("team Studio coordinates edits between actual account homes and enforces the current roster", async t => {
   const {base, stop, platform} = await startServer(bulkAuth);
@@ -82,4 +83,52 @@ test("team Studio coordinates edits between actual account homes and enforces th
   assert.equal((await editor.call("POST", path, draft)).data.error.code, "document_deleted");
   const tombstone = platform.db.prepare("SELECT title,body FROM ot_studio_documents WHERE id=?").get(document.id);
   assert.deepEqual(tombstone, {title:"",body:""});
+});
+
+test("team document versions restore atomically and stay scoped to the current roster", async t => {
+  const {base, stop, platform} = await startServer(bulkAuth);
+  t.after(stop);
+  const [owner, editor, stranger] = await Promise.all([
+    home(base, "versions-owner"), home(base, "versions-editor"), home(base, "versions-stranger"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {
+    name:"History", slug:"workspace-versions", idempotency_key:"studio-versions-fixture",
+  });
+  await owner.ok("POST", `/v1/ot/teams/${team.id}/members`, {handle:editor.handle,role:"member"});
+  const collection = `/v1/ot/teams/${team.workspace_id}/studio/documents`;
+  const {document} = await owner.ok("POST", collection, {title:"Initial",body:"First",client_key:"studio-history-original"});
+  const path = collection + "/" + document.id;
+  await editor.ok("PUT", path, {title:"Edited",body:"Second",revision:1});
+  assert.equal((await stranger.call("GET", path+"/versions/1")).status,404);
+  const history = await editor.ok("GET", path+"/versions");
+  assert.equal(history.current_revision,2);
+  assert.deepEqual(history.items.map((item: Record<string, unknown>)=>[item.revision,item.title,item.body]),
+    [[2,"Edited",undefined],[1,"Initial",undefined]]);
+  assert.equal((await editor.ok("GET", path+"/versions/1")).version.body,"First");
+  assert.equal((await owner.call("POST", path+"/restore", {revision:1,to:1})).data.error.code,"revision_conflict");
+  const outcomes = await Promise.all([
+    editor.call("POST", path+"/restore", {revision:2,to:1}),
+    owner.call("POST", path+"/restore", {revision:2,to:1}),
+  ]);
+  assert.deepEqual(outcomes.map(item=>item.status).sort(),[200,409]);
+  const restored = await owner.ok("GET", path+"/versions/3");
+  assert.equal(restored.version.body,"First");
+  assert.equal(restored.version.restored_from,1);
+  assert.equal((await editor.ok("GET", path+"/versions/2")).version.body,"Second");
+  for(let rev=3;rev<33;rev++) await editor.ok("PUT", path, {title:"Bounded",body:String(rev),revision:rev});
+  const bounded = await editor.ok("GET", path+"/versions");
+  assert.equal(bounded.items.length,30);
+  assert.equal(bounded.items.at(-1).revision,4);
+  assert.equal((await owner.call("GET",path+"/versions/3")).status,404);
+  // Upgrading a store that only kept the current document should resume at its existing revision.
+  platform.db.exec("DROP TABLE ot_studio_revisions");
+  platform.db.exec(STUDIO_SCHEMA);
+  platform.db.exec(STUDIO_SCHEMA);
+  const migrated = await owner.ok("GET",path+"/versions");
+  assert.deepEqual(migrated.items.map((version: {revision: number})=>version.revision),[33]);
+  await owner.ok("DELETE",path,{revision:33});
+  assert.equal((await editor.call("GET",path+"/versions/33")).status,404);
+  const remaining = platform.db.prepare("SELECT count(*) AS n FROM ot_studio_revisions WHERE document_id=?")
+    .get(document.id) as {n: number};
+  assert.equal(remaining.n,0);
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
+import {studioDiscussionContext} from '../openteamily/static/artifacts/studio-discussion.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref,
@@ -14,6 +15,19 @@ import {
   createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
+
+test('Studio discussion identifies the saved revision and bounds the excerpt on Unicode characters', () => {
+  const source = {title:'行动方案', revision:7, body:'核对负责人'};
+  assert.deepEqual(studioDiscussionContext(source), {
+    text:'团队文档《行动方案》 · 版本 7\n\n核对负责人', clipped:false,
+  });
+  assert.deepEqual(studioDiscussionContext({...source, body:' \n  '}), {text:'',clipped:false});
+  const excerpt = studioDiscussionContext({...source, body:'📋'.repeat(3000)});
+  assert.equal(excerpt.clipped,true);
+  assert.ok(excerpt.text.length <= 2900);
+  assert.match(excerpt.text,/…$/u);
+  assert.equal(excerpt.text,Buffer.from(excerpt.text).toString());
+});
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');

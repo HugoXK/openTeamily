@@ -14,13 +14,23 @@ CREATE TABLE IF NOT EXISTS ot_studio_documents (
 );
 CREATE INDEX IF NOT EXISTS ot_studio_documents_recent
   ON ot_studio_documents(team_id, updated_at DESC, id) WHERE deleted_at IS NULL;
+CREATE TABLE IF NOT EXISTS ot_studio_revisions (
+  document_id TEXT NOT NULL REFERENCES ot_studio_documents(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+  editor_id TEXT NOT NULL, updated_at INTEGER NOT NULL, restored_from INTEGER,
+  PRIMARY KEY (document_id, revision)
+);
+INSERT OR IGNORE INTO ot_studio_revisions (document_id, revision, title, body, editor_id, updated_at)
+  SELECT id, revision, title, body, updated_by, updated_at FROM ot_studio_documents WHERE deleted_at IS NULL;
 `;
 
 const HEX_ID = /^[0-9a-f]{32}$/;
 const CREATE_KEY = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_DOCUMENTS = 100;
+const MAX_REVISIONS = 30;
 const COLLECTION = "/v1/ot/teams/:team/studio/documents";
 const DETAIL = COLLECTION + "/:document";
+const HISTORY = DETAIL + "/versions";
 const SUMMARY = `d.id, d.title, d.revision, d.created_by, d.updated_at,
   COALESCE(creator.display_name, '') AS creator_name,
   COALESCE(editor.display_name, '') AS editor_name`;
@@ -34,6 +44,10 @@ type Summary = {
   creator_name: string; editor_name: string;
 };
 type Document = Summary & {body: string};
+type Revision = {revision: number; title: string; updated_by: string; updated_at: number; restored_from: number | null};
+const HISTORY_FIELDS = `r.revision, r.title, COALESCE(editor.display_name, '') AS updated_by,
+  r.updated_at, r.restored_from`;
+const HISTORY_ROWS = `FROM ot_studio_revisions r LEFT JOIN ot_profiles editor ON editor.owner_id=r.editor_id`;
 
 function scope(ot: OtContext, req: FastifyRequest): Scope {
   const { ownerId } = ot.me(req);
@@ -84,6 +98,37 @@ function detail(ot: OtContext, access: Scope, id: string) {
   return row;
 }
 
+function currentRevision(ot: OtContext, access: Scope, id: string) {
+  assert(HEX_ID.test(id), 404, "document_not_found", "no such document");
+  const row = ot.get<{revision: number}>(`SELECT revision FROM ot_studio_documents
+    WHERE team_id=? AND id=? AND deleted_at IS NULL`, access.teamId, id);
+  assert(row, 404, "document_not_found", "no such document");
+  return row.revision;
+}
+
+function revisionNumber(value: string) {
+  assert(/^[1-9][0-9]{0,15}$/.test(value), 400, "invalid_request", "Invalid revision");
+  return expectedRevision(Number(value));
+}
+
+function snapshot(ot: OtContext, id: string, restoredFrom: number | null = null) {
+  ot.run(`INSERT INTO ot_studio_revisions (document_id, revision, title, body, editor_id, updated_at, restored_from)
+    SELECT id, revision, title, body, updated_by, updated_at, ? FROM ot_studio_documents WHERE id=?`, restoredFrom, id);
+  ot.run(`DELETE FROM ot_studio_revisions WHERE document_id=? AND revision <=
+    (SELECT revision FROM ot_studio_documents WHERE id=?) - ?`, id, id, MAX_REVISIONS);
+}
+
+function update(ot: OtContext, access: Scope, id: string, revision: number, draft: {title: string; body: string},
+    restoredFrom: number | null = null) {
+  const result = ot.run(`UPDATE ot_studio_documents
+    SET title=?,body=?,revision=revision+1,updated_by=?,updated_at=?
+    WHERE team_id=? AND id=? AND revision=? AND deleted_at IS NULL`,
+  draft.title, draft.body, access.ownerId, ot.now(), access.teamId, id, revision);
+  assert(result.changes === 1, 409, "revision_conflict", "The document has a newer revision");
+  snapshot(ot, id, restoredFrom);
+  return { document: view(access, detail(ot, access, id)) };
+}
+
 function view(access: Scope, row: Document) {
   return { ...summary(access, row), body: row.body };
 }
@@ -127,6 +172,7 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
         (id, team_id, title, body, revision, created_by, updated_by, updated_at, key_hash, request_hash)
         VALUES (?,?,?,?,1,?,?,?,?,?)`, id, access.teamId, draft.title, draft.body, access.ownerId,
       access.ownerId, ot.now(), keyHash, requestHash);
+      snapshot(ot, id);
       return { status: 201, document: view(access, detail(ot, access, id)) };
     }).immediate();
     return reply.code(result.status).send({ document: result.document });
@@ -140,13 +186,8 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
     assert(Object.keys(filters).every(key => key === "revision"), 400, "invalid_request", "Unexpected document query");
     const requested = one(filters.revision, "revision");
     if (requested !== undefined) {
-      assert(/^[1-9][0-9]{0,15}$/.test(requested), 400, "invalid_request", "Invalid revision");
-      const revision = expectedRevision(Number(requested));
-      assert(HEX_ID.test(id), 404, "document_not_found", "no such document");
-      const current = ot.get<{ revision: number }>(`SELECT revision FROM ot_studio_documents
-        WHERE team_id=? AND id=? AND deleted_at IS NULL`, access.teamId, id);
-      assert(current, 404, "document_not_found", "no such document");
-      if (current.revision === revision) return { unchanged: true, revision };
+      const revision = revisionNumber(requested);
+      if (currentRevision(ot, access, id) === revision) return { unchanged: true, revision };
     }
     return { document: view(access, detail(ot, access, id)) };
   }));
@@ -159,12 +200,43 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
     checkRevision(row.revision, revision);
     const draft = content(input);
     if (draft.title === row.title && draft.body === row.body) return { document: view(access, row) };
-    const result = ot.run(`UPDATE ot_studio_documents
-      SET title=?,body=?,revision=revision+1,updated_by=?,updated_at=?
-      WHERE team_id=? AND id=? AND revision=? AND deleted_at IS NULL`,
-    draft.title, draft.body, access.ownerId, ot.now(), access.teamId, row.id, revision);
-    assert(result.changes === 1, 409, "revision_conflict", "The document has a newer revision");
-    return { document: view(access, detail(ot, access, row.id)) };
+    return update(ot, access, row.id, revision, draft);
+  }).immediate());
+
+  app.get(HISTORY, async (req, reply) => ot.tx(() => {
+    const access = scope(ot, req);
+    const id = params(req).document;
+    const current_revision = currentRevision(ot, access, id);
+    reply.header("Cache-Control", "private, no-store");
+    const items = ot.all<Revision>(`SELECT ${HISTORY_FIELDS} ${HISTORY_ROWS}
+      WHERE r.document_id=? ORDER BY r.revision DESC LIMIT ?`, id, MAX_REVISIONS);
+    return { items, current_revision, retained_limit: MAX_REVISIONS };
+  }));
+
+  app.get(HISTORY + "/:revision", async (req, reply) => ot.tx(() => {
+    const access = scope(ot, req);
+    const {document: id, revision} = params(req);
+    const current_revision = currentRevision(ot, access, id);
+    reply.header("Cache-Control", "private, no-store");
+    const version = ot.get<Revision & {body: string}>(`SELECT ${HISTORY_FIELDS}, r.body ${HISTORY_ROWS}
+      WHERE r.document_id=? AND r.revision=?`, id, revisionNumber(revision));
+    assert(version, 404, "revision_not_found", "no such revision");
+    return { version, current_revision };
+  }));
+
+  app.post(DETAIL + "/restore", async req => ot.db.transaction(() => {
+    const access = scope(ot, req);
+    const id = params(req).document;
+    const current = currentRevision(ot, access, id);
+    const input = fields(req, ["revision", "to"]);
+    const base = expectedRevision(input.revision);
+    const to = expectedRevision(input.to);
+    checkRevision(current, base);
+    assert(to < current, 400, "invalid_request", "Choose an earlier revision");
+    const version = ot.get<{title: string; body: string}>(`SELECT title, body FROM ot_studio_revisions
+      WHERE document_id=? AND revision=?`, id, to);
+    assert(version, 404, "revision_not_found", "no such revision");
+    return update(ot, access, id, base, version, to);
   }).immediate());
 
   app.delete(DETAIL, async req => ot.db.transaction(() => {
@@ -178,6 +250,7 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
       WHERE team_id=? AND id=? AND revision=? AND deleted_at IS NULL`,
     ot.now(), access.teamId, row.id, revision);
     assert(result.changes === 1, 409, "revision_conflict", "The document has a newer revision");
+    ot.run("DELETE FROM ot_studio_revisions WHERE document_id=?", row.id);
     return { deleted: true };
   }).immediate());
 }
