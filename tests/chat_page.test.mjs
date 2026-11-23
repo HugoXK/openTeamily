@@ -3606,6 +3606,67 @@ test('resource picker cancels pending reads, inserts actual quoted content once,
   assert.equal(el('resource-picker').open,false);assert.equal(posts.length,0);
 });
 
+test('prompt templates save the current draft, bind late inserts to their conversation, and never send', async () => {
+  const {mountPromptTemplates} = await import('../openteamily/static/chat/prompt-templates.mjs');
+  const {doc, el} = utilityDocument();
+  const composer = el('chat-body');
+  composer.maxLength = 4000;
+  composer.value = 'Summarize {{topic}}';
+  const prompt = {id: 'b'.repeat(32), title: 'Summary', variables: ['topic'], current_version: 1};
+  let scope = 'owner-workspace-thread';
+  let receipt;
+  let changed = 0;
+  composer.dispatchEvent = event => { if (event.type === 'input') changed += 1; };
+  const requests = [];
+  const library = mountPromptTemplates(doc, {composer, scope: () => scope, uiLabel: (_zh, en) => en,
+    request: async (method, path, body) => {
+      assert.equal(method, 'POST');
+      assert.equal(path, '/b/api/openteamily');
+      requests.push(body);
+      const value = body.endpoint === 'prompts/list' ? {items: [], cursor: null}
+        : body.endpoint === 'prompts/create' ? {prompt} : await receipt.promise;
+      return {status: 200, body: {ok: true, value}};
+    },
+  });
+  library.open();
+  await settle(2);
+  el('chat-prompt-title').value = 'Summary';
+  await fire(el('chat-prompt-save-form'), 'submit', {preventDefault() {}});
+  await settle(2);
+  assert.deepEqual(requests.map(call => call.endpoint), ['prompts/list', 'prompts/create']);
+  assert.deepEqual(requests.at(-1).payload, {title: 'Summary', body: 'Summarize {{topic}}', scope: 'private'});
+  const fields = el('chat-prompt-values');
+  fields.querySelector('input').value = 'work';
+  composer.value = 'Keep this';
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  receipt.resolve({text: 'x'.repeat(4000), missing: []});
+  await settle(2);
+  assert.match(el('chat-prompt-status').textContent, /message limit/);
+  assert.equal(composer.value, 'Keep this');
+  assert.equal(changed, 0);
+
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  scope = 'owner-workspace-other-thread';
+  receipt.resolve({text: 'Summarize work', missing: []});
+  await settle(2);
+  assert.equal(composer.value, 'Keep this');
+  assert.equal(changed, 0);
+
+  scope = 'owner-workspace-thread';
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  receipt.resolve({text: 'Summarize work', missing: []});
+  await settle(2);
+  assert.equal(composer.value, 'Keep this\n\nSummarize work');
+  assert.equal(changed, 1);
+  assert.equal(el('chat-prompt-dialog').open, false);
+  assert.deepEqual(requests.slice(-3).map(call => call.payload), Array(3).fill({
+    id: prompt.id, version: 1, values: {topic: 'work'},
+  }));
+});
+
 test('model utility errors remain visible and retries retain identity without fake completion', async()=>{
   const {mountMessageUtilities}=await import('../openteamily/static/chat/utilities.mjs');
   const {doc,el}=utilityDocument();const writes=[];const c={wid:'w',cid:'c',kind:'group'};

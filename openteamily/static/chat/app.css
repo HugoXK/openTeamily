@@ -3768,3 +3768,22 @@ body.app-workspace .mobile-inbox-heading h1 {
 }
 .chat-sequence-group-label.is-block-start { border-radius: .5rem .5rem 0 0; }
 .chat-sequence-group-label.is-branch { border-top: 1px dashed var(--ot-line); }
+
+#chat-prompt-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  color: var(--ot-ink);
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: 16px;
+  padding: 1.25rem;
+}
+#chat-prompt-dialog::backdrop { background: #14281d55; }
+.chat-prompt-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.chat-prompt-dialog-header h2 { margin: 0; font-size: 1.15rem; }
+#chat-prompt-dialog form { display: grid; gap: .5rem; margin-top: 1rem; }
+#chat-prompt-dialog form button { justify-self: start; }
+#chat-prompt-dialog select, #chat-prompt-dialog input { width: 100%; min-width: 0; }
+#chat-prompt-values { display: grid; gap: .4rem; }
+#chat-prompt-values:empty, #chat-prompt-status:empty { display: none; }

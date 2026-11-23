@@ -9477,6 +9477,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  const templateButton = document.getElementById('chat-prompt-templates');
+  if (servedByDsbot && templateButton && document.getElementById('chat-prompt-dialog')?.showModal) {
+    const composer = document.getElementById('chat-body');
+    const scope = () => currentUser && !sendClosed() && !composer.disabled &&
+      (currentSource === 'agent' ? currentAgent : currentConversation) ? sendScope() : null;
+    const loadTemplates = deferModule('./prompt-templates.mjs');
+    let templates;
+    const label = uiLabel('提示词模板', 'Prompt templates');
+    templateButton.title = label;
+    templateButton.setAttribute('aria-label', label);
+    templateButton.hidden = false;
+    templateButton.addEventListener('click', async () => {
+      const opening = scope();
+      if (!opening) {
+        show('error', uiLabel('请先打开可发送消息的对话。', 'Open a conversation you can send to first.'));
+        return;
+      }
+      try {
+        const {mountPromptTemplates} = await loadTemplates();
+        if (scope() !== opening) return;
+        templates ||= mountPromptTemplates(document, {request, composer, scope, uiLabel});
+        templates.open();
+      } catch {
+        if (scope() === opening) show('error', uiLabel('无法打开提示词模板。请重试。', 'Could not open prompt templates. Try again.'));
+      }
+    });
+  }
+
   const formatButton = document.getElementById('chat-format');
   const formatMenu = document.getElementById('chat-format-menu');
   const formatBold = document.getElementById('chat-format-bold');
