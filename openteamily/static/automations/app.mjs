@@ -318,6 +318,14 @@ export function draftFromTemplate(template, username) {
   return draft;
 }
 
+export function automationEditionDraft(item) {
+  const suffix = ' · 副本';
+  const title = item.title.trim().slice(0, 80 - suffix.length).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + suffix;
+  return {edition:true,title,prompt:item.prompt,template_id:item.template_id,intent:item.intent,scope:item.scope,
+    enabled:false,schedule:{...item.schedule},participants:[...(item.participants || [])],agents:[...(item.agents || [])],
+    notification_policy:notificationPolicy(item.notification_policy)};
+}
+
 function meetingActionDraft(source, username) {
   const suffix = ' · 行动项 ' + (source.target.action + 1);
   const topic = source.title.replace(/[\p{Cc}\s]+/gu, ' ').trim();
@@ -602,6 +610,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newButton = document.getElementById('new-automation');
   const saveButton = document.getElementById('save-automation');
   const sampleButton = document.getElementById('save-and-sample');
+  const copyButton = document.getElementById('copy-automation');
   const backButton = document.getElementById('cancel-editor');
   const editorConfirm = document.getElementById('editor-head-confirm') || form;
   const manualRunNote = document.getElementById('manual-run-note');
@@ -1258,6 +1267,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncRunControls() {
     const target = runScope();
+    if (copyButton) {
+      copyButton.hidden = !native || !target.automation || current?.workspace_id !== target.workspace;
+      copyButton.disabled = saveButton.disabled;
+    }
     const submission = runSubmissions.get(target.key);
     const watched = watchedRuns.get(target.key);
     const uncertain = submission?.state === 'uncertain';
@@ -1592,7 +1605,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     rememberEditorSettings();
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = item?.id ? item.title
-      : source?.target.memoryAction ? '准备行动跟进' : source ? '创建会议跟进' : '新建自动化';
+      : source?.target.memoryAction ? '准备行动跟进' : source ? '创建会议跟进' : item?.edition ? '复制自动化' : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
     runButton.hidden = !item?.id;
     syncRunControls();
@@ -1609,8 +1622,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderManualRunNote() {
     if (!manualRunNote) return;
-    manualRunNote.hidden = !current?.id && !followupSource;
+    manualRunNote.hidden = !current?.id && !followupSource && !current?.edition;
     manualRunNote.textContent = followupSource ? '保存为暂停的自动化。保存后可手动运行一次。'
+      : current?.edition ? '副本默认暂停。保存前可以修改任务和运行时间。'
       : oneTimeScheduleLabel(current?.schedule_status?.state) ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
@@ -2193,6 +2207,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       },
     });
   });
+  copyButton?.addEventListener('click', () => {
+    const target = runScope();
+    if (copyButton.hidden || copyButton.disabled || !target.automation || current?.workspace_id !== target.workspace) return;
+    const action = () => {
+      if (!currentRunScope(target) || saveButton.disabled) return;
+      const draft = automationEditionDraft(current);
+      const position = listReturn;
+      clearEditorLink();
+      openEditor(draft);
+      listReturn = position;
+    };
+    if (!editorHasChanges()) return action();
+    openConfirm({parent:editorConfirm,trigger:copyButton,
+      prompt:{question:'有未保存的修改。放弃修改并复制已保存版本？',confirmLabel:'复制已保存版本'},action});
+  });
   form.addEventListener('input', watchEditorExit);
   form.addEventListener('change', watchEditorExit);
 
@@ -2212,6 +2241,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const item = current?.id ? current : null;
     const source = followupSource;
+    const edition = current?.edition === true;
     const sample = Boolean(sampleButton && event.submitter === sampleButton && !sampleButton.hidden &&
       !item && !source && native && RECURRING_KINDS.has(values.schedule.kind));
     const editor = editorRequest;
@@ -2293,6 +2323,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       followupSource = null;
       replaceAutomationLink(current);
     }
+    if (edition && !startedSample && current?.workspace_id === workspace && /^[0-9a-f]{32}$/.test(current.id || '')) {
+      replaceAutomationLink(current);
+    }
     renderFollowupSource(savedFollowupSource(current));
     if (!item) {
       selectCategory('mine');
@@ -2308,6 +2341,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('remove-automation').hidden = false;
     runButton.hidden = false;
     if (runHistoryButton) runHistoryButton.hidden = false;
+    syncRunControls();
     renderManualRunNote();
     show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'

@@ -400,6 +400,10 @@
         <h2 id="group-invite-heading" data-ui-text="chat.group.add_group_members">添加群成员</h2>
         <p id="group-invite-context"></p>
         <label><span class="sr-only" data-ui-text="chat.group.search_eligible">搜索可添加的工作区成员</span><input type="search" id="group-invite-query" placeholder="搜索工作区成员" maxlength="80" autocomplete="off" data-ui-placeholder="chat.group.search_workspace"></label>
+        <div id="group-invite-selection" hidden>
+          <p id="group-invite-selected-count" role="status"></p>
+          <button type="button" id="group-invite-review" aria-pressed="false" aria-controls="group-invite-choices">仅显示已选</button>
+        </div>
         <div class="member-choices" id="group-invite-choices"></div>
         <p id="group-invite-status" role="status"></p>
         <section id="group-invite-link-panel" hidden aria-labelledby="group-invite-link-heading">

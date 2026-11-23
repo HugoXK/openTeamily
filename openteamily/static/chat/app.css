@@ -2060,10 +2060,16 @@ html[data-theme-resolved="dark"] #message-list li.agent{
 #group-invite-dialog .actions { margin-top: .25rem; }
 #group-invite-context { color: var(--ot-muted); overflow-wrap: anywhere; }
 #group-invite-query { width: 100%; }
+#group-invite-selection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+#group-invite-selected-count { font-size: .8125rem; color: var(--ot-muted); }
+#group-invite-review { min-height: 2.75rem; padding: .25rem .625rem; box-shadow: none; -webkit-tap-highlight-color: transparent; }
+#group-invite-review[aria-pressed="true"] { background: var(--ot-accent-soft); border-color: var(--ot-accent); color: var(--ot-accent-hover); }
 #group-invite-choices { max-height: min(16rem, 36dvh); overflow-y: auto; }
-#group-invite-choices label { min-height: 2.75rem; padding: .25rem .5rem; border-radius: .55rem; overflow-wrap: anywhere; }
+#group-invite-choices label { flex-flow: row nowrap; min-height: 2.75rem; padding: .25rem .5rem; border-radius: .55rem; overflow-wrap: anywhere; }
 #group-invite-choices label:hover { background: var(--ot-surface-2); }
 #group-invite-choices input { flex: 0 0 auto; }
+#group-invite-choices .group-invite-identity { display: grid; gap: .1rem; min-width: 0; }
+#group-invite-choices small { color: var(--ot-muted); }
 #group-invite-status:empty { display: none; }
 #group-info-invite, #group-info-add-agent { min-height: 2.75rem; text-align: left; color: var(--ot-accent-hover); }
 #group-info-add-agent-dialog { box-sizing: border-box; width: min(27rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); }

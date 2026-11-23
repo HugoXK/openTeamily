@@ -604,7 +604,7 @@ test('search and join use the team directory and show the approval status', asyn
     requests.push([path, options.method]);
     if (path === '/v1/auth/session') return respond(200, {user: {id: 'one', username: 'alice'}});
     if (path === '/v1/team-directory/ott_1/join') return pending.promise;
-    assert.match(path, /^\/v1\/team-directory\?limit=100/);
+    assert.match(path, /^\/v1\/team-directory\?limit=24/);
     return respond(200, {items: path.includes('&q=') ? [] : [team]});
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
@@ -624,10 +624,10 @@ test('search and join use the team directory and show the approval status', asyn
   assert.equal(el('discover-list').children.length, 1);
   assert.deepEqual(requests, [
     ['/v1/auth/session', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
     ['/v1/team-directory/ott_1/join', 'POST'],
-    ['/v1/team-directory?limit=100&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
   ]);
 });
 

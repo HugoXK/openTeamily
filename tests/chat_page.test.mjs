@@ -3768,6 +3768,7 @@ const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
 const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
 const linkPersonalStartup = linkPersonalDefault + '&workspace=';
+const linkPersonalSocial = workspace => linkPersonalStartup + workspace + '&directory=0';
 const linkPersonalEntry = linkPersonalStartup + linkWork + '&entry_agent=' + linkAgent;
 const linkPersonalThreadEntry = linkPersonalEntry + '&entry_conversation=' + linkThread + '&directory=0';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
@@ -3812,6 +3813,7 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
     const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
     const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork
+      : [linkWork, linkTeam].some(workspace => path === linkPersonalSocial(workspace)) ? path.slice(0, -'&directory=0'.length)
       : path.endsWith(linkSocialPath + '?start=unread') ? path.slice(0, -'?start=unread'.length) : path;
     const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call, options);
@@ -4146,7 +4148,7 @@ test('an exact shared chat and its group sidebar are usable while the personal s
     assert.equal(selected(), linkSocial);
     assert.deepEqual(messages(), [linkSocialLatest]);
     assert.equal(el('chat-body').disabled, false);
-    assert.ok(calls.some(call => call.path === linkPersonalStartup + linkTeam));
+    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkTeam)));
     assert.ok(calls.some(call => call.path === scope + linkNativeDirectory));
     assert.ok(calls.some(call => call.path === scope + linkSocialDirectory));
 
@@ -4161,6 +4163,52 @@ test('an exact shared chat and its group sidebar are usable while the personal s
   } finally {
     personal.resolve(json(503, {}));
     agents.resolve(json(503, {}));
+    restore();
+  }
+});
+
+test('an authorized personal group opens while the personal snapshot and native sidebar wait', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, calls, messages, selected, restore} = fixture;
+  const personal = Promise.withResolvers();
+  const agents = Promise.withResolvers();
+  const scope = linkBase(linkWork);
+  routes.set(linkPersonalSocial(linkWork), () => personal.promise);
+  routes.set(scope + linkNativeDirectory, () => agents.promise);
+  const loading = mount(doc, {fetcher:fixture.fetcher});
+  try {
+    await settle();
+    assert.equal(el('workspace').value, linkWork);
+    assert.equal(selected(), linkSocial);
+    assert.deepEqual(messages(), [linkSocialLatest]);
+    assert.equal(el('chat-body').disabled, false);
+    assert.equal(calls.filter(call => call.path.startsWith(scope + linkSocialPath + '?')).length, 1);
+    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkWork)));
+  } finally {
+    personal.resolve(linkedChatSnapshot(fixture));
+    agents.resolve(json(200, {items:[fixture.agent], conversations:[fixture.nativeThread]}));
+    await loading;
+    await settle();
+    restore();
+  }
+});
+
+test('an authorized team workspace entry starts loading its sidebar before the personal binding returns', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}`, {narrow:true});
+  const {doc, el, routes, calls, restore} = fixture;
+  const personal = Promise.withResolvers();
+  routes.set(linkPersonalStartup + linkTeam, () => personal.promise);
+  const loading = mount(doc, {fetcher:fixture.fetcher});
+  try {
+    await settle();
+    assert.equal(el('workspace').value, linkTeam);
+    assert.ok(calls.some(call => call.path === linkBase(linkTeam) + linkSocialDirectory));
+    assert.ok(calls.some(call => call.path === linkBase(linkTeam) + linkNativeDirectory));
+    assert.equal(calls.some(call => call.path === linkBase(linkWork) + linkNativeDirectory), false);
+  } finally {
+    personal.resolve(linkedChatSnapshot(fixture));
+    await loading;
+    await settle();
     restore();
   }
 });
