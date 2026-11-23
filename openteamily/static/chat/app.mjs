@@ -9,7 +9,6 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
-import { appendChatMarkdown, hasExplicitRichContent } from './rich-content.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
@@ -17,6 +16,8 @@ import { confirmSignupSession, personalDraftScope, readPendingPrivateText, saveP
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
+const loadRichContent = deferModule('./rich-content.mjs');
+let richContent;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -342,12 +343,43 @@ export function meetingCallHrefInMessage(text, origin) {
   return '';
 }
 
+function mayContainChatMarkdown(text, assistantReply) {
+  if (/^[ \t]*(?:```|~~~)/m.test(text) ||
+      (text.includes('|') && text.includes('\n') && /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\||$)/m.test(text))) return true;
+  return assistantReply && (/[\\`*_~]/.test(text) || /\]\(|\n[ \t]*\n/.test(text) ||
+    /^(?:#{1,6}\s|[ \t]*(?:>|[-+]\s|\d+[.)]\s|-{3,}$))/m.test(text));
+}
+
+function appendMessageMarkdown(doc, parent, source, assistantReply, updatePreview) {
+  const node = doc.createElement('div');
+  node.textContent = source;
+  parent.append(node);
+  const format = module => {
+    if (!assistantReply && !module.hasExplicitRichContent(source)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    module.renderChatMarkdown(doc, node, source);
+    updatePreview?.();
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  };
+  if (richContent) format(richContent);
+  else {
+    void loadRichContent().then(module => {
+      richContent = module;
+      if (node.isConnected !== false) format(module);
+    }).catch(() => {
+      // The message text and transcript remain usable if formatting fails to load.
+    });
+  }
+}
+
 function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
   const source = String(text || '');
-  const rich = Boolean((assistantReply && source.trim()) || hasExplicitRichContent(source));
+  const rich = mayContainChatMarkdown(source, assistantReply) &&
+    (!richContent || assistantReply || richContent.hasExplicitRichContent(source));
   if (rich) {
     renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews,
-      (parent, value) => appendChatMarkdown(doc, parent, value));
+      (parent, value, updatePreview) => appendMessageMarkdown(doc, parent, value, assistantReply, updatePreview));
   } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
@@ -5296,8 +5328,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else if (currentSource === 'agent' && privateHistory) await restorePrivateLatest(privateHistory);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
+  let startingInboxDirectory = null;
   let membersStatus = '';
-  async function loadSessions(link, {nativeDirectory, onPrivate} = {}) {
+  async function loadSessions(link, {nativeDirectory, pendingNativeDirectory, onPrivate} = {}) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
@@ -5312,8 +5345,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderSessions();
     }
     if (!id) return;
+    const startupRead = pendingNativeDirectory || (currentSource === 'social' && startingInboxDirectory?.owner === user &&
+      startingInboxDirectory.workspace === id ? startingInboxDirectory.read : null);
     const isLocalPersonal = inPersonalWorkspace();
-    const readThreadReceipt = nativeDirectory ? 0 : privateThreadReceipt;
+    const threadReceiptAtStart = privateThreadReceipt;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const path = `/v1/workspaces/${id}`;
     const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
@@ -5356,7 +5391,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return social;
     });
-    const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
+    const startupDirectory = nativeDirectory || (startupRead ? await startupRead : null);
+    if (!current()) return;
+    const readThreadReceipt = startupDirectory ? 0 : threadReceiptAtStart;
+    const listed = startupDirectory ? {status: 200, body: startupDirectory}
       : await read('/agents?limit=100&include=conversations');
     if (!current()) return;
     const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
@@ -5398,7 +5436,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!socialReady) renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null, socialReady);
     }
     const social = await socialRequest;
     if (!current()) return;
@@ -7434,7 +7472,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const socialTarget = start.social && chatPathId(start.social);
     const exactTarget = start.social ? socialTarget : chatPathId(start.agent) && chatPathId(start.conversation);
     const workspaceOnly = !start.social && !start.agent && !start.conversation;
-    const scopedEntry = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && (exactTarget || workspaceOnly);
+    const validWorkspace = /^[0-9a-f]{32}$/.test(start.workspace);
+    const inboxEntry = workspaceOnly && (!start.workspace || validWorkspace);
+    const scopedEntry = sharedRequest && !publicIntent && (inboxEntry || (validWorkspace && exactTarget));
     // The signed workspace list authorizes scoped entries while the personal snapshot is pending.
     const {local, shared, personalSpace} = scopedEntry ? await Promise.any([
       localReady.then(async local => {
@@ -7444,8 +7484,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       sharedRequest.then(shared => {
         const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
         const personalSpace = items.find(space => space.kind === 'personal' && (!space.owner_id || space.owner_id === owner.id));
-        const target = items.find(space => space.id === start.workspace);
-        const authorized = target && (['team', 'workspace'].includes(target.kind) || (socialTarget && target === personalSpace));
+        const target = start.workspace ? items.find(space => space.id === start.workspace) : personalSpace;
+        const authorized = target && (['team', 'workspace'].includes(target.kind) ||
+          ((socialTarget || inboxEntry) && target === personalSpace));
         return personalSpace && authorized ? {shared, personalSpace} : Promise.reject();
       }),
     ]).catch(() => ({})) : {local: await localReady};
@@ -7566,14 +7607,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     };
     let openingAgent;
     let firstSnapshot;
-    const snapshotOnStartup = openLocal && local.directory && !hash && !narrowScreen();
+    // A partial inbox can be used immediately, while the same native request
+    // still supplies private sessions and the final default session order.
+    const pendingNativeDirectory = shared && inboxEntry && workspaceId() === personalWorkspace
+      ? localReady.then(local => local?.space.id === personalWorkspace ? local.directory : null) : null;
+    if (pendingNativeDirectory) {
+      const opening = {owner, workspace: personalWorkspace, read: pendingNativeDirectory};
+      startingInboxDirectory = opening;
+      void pendingNativeDirectory.then(() => {
+        if (startingInboxDirectory === opening) startingInboxDirectory = null;
+      });
+    }
+    const snapshotOnStartup = (openLocal && local.directory || pendingNativeDirectory) && !hash && !narrowScreen();
     await loadSessions(undefined, {
       nativeDirectory: openLocal ? local.directory : null,
-      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? recent => {
+      pendingNativeDirectory,
+      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? (recent, socialReady) => {
         if (!bootCurrent()) return;
         if (start.agent) {
           openingAgent = openStartingAgent();
-        } else if (recent) {
+        } else if (recent && (!socialReady || sessions[0] === recent)) {
           firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
         }
       } : null,
@@ -8421,7 +8474,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
     if (message && scope === sendScope()) {
-      if (socialHistory?.readingHistory) liveBanner.hidden = false;
+      // Only append to a history window when the receipt cannot skip a message.
+      const tail = lastSocialItems.at(-1)?.seq;
+      const nextInView = Number.isSafeInteger(tail) && message.seq === tail + 1;
+      if (socialHistory?.readingHistory && !nextInView) liveBanner.hidden = false;
       else {
         const without = lastSocialItems.filter(item => item.id !== message.id);
         renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq), {refresh:true});

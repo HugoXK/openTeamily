@@ -2,9 +2,7 @@ import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
-import { mountSharedStudio } from './shared-studio.mjs';
-import { mountStudioCopy } from './studio-copy.mjs';
-import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
+import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
 
 function studioTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -633,6 +631,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let workspaceResolved = false;
   let studioWorkspaces = [];
   let workspaceLoad = 0;
+  let studioPreload = null;
   let current = null;
   let editor = null;
   let catalog = null;
@@ -706,8 +705,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (method, path, body, options = {}) =>
       request(method, path, body, undefined, options.signal, options.keepalive),
   });
-  const studio = mountSharedStudio(document, {
-    request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+  const studioButton = document.getElementById('studio-open');
+  const studioDialog = document.getElementById('studio-dialog');
+  const studioCopyButtons = ['studio-copy-open','studio-copy-mobile'].map(id => document.getElementById(id)).filter(Boolean);
+  const studioRequest = (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal);
+  const selectedStudioWorkspace = () => nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null;
+  const studioOptions = {
+    request: studioRequest,
     personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
       (!item.owner_id || item.owner_id === currentUser?.id))?.id,
     onOpenCatalog(workspace) {
@@ -736,12 +740,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     onClose() {
       if (studioTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },
+  };
+  const studio = lazyEditor(async () => {
+    const {mountSharedStudio} = await import('./shared-studio.mjs');
+    const component = mountSharedStudio(document, studioOptions);
+    component?.setWorkspace(selectedStudioWorkspace(), currentUser?.id);
+    return component;
   });
-  const studioCopy = mountStudioCopy(document, {
-    source: () => ({
-      selection: editor, item: current,
-      workspaces: nativeCatalog ? studioWorkspaces : [],
-    }),
+  const studioCopySource = () => ({
+    selection: editor, item: current,
+    workspaces: nativeCatalog ? studioWorkspaces : [],
+  });
+  const studioCopyOptions = {
+    source: studioCopySource,
     ready(selection) {
       if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
       if (selection.saving) return '作品正在保存，请稍候。';
@@ -751,13 +762,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (selection, id, review) =>
       request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
     show,
+  };
+  const studioCopy = lazyEditor(async () => {
+    const {mountStudioCopy} = await import('./studio-copy.mjs');
+    return mountStudioCopy(document, studioCopyOptions);
   });
-  const sharedWorkCopy = mountSharedWorkCopy(document, {
+  const sharedWorkCopyOptions = {
     request: (method, path, body, signal) => request(method, path, body, undefined, signal),
     dismissLink: () => syncViewUrl(),
     openArtifact: (workspace, artifact) => {
       void openEditor(artifact, {workspace,saved:true,notice:{kind:'ok',text:'已保存到个人空间。'}});
     },
+  };
+  const sharedWorkCopy = lazyEditor(async () => {
+    const {mountSharedWorkCopy} = await import('./shared-work-copy.mjs');
+    return mountSharedWorkCopy(document, sharedWorkCopyOptions);
   });
   const workVersion = lazyEditor(async () => {
     const {mountWorkVersion} = await import('./version-preview.mjs');
@@ -768,11 +787,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     });
   });
 
-  function syncStudioWorkspace() {
-    studio?.setWorkspace(nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
-      currentUser?.id);
-    studioCopy?.update();
+  function syncStudioCopy() {
+    const available = Boolean(studioCopyCandidate(studioCopySource()));
+    for (const button of studioCopyButtons) button.hidden = !available;
   }
+
+  function syncStudioWorkspace() {
+    const team = selectedStudioWorkspace();
+    if (studio.instance) studio.instance.setWorkspace(team, currentUser?.id);
+    else if (studioButton) studioButton.hidden = typeof studioDialog?.showModal !== 'function' || !studioScope(team, currentUser?.id);
+    syncStudioCopy();
+  }
+
+  studioButton?.addEventListener('click', async () => {
+    if (!workspaceResolved || !studioScope(selectedStudioWorkspace(), currentUser?.id)) return;
+    const load = workspaceLoad;
+    studioButton.disabled = true;
+    show('', '正在打开团队协作…');
+    try {
+      await studio.prepare();
+      if (load !== workspaceLoad) return;
+      show('', '');
+      await studio.instance?.open();
+    } catch {
+      if (load === workspaceLoad) show('error', '无法加载团队协作，请重试。');
+    } finally {
+      studioButton.disabled = false;
+    }
+  });
+
+  for (const button of studioCopyButtons) button.addEventListener('click', async () => {
+    const source = studioCopyCandidate(studioCopySource());
+    if (!source) return;
+    button.disabled = true;
+    try {
+      await studioCopy.prepare();
+      if (source.selection === editor && source.item === current) studioCopy.instance?.open();
+    } catch {
+      if (source.selection === editor) show('error', '无法打开团队复制，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   async function renderProviders() {
     const box = document.getElementById('oidc-providers');
@@ -2498,14 +2554,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
-    studioCopy?.update();
+    syncStudioCopy();
   }
 
   function hideEditor() {
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
-    studioCopy?.close();
+    studioCopy.instance?.close();
     editor?.controller.abort();
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
@@ -3417,8 +3473,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncStudioWorkspace();
   }
 
+  function cancelStudioPreload() {
+    studioPreload?.controller.abort();
+    studioPreload = null;
+  }
+
+  function nextWorkspaceLoad() {
+    cancelStudioPreload();
+    return ++workspaceLoad;
+  }
+
   async function load() {
-    const seq = ++workspaceLoad;
+    const seq = nextWorkspaceLoad();
     workspaceResolved = false;
     workspacePending.hidden = false;
     syncWorkspaceCreation();
@@ -3432,6 +3498,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
+    const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
       !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
       ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
@@ -3466,6 +3534,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
+    // The native Studio GET checks team membership itself. Start it alongside
+    // the workspace directory, and use it only for the verified selected team.
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
+    if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
       const items = result?.body?.items;
       if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
@@ -3475,7 +3548,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    const sharedPath = '/v1/workspaces?limit=100';
+    let {initial: space, supplemental} = namedStudio
+      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
+      : await readWorkspaceChoices(request, sharedPath, personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -3483,6 +3559,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
+      cancelStudioPreload();
       workspacePending.hidden = true;
       show('error', '无法读取工作区。');
       return;
@@ -3494,6 +3571,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
     if (!workspaces.length) {
+      cancelStudioPreload();
       hideEditor();
       catalog = null;
       allItems = [];
@@ -3510,15 +3588,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     hideEditor();
     if (sharedWork) {
       void loadList();
-      if (personal && personal.id === workspaceId() && sharedWorkCopy) sharedWorkCopy.open(personal.id,sharedWork);
+      const ready = await sharedCopyCode;
+      if (seq !== workspaceLoad) return;
+      if (ready && personal && personal.id === workspaceId() && sharedWorkCopy.instance) {
+        sharedWorkCopy.instance.open(personal.id, sharedWork);
+      }
       else show('error', '无法打开个人空间，请重试。');
       return;
     }
     if (linkedStudio) {
-      void loadList();
-      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
-          !await studio?.open(linkedStudio.id, linkedStudio.revision, linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined)) {
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace) {
+        cancelStudioPreload();
+        void loadList();
         show('error', '团队文档链接无效，或你没有访问权限。');
+        return;
+      }
+      void loadList();
+      const codeReady = await studioCode;
+      if (seq !== workspaceLoad) return;
+      if (!codeReady) {
+        cancelStudioPreload();
+        show('error', '无法加载团队协作，请刷新页面重试。');
+        return;
+      }
+      const opening = studio.instance?.open(linkedStudio.id, linkedStudio.revision,
+        linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined, prepared);
+      studioPreload = null;
+      if (!await opening) {
+        prepared?.controller.abort();
+        if (seq === workspaceLoad) show('error', '团队文档链接无效，或你没有访问权限。');
       }
       return;
     }
@@ -3587,7 +3685,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor) workspaceSelect.value = editor.workspace;
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     syncWorkspaceCreation();
     closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
@@ -4609,7 +4707,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     hideEditor();
     currentUser = null;
     syncStudioWorkspace();
@@ -4642,7 +4740,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const tracked = next?.session === spaceHistoryId;
       const approved = approvedBack;
       approvedBack = false;
-      if (!approved && (!canLeaveEditor() || studio?.canLeave() === false)) {
+      if (!approved && (!canLeaveEditor() || studio.instance?.canLeave() === false)) {
         if (spaceAddress) {
           const delta = tracked ? spaceAddress.entry.position - next.position : 0;
           if (delta && typeof view.history?.go === 'function') {
@@ -4655,17 +4753,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (tracked) spaceAddress = {url:spaceLocation(), state:event.state, entry:next};
       else writeSpaceAddress(spaceLocation());
       const address = spaceAddress;
-      workspaceLoad += 1;
+      nextWorkspaceLoad();
       hideEditor();
-      sharedWorkCopy?.close();
-      studio?.leaveForNavigation();
+      sharedWorkCopy.instance?.close();
+      studio.instance?.leaveForNavigation();
       show('', '');
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
       const studioTarget = studioTargetFromSearch(view.location.search);
-      if (studioTarget && !studioTarget.invalid && workspaceResolved && workspaceId() === studioTarget.workspace) {
-        void studio?.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
+      if (studio.instance && studioTarget && !studioTarget.invalid && workspaceResolved && workspaceId() === studioTarget.workspace) {
+        void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
         return;
       }
       if (studioTarget || artifactTargetFromSearch(view.location.search) ||

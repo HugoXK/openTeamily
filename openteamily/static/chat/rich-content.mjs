@@ -1,4 +1,4 @@
-import { markdownToBlocks, renderMarkdown } from '../memory/rich.mjs';
+import { markdownToBlocks, renderMarkdown } from '../shell/markdown.mjs';
 import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { renderChatCodeBlock } from './code-block.mjs';
 
@@ -61,10 +61,7 @@ async function showFlowchart(document, container, code, text, english) {
   }
 }
 
-export function appendChatMarkdown(document, parent, source) {
-  const markdown = document.createElement('div');
-  markdown.className = 'chat-markdown';
-  renderMarkdown(document, markdown, source, {readTable:readMarkdownTable, renderTable:renderMarkdownTable, renderCode});
-  parent.append(markdown);
-  return markdown;
+export function renderChatMarkdown(document, node, source) {
+  node.className = 'chat-markdown';
+  renderMarkdown(document, node, source, {readTable:readMarkdownTable, renderTable:renderMarkdownTable, renderCode});
 }

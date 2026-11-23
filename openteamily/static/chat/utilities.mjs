@@ -249,20 +249,22 @@ export function renderMessageText(document, root, text, folding = 'standard', li
     const details = document.createElement('details');
     const summary = document.createElement('summary');
     details.append(summary);
-    let preview = String(text);
-    if (renderBody) {
-      const body = renderBody(details, text);
-      preview = Array.from(body.children, block => {
+    const updatePreview = () => {
+      const body = renderBody && details.children[1];
+      const preview = body?.children.length ? Array.from(body.children, block => {
         if (block.dataset?.summary) return block.dataset.summary;
         if (['OL', 'UL'].includes(block.tagName)) return Array.from(block.children, item => item.textContent).join(' · ');
         const headings = block.querySelectorAll?.('thead th');
         return headings?.length ? Array.from(headings, cell => cell.textContent).join(' · ') : block.textContent;
-      }).join(' ').trim() || preview;
-    } else {
+      }).join(' ').trim() : '';
+      summary.textContent = (preview || String(text)).slice(0, limit) + '… 展开全文';
+    };
+    if (renderBody) renderBody(details, text, updatePreview);
+    else {
       const content = document.createElement('span'); content.setAttribute('style','white-space:pre-wrap'); content.textContent = text;
       details.append(content);
     }
-    summary.textContent = preview.slice(0, limit) + '… 展开全文';
+    updatePreview();
     root.append(details);
   }
   if (!linkPreviews) return;

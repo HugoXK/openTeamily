@@ -114,9 +114,10 @@ function teamRunsV1(endpoints, log) {
   const only = (req, method) => {
     if (req.method !== method) throw new FeatureError(405, 'method', 'Only ' + method + ' is supported')
   }
+  const read = (req, body) => ({body: req.ownerUsername ? {...body, viewer_username:req.ownerUsername} : body})
   return createV1Endpoint({ feature: 'team-runs', context: {log}, routes: [
     route(base, async (req, workspace_id) => {
-      if (req.method === 'GET') return { body: await endpoints.list({workspace_id}) }
+      if (req.method === 'GET') return read(req, await endpoints.list({workspace_id}))
       only(req, 'POST')
       const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps', 'source'])
       const {status, run} = await endpoints.create({ ...body, workspace_id, idempotency_key: req.headers.get('idempotency-key') })
@@ -124,11 +125,11 @@ function teamRunsV1(endpoints, log) {
     }),
     route(detail, async (req, workspace_id, id) => {
       only(req, 'GET')
-      return {body: await endpoints.get({workspace_id, id})}
+      return read(req, await endpoints.get({workspace_id, id}))
     }),
     route(base + '/automation-results/([0-9a-f]{32})/([0-9a-f]{32})', async (req, workspace_id, automation_id, run_id) => {
       only(req, 'GET')
-      return {body: await endpoints.automationResult({workspace_id, automation_id, run_id})}
+      return read(req, await endpoints.automationResult({workspace_id, automation_id, run_id}))
     }),
     route(detail + '/export', async (req, workspace_id, id) => {
       only(req, 'GET')
@@ -528,5 +529,6 @@ export default async function teamRuns(host) {
   void host.runtime().then(resume, resume)
   const wrapped = {}
   for (const [name, fn] of Object.entries(feature.endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.v1 = (payload, call) => feature.endpoints.v1(payload ?? {}, call)
   return { pages: ['team-runs'], endpoints: wrapped }
 }

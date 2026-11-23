@@ -3522,6 +3522,38 @@ test('assistant Markdown tables render scoped table headers and delegate only ce
   assert.equal(body.children[0].children[1].textContent, '<img src=x>');
 });
 
+test('the inbox entry leaves Markdown modules outside its static dependency graph', () => {
+  assert.doesNotMatch(chatHtml(), /rel="modulepreload"[^>]*href="[^"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs"/);
+  const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /from\s+['"][^'"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs['"]/);
+});
+
+test('a later rich renderer updates a folded message preview without closing or replacing its details', async () => {
+  const {renderMessageText} = await import('../openteamily/static/chat/utilities.mjs');
+  const {doc} = fakeChatDocument(chatHtml());
+  const root = doc.createElement('div');
+  const source = `### 后续检查\n\n${'保留完整内容。'.repeat(145)}`;
+  let body;
+  let updatePreview;
+  renderMessageText(doc, root, source, 'standard', false, (parent, text, afterRender) => {
+    body = doc.createElement('div');
+    body.textContent = text;
+    parent.append(body);
+    updatePreview = afterRender;
+  });
+  const [details] = root.children;
+  const [summary] = details.children;
+  details.open = true;
+  assert.match(summary.textContent, /^### 后续检查/);
+  const heading = doc.createElement('h3');
+  heading.textContent = '后续检查';
+  body.replaceChildren(heading);
+  updatePreview();
+  assert.equal(root.children[0], details);
+  assert.equal(details.open, true);
+  assert.equal(summary.textContent, '后续检查… 展开全文');
+});
+
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
   const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
   const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');
@@ -4257,6 +4289,56 @@ test('returning to a private chat fetches once and keeps the older scroll positi
     restore();
   }
 });
+
+for (const hasGap of [false, true]) {
+  test(`the plain inbox sends before native history loads and ${hasGap ? 'keeps a history gap out of view' : 'shows the confirmed next message'}`, async () => {
+    const fixture = linkedChatFixture('', {narrow:true});
+    const {doc, el, routes, calls, messages, selected, restore} = fixture;
+    const personal = Promise.withResolvers();
+    const scope = linkBase(linkWork);
+    const path = scope + linkSocialPath;
+    const next = 'otm_' + 'B'.repeat(26);
+    routes.set(linkPersonalDefault, () => personal.promise);
+    routes.set(path + '?start=unread', () => json(200, {
+      conversation:{id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group', unread_count:3,
+        updated:30, last_seq:8, members:[linkMember]},
+      items:[{id: linkSocialLatest, conversation_id:linkSocial, user_id:bob, seq:8, body:'Unread group message'}],
+      unread_window:{first:{id:linkSocialLatest, seq:8}, read_seq:7, last_seq:8, has_newer:false},
+    }));
+    routes.set(path + '/messages', () => json(201, {message:{
+      id:next, conversation_id:linkSocial, user_id:alice, seq:hasGap ? 10 : 9, body:'Reply before the inbox finishes',
+    }}));
+    const loading = mount(doc, {fetcher:fixture.fetcher});
+    try {
+      await settle();
+      assert.equal(el('workspace').value, linkWork);
+      const group = sessionRows(el).find(row => row.dataset.conversation === linkSocial);
+      assert.ok(group);
+      await fire(el('conversation-list'), 'click', {target:group});
+      assert.equal(selected(), linkSocial);
+      assert.deepEqual(messages().filter(Boolean), [linkSocialLatest]);
+      el('chat-body').value = 'Reply before the inbox finishes';
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      await settle();
+      assert.equal(el('chat-body').value, '');
+      assert.deepEqual(messages().filter(Boolean), hasGap ? [linkSocialLatest] : [linkSocialLatest,next]);
+      assert.equal(el('conversation-live-update').hidden, !hasGap);
+      assert.equal(calls.filter(call => call.path === path + '/messages').length, 1);
+      assert.equal(calls.some(call => call.path === scope + linkNativeDirectory), false);
+      personal.resolve(linkedChatSnapshot(fixture));
+      await loading;
+      await settle();
+      assert.ok(sessionRows(el).some(row => row.dataset.conversation === linkThread));
+      assert.equal(selected(), linkSocial);
+      assert.equal(calls.some(call => call.path === scope + linkNativeDirectory), false);
+    } finally {
+      personal.resolve(json(503, {}));
+      await loading;
+      await settle();
+      restore();
+    }
+  });
+}
 
 test('an exact shared chat and its group sidebar are usable while the personal startup and agent directory wait', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});

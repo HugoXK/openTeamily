@@ -67,7 +67,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['body'], b'')
 
     def test_static_validators_revalidate_get_and_head_without_a_body(self):
-        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs'):
+        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs', '/artifacts/entry.mjs'):
             first = self.raw.call('GET', path)
             self.assertEqual(first['status'], 200)
             self.assertEqual(first['headers']['Cache-Control'], 'private, no-cache')

@@ -1,7 +1,6 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { notifyActionFollowup } from '../shell/action-followup-events.mjs';
-import { mountStudioShare } from './studio-share.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -670,10 +669,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // the filter switches do not close a row under the reader.
   const expandedRuns = new Set();
   const teamNames = new Map();
-  const studioShare = mountStudioShare(document, {
-    request: (method, path, body, signal) => request(method, path, body, undefined, signal),
-    isCurrent: currentRunScope,
-  });
+  const canShareToStudio = typeof document.getElementById('automation-studio-dialog')?.showModal === 'function';
+  let studioShareLoad;
+
+  async function openStudioShare(trigger, target, run, team) {
+    if (!currentRunScope(target) || trigger.disabled) return;
+    trigger.disabled = true;
+    setBusy(trigger, true);
+    studioShareLoad ??= import('./studio-share.mjs').then(({mountStudioShare}) => mountStudioShare(document, {
+      request: (method, path, body, signal) => request(method, path, body, undefined, signal),
+      isCurrent: currentRunScope,
+    })).catch(() => {
+      studioShareLoad = null;
+      return null;
+    });
+    const share = await studioShareLoad;
+    trigger.disabled = false;
+    setBusy(trigger, false);
+    if (!currentRunScope(target)) return;
+    const activeTrigger = trigger.isConnected ? trigger
+      : document.querySelector(`#run-list [data-run-id="${run}"] [data-run-control="studio"]`);
+    if (!activeTrigger || activeTrigger.closest('[hidden]')) return;
+    if (share) share.open(activeTrigger, target, run, team);
+    else show('error', '暂时无法打开团队共享。请重试。');
+  }
 
   function pushRunFilter(filter) {
     if (!view || !view.history || !view.location) return;
@@ -1145,7 +1164,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         detail.appendChild(action);
         const team = teamNames.get(target.workspace);
-        if (studioShare && native && team) {
+        if (canShareToStudio && native && team) {
           const share = document.createElement('button');
           share.type = 'button';
           share.className = 'secondary run-share-team';
@@ -1153,7 +1172,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           share.textContent = '分享至团队协作';
           share.setAttribute('aria-haspopup', 'dialog');
           if (restore && focusRow.dataset.runId === item.id && focusedControl === 'studio') nextFocus = share;
-          share.addEventListener('click', () => studioShare.open(share, target, item.id, team));
+          share.addEventListener('click', () => openStudioShare(share, target, item.id, team));
           detail.appendChild(share);
         }
       }
