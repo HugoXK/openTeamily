@@ -10,8 +10,8 @@ const sourceDir = fileURLToPath(new URL('../ds-bot-upstream/ds-bot/', import.met
 const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
-    'cf6f9ddbf898ded9429c6895c43eea8175c9b57e2777f4800c8c4f89acd97035',
-    'e62dccc37a0c02e962468eab381fd8b5e8334f1ee6b51f3bd94fae3fba904f8a',
+    '2527e2a9bc6dcae9d4b08973e6b677db7e515cadb3d0843c7474bffbdff56034',
+    '34d617b7c6472695a2139ceed94879d1ef8c5ebd049d597b18f7e14346df9999',
   ],
   'src/client/at-menu.js': [
     'a0feee8fdb684324e7160f422c7930ec4ae032ef214d5d4651a7f6ede3c82124',
@@ -22,24 +22,24 @@ const files = {
     'bc23ba5a3fa351d83c1714441055a022fb1d4f813479908777519b0b191b240b',
   ],
   'src/client/i18n.js': [
-    '1124fb90ac4409c3bfff7f092800e98aa5590437c5372d3823a446ee427a2506',
-    '19825b82add7d5cc4ff5e2393d8826786c8f1209c36fce411c6fd2411467e5fb',
+    'b4532d9f3df3570690ce67ca16f6bf31b4daad7a37be0a8800bedcbcbd77f606',
+    '424ee582bfca9ab5b46e604b54d74de7cf1b75b521bf0250669a3aae982a72f6',
   ],
   'src/client/new-chat.js': [
-    '1086a6d2a199959cb73f088f8c19492dd2ad654425eb324688a0ae8b6c2d5176',
-    'f3baacd31e58247a3da295ed73062afb6c2357cfc11f50d2b3420eff1911128a',
+    '3f98f6db4cf84f6a9ad9aaef9228a6332970e0ce5bfa1533cda100faf570bf06',
+    'cc44ddde3947c8ca20c6c0a8806366f57a4b2f6b86f22ef21dde63cc97d8d6c9',
   ],
   'src/client/team-actions.js': [
-    '2c7bb430115cc4bc44d714c1c7f12ec0965049774b6785d5434d20379ce714a6',
-    'a20d9cc15385d826a8fd4cb2d06421763ae65885f2cfa7717afdb563f8bc8a4a',
+    'd827f54bbcd41e2572ba6fd02879b182f596cd7cc48e03f5ad1bdcb5ab036008',
+    '37217792866074e48a6ed890615db2633f9dd4e817c23e18570c174c5f046419',
   ],
   'src/host/capabilities.js': [
-    'de00bf540137da28f4bd3e28cec2af87b95a5f9672e4f5461da9c9e94a1cc1c3',
-    '39669aba5c52ffc9ae505c6bf52e8494c443a4d2f5f84206213962a8b5c2cba8',
+    'c9f9a62de52275fa93a289b49894fcbaa8bd01c4d5f37e932cdedc8afd65738a',
+    'f23fc96ac541c79a0fdd58fb0872421a1ddc9903dc9c460480fab176a8328b9b',
   ],
   'src/host/channel.js': [
-    '705ef779835e55100f3eaa04cd7e995e4fcc7a02eb3ad9fd976cedbd904d6aa4',
-    '02138c12a8659d79117847925c8e37039af78ce15dea1954abf4156bac04df7a',
+    'ac73e8f9b1d14eb9aae4672f7c1e5c33d4b803362db7f5bd34efefb3a748c51f',
+    '91d8d69a6dfcfb0308fedb0e03881e0f9edf8a584fff40296ac64f9e0630b796',
   ],
 }
 
