@@ -11,10 +11,58 @@ import { loadFeatures } from '../src/features.js'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 
-function fixture(chatTurn) {
+function testRuntime() {
+  const bots = { main: { id: 'main', name: 'Main', capabilities: [] } }
+  let sessions = 0
+  const rt = {
+    state: { bots },
+    botOf: id => bots[id],
+    chatOwners: new Map(),
+    createBot: async fields => (bots.agent = { ...fields, id: 'agent', capabilities: [] }),
+    updateBot: async (id, fields) => Object.assign(bots[id], fields),
+    setFlags: async (id, fields) => Object.assign(bots[id], fields),
+    createSession: async () => 'session-' + ++sessions,
+    workDirOf: () => '/fixture',
+    resolveAgent: async id => ({ session: { id } }),
+    eventsBackwards: async function* () {},
+    save: async () => {},
+  }
+  return { bots, rt }
+}
+
+function fixture() {
   const turns = []
-  const host = { runtime: async () => ({ rt: {}, ctx: {}, chatTurn: chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: `DS-Bot reply ${turns.length}`, sessionId: 's-' + key, turnId: 't' } }) }) }
-  const created = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3'))
+  const { rt } = testRuntime()
+  rt.eventsBackwards = async function* (sessionId) {
+    let seq = 0
+    for (const row of db.prepare('SELECT * FROM agent_messages ORDER BY created,id').all()) {
+      const content = [{ type: 'text', text: row.text }]
+      yield {
+        type: row.role === 'user' ? 'user/message' : 'assistant/message',
+        seq: ++seq,
+        time: row.created * 1000,
+        data: row.role === 'user'
+          ? { content, source: { openteamilyMessageId: row.id } }
+          : { message: { content, source: { openteamilyMessageId: row.id } } },
+      }
+    }
+  }
+  const nativeTurn = async (botId, sessionId, text, rid) => {
+    turns.push({ key: sessionId, text, rid })
+    return { text: `DS-Bot reply ${turns.length}`, sessionId, turnId: 't' }
+  }
+  const host = {
+    call: async () => ({}),
+    runtime: async () => ({
+      rt,
+      ctx: { sessions: { flush: async () => {} } },
+      mainBot: async () => 'main',
+      chatTurn: async () => { throw new Error('Agent turns use the native Bot session') },
+      nativeTurn,
+    }),
+  }
+  const created = createAgents({ db, host })
   return { e: created.endpoints, turns, migrate: created.migrate }
 }
 
@@ -111,8 +159,8 @@ test('messages to an agent are native DS-Bot turns on that conversation\'s own s
   const sent = await e.send({ workspace_id: W, id: agent.id, conversation_id: conversation.id, text: '你好' })
   assert.equal(sent.reply.text, 'DS-Bot reply 1')
   assert.equal(sent.reply.meta.engine, 'ds-bot')
-  assert.equal(turns[0].key, `agent:${agent.id}:${conversation.id}`)
-  assert.match(turns[0].text, /^You are 助手\.\nKeep answers to one sentence\.\n\nUser: 你好$/)
+  assert.equal(turns[0].key, sent.reply.meta.session_id)
+  assert.equal(turns[0].text, '你好')
   assert.equal(turns[0].rid, `ot-agent:${sent.message.id}`)
   assert.equal((await e.messages({ workspace_id: W, id: agent.id, conversation_id: conversation.id })).items.length, 2)
   await e.archive({ workspace_id: W, id: agent.id })
@@ -120,7 +168,8 @@ test('messages to an agent are native DS-Bot turns on that conversation\'s own s
 })
 
 test('without the DS-Bot chat service a send fails closed and is recorded', async () => {
-  const host = { runtime: async () => ({ rt: {}, ctx: {} }) }
+  const { rt } = testRuntime()
+  const host = { runtime: async () => ({ rt, ctx: { sessions: { flush: async () => {} } }, mainBot: async () => 'main' }) }
   const { endpoints: e } = createAgents({ db: new DatabaseSync(':memory:'), host })
   const { agent } = await e.create({ workspace_id: W, name: 'A', idempotency_key: 'b'.repeat(16) })
   const { conversation } = await e['conversation-create']({ workspace_id: W, id: agent.id })

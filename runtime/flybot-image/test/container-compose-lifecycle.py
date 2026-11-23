@@ -308,8 +308,16 @@ def main(argv):
         user = ApiClient(app, loopback_origin)
         require(user.register('alice')['status'] == 201, 'register failed')
         enrolled = user.call('POST', '/v1/personal-agent')
-        require(enrolled['status'] == 201, 'personal agent failed: %r' % enrolled)
+        require(enrolled['status'] in (200, 201), 'personal agent failed: %r' % enrolled)
         personal = enrolled['body']['personal_agent']
+        require(isinstance(personal, dict), 'personal agent shape unexpected: %r' % enrolled)
+        workspace = personal.get('workspace')
+        agent = personal.get('agent')
+        require(isinstance(workspace, dict) and isinstance(workspace.get('id'), str)
+                and workspace.get('kind') == 'personal',
+                'personal workspace shape unexpected: %r' % enrolled)
+        require(isinstance(agent, dict) and isinstance(agent.get('id'), str),
+                'personal agent identity missing: %r' % enrolled)
         provision = personal['runtime_provisioning']
         require(provision['state'] == 'provisioned', 'personal runtime was not provisioned')
         iid = provision['instance_id']

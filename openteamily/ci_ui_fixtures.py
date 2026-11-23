@@ -5,16 +5,18 @@ tokens, runtime keys, or public homepage tokens. Not a Teamily or production
 dataset.
 """
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import secrets
 import struct
+import threading
 import time
 import zlib
 
 from .app import App, Config
 from .store import Store
-from tests.test_artifact_media import multipart
 from tests.test_management import Client
 
 
@@ -69,6 +71,59 @@ def solid_png(width=96, height=64, rgb=(0x1A, 0x5F, 0xB0)):
     raw = b''.join(b'\x00' + (bytes(rgb) * width) for _ in range(height))
     ihdr = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+
+
+def start_fake_provider(secret, body_text='hello from fake provider'):
+    seen = {'authorization': None, 'body': None, 'count': 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get('Content-Length', '0'))
+            raw = self.rfile.read(length)
+            seen['authorization'] = self.headers.get('Authorization')
+            seen['body'] = raw
+            seen['count'] += 1
+            if self.path.rstrip('/') != '/v1/chat/completions':
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get('Authorization') != 'Bearer ' + secret:
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error":"unauthorized"}')
+                return
+            payload = json.dumps({
+                'choices': [{'message': {'role': 'assistant', 'content': body_text}}],
+                'model': 'fake-model',
+            }).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+    thread.start()
+    return server, thread, seen
+
+
+def multipart(fields, files, boundary='----OTTestBoundary9f3a'):
+    parts = []
+    for name, value in fields:
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        )
+    for name, filename, mime, data in files:
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+            f'Content-Type: {mime}\r\n\r\n'.encode() + data + b'\r\n'
+        )
+    parts.append(f'--{boundary}--\r\n'.encode())
+    return b''.join(parts), 'multipart/form-data; boundary=' + boundary
 
 
 def _require(response, allowed, action):

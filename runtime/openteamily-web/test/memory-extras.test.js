@@ -394,7 +394,7 @@ test('automatic group capture has its own cursor and can be paused during extrac
     assert.deepEqual(await toggle(true),{enabled:true})
     assert.deepEqual(await toggle(true),{enabled:true},'a retried enable preserves the cursor')
     assert.equal((await list()).body.group_capture,true)
-    await Promise.race([extracting,delay(6000,null,{ref:false}).then(()=>assert.fail('Group capture did not start'))])
+    await Promise.race([extracting,delay(6000).then(()=>assert.fail('Group capture did not start'))])
     assert.deepEqual(reads,[42])
     await list('POST',{enabled:false})
     assert.equal((await list()).body.queued,1,'the private-chat preference is independent')

@@ -24,9 +24,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from openteamily.ci_ui_fixtures import (  # noqa: E402
-    PROVIDER_TEXT, USERNAME, seed_fixtures,
+    PROVIDER_TEXT, USERNAME, seed_fixtures, start_fake_provider,
 )
-from tests.test_runtime_infer import start_fake_provider  # noqa: E402
 
 
 def _free_port(preferred):
@@ -208,22 +207,14 @@ def main(argv=None):
         cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(0.4)
-    agent = subprocess.Popen(
-        [sys.executable, '-m', 'openteamily.flybot', 'daemon', 'start',
-         '--origin', origin, '--key-file', seed['runtime_key_file'],
-         '--hostname', seed['runtime_key_name'], '--poll', '0.5'],
-        cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
 
     def shutdown(*_args):
-        for process in (agent, server):
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-        for process in (agent, server):
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        if server.poll() is None:
+            server.send_signal(signal.SIGTERM)
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
         provider.shutdown()
         provider_thread.join(3)
         provider.server_close()
