@@ -1884,8 +1884,8 @@
       "path": "src/openteamily/index.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "2be9a5757d552b713df8352e703813f380b3c5a7efab51af0b52b8f3797c845d",
-      "bytes": 1671
+      "new_sha256": "8afd51e2c4393261a4188eea92aed9ce66a683f9b15f7f6e2a8beb54bce3edea",
+      "bytes": 1794
     },
     "services/bot-social/test/openteamily_teams.test.ts": {
       "destination": "services/bot-social",
@@ -2250,6 +2250,22 @@
       "bytes": 8535,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
+    },
+    "services/bot-social/src/openteamily/moderation.ts": {
+      "destination": "services/bot-social",
+      "path": "src/openteamily/moderation.ts",
+      "reason": "OpenTeamily-authored addition (MIT): blocks, reports and the moderation queue, stored in Bot Social (#587).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "661c8e84abf930c13abd61798f923d465664420824118faf2867320ec48fe58b",
+      "bytes": 13312
+    },
+    "services/bot-social/test/ot_moderation.test.ts": {
+      "destination": "services/bot-social",
+      "path": "test/ot_moderation.test.ts",
+      "reason": "OpenTeamily-authored addition (MIT): blocks, reports and the moderation queue, stored in Bot Social (#587).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "1b75d282a06000a0a309134411d3228dd15b5ce407a062218bdc541500ece99d",
+      "bytes": 11856
     }
   },
   "core_fork_removed": {
