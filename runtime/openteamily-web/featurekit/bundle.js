@@ -15,11 +15,11 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.bundle$/
 const IDENT = /^[a-z_][a-z0-9_]{0,63}$/
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
 
-// Target binding policy: a bundle carrying instance_id must match this host.
-// Missing instance_id is rejected by default (requireInstanceId !== false).
-// Only the private-volume boot importer explicitly passes requireInstanceId:false
-// so pre-binding v1 files can still be read there; all manager/featurekit/B4
-// import paths require the id. Error text matches src/pending-import.js.
+// Target binding policy: when the caller opts in with target options, a bundle
+// carrying instance_id must match this host and a missing id is rejected unless
+// the caller explicitly passes requireInstanceId:false (legacy acceptance).
+// Callers that already verify their own target (B4, pending-import) may call
+// verifyBundle without options. Featurekit passes the routing identity.
 function targetOptions(options) {
   if (typeof options === 'string') return { instanceId: options }
   if (!options || typeof options !== 'object') return {}
@@ -44,7 +44,11 @@ export function verifyBundleTarget(bundle, options = {}) {
 export function verifyBundle(bundle, feature, options = {}) {
   if (!bundle || bundle.format !== BUNDLE_FORMAT || bundle.version !== 1) throw new Error('unsupported bundle format')
   if (bundle.feature !== feature.name) throw new Error('bundle feature mismatch')
-  verifyBundleTarget(bundle, options)
+  // B4 and other callers may already verify the target themselves. Only apply
+  // the shared check when the caller opted in by supplying target options.
+  const targetCheck = typeof options === 'string' || (options && (
+    options.instanceId !== undefined || options.requireInstanceId !== undefined || options.allowLegacy !== undefined))
+  if (targetCheck) verifyBundleTarget(bundle, options)
   const declared = feature.importTables ?? {}
   const tables = bundle.tables ?? {}
   const manifest = bundle.manifest ?? {}
