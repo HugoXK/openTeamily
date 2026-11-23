@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS team_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT
 CREATE INDEX IF NOT EXISTS team_runs_workspace_recent ON team_runs(workspace_id, created DESC, id DESC);
 CREATE TABLE IF NOT EXISTS team_run_sources (run_id TEXT PRIMARY KEY REFERENCES team_runs(id) ON DELETE CASCADE,
   source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS team_run_reuses (
+  sequence INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL UNIQUE REFERENCES team_runs(id) ON DELETE CASCADE,
+  original_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS team_run_reuses_original ON team_run_reuses(original_id, sequence DESC);
 CREATE TABLE IF NOT EXISTS team_run_steps (run_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE, position INTEGER NOT NULL,
   agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, instruction TEXT NOT NULL, depends TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('waiting','queued','running','succeeded','failed','blocked','cancelled')),
@@ -119,7 +124,7 @@ function teamRunsV1(endpoints, log) {
     route(base, async (req, workspace_id) => {
       if (req.method === 'GET') return read(req, await endpoints.list({workspace_id}))
       only(req, 'POST')
-      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps', 'source'])
+      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps', 'source', 'reused_from'])
       const {status, run} = await endpoints.create({ ...body, workspace_id, idempotency_key: req.headers.get('idempotency-key') })
       return {status, body: {run}}
     }),
@@ -214,6 +219,12 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       out.steps = list.map(s => stepView(s, depth))
       const source = sourceFor(row.id)
       if (source) out.source = source
+      const original = one(`SELECT r.id FROM team_run_reuses l JOIN team_runs r ON r.id=l.original_id
+        WHERE l.run_id=? AND r.workspace_id=?`, row.id, row.workspace_id)
+      const latest = one(`SELECT r.id FROM team_run_reuses l JOIN team_runs r ON r.id=l.run_id
+        WHERE l.original_id=? AND r.workspace_id=? ORDER BY l.sequence DESC LIMIT 1`, row.id, row.workspace_id)
+      if (original) out.reused_from = original.id
+      if (latest) out.latest_reuse = latest.id
     }
     return out
   }
@@ -394,11 +405,15 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const parsed = parseSteps(p.steps)
       const source = p.source === undefined ? null : automationSource(p.source) ?? teamRunSource(p.source)
       if (p.source !== undefined && !source) fail('source_invalid', '结果引用无效。', 400)
+      const originalId = p.reused_from
+      if (originalId !== undefined && (typeof originalId !== 'string' || !ID.test(originalId))) {
+        fail('invalid', '请选择有效的原任务。', 400)
+      }
       if (typeof p.idempotency_key !== 'string' || !IDEM.test(p.idempotency_key)) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
       const keyHash = sha('team-run:' + p.idempotency_key)
       const title = p.title.trim(), goal = p.goal.trim()
       const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title,
-        ...(source && {source}) }))
+        ...(source && {source}), ...(originalId && {reused_from:originalId}) }))
       const existing = () => {
         const prior = one('SELECT * FROM team_runs WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
         if (!prior) return null
@@ -427,6 +442,11 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const saved = transaction(() => {
         const concurrent = existing()
         if (concurrent) return concurrent
+        if (originalId) {
+          const original = one('SELECT status FROM team_runs WHERE id=? AND workspace_id=?', originalId, workspaceId)
+          if (!original) fail('reuse_unavailable', '原任务已不可用。可以移除引用后继续。', 404)
+          if (original.status === 'running') fail('reuse_active', '原任务仍在运行。完成后可以复用。', 409)
+        }
         const owned = one(`SELECT COUNT(*) AS total, COUNT(CASE WHEN status='running' THEN 1 END) AS active
           FROM team_runs WHERE workspace_id=?`, workspaceId)
         if (owned.total >= LIMITS.runs) fail('quota', 'Team run capacity reached; remove finished runs first', 429)
@@ -434,6 +454,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         const id = newId(), t = clock()
         run('INSERT INTO team_runs VALUES(?,?,?,?,?,?,?,?,?)', id, workspaceId, title, goal, 'running', t, t, keyHash, requestHash)
         if (source) run('INSERT INTO team_run_sources (run_id, source) VALUES (?,?)', id, JSON.stringify(source))
+        if (originalId) run('INSERT INTO team_run_reuses (run_id, original_id) VALUES (?,?)', id, originalId)
         for (const [position, s] of parsed.entries()) {
           run('INSERT INTO team_run_steps (run_id, position, agent_id, agent_name, instruction, depends, status) VALUES(?,?,?,?,?,?,?)',
             id, position, s.agent_id, heads.get(s.agent_id), s.instruction, JSON.stringify(s.depends), 'waiting')

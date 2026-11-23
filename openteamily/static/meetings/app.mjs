@@ -665,6 +665,9 @@ function mount() {
   let listRequest = null;
   let retryList = null;
   let searchTimer;
+  let catalogueOrigin = '';
+  let catalogueSize = 0;
+  let catalogueTranscript = false;
   let inboxView = null;
   const inboxWrites = new Set();
   let actions = [];
@@ -1091,10 +1094,30 @@ function mount() {
     destination.button.addEventListener('click', () => copySavedNotes(destination));
   }
 
-  function rewriteLocation(params, workspace = workspaceId()) {
-    if (globalThis.history?.replaceState && globalThis.location) {
-      globalThis.history.replaceState(null, '', '#' + new URLSearchParams(workspace ? {workspace, ...params} : params));
+  function rememberCatalogue(url) {
+    const history = globalThis.history;
+    if (!history?.replaceState || !globalThis.location) return;
+    const workspace = workspaceId();
+    const state = {...history.state};
+    if (native && meetingIdPattern.test(viewerId) && meetingIdPattern.test(workspace)) {
+      state.meetingCatalogue = {owner:viewerId, workspace, query:search.value.trim().slice(0, 80), open:openOnly.checked,
+        origin:catalogueOrigin, size:catalogueSize, transcript:catalogueTranscript};
     }
+    history.replaceState(state, '', url ?? globalThis.location.href);
+  }
+
+  function restoreCatalogue() {
+    const saved = native && globalThis.history?.state?.meetingCatalogue;
+    const matching = saved && meetingIdPattern.test(viewerId) && saved.owner === viewerId && saved.workspace === workspaceId();
+    search.value = matching && typeof saved.query === 'string' ? saved.query.slice(0, 80) : '';
+    openOnly.checked = Boolean(matching && saved.open === true);
+    catalogueOrigin = matching && meetingIdPattern.test(saved.origin) ? saved.origin : '';
+    catalogueSize = matching && Number.isInteger(saved.size) ? Math.max(0, Math.min(saved.size, 100)) : 0;
+    catalogueTranscript = Boolean(catalogueOrigin && matching && saved.transcript === true);
+  }
+
+  function rewriteLocation(params, workspace = workspaceId()) {
+    rememberCatalogue('#' + new URLSearchParams(workspace ? {workspace, ...params} : params));
   }
 
   function draftOwner() {
@@ -1639,6 +1662,14 @@ function mount() {
     listCursor = '';
     listVersion = undefined;
     listStatus.textContent = '';
+    catalogueOrigin = '';
+    catalogueSize = 0;
+    catalogueTranscript = false;
+  }
+
+  function focusCatalogue(fallback) {
+    const origin = catalogueOrigin && document.querySelector(`#meeting-list button[data-meeting="${catalogueOrigin}"]`);
+    (origin || ((search.value || openOnly.checked) ? search : fallback))?.focus();
   }
 
   function setReceiptMode(receipt) {
@@ -1733,7 +1764,7 @@ function mount() {
     syncWriting();
     if (focus) {
       document.getElementById('main').scrollTop = 0;
-      newButton.focus?.({preventScroll: true});
+      focusCatalogue(newButton);
     }
   }
 
@@ -1741,12 +1772,14 @@ function mount() {
     const workspace = workspaceId(), pendingSelection = selection;
     if (!workspace || (append && (!listCursor || listRequest || searchTimer))) return;
     const cursor = append ? listCursor : '';
-    const query = new URLSearchParams({limit: native ? Math.max(20, preserve ? Math.min(100, meetings.length) : 0) : 100});
+    const size = append || refresh ? 20 : Math.max(20, Math.min(100, preserve ? meetings.length : catalogueSize));
+    const query = new URLSearchParams({limit: native ? size : 100});
     if (native) {
       query.set('order', 'recent');
       if (search.value?.trim()) query.set('q', search.value.trim());
       if (openOnly.checked) query.set('open', '1');
       if (cursor) query.set('cursor', cursor);
+      if (!append) rememberCatalogue();
     }
     stopList();
     const controller = listRequest = new AbortController();
@@ -1774,9 +1807,11 @@ function mount() {
       return true;
     });
     meetings = append ? [...meetings, ...items] : items;
+    catalogueSize = Math.min(100, meetings.length);
     const next = result.body.cursor;
     listCursor = next !== cursor && meetingIdPattern.test(next || '') ? next : '';
     listStatus.textContent = append ? `已显示 ${meetings.length} 条会议记录。` : refresh ? '会议列表已更新。' : '';
+    if (native) rememberCatalogue();
     renderList();
     if (append || keepEditor || pendingSelection !== selection) return;
     if (globalThis.matchMedia?.('(max-width: 700px)').matches) {
@@ -2013,10 +2048,12 @@ function mount() {
       : detail.body.meeting?.id === meetingId && detail.body.meeting.workspace_id === linkedWorkspace);
     if (verified) {
       fillWorkspaces([{id: linkedWorkspace, name: '当前工作区'}], linkedWorkspace);
+      restoreCatalogue();
       syncLibraryLink();
       if (shareId) void openSharedMeeting(shareId, detail);
       else {
-        void openMeeting(meetingId, detail, undefined, actionReference);
+        const transcriptQuery = catalogueTranscript && catalogueOrigin === meetingId ? search.value : '';
+        void openMeeting(meetingId, detail, transcriptQuery, actionReference);
         void loadList({keepEditor: true});
       }
     }
@@ -2038,6 +2075,7 @@ function mount() {
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(withVerified(shared.body.items || []), workspaceId());
     });
     if (verified) return;
+    restoreCatalogue();
     if (linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
       workspaceSelect.value = '';
       syncLibraryLink();
@@ -2068,7 +2106,8 @@ function mount() {
         show('error', '共享纪要链接无效。');
       }
     } else if (workspaceId() === linkedWorkspace && meetingIdPattern.test(meetingId)) {
-      await Promise.all([openMeeting(meetingId, viewerMatches && detail, undefined, actionReference), loadList({keepEditor: true})]);
+      const transcriptQuery = catalogueTranscript && catalogueOrigin === meetingId ? search.value : '';
+      await Promise.all([openMeeting(meetingId, viewerMatches && detail, transcriptQuery, actionReference), loadList({keepEditor: true})]);
     } else if (linked.get('new') === '1') {
       fill(null);
       if (linked.get('from') === 'chat') {
@@ -2384,7 +2423,8 @@ function mount() {
     resume.hidden = false;
     sharing.sync();
     document.getElementById('main').scrollTop = 0;
-    resume.focus?.({preventScroll: true});
+    if (current?.id === catalogueOrigin) focusCatalogue(resume);
+    else resume.focus?.({preventScroll: true});
   });
 
   resume.addEventListener('click', () => {
@@ -2434,7 +2474,11 @@ function mount() {
     if (!resume.hidden && current?.id === id) {
       resume.click();
       if (transcriptQuery) transcriptSearch.open(transcriptQuery);
-    } else await confirmNavigation(() => openMeeting(id, undefined, transcriptQuery));
+    } else await confirmNavigation(() => {
+      catalogueOrigin = id;
+      catalogueTranscript = Boolean(transcriptQuery);
+      return openMeeting(id, undefined, transcriptQuery);
+    });
   });
 
   function filterMeetings(debounce = false) {
@@ -2486,6 +2530,8 @@ function mount() {
     hideAttendees();
     memberCache = {workspace: '', items: [], failed: false};
     resetList();
+    search.value = '';
+    openOnly.checked = false;
     openCatalogue();
     if (actionView) setInbox(true, {focus:false});
     if (workspaceId()) void loadList({keepEditor:actionView});

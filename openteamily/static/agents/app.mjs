@@ -30,6 +30,8 @@ export function searchWithCategory(search, slug) {
 }
 
 const directoryId = /^[0-9a-f]{32}$/;
+const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80};
+const editFields = Object.keys(editLimits);
 
 function directoryTarget(hash) {
   const params = new URLSearchParams((hash || '').replace(/^#/, ''));
@@ -142,6 +144,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const editForm = document.getElementById('edit-form');
   const editConflict = document.getElementById('agent-edit-conflict');
   const reloadSettings = document.getElementById('reload-agent-settings');
+  const draftNotice = document.getElementById('agent-edit-draft');
+  const draftText = document.getElementById('agent-edit-draft-note');
+  const restoreDraft = document.getElementById('restore-agent-draft');
+  const clearDraft = document.getElementById('discard-agent-draft');
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
   const openCreate = document.getElementById('open-create');
@@ -157,6 +163,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
+  let draftKey = '', originalEdits, waitingDraft;
   let personalAgentId = '';
   let personalLook = null;
   let agentSelection = 0;
@@ -177,6 +184,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function hideDrawer() {
     sharing?.close();
     currentAgent = null;
+    draftKey = '';
+    originalEdits = waitingDraft = null;
     agentSelection += 1;
     createForm.hidden = editForm.hidden = chatPanel.hidden = true;
     if (drawer) drawer.hidden = true;
@@ -646,6 +655,57 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  function currentEdits() {
+    return Object.fromEntries(editFields.filter(field => editForm.elements[field])
+      .map(field => [field, editForm.elements[field].value]));
+  }
+
+  function applyEdits(values) {
+    for (const [field, value] of Object.entries(values)) {
+      if (editForm.elements[field]) editForm.elements[field].value = value;
+    }
+  }
+
+  function readEditDraft() {
+    if (!draftKey) return null;
+    try {
+      const draft = JSON.parse(document.defaultView.sessionStorage.getItem(draftKey));
+      if (!Number.isSafeInteger(draft?.revision) || !draft.values) return null;
+      const values = Object.fromEntries(editFields.filter(field => typeof draft.values[field] === 'string' &&
+        draft.values[field].length <= editLimits[field] &&
+        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])))
+        .map(field => [field,draft.values[field]]));
+      for (const field of Object.keys(values)) {
+        if (values[field] === originalEdits[field]) delete values[field];
+      }
+      return Object.keys(values).length ? {revision:draft.revision, values} : null;
+    } catch { return null; }
+  }
+
+  function storeEditDraft() {
+    if (!draftKey || !originalEdits || waitingDraft) return;
+    const values = Object.fromEntries(Object.entries(currentEdits()).filter(([field,value]) => originalEdits[field] !== value));
+    const changed = Object.keys(values).length > 0;
+    let saved = false;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      if (changed) storage.setItem(draftKey, JSON.stringify({revision:currentAgent.revision, values}));
+      else storage.removeItem(draftKey);
+      saved = true;
+    } catch {}
+    if (draftNotice) draftNotice.hidden = !changed;
+    const text = saved ? '草稿已保存在此标签页。' : '有未保存的修改。';
+    if (draftText && draftText.textContent !== text) draftText.textContent = text;
+    if (restoreDraft) restoreDraft.hidden = true;
+  }
+
+  function setEditFieldsEnabled(enabled) {
+    for (const field of editFields) {
+      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled;
+    }
+    editForm.querySelector('button[type="submit"]').disabled = !enabled;
+  }
+
   function fillEdit(agent) {
     sharing?.close();
     if (editConflict) editConflict.hidden = true;
@@ -665,9 +725,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (starts) starts.value = (agent.quick_starts || []).join('\n');
     const active = !agent.archived && !agent.native_deleted;
     const writable = active && canManage(actor);
-    for (const field of ['name', 'summary', 'instructions', 'category', 'quick_starts']) {
-      if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
-    }
+    const scope = [currentUser?.id, workspaceId(), agent.id];
+    draftKey = writable && scope.every(id => directoryId.test(id || '')) ? 'ot-agent-edit:' + scope.join(':') : '';
+    originalEdits = currentEdits();
+    const draft = readEditDraft();
+    waitingDraft = draft && draft.revision !== agent.revision ? draft : null;
+    if (draft && !waitingDraft) applyEdits(draft.values);
+    if (waitingDraft) {
+      if (draftNotice) draftNotice.hidden = false;
+      if (draftText) draftText.textContent = '设置已更新。恢复草稿会应用你改过的字段，请核对后再保存。';
+      if (restoreDraft) restoreDraft.hidden = false;
+    } else if (draftKey) storeEditDraft();
+    else if (draftNotice) draftNotice.hidden = true;
+    setEditFieldsEnabled(writable && !waitingDraft);
     document.getElementById('archive-button').hidden = !writable;
     if (openSharing) {
       openSharing.hidden = !nativeSharing || !canManage(actor);
@@ -687,7 +757,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (drawer) {
       drawer.hidden = false;
       drawer.scrollTop = 0;
-      editForm.elements.name.focus?.();
+      if (waitingDraft) restoreDraft?.focus?.();
+      else editForm.elements.name.focus?.();
     }
     const openChat = document.getElementById('open-in-chat');
     if (openChat) {
@@ -785,6 +856,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   reloadSettings?.addEventListener('click', () => {
     if (currentAgent) return openAgent(currentAgent.id);
   });
+  editForm.addEventListener('input', storeEditDraft);
+  editForm.addEventListener('change', storeEditDraft);
+  restoreDraft?.addEventListener('click', () => {
+    if (!waitingDraft) return;
+    applyEdits(waitingDraft.values);
+    waitingDraft = null;
+    setEditFieldsEnabled(true);
+    storeEditDraft();
+    editForm.elements.name.focus?.();
+  });
+  clearDraft?.addEventListener('click', () => {
+    if (!draftKey || (editForm.querySelector('button[type="submit"]').disabled && !waitingDraft)) return;
+    applyEdits(originalEdits);
+    waitingDraft = null;
+    setEditFieldsEnabled(true);
+    storeEditDraft();
+    editForm.elements.name.focus?.();
+  });
 
   function invalidQuickStarts(starts) {
     if (!starts || (starts.length <= 5 && starts.every(line => line.length <= 80))) return false;
@@ -828,14 +917,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const edited = event.currentTarget.elements.id.value;
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     if (submit.disabled) return;
+    const sentEdits = currentEdits();
     const values = readAgentForm(event.currentTarget);
     if (invalidQuickStarts(values.quick_starts)) return;
     values.revision = Number(event.currentTarget.elements.revision.value);
     submit.disabled = true;
     const result = await request('POST', `/v1/workspaces/${workspace}/agents/${edited}`, values)
       .catch(() => ({status:0, body:{}}));
-    submit.disabled = false;
     if (selected !== agentSelection || workspace !== workspaceId() || edited !== currentAgent?.id) return;
+    submit.disabled = false;
     if (result.body.error?.code === 'revision_conflict' && editConflict && reloadSettings) {
       editConflict.hidden = reloadSettings.hidden = false;
       return;
@@ -845,9 +935,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const {agent} = result.body;
+    const newerEdits = Object.fromEntries(Object.entries(currentEdits()).filter(([field,value]) => sentEdits[field] !== value));
+    try { if (draftKey) document.defaultView.sessionStorage.removeItem(draftKey); } catch {}
     directoryAgents = directoryAgents.map(item => item.id === agent.id ? agent : item);
     renderDirectory();
     fillEdit(agent);
+    applyEdits(newerEdits);
+    storeEditDraft();
     show('ok', '已更新。之后的对话会使用新的说明。');
   });
 

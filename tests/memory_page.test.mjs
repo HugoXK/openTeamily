@@ -27,6 +27,9 @@ test('directory and action queries encode filters and omit empty values', () => 
   assert.equal(actionQuery('', 'open'), '?status=open');
   assert.equal(actionQuery('跟进', 'done'), '?q=%E8%B7%9F%E8%BF%9B&status=done');
   assert.equal(actionQuery('', ''), '');
+  const dueCursor = '0:1800000000:' + 'a'.repeat(32);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(actionQuery('', 'open', dueCursor, 20, 'due'))),
+    {status:'open', after:dueCursor, limit:'20', order:'due'});
 });
 
 test('action edit drafts preserve concurrent changes and isolate overlapping fields for review', () => {
@@ -884,7 +887,7 @@ function memoryFetcher() {
     }
     const listed = /^\/v1\/workspaces\/(ws[12])\/memory\?order=recent&limit=20$/.exec(path);
     if (listed) return jsonResponse(200, {items: Object.values(pages), total: Object.keys(pages).length});
-    const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path);
+    const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path.split('?')[0]);
     if (actions) return jsonResponse(200, {items: [action]});
     const graphPath = /^\/v1\/workspaces\/(ws[12])\/memory\/graph$/.exec(path);
     if (graphPath) return jsonResponse(200, graph);
@@ -920,7 +923,7 @@ async function mountMemory() {
     for (let round = 0; round < 6; round += 1) await memoryTick();
   };
   const openActionRow = async (index) => {
-    await el('action-list').children[index].children[0].dispatch('click');
+    await el('action-list').children[index].children[1].dispatch('click');
     for (let round = 0; round < 6; round += 1) await memoryTick();
   };
   return {doc, el, requests, posted, openPageRow, openActionRow};
