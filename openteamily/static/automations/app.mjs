@@ -272,24 +272,21 @@ function savedFollowupSource(item) {
 
 // `/automations?runs=failed` keeps the run-history filter across refresh,
 // back/forward and sharing. One recorded value at a time; anything else is 全部.
-export const RUN_FILTERS = Object.freeze(['all', 'succeeded', 'failed']);
+export const RUN_FILTERS = Object.freeze(['all', 'active', 'succeeded', 'failed', 'cancelled']);
 
 export function runFilterFromSearch(search) {
   const value = new URLSearchParams(search || '').get('runs') || '';
-  return value === 'succeeded' || value === 'failed' ? value : 'all';
+  return RUN_FILTERS.includes(value) ? value : 'all';
 }
 
 export function runFilterSearchText(filter) {
-  return filter === 'succeeded' || filter === 'failed' ? `?runs=${filter}` : '';
+  return filter !== 'all' && RUN_FILTERS.includes(filter) ? `?runs=${filter}` : '';
 }
 
-// The server filters on the stored status, and run_view reports cancelled and
-// timed-out runs as their own status. 失败 therefore names all three, so the
-// mirror here can never hide a row the server sent back for status=failed.
 export function matchesRunFilter(item, filter) {
-  if (filter === 'succeeded') return item.status === 'succeeded';
-  if (filter === 'failed') return item.status === 'failed' || item.status === 'cancelled' || item.status === 'timeout';
-  return true;
+  if (filter === 'active') return runActive(item);
+  if (filter === 'failed') return item.status === 'failed' || item.status === 'timeout';
+  return filter === 'all' || item.status === filter;
 }
 
 export function catalogItems(templates, category, search) {
@@ -702,12 +699,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment);
   }
 
-  const RUN_FILTER_BUTTONS = {all: 'run-filter-all', succeeded: 'run-filter-succeeded', failed: 'run-filter-failed'};
-
   function syncRunFilters() {
-    for (const [name, id] of Object.entries(RUN_FILTER_BUTTONS)) {
-      const button = document.getElementById(id);
-      if (button) button.setAttribute('aria-current', name === runFilter ? 'true' : 'false');
+    for (const filter of RUN_FILTERS) {
+      const button = document.getElementById('run-filter-' + filter);
+      if (button) button.setAttribute('aria-current', filter === runFilter ? 'true' : 'false');
     }
   }
 
@@ -1009,7 +1004,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const latest = item.latest_retry;
     const status = latest && runStatusLabel(latest);
     const links = [
-      [item.retry_of, 'retry-source', '查看原运行', 'failed'],
+      [item.retry_of, 'retry-source', '查看原运行', item.retry_source_status === 'cancelled' ? 'cancelled' : 'failed'],
       [latest?.id, 'latest-retry', status ? '查看重试 · ' + status : '查看重试'],
     ].filter(([id]) => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id) && id !== item.id);
     if (!links.length) return null;
@@ -1025,7 +1020,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return controls;
   }
 
-  function renderRuns(items) {
+  function renderRuns(items, {filterPending = false} = {}) {
     const list = document.getElementById('run-list');
     const empty = document.getElementById('run-empty');
     const panel = document.getElementById('run-panel');
@@ -1034,9 +1029,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     panel.hidden = false;
     const visible = items.filter(item => matchesRunFilter(item, runFilter));
     const filtering = runFilter !== 'all';
-    empty.hidden = items.length > 0 || filtering;
+    empty.hidden = filterPending || items.length > 0 || filtering;
     const filterEmpty = document.getElementById('run-filter-empty');
-    if (filterEmpty) filterEmpty.hidden = !(filtering && visible.length === 0);
+    if (filterEmpty) filterEmpty.hidden = filterPending || !(filtering && visible.length === 0);
     const target = runScope();
     const submission = runSubmissions.get(target.key);
     const hasRetry = visible.some(retryAllowed);
@@ -1222,18 +1217,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (cancellingRuns.has(key)) return;
     cancellingRuns.add(key);
     if (currentRunScope(target)) renderRuns(recentRuns);
-    const result = await runRequestWithTimeout('POST', `${runPath(target)}/runs/${target.run}/cancel`, {});
-    cancellingRuns.delete(key);
-    if (!currentRunScope(target)) return;
-    if (result.status !== 200) {
-      show('error', result.status === 409 ? '运行状态已改变，无法取消。'
-        : messageFor(result.body.error, '暂时无法确认已取消，正在更新运行状态。'));
-    } else {
-      const item = result.body.run;
-      if (watchMatches(item, target) && watchedRuns.get(target.key)?.id === item.id) watchedRuns.set(target.key, item);
+    const path = `${runPath(target)}/runs/${target.run}`;
+    const isCancelled = item => item?.id === target.run && item.status === 'cancelled' && exactRunForTarget(item, target);
+    try {
+      const result = await runRequestWithTimeout('POST', path + '/cancel', {});
+      if (!currentRunScope(target)) return;
+      let item = result.body.run;
+      let confirmed = result.status === 200 && (!native || isCancelled(item));
+      if (!confirmed && native && ([0, 200, 408, 409].includes(result.status) || result.status >= 500)) {
+        show('loading', '正在确认是否已取消…');
+        const checked = await runRequestWithTimeout('GET', path);
+        if (!currentRunScope(target)) return;
+        item = checked.body.run;
+        confirmed = checked.status === 200 && isCancelled(item);
+      }
+      if (!confirmed) {
+        show('error', result.status === 409 ? '运行状态已改变，无法取消。'
+          : messageFor(result.body.error, '暂时无法确认已取消，正在更新运行状态。'));
+        return;
+      }
+      if (isCancelled(item)) {
+        if (watchedRuns.get(target.key)?.id === item.id) watchedRuns.set(target.key, item);
+        if (selectedRun?.id === item.id) selectedRun = item;
+        recentRuns = recentRuns.map(run => run.id === item.id ? item : run);
+      }
       show('ok', '已取消。');
+    } finally {
+      cancellingRuns.delete(key);
+      if (currentRunScope(target)) {
+        renderRuns(recentRuns);
+        await loadRuns();
+      }
     }
-    await loadRuns();
   }
 
   function watchMatches(item, target) {
@@ -1382,7 +1397,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setRunPageControls();
       const found = selectedRun && items.find(item => item.id === selectedRun.id && exactRunForTarget(item, target));
       if (found) selectedRun = found;
-      const showSelection = selectedRun && !cursor && !found && matchesRunFilter(selectedRun, runFilter);
+      const noLongerActive = runActive(selectedRun) && listed.body.has_pending === false;
+      const showSelection = selectedRun && !cursor && !found && !noLongerActive && matchesRunFilter(selectedRun, runFilter);
       renderRuns(showSelection ? [selectedRun, ...items] : items);
       if (focus) showRunHistory();
     } else {
@@ -1414,7 +1430,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         updated = exact.body.run;
       }
     }
-    if (updated && watchedRuns.get(target.key) === watched) watchedRuns.set(target.key, updated);
+    if (updated && watchedRuns.get(target.key) === watched) {
+      watchedRuns.set(target.key, updated);
+      if (selectedRun?.id === updated.id && exactRunForTarget(updated, target)) selectedRun = updated;
+    }
     syncRunControls();
     scheduleRunPoll(activeRun || runActive(watchedRuns.get(target.key)) || runSubmissions.get(target.key)?.state === 'pending');
   }
@@ -2066,8 +2085,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (lookup && currentRunScope(lookup.target)) void openLinkedRun(lookup.target, lookup.id);
   });
   syncRunFilters();
-  for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
-    const button = document.getElementById(id);
+  for (const filter of RUN_FILTERS) {
+    const button = document.getElementById('run-filter-' + filter);
     if (!button) continue;
     button.addEventListener('click', async () => {
       if (filter === runFilter) return;
@@ -2078,6 +2097,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       resetRunPages();
       syncRunFilters();
       pushRunFilter(filter);
+      renderRuns(recentRuns, {filterPending:true});
       await loadRuns();
     });
   }
@@ -2098,6 +2118,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         selectedRun = null;
         if (linked.run) void openLinkedRun(target, linked.run);
       }
+      if (!runPanel?.hidden) renderRuns(recentRuns, {filterPending:true});
       loadRuns();
     });
   }

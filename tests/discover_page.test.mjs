@@ -1560,6 +1560,41 @@ test('a work card opens a shareable detail and returns to the originating feed a
   assert.equal(requests.filter(path => path.startsWith('/v1/discover/works?')).length, 1);
 });
 
+test('work feed reload restores only saved cursor pages after confirming the viewer', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const search = '?kind=document&q=release';
+  for (const viewer of ['original-owner', 'different-owner']) {
+    const doc = feedDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const session = Promise.withResolvers();
+    const history = {state:{discoverWorkFeed:{
+      key:JSON.stringify(['signed-in','original-owner',search]),pageCount:2,scroll:240,
+    }}};
+    const requests = [];
+    const first = detailFixture({slug:'release-first'});
+    const next = detailFixture({slug:'release-second'});
+    const mounted = mount(doc, {history, location:{pathname:'/discover',search},fetcher(path) {
+      if (path === '/v1/auth/session') return session.promise;
+      const url = new URL(path, 'https://discover.test');
+      assert.equal(url.pathname, '/v1/discover/works');
+      assert.equal(url.searchParams.get('kind'), 'document');
+      assert.equal(url.searchParams.get('q'), 'release');
+      const cursor = url.searchParams.get('cursor');
+      requests.push(cursor);
+      return commentResponse({items:cursor ? [next] : [first],cursor:cursor ? '' : 'release-cursor',viewer_username:'alice'});
+    }});
+    await flush();
+    assert.deepEqual(requests, [null]);
+    assert.equal(doc.getElementById('feed-grid').children.length, 1);
+    session.resolve(commentResponse({user:{id:viewer,username:'alice'}}));
+    await mounted;
+    const same = viewer === 'original-owner';
+    assert.deepEqual(requests,same ? [null,'release-cursor'] : [null]);
+    assert.equal(doc.getElementById('feed-grid').children.length,same ? 2 : 1);
+    if (same) assert.equal(doc.getElementById('main').scrollTop,240);
+  }
+});
+
 test('work navigation keeps the signed-in feed context and sharing copies the canonical public URL', async () => {
   const {mount, workDetailFromSearch} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();

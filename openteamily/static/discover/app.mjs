@@ -13,7 +13,7 @@ const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
 const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
-const CATALOG_RESTORE_PAGES = 12;
+const BROWSE_RESTORE_PAGES = 12;
 const CATALOG_RETURN_LINKS = ['catalog-profile', 'catalog-chat', 'catalog-author'];
 
 export function validSlug(value) {
@@ -743,10 +743,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function restoreFeedPosition(position) {
     const control = position.focusId && document.getElementById(position.focusId);
-    const target = position.trigger?.isConnected ? position.trigger :
-      workTriggers.get(position.slug) || (control && !control.hidden ? control : null);
+    const card = workTriggers.get(position.slug);
+    const workTrigger = position.detailButton ? card?.closest?.('.feed-entry')?.querySelector?.('.feed-detail-toggle') || card : card;
+    const target = position.trigger?.isConnected ? position.trigger : workTrigger || (control && !control.hidden ? control : null);
     initialView.scrollTop = position.scroll;
     (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
+    if (target && Number.isFinite(position.offset)) {
+      initialView.scrollTop += target.getBoundingClientRect().top - initialView.getBoundingClientRect().top - position.offset;
+    }
   }
 
   function closeWorkDetail({restore = true} = {}) {
@@ -818,7 +822,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     cancelSearch();
     const existing = activeWork;
     if (!existing) {
-      feedReturn = {scroll: initialView.scrollTop || 0, trigger, slug: intent.slug};
+      feedReturn = {...captureFeedPosition(trigger, intent.slug), trigger};
+      if (navigate) rememberFeedPosition(feedReturn, {persist: true});
     }
     if (navigate) {
       const url = workUrl(intent);
@@ -1239,35 +1244,64 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     searchTimer = undefined;
   }
 
-  function rememberFeedPosition() {
-    if (!feedPages || feedRestore) return;
-    const key = feedSearchText(feedState);
-    const focused = document.activeElement;
-    const position = activeWork ? feedReturn : {
+  function captureFeedPosition(control, slug = control?.closest?.('.feed-entry')?.dataset.slug) {
+    const offset = validSlug(slug) && control?.getBoundingClientRect?.().top - initialView.getBoundingClientRect?.().top;
+    return {
       scroll: initialView.scrollTop || 0,
-      slug: focused?.closest?.('.feed-entry')?.dataset.slug,
-      focusId: focused?.id?.startsWith('feed-') && focused.id,
+      ...(validSlug(slug) && {slug, detailButton: Boolean(control?.classList?.contains('feed-detail-toggle'))}),
+      ...(Number.isFinite(offset) && {offset}),
+      ...(control?.id?.startsWith('feed-') && {focusId: control.id}),
     };
-    if (!position) return;
-    feedPositions.delete(key);
-    feedPositions.set(key, {
-      pageCount: feedPages, scroll: position.scroll, slug: position.slug, focusId: position.focusId,
-    });
-    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
   }
 
-  async function readFeedPosition(position) {
+  function feedHistoryKey() {
+    const viewer = currentUser?.id;
+    if (sessionState !== 'guest' && (sessionState !== 'signed-in' || typeof viewer !== 'string')) return '';
+    return JSON.stringify([sessionState, viewer || null, feedSearchText(feedState)]);
+  }
+
+  function recordedFeedPosition() {
+    const position = history?.state?.discoverWorkFeed;
+    const key = feedHistoryKey();
+    if (!key || position?.key !== key || !Number.isInteger(position.pageCount) || position.pageCount < 1 ||
+        position.pageCount > BROWSE_RESTORE_PAGES || !Number.isFinite(position.scroll) || position.scroll < 0) return null;
+    return position;
+  }
+
+  function rememberFeedPosition(position = activeWork ? feedReturn : captureFeedPosition(document.activeElement), {persist = false} = {}) {
+    if (!feedPages || feedRestore || !position) return;
+    const {scroll, slug, detailButton, offset, focusId} = position;
+    const record = {pageCount: Math.min(feedPages, BROWSE_RESTORE_PAGES), scroll, slug, detailButton, offset, focusId};
+    const key = feedSearchText(feedState);
+    feedPositions.delete(key);
+    feedPositions.set(key, record);
+    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
+    const historyKey = persist && feedHistoryKey();
+    if (historyKey && history?.replaceState && 'state' in history) {
+      try { history.replaceState({...history.state, discoverWorkFeed: {...record, key: historyKey}}, ''); }
+      catch { /* The browser may disable history changes while leaving. */ }
+    }
+  }
+
+  async function readFeedPosition(position, {reuseCurrent = false} = {}) {
     if (!position || sessionPending) return loadFeed();
     const restoring = {position};
     feedRestore = restoring;
-    let loaded = await loadFeed();
-    for (let page = 1; page < position.pageCount && loaded && feedRestore === restoring && feedState.cursor; page++) {
+    let loaded = reuseCurrent && feedPages > 0 || await loadFeed();
+    let remaining = position.pageCount;
+    while (remaining-- > 0 && feedPages < position.pageCount && loaded && feedRestore === restoring && feedState.cursor) {
       loaded = await loadFeed({append: true});
     }
     if (feedRestore !== restoring) return;
     feedRestore = null;
     updateFeedStatus();
     if (!activeWork) restoreFeedPosition(position);
+  }
+
+  function restoreRecordedFeedPosition() {
+    if (activeWork || feedRestore || feedState.loading || feedFailure) return;
+    const saved = recordedFeedPosition();
+    if (saved) return readFeedPosition(saved, {reuseCurrent: true});
   }
 
   function applyFeedFilters(changes, {refresh = false} = {}) {
@@ -1280,7 +1314,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       return;
     }
-    rememberFeedPosition();
+    rememberFeedPosition(undefined, {persist: !activeWork});
     feedRestore = null;
     Object.assign(feedState, changes);
     applyFeedChrome({restoreQuery: true});
@@ -1318,6 +1352,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
+    window.addEventListener('pagehide', () => { if (!activeWork) rememberFeedPosition(undefined, {persist: true}); });
     window.addEventListener('popstate', () => {
       syncLoginLink();
       cancelSearch();
@@ -1337,7 +1372,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       if (feedChanged) {
         initialView.scrollTop = 0;
-        const position = feedPositions.get(nextKey);
+        const position = feedPositions.get(nextKey) || recordedFeedPosition();
         const loaded = readFeedPosition(position);
         if (!intent) return loaded;
         const opened = openWorkDetail(intent);
@@ -1345,6 +1380,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         return Promise.all([loaded, opened]);
       }
       if (intent) return openWorkDetail(intent);
+      return restoreRecordedFeedPosition();
     });
   }
 
@@ -1714,7 +1750,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (result.status !== 200) {
       const message = result.body?.error?.message || '无法加载公开作品。';
       const position = feedRestore?.position;
-      const retry = position ? () => readFeedPosition(position) : () => loadFeed({append, retainItems, refresh});
+      const retry = position ? () => readFeedPosition(position, {reuseCurrent: append}) : () => loadFeed({append, retainItems, refresh});
       setFeedError(message, retry);
       updateFeedStatus();
       return;
@@ -2278,7 +2314,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const offset = link && trigger.getBoundingClientRect().top - initialView.getBoundingClientRect().top;
     try {
       history.replaceState({...history.state, discoverAgentDirectory:{
-        key, pages:Math.min(catalogPages, CATALOG_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
+        key, pages:Math.min(catalogPages, BROWSE_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
         ...(link && validSlug(slug) ? {slug, link, offset} : {}),
       }}, '');
     } catch { /* The browser may disable history changes while leaving. */ }
@@ -2288,7 +2324,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const request = await directoryLoad;
     const saved = history?.state?.discoverAgentDirectory;
     if (!request || request !== catalogRequest || !saved || saved.key !== catalogPositionKey() ||
-        !Number.isInteger(saved.pages) || saved.pages < 1 || saved.pages > CATALOG_RESTORE_PAGES ||
+        !Number.isInteger(saved.pages) || saved.pages < 1 || saved.pages > BROWSE_RESTORE_PAGES ||
         !Number.isFinite(saved.scroll) || saved.scroll < 0) return;
     while (catalogPages < saved.pages && cursor) {
       if (await loadCatalog(true) !== catalogRequest || saved.key !== catalogPositionKey()) return;
@@ -2506,17 +2542,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     mainPanel.hidden = false;
     show('', '');
     if (!catalogView) {
+      let loadedFeed = feedRequest === initialFeedRequest ? feedLoad : null;
       if (feedState.tab !== 'activity') {
         applyFeedChrome();
-        return Promise.all([loadFeed(), detailLoad]);
-      }
-      if (currentUser && !nativeCatalog) return Promise.all([loadFeed({retainItems: true}), detailLoad]);
-      if (nativeCatalog && feedViewer !== undefined) {
-        if (mismatchedNativeFeed(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
-        for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
+        loadedFeed = loadFeed();
+      } else if (currentUser && !nativeCatalog) loadedFeed = loadFeed({retainItems: true});
+      else if (nativeCatalog && feedViewer !== undefined) {
+        if (mismatchedNativeFeed(feedViewer)) loadedFeed = loadFeed({retainItems: true, retryViewer: false});
+        else for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
       }
       updateFeedStatus();
-      return Promise.all([feedRequest === initialFeedRequest ? feedLoad : null, detailLoad]);
+      const feedReturnLoad = Promise.resolve(loadedFeed).then(() => {
+        if (attempt === sessionRequest) return restoreRecordedFeedPosition();
+      });
+      return Promise.all([feedReturnLoad, detailLoad]);
     }
     if (!currentUser) {
       if (teamsView) await loadTeams();

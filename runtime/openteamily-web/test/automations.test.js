@@ -592,11 +592,12 @@ test('automations keep running after 200 historical runs and preserve keyset his
     const id = i.toString(16).padStart(32, '0')
     const start = at - 1000 + Math.floor(i / 4)
     const status = i % 3 === 0 ? 'failed' : 'succeeded'
+    const error = i % 9 === 0 ? 'cancelled' : i % 6 === 0 ? 'timeout' : status === 'failed' ? 'runtime_failed' : null
     const due = i % 2 === 0 ? -i : at - 86400 - i
     const resultText = 'Historical output ' + i
-    prior.push({id, started: start, status, resultText})
+    prior.push({id, started: start, status: ['cancelled','timeout'].includes(error) ? error : status, resultText})
     const dispatch = JSON.stringify({backend: 'ds-bot', result: {text: resultText}})
-    insert.run(id, automation.id, W, due, start, start + 1, status, status === 'failed' ? 'runtime_failed' : null, dispatch)
+    insert.run(id, automation.id, W, due, start, start + 1, status, error, dispatch)
   }
   feature.db.exec('COMMIT')
 
@@ -636,7 +637,9 @@ test('automations keep running after 200 historical runs and preserve keyset his
   }
   const ordered = [...prior, ...newest].sort((a, b) => b.started - a.started || b.id.localeCompare(a.id))
   assert.deepEqual(readAll(), ordered.map(run => run.id))
-  assert.deepEqual(readAll('failed'), ordered.filter(run => run.status === 'failed').map(run => run.id))
+  assert.deepEqual(readAll('failed'), ordered.filter(run => ['failed','timeout'].includes(run.status)).map(run => run.id))
+  assert.deepEqual(readAll('cancelled'), ordered.filter(run => run.status === 'cancelled').map(run => run.id))
+  assert.deepEqual(readAll('active'), [])
 })
 
 test('manual execution queues only the named automation and leaves its scheduled slot free', async () => {
@@ -663,6 +666,7 @@ test('manual execution queues only the named automation and leaves its scheduled
   const detail = await e['automations/v1']({method: 'GET', path: runsPath + '/' + accepted.body.run.id})
   assert.equal(detail.body.run.status, 'running')
   assert.equal((await e['automations/v1']({method: 'GET', path: runsPath + '?status=running'})).body.items[0].id, accepted.body.run.id)
+  assert.equal((await e['automations/v1']({method: 'GET', path: runsPath + '?status=active'})).body.items[0].id, accepted.body.run.id)
   const activeRun = {id:accepted.body.run.id, automation_id:target.id, workspace_id:W, status:'running'}
   assert.deepEqual((await e['automations/v1']({method: 'GET', path: runsPath + '?status=queued'})).body,
     {items: [], cursor: null, has_pending: true, active_run:activeRun, schedule_status: {state:'paused'}, schedule_revision: 1})

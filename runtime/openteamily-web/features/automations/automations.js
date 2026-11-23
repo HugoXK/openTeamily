@@ -809,10 +809,10 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
 
   function runHistoryViews(automation, rows) {
     const sourceIds = [...new Set(rows.map(row => row.attempt_of).filter(id => id && HEX32.test(id)))]
-    const originals = sourceIds.length ? all(`SELECT id FROM ot_automation_runs
+    const originals = sourceIds.length ? all(`SELECT id,status,error_code,claimed_at FROM ot_automation_runs
       WHERE workspace_id=? AND automation_id=? AND id IN (${sourceIds.map(() => '?').join(',')})`,
     automation.workspace_id, automation.id, ...sourceIds) : []
-    const available = new Set(originals.map(row => row.id))
+    const sourceStates = new Map(originals.map(row => [row.id, runStatus(row)]))
     const failed = rows.filter(row => row.status === 'failed').map(row => row.id)
     const retries = failed.length ? all(`SELECT id, attempt_of, status, error_code, claimed_at FROM (
       SELECT child.id, child.attempt_of, child.status, child.error_code, child.claimed_at,
@@ -825,7 +825,11 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     const latest = new Map(retries.map(retry => [retry.attempt_of, {id:retry.id, status:runStatus(retry)}]))
     return rows.map(row => {
       const item = runView(row)
-      if (item.retry_of && !available.has(item.retry_of)) delete item.retry_of
+      if (item.retry_of) {
+        const source = sourceStates.get(item.retry_of)
+        if (source) item.retry_source_status = source
+        else delete item.retry_of
+      }
       if (latest.has(row.id)) item.latest_retry = latest.get(row.id)
       return item
     })
@@ -844,16 +848,20 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     const cursor = payload.cursor ?? ''
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
-    if (status && !['queued', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
+    if (status && !['active', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'].includes(status)) {
+      refuse(400, 'invalid', 'Invalid run status')
+    }
     const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND workspace_id=? AND id=?', row.id, row.workspace_id, cursor)
     if (cursor && !after) refuse(404, 'not_found', 'Automation run not found')
     const params = [row.id, row.workspace_id]
     let filter = 'automation_id=? AND workspace_id=?'
     if (status) {
       filter += ' AND status=?'
-      params.push(status === 'running' ? 'queued' : status)
+      params.push(status === 'active' || status === 'running' ? 'queued' : status === 'cancelled' ? 'failed' : status)
       if (status === 'queued') filter += ' AND claimed_at IS NULL'
       if (status === 'running') filter += ' AND claimed_at IS NOT NULL'
+      if (status === 'cancelled') filter += " AND error_code='cancelled'"
+      if (status === 'failed') filter += " AND COALESCE(error_code,'')<>'cancelled'"
     }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)

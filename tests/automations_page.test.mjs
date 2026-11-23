@@ -1030,13 +1030,15 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
       const wanted = listedRuns[3] || '';
       const allRows = getRuns ? await getRuns() : runs;
       const rows = allRows.filter(item => !wanted || item.status === wanted);
-      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? rows : []})};
+      return {status: 200, json: async () => ({items: listedRuns[2] === items[0]?.id ? rows : []})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
       return {status: 200, json: async () => ({})};
     }
-    if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/runs\/[^/]+\/cancel$/.test(path)) {
-      return {status: 200, json: async () => ({})};
+    const cancellation = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\/([^/]+)\/cancel$/);
+    if (method === 'POST' && cancellation) {
+      const [,workspace_id,automation_id,id] = cancellation;
+      return {status: 200, json: async () => ({run:{workspace_id,automation_id,id,status:'cancelled'}})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+$/.test(path)) {
       return {status: 200, json: async () => ({automation: {...AUTOMATION, title: '新的标题', revision: 2}})};
@@ -1142,7 +1144,10 @@ test('删除先在原位问一次，确认前 0 请求、确认后恰好 1 次 r
 });
 
 test('取消运行先在原位问一次，确认前 0 请求、确认后恰好 1 次 cancel', async () => {
-  const {elements, calls, restore} = await mountEditor({runs: [{id: 'r1', status: 'queued'}]});
+  const {elements, calls, restore} = await mountEditor({
+    items: [{...AUTOMATION,id:'a'.repeat(32)}], workspaces: [{id:'b'.repeat(32), name:'团队'}],
+    runs: [{id:'c'.repeat(32), status:'queued'}],
+  });
   try {
     await openFirst(elements);
     const runList = elements.get('run-list');
@@ -1345,6 +1350,8 @@ test('runFilterFromSearch and runFilterSearchText round-trip the runs query', ()
   assert.equal(runFilterFromSearch(''), 'all');
   assert.equal(runFilterFromSearch('?runs=failed'), 'failed');
   assert.equal(runFilterFromSearch('?runs=succeeded'), 'succeeded');
+  assert.equal(runFilterFromSearch('?runs=active'), 'active');
+  assert.equal(runFilterFromSearch('?runs=cancelled'), 'cancelled');
   assert.equal(runFilterFromSearch('?runs=all'), 'all');
   assert.equal(runFilterFromSearch('?runs=1'), 'all');
   assert.equal(runFilterFromSearch('?runs=FAILED'), 'all');
@@ -1352,6 +1359,8 @@ test('runFilterFromSearch and runFilterSearchText round-trip the runs query', ()
   assert.equal(runFilterSearchText('all'), '');
   assert.equal(runFilterSearchText('failed'), '?runs=failed');
   assert.equal(runFilterSearchText('succeeded'), '?runs=succeeded');
+  assert.equal(runFilterSearchText('active'), '?runs=active');
+  assert.equal(runFilterSearchText('cancelled'), '?runs=cancelled');
 });
 
 test('matchesRunFilter keeps only the requested stored statuses', () => {
@@ -1360,9 +1369,13 @@ test('matchesRunFilter keeps only the requested stored statuses', () => {
   assert.equal(matchesRunFilter({status: 'failed'}, 'failed'), true);
   assert.equal(matchesRunFilter({status: 'queued'}, 'failed'), false);
   assert.equal(matchesRunFilter({status: 'succeeded'}, 'failed'), false);
-  assert.equal(matchesRunFilter({status: 'cancelled'}, 'failed'), true,
-    'run_view reports a cancelled run as cancelled; the server stores it as failed');
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'cancelled'), true);
   assert.equal(matchesRunFilter({status: 'timeout'}, 'failed'), true);
+  assert.equal(matchesRunFilter({status: 'timeout'}, 'cancelled'), false);
+  assert.equal(matchesRunFilter({status: 'queued'}, 'active'), true);
+  assert.equal(matchesRunFilter({status: 'running'}, 'active'), true);
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'active'), false);
   assert.equal(matchesRunFilter({status: 'succeeded'}, 'succeeded'), true);
   assert.equal(matchesRunFilter({status: 'failed'}, 'succeeded'), false);
   assert.equal(matchesRunFilter({}, 'succeeded'), false);
