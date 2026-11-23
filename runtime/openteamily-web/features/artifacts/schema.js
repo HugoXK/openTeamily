@@ -97,6 +97,37 @@ CREATE TABLE artifact_spreadsheets (
   artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
   workbook TEXT NOT NULL);
 `, `
+CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, updated DESC, id);
+`, `
+ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
+`, `
+CREATE INDEX IF NOT EXISTS artifact_chat_sources_conversation ON artifact_chat_sources(workspace_id, agent_id, conversation_id);
+`, `
+ALTER TABLE artifact_shares ADD COLUMN source_revision INTEGER;
+`, `
+CREATE TABLE artifact_share_keys (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  secret TEXT NOT NULL
+);
+ALTER TABLE artifact_shares ADD COLUMN recovery_version INTEGER NOT NULL DEFAULT 0;
+`, `
+CREATE TABLE artifact_team_run_sources (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 7),
+  run_title TEXT NOT NULL,
+  UNIQUE(workspace_id, run_id, position));
+`, `
+CREATE TABLE artifact_restores (
+  artifact_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  source_revision INTEGER NOT NULL,
+  request_key TEXT,
+  PRIMARY KEY (artifact_id, revision),
+  UNIQUE (artifact_id, request_key),
+  FOREIGN KEY (artifact_id, revision) REFERENCES artifact_versions(artifact_id, revision) ON DELETE CASCADE);
+`, `
 -- Artifact annotation threads (retried from the retired openteamily/annotations.py).
 -- The artifact row is the parent: threads and comments are dropped with the
 -- artifact, and the workspace column keeps every query scoped to one workspace.
@@ -128,37 +159,6 @@ CREATE TABLE IF NOT EXISTS annotation_comments (
   deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)));
 CREATE INDEX IF NOT EXISTS annotation_comment_thread
   ON annotation_comments(workspace_id, thread_id, deleted, id);
-`, `
-CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, updated DESC, id);
-`, `
-ALTER TABLE artifact_shares ADD COLUMN revocation_confirmed_at INTEGER;
-`, `
-CREATE INDEX IF NOT EXISTS artifact_chat_sources_conversation ON artifact_chat_sources(workspace_id, agent_id, conversation_id);
-`, `
-ALTER TABLE artifact_shares ADD COLUMN source_revision INTEGER;
-`, `
-CREATE TABLE artifact_share_keys (
-  id INTEGER PRIMARY KEY CHECK(id=1),
-  secret TEXT NOT NULL
-);
-ALTER TABLE artifact_shares ADD COLUMN recovery_version INTEGER NOT NULL DEFAULT 0;
-`, `
-CREATE TABLE artifact_team_run_sources (
-  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
-  workspace_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 7),
-  run_title TEXT NOT NULL,
-  UNIQUE(workspace_id, run_id, position));
-`, `
-CREATE TABLE artifact_restores (
-  artifact_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  source_revision INTEGER NOT NULL,
-  request_key TEXT,
-  PRIMARY KEY (artifact_id, revision),
-  UNIQUE (artifact_id, request_key),
-  FOREIGN KEY (artifact_id, revision) REFERENCES artifact_versions(artifact_id, revision) ON DELETE CASCADE);
 `]
 
 // annotation_threads/annotation_comments have no legacy rows to import: the

@@ -58,7 +58,7 @@ function seedForeignComment(bot, threadId, { created = 1000 } = {}) {
   } finally { db.close() }
 }
 
-test('the artifacts feature serves annotations and records migration 4', async () => {
+test('the artifacts feature serves annotations and records its migration last', async () => {
   const { bot, artifactId } = await setup()
   const listed = await ok(bot, 'artifacts/annotations-list', { workspace_id: WS, artifact_id: artifactId })
   assert.deepEqual(listed.items, [])
@@ -67,10 +67,35 @@ test('the artifacts feature serves annotations and records migration 4', async (
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
       .map((row) => row.version)
-    // The annotation tables are migration 4; later main-line migrations follow it.
-    assert.deepEqual(versions.slice(0, 4), [1, 2, 3, 4])
-    assert.equal(versions.length, versions.at(-1))
+    // Appended after every existing migration: an already-provisioned volume keeps
+    // versions 1..N-1 and applies the annotation tables as N, so nothing is renumbered.
+    assert.deepEqual(versions, versions.map((_, index) => index + 1))
+    assert.equal(versions.at(-1), versions.length)
   } finally { db.close() }
+})
+
+test('a volume that predates the annotation tables applies them on the next boot', async () => {
+  const { bot, artifactId } = await setup()
+  const db = store(bot)
+  let last = 0
+  try {
+    last = db.prepare('SELECT MAX(version) AS v FROM ot_feature_migrations WHERE feature=?').get('artifacts').v
+    db.exec('DROP TABLE IF EXISTS annotation_comments')
+    db.exec('DROP TABLE IF EXISTS annotation_threads')
+    db.prepare('DELETE FROM ot_feature_migrations WHERE feature=? AND version=?').run('artifacts', last)
+  } finally { db.close() }
+  // Same state as a volume provisioned by a build without this feature: every
+  // earlier migration is recorded, the last one is not, and its tables are gone.
+  const again = await boot(bot.vol)
+  const listed = await ok(again, 'artifacts/annotations-list', { workspace_id: WS, artifact_id: artifactId })
+  assert.deepEqual(listed.items, [])
+  const restored = store(again)
+  try {
+    const versions = restored.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
+      .map((row) => row.version)
+    assert.equal(versions.at(-1), last)
+    assert.deepEqual(versions, versions.map((_, index) => index + 1))
+  } finally { restored.close() }
 })
 
 test('threads are pinned to a revision, list in id order, and page with a cursor', async () => {
@@ -324,9 +349,10 @@ test('migrations are idempotent and threads survive a reboot', async () => {
   try {
     const versions = db.prepare('SELECT version FROM ot_feature_migrations WHERE feature=? ORDER BY version').all('artifacts')
       .map((row) => row.version)
-    // The annotation tables are migration 4; later main-line migrations follow it.
-    assert.deepEqual(versions.slice(0, 4), [1, 2, 3, 4])
-    assert.equal(versions.length, versions.at(-1))
+    // Appended after every existing migration: an already-provisioned volume keeps
+    // versions 1..N-1 and applies the annotation tables as N, so nothing is renumbered.
+    assert.deepEqual(versions, versions.map((_, index) => index + 1))
+    assert.equal(versions.at(-1), versions.length)
   } finally { db.close() }
 })
 
