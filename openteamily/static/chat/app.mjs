@@ -32,7 +32,7 @@ export function renderUnreadDivider(document, list, boundary) {
   }
   const wanted = String((boundary && boundary.messageId) || '');
   if (!wanted) return null;
-  const anchor = (list.children || []).find(node => node && node.dataset && node.dataset.messageId === wanted);
+  const anchor = Array.from(list.children || []).find(node => node && node.dataset && node.dataset.messageId === wanted);
   if (!anchor) return null;
   const divider = document.createElement('li');
   divider.className = 'unread-divider';

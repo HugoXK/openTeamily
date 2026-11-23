@@ -4,19 +4,39 @@ import { renderUnreadDivider, unreadDividerText } from '../openteamily/static/ch
 
 // Just enough DOM for the divider: the list carries one <li> per message, each
 // tagged with its message id the way renderSocialMessages tags a real row.
+// A real `HTMLCollection` has length/item() and numeric indices, but no array
+// methods: a fake that hands back a plain array hides `.find is not a function`
+// on the real page.
+function fakeChildren(rows) {
+  return new Proxy({}, {
+    get(target, property) {
+      if (property === 'length') return rows.length;
+      if (property === 'item') return index => rows[index] ?? null;
+      if (property === Symbol.iterator) return function* iterate() { yield* rows; };
+      if (typeof property === 'string' && /^\d+$/.test(property)) return rows[Number(property)];
+      return undefined;
+    },
+    has(target, property) {
+      if (property === 'length' || property === 'item') return true;
+      return typeof property === 'string' && /^\d+$/.test(property) && Number(property) < rows.length;
+    },
+  });
+}
+
 function fakeList(messageIds) {
-  const children = messageIds.map(id => ({dataset: {messageId: id}, tagName: 'li'}));
+  const rows = messageIds.map(id => ({dataset: {messageId: id}, tagName: 'li'}));
+  const children = fakeChildren(rows);
   return {
-    children,
+    get children() { return children; },
     insertBefore(node, reference) {
-      const at = reference ? children.indexOf(reference) : children.length;
+      const at = reference ? rows.indexOf(reference) : rows.length;
       assert.notEqual(at, -1, 'the divider must be inserted before a rendered row');
-      children.splice(at, 0, node);
+      rows.splice(at, 0, node);
     },
     removeChild(node) {
-      const at = children.indexOf(node);
+      const at = rows.indexOf(node);
       assert.notEqual(at, -1, 'the stale divider must be a child of the list');
-      children.splice(at, 1);
+      rows.splice(at, 1);
     },
   };
 }
@@ -28,7 +48,7 @@ const document = {
   },
 };
 
-const corners = list => list.children.map(node => (node.className === 'unread-divider' ? '|' : node.dataset.messageId));
+const corners = list => Array.from(list.children).map(node => (node.className === 'unread-divider' ? '|' : node.dataset.messageId));
 
 test('a conversation with no unread messages draws no divider', () => {
   const list = fakeList(['m1', 'm2', 'm3']);
