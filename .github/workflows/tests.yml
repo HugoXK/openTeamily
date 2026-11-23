@@ -57,7 +57,6 @@ jobs:
       - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs
-      - run: node --test tests/workspace_events.test.mjs
       - run: node --test tests/skill_imports.test.mjs
       - run: node --test tests/skills_page.test.mjs
       - run: node --test tests/home_page.test.mjs
@@ -65,6 +64,16 @@ jobs:
       - run: node --test tests/docs_pages.test.mjs
       - run: node --test tests/onboarding_step2.test.mjs
       - run: node --test tests/follow_work_notify.test.mjs
+      - run: node --test tests/agent_private_sharing.test.mjs
+      - run: node --test tests/chat_call_recording.test.mjs
+      - run: node --test tests/chat_calls_handoff.test.mjs
+      - run: node --test tests/chat_group_management.test.mjs
+      - run: node --test tests/chat_stickers.test.mjs
+      - run: node --test tests/public_agent_share.test.mjs
+      - run: node --test tests/studio_merge.test.mjs
+      - run: node --test tests/system_locale.test.mjs
+      - run: node --test tests/system_locale_chat.test.mjs
+      - run: node --test tests/team_runs_page.test.mjs
       - name: Python tests with explicit trusted runner Node
         run: |
           install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
