@@ -671,15 +671,17 @@ function teamsRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const q = parseQuery(query)
-          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
+          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit'), cursor: q.get('cursor') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
               name: t.name,
               summary: t.summary || '',
               member_count: t.member_count ?? 0,
+              team_id: t.id,
               workspace_id: t.workspace_id || t.id,
               membership: t.membership || null,
             })),
+            cursor: data.cursor || null,
           }]
         })
       },

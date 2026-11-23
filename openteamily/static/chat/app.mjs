@@ -5632,6 +5632,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupInvite = document.getElementById('group-invite-dialog');
   const groupInviteQuery = document.getElementById('group-invite-query');
   const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteSelection = document.getElementById('group-invite-selection');
+  const groupInviteSelectedCount = document.getElementById('group-invite-selected-count');
+  const groupInviteReview = document.getElementById('group-invite-review');
   const groupInviteStatus = document.getElementById('group-invite-status');
   const groupInviteSubmit = document.getElementById('group-invite-submit');
   let inviteTarget = null;
@@ -5669,24 +5672,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!showGroupInviteLink && inviteTarget) void prepareGroupInviteLink(inviteTarget, currentConversation);
   });
   const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+  const inviteSearchText = value => value.normalize('NFKC').trim().toLocaleLowerCase();
+  const reviewingGroupInvite = () => groupInviteReview.getAttribute('aria-pressed') === 'true';
 
   function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
     groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+    groupInviteReview.disabled = invitingMembers;
+    groupInviteQuery.disabled = invitingMembers || reviewingGroupInvite();
+    groupInviteChoices.inert = invitingMembers;
   }
 
   function syncGroupInvite() {
-    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    const count = selectedInviteMembers().length;
+    const wasReviewing = reviewingGroupInvite();
+    const reviewing = count > 0 && wasReviewing;
+    groupInviteReview.setAttribute('aria-pressed', String(reviewing));
+    groupInviteSelection.hidden = !count;
+    groupInviteSelectedCount.textContent = count
+      ? uiLabel(`已选 ${count} 位成员`, `${count} ${count === 1 ? 'member' : 'members'} selected`) : '';
+    const needle = inviteSearchText(groupInviteQuery.value).replace(/^@/, '');
     let visible = 0;
     for (const choice of groupInviteChoices.children) {
-      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      choice.hidden = reviewing ? !choice.children[0].checked : !choice.dataset.search.includes(needle);
       if (!choice.hidden) visible++;
     }
-    const count = selectedInviteMembers().length;
     syncGroupInviteSubmit(count);
+    if (wasReviewing && !reviewing) groupInviteQuery.focus({preventScroll:true});
     if (groupInviteChoices.children.length) {
-      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
-        : !visible ? '没有匹配的成员。'
-        : count ? `已选 ${count} 位成员` : '';
+      groupInviteStatus.textContent = count > 50 ? uiLabel('一次最多添加 50 位成员。', 'You can add up to 50 members at once.')
+        : !visible ? uiLabel('没有匹配的成员。', 'No matching members.') : '';
     }
   }
 
@@ -5697,10 +5711,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inviteTarget = target;
     groupInviteQuery.value = '';
     groupInviteChoices.replaceChildren();
-    groupInviteSubmit.disabled = true;
+    groupInviteChoices.scrollTop = 0;
+    groupInviteReview.setAttribute('aria-pressed', 'false');
+    groupInviteReview.textContent = uiLabel('仅显示已选', 'Show selected only');
+    syncGroupInvite();
     const personal = Boolean(conversation.account_group);
     const roster = personal ? '联系人' : '工作区成员';
-    const searchLabel = personal ? uiLabel('搜索联系人', 'Search contacts') : uiLabel('搜索工作区成员', 'Search workspace members');
+    const searchLabel = personal ? uiLabel('搜索联系人姓名或 @用户名', 'Search contacts by name or @handle')
+      : uiLabel('搜索工作区成员姓名或 @用户名', 'Search workspace members by name or @handle');
     groupInviteQuery.placeholder = searchLabel;
     groupInviteQuery.setAttribute('aria-label', searchLabel);
     groupInviteStatus.textContent = '正在加载' + roster + '…';
@@ -5717,12 +5735,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const joined = new Set((currentConversation.members || []).map(member => personal ? member.handle : member.user_id));
     const candidates = memberChoices(personal ? contactMembers(result) : result.body.items, currentUser?.id)
       .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
-    for (const member of candidates) {
+    for (const [index, member] of candidates.entries()) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.value = member.handle || member.user_id;
-      label.append(box, document.createTextNode(member.username || box.value));
+      const identity = document.createElement('span');
+      identity.className = 'group-invite-identity';
+      const name = document.createElement('span');
+      name.id = `group-invite-member-name-${index}`;
+      name.textContent = member.username || box.value;
+      box.setAttribute('aria-labelledby', name.id);
+      identity.append(name);
+      const handle = member.handle ? '@' + member.handle.replace(/^@/, '') : '';
+      if (handle) {
+        const descriptor = document.createElement('small');
+        descriptor.id = `group-invite-member-handle-${index}`;
+        descriptor.textContent = handle;
+        box.setAttribute('aria-describedby', descriptor.id);
+        identity.append(descriptor);
+      }
+      label.dataset.search = inviteSearchText(`${name.textContent} ${handle}`);
+      label.append(box, identity);
       groupInviteChoices.append(label);
     }
     groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的' + roster + '。';
@@ -5740,6 +5774,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
   groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteReview.addEventListener('click', () => {
+    groupInviteReview.setAttribute('aria-pressed', String(!reviewingGroupInvite()));
+    groupInviteChoices.scrollTop = 0;
+    syncGroupInvite();
+  });
   groupInviteChoices.addEventListener('change', syncGroupInvite);
   document.getElementById('group-invite-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -5749,7 +5788,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invitingMembers = true;
     const cancel = document.getElementById('group-invite-cancel');
     cancel.disabled = true;
-    groupInviteSubmit.disabled = true;
+    syncGroupInviteSubmit(memberIds.length);
     groupInviteSubmit.textContent = '添加中…';
     try {
       const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
@@ -7311,19 +7350,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let personalRequest;
     const readPersonal = () => personalRequest ??= read('/v1/personal-agent').then(result =>
       result.status === 200 ? result.body.personal_agent : null);
-    const exactTarget = start.social ? chatPathId(start.social) : chatPathId(start.agent) && chatPathId(start.conversation);
-    const scopedLink = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && exactTarget;
-    // An authenticated workspace list can open an exact team conversation while the personal snapshot is pending.
-    const {local, shared, personalSpace} = scopedLink ? await Promise.any([
+    const socialTarget = start.social && chatPathId(start.social);
+    const exactTarget = start.social ? socialTarget : chatPathId(start.agent) && chatPathId(start.conversation);
+    const workspaceOnly = !start.social && !start.agent && !start.conversation;
+    const scopedEntry = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && (exactTarget || workspaceOnly);
+    // The signed workspace list authorizes scoped entries while the personal snapshot is pending.
+    const {local, shared, personalSpace} = scopedEntry ? await Promise.any([
       localReady.then(async local => {
         if (!local && bootCurrent()) await readPersonal();
         return {local};
       }),
       sharedRequest.then(shared => {
         const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
-        const personalSpace = items.find(space => space.kind === 'personal');
-        return personalSpace && items.some(space => space.id === start.workspace && ['team', 'workspace'].includes(space.kind))
-          ? {shared, personalSpace} : Promise.reject();
+        const personalSpace = items.find(space => space.kind === 'personal' && (!space.owner_id || space.owner_id === owner.id));
+        const target = items.find(space => space.id === start.workspace);
+        const authorized = target && (['team', 'workspace'].includes(target.kind) || (socialTarget && target === personalSpace));
+        return personalSpace && authorized ? {shared, personalSpace} : Promise.reject();
       }),
     ]).catch(() => ({})) : {local: await localReady};
     if (!bootCurrent()) return;

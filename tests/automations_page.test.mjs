@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { automationEditionDraft, automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
   assert.equal(csrfCookie('ot_dev_session=x; ot_dev_csrf=token-b'), 'token-b');
   assert.equal(csrfCookie('csrf=nope; other=1'), '');
+});
+
+test('a copied automation starts paused and separates task settings from saved history and source grants', () => {
+  const original = {id:'a'.repeat(32),revision:4,workspace_id:'b'.repeat(32),title:'a'.repeat(74)+'📘abcd',
+    prompt:'Prepare a weekly briefing',template_id:'custom',intent:'monitor',scope:'ongoing',enabled:true,
+    schedule:{kind:'weekly',weekday:3,time:'15:30',time_zone:'Asia/Shanghai'},notification_policy:'off',
+    participants:['alice'],agents:['research'],source_meeting:{meeting_id:'c'.repeat(32)},
+    source_memory_action:{action_id:'d'.repeat(32)},active_run:{id:'e'.repeat(32)}};
+  const draft = automationEditionDraft(original);
+  assert.deepEqual(draft,{edition:true,title:'a'.repeat(74)+' · 副本',prompt:original.prompt,template_id:'custom',
+    intent:'monitor',scope:'ongoing',enabled:false,schedule:original.schedule,notification_policy:'off',
+    participants:['alice'],agents:['research']});
+  assert.notEqual(draft.schedule,original.schedule);
+  assert.notEqual(draft.participants,original.participants);
+  assert.notEqual(draft.agents,original.agents);
 });
 
 test('listQuery encodes tab and search', () => {
