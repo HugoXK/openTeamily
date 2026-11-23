@@ -142,6 +142,30 @@ function chatDraftMentions(value) {
     .map(({owner_id, agent_id}) => ({owner_id, agent_id})) : [];
 }
 
+const privateTextKey = /^[A-Za-z0-9_-]{16,64}$/;
+
+function privateTextOwner(scope) {
+  try {
+    const [owner, workspace, source, agent, conversation] = JSON.parse(scope);
+    return source === 'agent' && [owner, workspace, agent, conversation].every(validSignupUser) ? owner : null;
+  } catch { return null; }
+}
+
+function chatDraftPendingText(value) {
+  if (!Array.isArray(value?.pendingPrivateText)) return [];
+  return value.pendingPrivateText.flatMap(row => {
+    const body = chatDraftBody(row?.message);
+    if (!body.trim() || typeof row.key !== 'string' || !privateTextKey.test(row.key)) return [];
+    const language = row.message.chat_language;
+    return [{key:row.key, message:{body, ...(typeof language === 'string' && language.length <= 64 ? {chat_language:language} : {})}}];
+  });
+}
+
+function chatDraftRecord(body, agentMentions, pendingPrivateText) {
+  if (!agentMentions.length && !pendingPrivateText.length) return body;
+  return {body, ...(agentMentions.length ? {agentMentions} : {}), ...(pendingPrivateText.length ? {pendingPrivateText} : {})};
+}
+
 export function readChatDrafts(view, owner) {
   const drafts = new Map();
   for (const [scope, value] of storedChatDrafts(view, owner)) {
@@ -155,7 +179,10 @@ export function writeChatDrafts(view, owner, drafts) {
   const records = new Map(drafts);
   for (const [scope, value] of storedChatDrafts(view, owner)) {
     const agentMentions = chatDraftMentions(value);
-    if (agentMentions.length) records.set(scope, {body: records.get(scope) || '', agentMentions});
+    const pendingPrivateText = chatDraftPendingText(value);
+    if (agentMentions.length || pendingPrivateText.length) {
+      records.set(scope, chatDraftRecord(records.get(scope) || '', agentMentions, pendingPrivateText));
+    }
   }
   return saveChatDrafts(view, owner, records);
 }
@@ -168,11 +195,30 @@ export function writeChatDraftMentions(view, scope, agentMentions) {
   const owner = chatDraftOwner(scope);
   if (!owner) return;
   const drafts = storedChatDrafts(view, owner);
-  const body = chatDraftBody(drafts.get(scope));
-  if (agentMentions.length) drafts.set(scope, {body, agentMentions});
-  else if (body) drafts.set(scope, body);
+  const previous = drafts.get(scope);
+  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions, chatDraftPendingText(previous));
+  if (updated) drafts.set(scope, updated);
   else drafts.delete(scope);
   saveChatDrafts(view, owner, drafts);
+}
+
+export function readPendingPrivateText(view, scope) {
+  const owner = privateTextOwner(scope);
+  return owner ? chatDraftPendingText(storedChatDrafts(view, owner).get(scope)) : [];
+}
+
+export function savePendingPrivateText(view, scope, key, message) {
+  const owner = privateTextOwner(scope);
+  if (!owner || typeof key !== 'string' || !privateTextKey.test(key) || (message && !chatDraftBody(message).trim())) return false;
+  const drafts = storedChatDrafts(view, owner);
+  const previous = drafts.get(scope);
+  const rows = new Map(chatDraftPendingText(previous).map(row => [row.key, row]));
+  if (message) rows.set(key, {key,message});
+  else if (!rows.delete(key)) return true;
+  const updated = chatDraftRecord(chatDraftBody(previous), chatDraftMentions(previous), [...rows.values()]);
+  if (updated) drafts.set(scope, updated);
+  else drafts.delete(scope);
+  return saveChatDrafts(view, owner, drafts);
 }
 
 export function takeSignupSession(view, now = Date.now()) {

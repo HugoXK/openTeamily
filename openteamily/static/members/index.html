@@ -117,7 +117,8 @@
             <option value="admin">管理员</option>
           </select>
         </label>
-        <button type="submit">添加</button>
+        <button type="submit" id="add-member-submit">添加</button>
+        <p id="add-member-status" class="note workspace-write-status" role="status" hidden></p>
       </fieldset>
     </form>
     <form id="invite-form" method="post" action="/v1/workspaces" hidden>
@@ -132,7 +133,8 @@
         <label>有效天数 <input type="number" name="expires_days" min="1" max="30" value="7"></label>
         <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
         <label class="check-row"><input type="checkbox" name="requires_approval"> 加入前需要所有者或管理员审批</label>
-        <button type="submit">生成</button>
+        <button type="submit" id="create-invite-submit">生成</button>
+        <p id="create-invite-status" class="note workspace-write-status" role="status" hidden></p>
         <div id="issued-token" class="invite-link" hidden>
           <label>邀请链接 <input type="url" id="issued-invite-link" readonly autocomplete="off" spellcheck="false"></label>
           <button type="button" id="copy-issued-invite">复制邀请链接</button>

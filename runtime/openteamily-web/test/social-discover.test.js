@@ -7,11 +7,30 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
+import social from '../features/social/index.js'
 import { createDispatch } from '../src/dispatch.js'
 import { boot } from './helpers.js'
 import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
+
+test('the contacts directory carries its authenticated viewer and personal workspace', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-contacts-viewer-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token:'fixture',server:SERVER}), {mode:0o600})
+  const workspace = 'a'.repeat(32)
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath,fetch:async url => {
+    assert.equal(url, SERVER + '/v1/ot/contacts')
+    return Response.json({items:[]})
+  }}))
+  const list = social({call:async endpoint => {
+    assert.equal(endpoint, 'agents/personal-binding')
+    return {workspace_id:workspace}
+  }}).endpoints.v1
+  const request = new Request(SERVER, {headers:{'x-ot-owner-username':'SignedOwner'}})
+  const result = await list({method:'GET',path:'/v1/contacts',body:{viewer_username:'UntrustedName'}},{request})
+  assert.deepEqual(result, {status:200,body:{items:[],workspace_id:workspace,viewer_username:'SignedOwner'}})
+})
 
 test('editable publishing and remix copy only the selected canonical saved work', async () => {
   const author = await boot()
@@ -472,7 +491,7 @@ test('native Discover forwards popularity cursors separately and publishes only 
     assert.equal(init.method, 'PUT')
     assert.deepEqual(JSON.parse(init.body), {
       kind: 'work', ref: artifact, slug: 'vase', title: '陶瓷花瓶',
-      summary: '', work_kind: 'model3d', snapshot: '', model_data: modelData,
+      summary: '', work_kind: 'model3d', snapshot: '', model_data: modelData, source_revision:5,
     })
     return Response.json(published)
   }
@@ -499,7 +518,11 @@ test('native Discover forwards popularity cursors separately and publishes only 
   const expired = await call({method: 'GET', path: feed})
   assert.equal(expired.status, 409)
   assert.equal(expired.body.error.code, 'popularity_expired')
-  const saved = await call({method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`, body: {slug: 'vase'}})
+  const path = `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`
+  const stale = await call({method:'POST',path,body:{slug:'vase',revision:4}})
+  assert.equal(stale.status,409)
+  assert.equal(stale.body.error.code,'artifact_changed')
+  const saved = await call({method:'POST',path,body:{slug:'vase',revision:5}})
   assert.equal(saved.status, 201)
   assert.equal(saved.body.discover.listed, true)
 })
@@ -579,7 +602,8 @@ test('publishing media exports the saved revision and Discover only projects its
     media = {mime, filename}
     assert.equal((await call(publish)).status, 201)
     assert.deepEqual(puts.at(-1), {kind: 'work', ref: artifactId, slug: 'media-preview', title: '作品预览',
-      work_kind: kind, summary: '', snapshot: '', media_data: bytes.toString('base64'), media_mime: mime, media_filename: filename})
+      work_kind: kind, summary: '', snapshot: '', media_data: bytes.toString('base64'), media_mime: mime, media_filename: filename,
+      source_revision: 7})
   }
   mismatch = true
   assert.equal((await call(publish)).status, 409)
@@ -702,7 +726,8 @@ test('native website publication copies the authorized saved HTML and exposes on
   const workspace = 'b'.repeat(32)
   const artifact = 'c'.repeat(32)
   const html = '<h1>本地计数器</h1><p>点按增加数值。</p><script>document.title = "script fixture"</script>'
-  const listing = {kind: 'work', work_kind: 'website', listed: true, slug: 'local-counter', title: '本地计数器', site_available: true}
+  const listing = {kind: 'work', work_kind: 'website', listed: true, slug: 'local-counter', title: '本地计数器',
+    site_available: true, source_revision: 2}
   const site = createBotSocial({server: SERVER, credentialsPath, async fetch(url, init) {
     records.push([init.method, new URL(url).pathname, init.body ? JSON.parse(init.body) : null])
     if (url.endsWith('/mine')) return Response.json({listings: []})
@@ -720,12 +745,15 @@ test('native website publication copies the authorized saved HTML and exposes on
     body: {slug: 'local-counter', site_html: 'request override'},
   })
   assert.equal(publish.status, 201)
+  assert.equal(publish.body.discover.published_revision,2)
   assert.deepEqual(records.find(([method]) => method === 'PUT')?.[2], {
     kind: 'work', ref: artifact, slug: 'local-counter', title: '本地计数器',
-    work_kind: 'website', site_html: html,
+    work_kind: 'website', site_html: html, source_revision: 2,
   })
   const detail = await run({method: 'GET', path: '/v1/discover/works/local-counter'})
   assert.equal(detail.body.work.site_available, true)
+  assert.equal(Object.hasOwn(detail.body.work, 'source_revision'), false)
+  assert.equal(Object.hasOwn(detail.body.work, 'published_revision'), false)
   assert.equal(Object.hasOwn(detail.body.work, 'site_html'), false)
   assert.equal(JSON.stringify(detail).includes('script fixture'), false)
 })
