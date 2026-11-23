@@ -1257,6 +1257,15 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
   border-radius: .625rem;
   color: var(--ot-on-accent);
 }
+a.catalog-create.catalog-create-secondary {
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface-solid);
+  color: var(--ot-accent);
+}
+a.catalog-create.catalog-create-secondary:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
 #discover-list article { padding: .875rem; gap: .75rem; }
 #discover-list h3 { font-size: .9375rem; }
 #discover-list .summary { font-size: .8125rem; }

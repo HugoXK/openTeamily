@@ -57,14 +57,17 @@ class AgentsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/agents', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/agents')['status'], 405)
 
-    def test_category_deep_link_is_the_only_accepted_query(self):
+    def test_category_and_team_template_deep_links_are_the_only_accepted_queries(self):
         page = self.raw.call('GET', '/agents', query='category=design')
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
         slugs = re.findall(r'data-category="([a-z-]+)"', html)
         self.assertEqual(slugs, ['all', *[slug for slug, _label in discover.AGENT_CATEGORIES]])
+        for query in ('tab=teams', 'tab=teams&new=1'):
+            self.assertEqual(self.raw.call('GET', '/agents', query=query)['status'], 200)
         for bad in ('category=not-a-category', 'category=', 'category=design&x=1',
-                    'x=1', 'category=Design', 'category=design&category=sales'):
+                    'x=1', 'category=Design', 'category=design&category=sales',
+                    'tab=agents', 'new=1', 'tab=teams&new=2', 'tab=teams&new=1&x=1'):
             self.assertEqual(self.raw.call('GET', '/agents', query=bad)['status'], 400, bad)
 
     def test_platform_wrapper_leaves_agent_directory_to_the_runtime(self):

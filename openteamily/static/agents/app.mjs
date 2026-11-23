@@ -46,6 +46,10 @@ function directoryTarget(hash) {
   return {workspace, agent, archived: params.get('status') === 'archived'};
 }
 
+export function teamDirectoryLink(search) {
+  return search === '?tab=teams' || search === '?tab=teams&new=1';
+}
+
 export function readAgentForm(form) {
   const data = new FormData(form);
   const quickStarts = data.get('quick_starts');
@@ -180,6 +184,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let memberNames = new Map();
   let teamTemplates = [];
   let teamTemplatesLoaded = false;
+  const directorySearch = globalThis.location?.search || '';
+  let teamsTabSelected = teamDirectoryLink(directorySearch);
+  let focusTemplates = directorySearch === '?tab=teams&new=1';
 
   function hideDrawer() {
     sharing?.close();
@@ -493,6 +500,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await restoreDirectory();
+    if (seq !== sessionLoad || !teamsTabSelected) return;
+    await loadTeamTemplates();
+    if (seq === sessionLoad && teamsTabSelected && focusTemplates) {
+      focusTemplates = false;
+      document.getElementById('teams-panel')?.focus();
+    }
   }
 
   let directoryAgents = [];
@@ -1063,19 +1076,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
   if (tabAgents && tabTeams) {
+    function selectDirectoryTab(teams) {
+      teamsTabSelected = teams;
+      tabAgents.setAttribute('aria-selected', String(!teams));
+      tabTeams.setAttribute('aria-selected', String(teams));
+      document.getElementById('list-panel').hidden = teams;
+      document.getElementById('teams-panel').hidden = !teams;
+    }
     tabAgents.addEventListener('click', () => {
-      tabAgents.setAttribute('aria-selected', 'true');
-      tabTeams.setAttribute('aria-selected', 'false');
-      document.getElementById('list-panel').hidden = false;
-      document.getElementById('teams-panel').hidden = true;
+      focusTemplates = false;
+      selectDirectoryTab(false);
     });
     tabTeams.addEventListener('click', async () => {
-      tabAgents.setAttribute('aria-selected', 'false');
-      tabTeams.setAttribute('aria-selected', 'true');
-      document.getElementById('list-panel').hidden = true;
-      document.getElementById('teams-panel').hidden = false;
+      selectDirectoryTab(true);
       await loadTeamTemplates();
     });
+    if (teamsTabSelected) selectDirectoryTab(true);
   }
 
   return load();

@@ -292,6 +292,8 @@ class SettingsPage:
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':
+            if query in ('tab=teams', 'tab=teams&new=1'):
+                return True
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':

@@ -83,10 +83,11 @@ test('catalog categories are selectable and the search opens a real dialog', () 
 });
 
 
-test('the teams catalog links to the existing team wizard', () => {
+test('the teams catalog links to separate workspace and AI team creation flows', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
   assert.match(html, /id="catalog-create-team" href="\/team" hidden>\+ 创建团队</);
+  assert.match(html, /id="catalog-create-agent-team" href="\/agents\?tab=teams&amp;new=1" hidden>\+ 创建 AI 智能体团队</);
   assert.doesNotMatch(html, /没有公共 AI 团队目录接口/);
 });
 
@@ -588,6 +589,7 @@ test('anonymous viewers see login guidance and never query the teams directory',
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   assert.equal(doc.getElementById('catalog-tab-teams').attributes['aria-current'], 'page');
   assert.equal(doc.getElementById('catalog-create-team').hidden, false);
+  assert.equal(doc.getElementById('catalog-create-agent-team').hidden, true);
   assert.match(doc.getElementById('discover-empty').textContent, /登录后/);
   await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
   assert.deepEqual(requests, ['/v1/auth/session']);
@@ -609,6 +611,8 @@ test('search and join use the team directory and show the approval status', asyn
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-create-team').hidden, false);
+  assert.equal(el('catalog-create-agent-team').hidden, false);
   const teamAction = () => el('discover-list').children[0].children[0].children[1].children[1];
   const original = teamAction();
   const clicked = original.handlers.click();
