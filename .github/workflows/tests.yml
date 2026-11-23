@@ -74,6 +74,7 @@ jobs:
       - run: node --test tests/system_locale.test.mjs
       - run: node --test tests/system_locale_chat.test.mjs
       - run: node --test tests/team_runs_page.test.mjs
+      - run: node --test tests/chat_flowchart.test.mjs
       - name: Python tests with explicit trusted runner Node
         run: |
           install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
