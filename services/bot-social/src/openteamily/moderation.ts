@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, one, OtContext, optText, params, query, text } from "./core.js";
+import { requireMember } from "./teams.js";
 
 export const MODERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_blocks (
@@ -123,6 +124,16 @@ function workspaceTeam(ot: OtContext, raw: unknown, ownerId: string) {
   return { workspaceId, teamId: team.id as string };
 }
 
+/** The same workspace, narrowed to its reviewers: the owner or an admin of the team. */
+function reviewerTeam(ot: OtContext, raw: unknown, ownerId: string) {
+  const workspaceId = String(raw ?? "");
+  assert(WORKSPACE.test(workspaceId), 400, "invalid_request", "workspace_id must be a 32-character hex id");
+  const team = ot.get<any>("SELECT id FROM ot_teams WHERE workspace_id = ?", workspaceId);
+  assert(team, 404, "not_found", "workspace not found");
+  const { role } = requireMember(ot, team.id as string, ownerId, ["owner", "admin"]);
+  return { workspaceId, teamId: team.id as string, role };
+}
+
 export function registerModeration(app: FastifyInstance, ot: OtContext) {
   // ---- blocks: directional and owner-global, so a block holds across every workspace
   app.get("/v1/ot/blocks", async (req) => {
@@ -181,13 +192,13 @@ export function registerModeration(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/workspaces/:workspace_id/reports/count", async (req) => {
     const me = ot.me(req);
-    const { workspaceId } = workspaceTeam(ot, params(req).workspace_id, me.ownerId);
+    const { workspaceId } = reviewerTeam(ot, params(req).workspace_id, me.ownerId);
     const pending = ot.get<any>("SELECT COUNT(*) AS n FROM content_reports WHERE workspace_id = ? AND status = 'pending'", workspaceId).n;
     return { pending };
   });
   app.get("/v1/ot/workspaces/:workspace_id/reports", async (req) => {
     const me = ot.me(req);
-    const { workspaceId } = workspaceTeam(ot, params(req).workspace_id, me.ownerId);
+    const { workspaceId } = reviewerTeam(ot, params(req).workspace_id, me.ownerId);
     const q = query(req);
     const limit = limitOf(q.limit);
     let sql = "SELECT * FROM content_reports WHERE workspace_id = ?";
@@ -205,14 +216,14 @@ export function registerModeration(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/workspaces/:workspace_id/reports/:report_id", async (req) => {
     const me = ot.me(req);
-    const { workspaceId } = workspaceTeam(ot, params(req).workspace_id, me.ownerId);
+    const { workspaceId } = reviewerTeam(ot, params(req).workspace_id, me.ownerId);
     const row = ot.get<any>("SELECT * FROM content_reports WHERE workspace_id = ? AND id = ?", workspaceId, text(params(req).report_id, "report_id", { max: 128 }));
     assert(row, 404, "not_found", "report not found");
     return reportView(row);
   });
   app.get("/v1/ot/workspaces/:workspace_id/reports/:report_id/actions", async (req) => {
     const me = ot.me(req);
-    const { workspaceId } = workspaceTeam(ot, params(req).workspace_id, me.ownerId);
+    const { workspaceId } = reviewerTeam(ot, params(req).workspace_id, me.ownerId);
     const reportId = text(params(req).report_id, "report_id", { max: 128 });
     const row = ot.get<any>("SELECT 1 FROM content_reports WHERE workspace_id = ? AND id = ?", workspaceId, reportId);
     assert(row, 404, "not_found", "report not found");
@@ -222,7 +233,7 @@ export function registerModeration(app: FastifyInstance, ot: OtContext) {
   app.post("/v1/ot/workspaces/:workspace_id/reports/:report_id/resolve", async (req) => {
     const me = ot.me(req);
     const b = body(req);
-    const { workspaceId } = workspaceTeam(ot, params(req).workspace_id, me.ownerId);
+    const { workspaceId, role } = reviewerTeam(ot, params(req).workspace_id, me.ownerId);
     const reportId = text(params(req).report_id, "report_id", { max: 128 });
     const status = statusOf(b.status, true);
     const resolution = optText(b.resolution, "resolution", { max: RESOLUTION_MAX, multiline: true }) ?? "";
@@ -231,6 +242,11 @@ export function registerModeration(app: FastifyInstance, ot: OtContext) {
     return ot.tx(() => {
       const row = ot.get<any>("SELECT * FROM content_reports WHERE workspace_id = ? AND id = ?", workspaceId, reportId);
       assert(row, 404, "not_found", "report not found");
+      // A reviewer never settles a complaint about themselves. The owner is the workspace's
+      // accountable reviewer, so only an admin is barred from clearing a report they filed;
+      // the owner's own filings still need the owner, or the queue would never drain.
+      assert(row.target_type !== "user" || row.target_id !== me.ownerId, 403, "forbidden", "you cannot resolve a report about yourself");
+      assert(row.reporter_id !== me.ownerId || role === "owner", 403, "forbidden", "you cannot resolve a report you filed");
       if (row.status !== "pending") {
         assert(row.status === status, 409, "conflict", "report is already resolved");
         return reportView(row);

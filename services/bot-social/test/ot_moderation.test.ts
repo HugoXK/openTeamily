@@ -216,3 +216,79 @@ test("oversize text and out-of-range limits are refused and write no action", as
   assert.equal((await A.call("GET", `${url}?limit=101`)).status, 400);
   assert.deepEqual((await A.ok("GET", `${url}/${report.id}/actions`)).actions, []);
 });
+
+// The review queue is a reviewer surface: only a workspace owner or admin may see it
+// or act on it. Reporting stays a plain member's action, and no reviewer settles a
+// complaint they filed or one filed about them.
+async function join(owner: Home, ws: any, guest: Home, role = "member") {
+  const { code } = await owner.ok("POST", `/v1/ot/teams/${ws.id}/invites`, { role, max_uses: 1 });
+  return guest.ok("POST", "/v1/ot/invites/accept", { code });
+}
+
+test("a plain member can file reports but cannot resolve one", async () => {
+  const A = await home(S.base, "modqowner");
+  const B = await home(S.base, "modqmember");
+  const ws = await workspace(A, "modque");
+  const url = wsBase(ws);
+  const report = await A.ok("POST", url, { target_type: "message", target_id: "message-0001", reason: "spam", details: "Repeated advertising." });
+  const joined = await join(A, ws, B);
+  assert.equal(joined.role, "member");
+
+  const filed = await B.ok("POST", url, { target_type: "message", target_id: "message-0002", reason: "spam" });
+  assert.equal(filed.reporter_id, await me(B), "reporting is a member's action");
+
+  assert.equal((await B.call("POST", `${url}/${report.id}/resolve`, { status: "dismissed" })).status, 403, "a member cannot resolve");
+  assert.equal((await A.ok("GET", `${url}/${report.id}`)).status, "pending", "the refused member wrote nothing");
+  assert.deepEqual((await A.ok("GET", `${url}/${report.id}/actions`)).actions, []);
+});
+
+test("a member cannot read the reviewer queue", async () => {
+  const A = await home(S.base, "modrqowner");
+  const B = await home(S.base, "modrqmember");
+  const ws = await workspace(A, "modrque");
+  const url = wsBase(ws);
+  const report = await A.ok("POST", url, { target_type: "message", target_id: "message-0001", reason: "spam" });
+  await join(A, ws, B);
+
+  assert.equal((await B.call("GET", url)).status, 403, "a member cannot read the queue");
+  assert.equal((await B.call("GET", `${url}/count`)).status, 403, "a member cannot read the pending count");
+  assert.equal((await B.call("GET", `${url}/${report.id}`)).status, 403, "a member cannot read a report and its reporter_id");
+  assert.equal((await B.call("GET", `${url}/${report.id}/actions`)).status, 403, "a member cannot read reviewer actions");
+});
+
+test("a non-member still learns nothing about another workspace's queue", async () => {
+  const A = await home(S.base, "modstra");
+  const X = await home(S.base, "modstrx");
+  const ws = await workspace(A, "modstr");
+  const url = wsBase(ws);
+  const report = await A.ok("POST", url, { target_type: "message", target_id: "message-0001", reason: "spam" });
+  for (const path of [url, `${url}/count`, `${url}/${report.id}`, `${url}/${report.id}/actions`]) {
+    assert.equal((await X.call("GET", path)).status, 404, `a stranger must not reach ${path}`);
+  }
+  assert.equal((await X.call("POST", `${url}/${report.id}/resolve`, { status: "dismissed" })).status, 404);
+});
+
+test("no reviewer settles a complaint they filed, and a reported user cannot clear it", async () => {
+  const A = await home(S.base, "modselfa");
+  const B = await home(S.base, "modselfb");
+  const ws = await workspace(A, "modself");
+  const url = wsBase(ws);
+  await join(A, ws, B);
+  await A.ok("PATCH", `/v1/ot/teams/${ws.id}/members/${B.handle}`, { role: "admin" });
+
+  const own = await B.ok("POST", url, { target_type: "message", target_id: "message-0001", reason: "spam" });
+  assert.equal((await B.call("POST", `${url}/${own.id}/resolve`, { status: "dismissed" })).status, 403, "an admin cannot clear a complaint they filed");
+  assert.equal((await A.ok("GET", `${url}/${own.id}`)).status, "pending");
+
+  const aboutB = await A.ok("POST", url, { target_type: "user", target_id: await me(B), reason: "harassment" });
+  assert.equal((await B.call("POST", `${url}/${aboutB.id}/resolve`, { status: "dismissed" })).status, 403, "the reported user cannot clear the report about them");
+  assert.equal((await A.ok("GET", `${url}/${aboutB.id}`)).status, "pending");
+
+  // the workspace owner is the accountable reviewer: an admin clears other people's reports,
+  // the owner keeps the final word on the ones they filed themselves.
+  const other = await A.ok("POST", url, { target_type: "message", target_id: "message-0003", reason: "spam" });
+  const cleared = await B.ok("POST", `${url}/${other.id}/resolve`, { status: "actioned", resolution: "Removed.", action: "remove" });
+  assert.equal(cleared.reviewer_id, await me(B));
+  const finalWord = await A.ok("POST", `${url}/${aboutB.id}/resolve`, { status: "actioned", resolution: "Removed the message.", action: "remove" });
+  assert.equal(finalWord.reviewer_id, await me(A));
+});
