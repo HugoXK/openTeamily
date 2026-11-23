@@ -160,6 +160,11 @@ class GatewayTest(unittest.TestCase):
         self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents', 'artifacts'} <= gw.load_routes()['moved_pages'])
         self.assertTrue({'members', 'team', 'messenger', 'discover'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
+        release_base = '/chat/assets/' + 'a' * 32
+        for module in ('chat/app.mjs', 'chat/files.mjs', 'chat/translation.mjs', 'shell/thumb.mjs'):
+            path = f'{release_base}/{module}'
+            expected = '/api/openteamily/page?path=' + path.replace('/', '%2F')
+            self.assertEqual(gw.target_for(path, gw.load_routes()), expected)
         self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')

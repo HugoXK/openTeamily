@@ -3,6 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { apply, name, inject } from '../index.js'
 import { createPageHandler, resolvePagePath, writeChatAssetManifest, PAGE_PATH, SERVED_BY_HEADER } from '../src/pages.js'
 import { API_PATH, GATEWAY_PATH, LEGACY_PATH, REPLY_STREAM_PATH } from '../src/dispatch.js'
@@ -161,6 +162,36 @@ test('Chat versions its static dependency graph, keeps HTML private, and never c
   assert.equal(changed.headers.get('cache-control'), 'no-store')
   const current = await get(after, changed.headers.get('location'))
   assert.equal(await current.text(), 'export const item = 2')
+})
+
+test('the native Chat page and its module dependencies are served from one versioned package', async () => {
+  const pagesDir = fileURLToPath(new URL('../../../openteamily/static/', import.meta.url))
+  const route = {fetch: createPageHandler({pagesDir, identity:{instanceId:'chat-modules'}})}
+  const page = await get(route, '/chat')
+  assert.equal(page.status, 200)
+  assert.equal(page.headers.get(SERVED_BY_HEADER), 'ds-bot; instance=chat-modules')
+  const html = await page.text()
+  const modules = new Set([...html.matchAll(/(?:href|src)="(\/[^"]+\.mjs)"/g)].map(match => match[1]))
+  const main = [...modules].find(path => path.endsWith('/chat/app.mjs'))
+  assert.match(main ?? '', /^\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs$/)
+  const base = main.slice(0, -'/chat/app.mjs'.length)
+  for (const module of ['dsbot.mjs', 'files.mjs', 'translation.mjs']) {
+    assert.ok(modules.has(base + '/chat/' + module), `Missing Chat preload for ${module}`)
+  }
+
+  // Follow shipped imports, including literal paths passed to Chat's deferred loader.
+  const origin = 'https://runtime.test'
+  for (const path of modules) {
+    assert.ok(path.startsWith(base + '/'), `Chat module escaped its package: ${path}`)
+    const response = await get(route, path)
+    assert.equal(response.status, 200, path)
+    assert.match(response.headers.get('content-type'), /^text\/javascript/, path)
+    assert.match(response.headers.get('cache-control'), /immutable$/, path)
+    const source = await response.text()
+    for (const [, specifier] of source.matchAll(/(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\bdeferModule\s*\(\s*)['"](\.{1,2}\/[^'"]+\.m?js)['"]/g)) {
+      modules.add(new URL(specifier, origin + path).pathname)
+    }
+  }
 })
 
 test('built Chat pages can open before an optional dependency is read', async t => {
