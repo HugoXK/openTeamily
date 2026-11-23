@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
-import { discussionContext } from '../openteamily/static/meetings/discussion.mjs';
+import { mergeMeetingFields, mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
+import { discussionContext, mountMeetingDiscussion } from '../openteamily/static/meetings/discussion.mjs';
+import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
+import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
+
+test('meeting version review merges disjoint edits and flags overlapping fields', () => {
+  const actions = [['核对报告', 'Alice', false, '2026-12-01']];
+  const base = ['会议', '2026-11-22T13:00', 'Alice', '摘要', '旧正文', actions];
+  const local = ['后续会议', base[1], base[2], '我的摘要', base[4], actions];
+  const remote = [base[0], base[1], base[2], '后提交的摘要', '新正文', [['核对报告', 'Alice', true, '2026-12-01']]];
+  assert.deepEqual(mergeMeetingFields(base, local, remote), {
+    fields:['后续会议', base[1], base[2], '我的摘要', '新正文', remote[5]], conflicts:[3],
+  });
+  assert.deepEqual(mergeMeetingFields(base, remote, remote), {fields:remote, conflicts:[]});
+});
 
 test('meeting discussion includes only saved summary and open actions until the transcript is selected', () => {
   const meeting = {title:'Review', revision:3, summary:'Saved notes', transcript:'Private transcript', attendees:['Private attendee'],
@@ -13,6 +26,7 @@ test('meeting discussion includes only saved summary and open actions until the 
   assert.doesNotMatch(text,/Private transcript|Private attendee|Closed task/);
   assert.equal(clipped,false);
   assert.match(discussionContext(meeting,true).text,/Private transcript/);
+  assert.doesNotMatch(discussionContext({...meeting,shared:true},true).text,/Private transcript/);
   const transcriptOnly = {...meeting,summary:'',action_items:[]};
   assert.equal(discussionContext(transcriptOnly).text,'');
   assert.match(discussionContext(transcriptOnly,true).text,/Private transcript/);
@@ -62,6 +76,118 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('a received meeting revoked during draft preparation cannot become a chat draft', async () => {
+  const document = meetingDocument();
+  const get = id => document.getElementById(id);
+  const owner = 'a'.repeat(32), source = 'b'.repeat(32), personal = 'c'.repeat(32), agent = 'd'.repeat(32);
+  const meeting = {id:'e'.repeat(32), shared:true, revision:2, title:'Received', summary:'Shared notes', transcript:'Private transcript'};
+  const dialog = get('meeting-discussion-dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  const stored = new Map();
+  document.defaultView = {sessionStorage:{
+    getItem: key => stored.get(key),
+    setItem: (key, value) => { stored.set(key, value); },
+    removeItem: key => { stored.delete(key); },
+  }};
+  const checked = '/v1/workspaces/'+source+'/meetings/shared/'+meeting.id;
+  const prepared = checked+'/discussion';
+  const reads = [];
+  let sourceReads = 0;
+  const discussion = mountMeetingDiscussion(document, {
+    context: () => ({owner, workspace:source, meeting, shared:true}),
+    isDirty: () => false,
+    openChat: () => assert.fail('revoked source opened a draft'),
+    key: () => 'meeting-discussion-' + 'a'.repeat(32),
+    async request(method, path, body) {
+      reads.push([method,path]);
+      if (path === '/v1/auth/session') return {status:200,body:{user:{id:owner,username:'reader'}}};
+      if (path === '/v1/personal-agent') return {status:200,body:{personal_agent:{workspace:{id:personal},agent:{id:agent}}}};
+      if (path === checked) {
+        if (++sourceReads === 2) return {status:404,body:{}};
+        return {status:200,body:{meeting,viewer_username:'reader',received:true}};
+      }
+      assert.deepEqual([method,path,body],['POST',prepared,{revision:2}]);
+      return {status:200,body:{discussion:{id:'f'.repeat(32),workspace_id:personal,agent_id:agent},viewer_username:'reader'}};
+    },
+  });
+  discussion.sync();
+  assert.equal(get('shared-meeting-discussion-entry').hidden,false);
+  await get('shared-meeting-discussion').fire('click');
+  assert.doesNotMatch(get('meeting-discussion-preview').value,/Private transcript/);
+  assert.equal(get('meeting-discussion-transcript-option').hidden,true);
+  assert.deepEqual(reads,[]);
+  await get('meeting-discussion-form').fire('submit');
+  assert.deepEqual(reads.filter(([method])=>method==='POST'),[['POST',prepared]]);
+  assert.deepEqual(reads.at(-1),['GET',checked]);
+  assert.match(get('meeting-discussion-status').textContent,/已撤回/);
+  assert.equal(get('meeting-discussion-preview').value,'');
+  assert.equal(get('meeting-discussion-submit').disabled,true);
+  assert.doesNotMatch([...stored.values()].join(' '),/Shared notes/);
+});
+
+test('a handed-off call recording stays local and only explicit removal deletes its handoff', async () => {
+  const document = meetingDocument();
+  const element = id => document.getElementById('meeting-audio-' + id);
+  element('preview').removeAttribute = name => { delete element('preview')[name]; };
+  const audio = mountMeetingAudio(document, {
+    request() { assert.fail('showing a recording should not upload audio'); },
+    base: () => '/v1/workspaces/fixture/meetings',
+    transcript: {value: ''},
+  });
+  let removals = 0;
+  const discard = async () => { removals += 1; };
+  const handedOff = new Blob(['browser audio'], {type:'audio/webm;codecs=opus'});
+  const clip = {blob:handedOff, discard};
+  assert.equal(audio.acceptCallRecording({blob:new Blob(['video'], {type:'video/webm'}), discard}), false);
+  assert.equal(audio.acceptCallRecording(clip), true);
+  const url = element('preview').src;
+  assert.match(url, /^blob:/);
+  assert.equal(element('preview').hidden, false);
+  assert.equal(audio.hasPendingWork(), false);
+  assert.equal(audio.acceptCallRecording({blob:new Blob(['second recording'], {type:'audio/ogg'}), discard}), false);
+  assert.equal(element('preview').src, url);
+  assert.equal(element('start').disabled, true);
+  audio.reset();
+  assert.equal(audio.hasPendingWork(), false);
+  assert.equal(element('preview').hidden, true);
+  assert.equal(removals, 0);
+  assert.equal(audio.acceptCallRecording(clip), true);
+  await element('discard').fire('click');
+  assert.equal(removals, 1);
+  assert.equal(element('preview').hidden, true);
+  assert.equal(element('preview').src, undefined);
+});
+
+test('meeting transcript locate uses literal matches and never changes the saved text', () => {
+  const document = meetingDocument();
+  const element = id => document.getElementById('meeting-transcript-' + id);
+  const transcript = document.createElement('textarea');
+  const source = '😀 预计 [v2] 周一上线。\n确认 [V2] 的结果。';
+  transcript.value = source;
+  transcript.setSelectionRange = (start, end) => { transcript.selected = transcript.value.slice(start, end); };
+  transcript.scrollIntoView = () => {};
+  const search = mountTranscriptSearch(document, transcript);
+  search.open('[v2]');
+  const passage = element('hit');
+  assert.equal(passage.focused, true);
+  assert.equal(passage.children[1].tag, 'mark');
+  assert.equal(passage.children[1].textContent, '[v2]');
+  assert.match(element('search-status').textContent, /第 1 处，共 2 处/);
+  element('next').fire('click');
+  assert.equal(passage.children[1].textContent, '[V2]');
+  element('location').fire('click');
+  assert.equal(transcript.focused, true);
+  assert.equal(transcript.selected, '[V2]');
+  assert.equal(transcript.value, source);
+  element('next').fire('click');
+  assert.match(element('search-status').textContent, /第 1 处/);
+  element('prev').fire('click');
+  assert.match(element('search-status').textContent, /第 2 处/);
+  search.reset();
+  assert.equal(passage.hidden, true);
+  assert.deepEqual(passage.children, []);
+});
 
 test('meeting sharing sends only the saved revision and selected account, then confirms revocation', async () => {
   const document = meetingDocument();
@@ -140,6 +266,60 @@ test('meeting sharing sends only the saved revision and selected account, then c
   assert.equal(revoked, true);
   assert.equal(control('sent').children.length, 0);
   assert.equal(control('close').focused, true);
+});
+
+test('an unconfirmed meeting share keeps its exact retry key through reload until acknowledged', async () => {
+  const owner = 'a'.repeat(32);
+  const workspace = 'b'.repeat(32);
+  const meeting = {id:'c'.repeat(32), title:'Private meeting title', revision:3, transcript:'Private transcript'};
+  const receipts = [];
+  const storage = new Map();
+  let keyCount = 0;
+  async function confirm({actor=owner, scope=workspace, revision=3, group='otc_a', to='otf_a', acknowledged=false}={}) {
+    const document = meetingDocument();
+    document.defaultView = {sessionStorage:{
+      getItem: key => storage.get(key),
+      setItem: (key, value) => { storage.set(key, value); },
+      removeItem: key => { storage.delete(key); },
+    }};
+    const get = name => document.getElementById('meeting-share-' + name);
+    get('dialog').showModal = () => { get('dialog').open = true; };
+    mountMeetingShares(document, {
+      context: () => ({owner:actor, workspace:scope, meeting:{...meeting, revision}}),
+      key: () => 'meeting-share-' + String(++keyCount).padStart(16, '0'),
+      async request(method, path, body, headers) {
+        if (method === 'POST') {
+          receipts.push(headers['Idempotency-Key']);
+          return acknowledged ? {status:200,body:{meeting:{...meeting,id:'d'.repeat(32)}}} : {status:503,body:{}};
+        }
+        const items = path.includes('/social/conversations') ? [{id:'otc_a',kind:'group'},{id:'otc_b',kind:'group'}]
+          : path.includes('/share-recipients') ? [{id:'otf_a',name:'Recipient name'},{id:'otf_b',name:'Other person'}] : [];
+        return {status:200,body:{items}};
+      },
+    });
+    const before = receipts.length;
+    await document.getElementById('share-meeting').fire('click');
+    get('conversation').value = group;
+    await get('conversation').fire('change');
+    const recipient = get('recipient-items').children.map(label=>label.children[0]).find(box=>box.value===to);
+    recipient.checked = true;
+    recipient.fire('change');
+    assert.equal(receipts.length,before,'reopening and reselecting never send');
+    await get('form').fire('submit');
+    return receipts.at(-1);
+  }
+  const first = await confirm();
+  const stored = [...storage.values()].join('');
+  assert.match(stored,new RegExp(first));
+  assert.doesNotMatch(stored,/Private meeting title|Private transcript|Recipient name|Other person/);
+  assert.notEqual(await confirm({actor:'e'.repeat(32),acknowledged:true}),first);
+  assert.notEqual(await confirm({scope:'f'.repeat(32),acknowledged:true}),first);
+  assert.notEqual(await confirm({revision:4,acknowledged:true}),first);
+  assert.notEqual(await confirm({group:'otc_b',acknowledged:true}),first);
+  assert.notEqual(await confirm({to:'otf_b',acknowledged:true}),first);
+  assert.equal(await confirm({acknowledged:true}),first);
+  assert.equal(storage.size,0);
+  assert.notEqual(await confirm(),first,'a later deliberate share receives a new key');
 });
 
 test('a receipt renders the shared summary and action status as read-only text', () => {

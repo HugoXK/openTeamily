@@ -3,6 +3,10 @@ import { digest } from '../../featurekit/http.js'
 const SHARE_ID = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const EXCERPT_LENGTH = 400
 
+export function teamRunWorkKey(runId, position) {
+  return digest(`artifact-source:team_run:${runId}:${position}`)
+}
+
 export function teamRunSource(value) {
   if (!value || typeof value !== 'object' || Object.keys(value).length !== 3 ||
       typeof value.id !== 'string' || !SHARE_ID.test(value.id) ||

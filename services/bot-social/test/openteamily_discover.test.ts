@@ -24,6 +24,28 @@ let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
 
+test("published work source revision stays owner-only and rejects late older releases", async () => {
+  const [author,reader] = await Promise.all([home(S.base,"revision-owner"),home(S.base,"revision-reader")]);
+  const path = "/v1/ot/listings";
+  const slug = "publish-version-fence";
+  const work = {kind:"work",work_kind:"document",ref:"private-saved-work",slug,title:"Work revision fixture"};
+  const draft = (revision: number) => ({...work,source_revision:revision,snapshot:"Public revision " + revision});
+  const first = await author.ok("PUT",path,draft(3));
+  const updated = await author.ok("PUT",path,draft(4));
+  assert.equal(updated.id,first.id);
+  assert.equal(updated.source_revision,4);
+  const stale = await author.call("PUT",path,draft(3));
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"artifact_changed");
+  assert.equal((await author.ok("GET",path+"/mine")).listings[0].source_revision,4);
+  assert.deepEqual((await reader.ok("GET",path+"/mine")).listings,[]);
+  const publicWork = await reader.ok("GET","/v1/ot/discover/"+slug+"/detail");
+  assert.equal(publicWork.work.source_revision,undefined);
+  const publicPage = await fetch(S.base + "/w/" + slug);
+  assert.equal(publicPage.status,200);
+  assert.match(await publicPage.text(),/Public revision 4/);
+});
+
 test("guest Discover pages only contain opted-in records and carry no viewer state", async () => {
   const publisher = await home(S.base, "guest-directory-publisher");
   const term = "anonymous-gallery-fixture";
@@ -353,6 +375,45 @@ test("the public work preview is bounded, listed-only, and independent of the vi
   }
   await publisher.ok("DELETE", "/v1/ot/listings/" + work.id);
   assert.equal((await fetch(S.base + path + "?view=preview", {headers})).status, 404);
+});
+
+test("a public preview gives chronological neighbors inside the requested public filters", async () => {
+  const [creator, other] = await Promise.all([home(S.base, "preview-neighbor-owner"), home(S.base, "preview-neighbor-other")]);
+  const term = "Scoped public neighbors";
+  const publish = async (publishAs: typeof creator, suffix: string, time: number, workKind = "document", prefix = term) => {
+    const slug = "direct-browse-" + suffix;
+    const entry = await publishAs.ok("PUT", "/v1/ot/listings", {
+      kind:"work", work_kind:workKind, ref:slug, slug, title:`${prefix} ${suffix}`, snapshot:"Public preview text",
+    });
+    S.platform.db.prepare("UPDATE ot_listings SET updated_at=? WHERE id=?").run(time, entry.id);
+    return entry;
+  };
+  const newer = await publish(creator,"newer",500);
+  const anchor = await publish(creator,"anchor",300);
+  const older = await publish(creator,"older",100);
+  await publish(other,"other-author",430);
+  await publish(creator,"other-kind",440,"slides");
+  await publish(creator,"other-topic",450,"document","Unrelated title");
+  const withdrawn = await publish(creator,"withdrawn",460);
+  await creator.ok("DELETE", "/v1/ot/listings/" + withdrawn.id);
+  const read = (creatorFilter = creator.handle, query = term) => fetch(S.base + `/w/${anchor.slug}?` + new URLSearchParams({
+    view:"preview", nav:"latest", kind:"document", creator:creatorFilter, q:query, tab:"following",
+  }), {headers:{accept:"application/json"}});
+  const response = await read();
+  assert.equal(response.status,200);
+  const view = await response.json() as any;
+  assert.deepEqual(view.previous,{slug:newer.slug,title:newer.title});
+  assert.deepEqual(view.next,{slug:older.slug,title:older.title});
+  for (const [handle,q] of [[creator.handle,"Unrelated title"],["former-author.home",term]]) {
+    const result = await read(handle,q);
+    assert.equal(result.status,200);
+    const work = await result.json() as any;
+    assert.equal(work.slug,anchor.slug);
+    assert.equal(work.previous,null);
+    assert.equal(work.next,null);
+  }
+  await creator.ok("DELETE", "/v1/ot/listings/" + anchor.id);
+  assert.equal((await read()).status,404);
 });
 
 test("publication notifications resolve the current listing by ID and disappear when it is unlisted", async () => {

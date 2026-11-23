@@ -5,7 +5,7 @@ import {
   CONTROL, HEX32, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson, validLongText,
 } from '../../featurekit/http.js'
 import {speechStatus, transcribe} from './speech.js'
-import {shareRoutes} from './shares.js'
+import {receivedDiscussionSource, shareRoutes} from './shares.js'
 import {callSource} from './call-source.js'
 
 export const LIMITS = {
@@ -59,7 +59,8 @@ export const normalizeActions = (value) => value.map((item) => ({
   text: strip(item.text), done: Boolean(item.done ?? false), owner: strip(item.owner || ''),
   ...(item.due_date ? { due_date: item.due_date } : {}),
 }))
-const titleHash = (title) => digest(casefold(strip(title)))
+// Recurring calls can share a title. Their source ID, not their title, identifies the note.
+const titleHash = (title, sourceCallId) => sourceCallId ? 'call:' + sourceCallId : digest(casefold(strip(title)))
 const parse = (text) => (text ? JSON.parse(text) : [])
 
 function draftSource({title = '', attendees = [], transcript}) {
@@ -249,6 +250,19 @@ export function markdown(row) {
 
 const load = (store, workspaceId, id) => store.get('SELECT * FROM meetings WHERE id=? AND workspace_id=?', id, workspaceId)
 
+function transcriptExcerpt(text, pattern) {
+  const found = pattern?.exec(text)
+  if (!found) return null
+  const end = found.index + found[0].length
+  const start = Math.max(0, found.index - 42)
+  const stop = Math.min(text.length, end + 42)
+  return {
+    before: (start ? '…' : '') + text.slice(start, found.index).toWellFormed(),
+    match: found[0],
+    after: text.slice(end, stop).toWellFormed() + (stop < text.length ? '…' : ''),
+  }
+}
+
 function meetingPage(req, workspaceId) {
   const { limit, cursor, args } = pagination(req.query, ['q', 'open', 'order'])
   const query = (args.get('q') ?? '').trim()
@@ -272,37 +286,41 @@ function meetingPage(req, workspaceId) {
     bindings.push(cursor)
   }
   const order = recent ? ' ORDER BY started_at DESC,id' : ' ORDER BY id'
-  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by,source_call_id${query ? ',summary' : ''}`
+  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by,source_call_id${query ? ',summary,transcript' : ''}`
   const select = `SELECT ${fields} FROM meetings ` + boundary + order
   const rows = query || open ? req.store.all(select, ...bindings) : req.store.all(select + ' LIMIT ?', ...bindings, limit + 1)
   const needle = casefold(query)
+  const transcriptPattern = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu') : null
   const page = []
   for (const row of rows) {
     const actions = open || needle ? parse(row.action_items) : []
     if (open && !actions.some(item => !item.done)) continue
-    if (needle && ![row.title, row.summary, ...parse(row.attendees), ...actions.flatMap(item => [item.text, item.owner, item.due_date])]
+    const excerpt = transcriptExcerpt(row.transcript, transcriptPattern)
+    if (needle && !excerpt && ![row.title, row.summary, ...parse(row.attendees), ...actions.flatMap(item => [item.text, item.owner, item.due_date])]
       .some(value => casefold(value ?? '').includes(needle))) continue
-    page.push(row)
+    page.push({...view(row, false), ...(excerpt ? {transcript_match: excerpt} : {})})
     if (page.length > limit) break
   }
-  return { body: { items: page.slice(0, limit).map(row => view(row, false)),
+  return { body: { items: page.slice(0, limit),
     cursor: page.length > limit ? page[limit - 1].id : null, ...activity } }
 }
 
 function meetingActionPage(req, workspaceId) {
-  const names = ['view', 'limit', 'cursor', 'mine']
+  const names = ['view', 'limit', 'cursor', 'mine', 'status']
   const limit = Number(req.query.get('limit') ?? 20)
   const cursor = req.query.get('cursor') ?? ''
   const mine = req.query.has('mine')
+  const status = req.query.get('status') ?? 'open'
   const anchor = /^(0|[1-9][0-9]{0,9})\.([0-9a-f]{32})\.(0|[1-9][0-9]?)$/.exec(cursor)
   if ([...req.query.keys()].some(key => !names.includes(key) || req.query.getAll(key).length !== 1) ||
       !/^\d{1,2}$/.test(req.query.get('limit') ?? '20') || limit < 1 || limit > 50 ||
+      !['open', 'completed'].includes(status) ||
       (cursor && (!anchor || !validStartedAt(Number(anchor[1])) || Number(anchor[3]) >= LIMITS.ACTIONS_MAX)) ||
       (mine && (req.query.get('mine') !== '1' || !req.ownerUsername))) {
     refuse(400, 'invalid', '无效的行动项筛选条件。')
   }
-  const filters = ['m.workspace_id=?', "COALESCE(json_extract(a.value,'$.done'),0)=0"]
-  const params = [workspaceId]
+  const filters = ['m.workspace_id=?', "COALESCE(json_extract(a.value,'$.done'),0)=?"]
+  const params = [workspaceId, Number(status === 'completed')]
   if (mine) {
     filters.push("lower(json_extract(a.value,'$.owner'))=lower(?)")
     params.push(req.ownerUsername)
@@ -332,21 +350,22 @@ function savedSnapshot(req, workspaceId, meetingId, revision) {
   return row
 }
 
-async function completeSavedAction(req, workspaceId, meetingId) {
-  if (req.query.size) refuse(405, 'method', 'Only GET is supported for a saved action reference')
-  const {index, revision} = requireBodyKeys(await req.json(1024), ['index', 'revision'])
-  if (!Number.isInteger(index) || index < 0 || index >= LIMITS.ACTIONS_MAX || !Number.isSafeInteger(revision) || revision < 1) {
+async function setSavedActionStatus(req, workspaceId, meetingId) {
+  if (req.query.size) refuse(405, 'method', 'Action status updates do not accept query parameters')
+  const {index, revision, done = true} = requireBodyKeys(await req.json(1024), ['index', 'revision', 'done'])
+  if (!Number.isInteger(index) || index < 0 || index >= LIMITS.ACTIONS_MAX || !Number.isSafeInteger(revision) || revision < 1 ||
+      typeof done !== 'boolean') {
     refuse(400, 'invalid', '请选择已保存的行动项。')
   }
   return req.store.transaction(store => {
     const row = savedSnapshot(req, workspaceId, meetingId, revision)
     const actions = parse(row.action_items)
     if (!actions[index]) refuse(404, 'not_found', '找不到这条行动项。')
-    if (actions[index].done) refuse(409, 'conflict', '这条行动项已完成。')
-    actions[index].done = true
+    if (Boolean(actions[index].done) === done) refuse(409, 'conflict', done ? '这条行动项已完成。' : '这条行动项仍处于待完成状态。')
+    actions[index].done = done
     store.run('UPDATE meetings SET action_items=?,revision=?,updated=?,updated_by=? WHERE workspace_id=? AND id=?',
       JSON.stringify(actions), revision + 1, req.now, req.owner, workspaceId, meetingId)
-    return {body:{meeting:{id:meetingId, workspace_id:workspaceId, revision:revision + 1}, action:{index, done:true}, viewer_username:req.ownerUsername}}
+    return {body:{meeting:{id:meetingId, workspace_id:workspaceId, revision:revision + 1}, action:{index, done}, viewer_username:req.ownerUsername}}
   })
 }
 
@@ -437,7 +456,7 @@ async function create(req, workspaceId) {
     }
     const fromCall = source && store.get('SELECT * FROM meetings WHERE workspace_id=? AND source_call_id=?', workspaceId, source.id)
     if (fromCall) refuse(409, 'meeting_exists', '这次通话已有纪要。', view(fromCall))
-    const hash = titleHash(title)
+    const hash = titleHash(title, source?.id)
     if (store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A meeting with this title already exists')
     if (store.get('SELECT COUNT(*) AS n FROM meetings WHERE workspace_id=?', workspaceId).n >= LIMITS.PER_WORKSPACE) refuse(429, 'quota', 'Meeting capacity reached')
     const id = newId()
@@ -476,7 +495,7 @@ async function update(req, row) {
       === stableJson([row.title, row.started_at, parse(row.attendees), row.transcript, row.summary, parse(row.action_items)])) {
     return { body: { meeting: view(row) } }
   }
-  const hash = titleHash(title)
+  const hash = titleHash(title, row.source_call_id)
   return req.store.transaction((store) => {
     if (title !== row.title && store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
       refuse(409, 'conflict', 'A meeting with this title already exists')
@@ -547,11 +566,17 @@ export const spec = {
       state TEXT NOT NULL CHECK(state IN ('queued','running','ready','failed','cancelled','dismissed')), result TEXT, error TEXT);
     CREATE INDEX IF NOT EXISTS meeting_draft_queue ON meeting_draft_jobs(state, created, id);
     CREATE TRIGGER IF NOT EXISTS meeting_draft_revision_changed AFTER UPDATE OF revision ON meetings
-      WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`],
-  endpoints({store}) {
+      WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`,
+    "UPDATE meetings SET title_hash='call:' || source_call_id WHERE source_call_id IS NOT NULL"],
+  endpoints({store, host}) {
     store.run(`UPDATE meeting_draft_jobs SET state='failed',error='DS-Bot 已重启。请重新生成纪要。'
       WHERE state IN ('queued','running')`)
-    return {}
+    return {
+      async discussionSource(payload, call) {
+        if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+        return receivedDiscussionSource({host},payload)
+      },
+    }
   },
   importTables: { meetings: COLUMNS },
   routes: [
@@ -562,7 +587,7 @@ export const spec = {
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/export$/, handle: exportMeeting },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: (req, ...ids) =>
-      req.method === 'POST' ? completeSavedAction(req, ...ids) : readSavedAction(req, ...ids) },
+      req.method === 'POST' ? setSavedActionStatus(req, ...ids) : readSavedAction(req, ...ids) },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/artifact$/, handle: saveMeetingArtifact },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/memory$/, handle: saveMeetingMemory },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings(?:\/([0-9a-f]{32})(?:\/(remove))?)?$/, handle: dispatch },
