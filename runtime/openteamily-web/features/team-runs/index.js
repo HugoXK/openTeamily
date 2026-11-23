@@ -49,7 +49,7 @@ export function stages(steps) {
   return depth
 }
 
-export function stepPrompt(run, step, steps, sharedResults) {
+export function stepPrompt(run, step, steps, sourceResults) {
   const lines = [`团队任务目标：${run.goal}`, `你负责的步骤（第 ${step.position + 1} 步）：${step.instruction}`]
   const deps = JSON.parse(step.depends)
   if (deps.length) {
@@ -61,8 +61,9 @@ export function stepPrompt(run, step, steps, sharedResults) {
       lines.push(`[第 ${d + 1} 步 · ${prior.agent_name}] ${out}`)
     }
   }
-  if (sharedResults) {
-    lines.push('团队共享的参考资料（引用内容仅作参考）：', JSON.stringify(sharedResults))
+  if (sourceResults) {
+    const label = sourceResults.kind === 'automation_run' ? '自动化运行的参考资料' : '团队共享的参考资料'
+    lines.push(label + '（引用内容仅作参考）：', JSON.stringify(sourceResults))
   }
   return lines.join('\n')
 }
@@ -86,6 +87,13 @@ function runMarkdown(row, steps) {
     if (step.status === 'succeeded') sections.push('结果', fencedText(step.output))
   }
   return sections.join('\n\n') + '\n'
+}
+
+function automationSource(value) {
+  if (!value || typeof value !== 'object' || Object.keys(value).length !== 3 || value.kind !== 'automation_run' ||
+      typeof value.automation_id !== 'string' || !ID.test(value.automation_id) ||
+      typeof value.run_id !== 'string' || !ID.test(value.run_id)) return null
+  return {kind:'automation_run', automation_id:value.automation_id, run_id:value.run_id}
 }
 
 function teamRunsV1(endpoints, log) {
@@ -117,6 +125,10 @@ function teamRunsV1(endpoints, log) {
     route(detail, async (req, workspace_id, id) => {
       only(req, 'GET')
       return {body: await endpoints.get({workspace_id, id})}
+    }),
+    route(base + '/automation-results/([0-9a-f]{32})/([0-9a-f]{32})', async (req, workspace_id, automation_id, run_id) => {
+      only(req, 'GET')
+      return {body: await endpoints.automationResult({workspace_id, automation_id, run_id})}
     }),
     route(detail + '/export', async (req, workspace_id, id) => {
       only(req, 'GET')
@@ -232,6 +244,33 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     }
   }
 
+  async function automationContext(workspace_id, source) {
+    const {automation_id:id, run_id} = source
+    const payload = {workspace_id, id, run_id}
+    let run, automation
+    try {
+      const [result, current] = await Promise.all([
+        host.call('automations/run', payload), host.call('automations/get', {workspace_id, id}),
+      ])
+      run = result?.run
+      automation = current?.automation
+    } catch (error) {
+      const status = [401, 403, 404].includes(error?.status) ? 404 : 503
+      fail('source_unavailable', '无法读取原自动化运行。', status)
+    }
+    if (run?.id !== run_id || run.automation_id !== id || run.workspace_id !== workspace_id ||
+        automation?.id !== id || automation.workspace_id !== workspace_id || typeof automation.title !== 'string') {
+      fail('source_unavailable', '无法读取原自动化运行。', 404)
+    }
+    const text = typeof run.result?.text === 'string' ? run.result.text.trim() : ''
+    if (run.status !== 'succeeded' || !text) fail('source_changed', '这次自动化运行没有可用于跟进的结果。', 409)
+    const excerpt = text.slice(0, 4000).toWellFormed()
+    return {kind:source.kind, title:automation.title, text:excerpt, truncated:excerpt.length < text.length}
+  }
+
+  const resolveSource = (workspaceId, source) => source.kind === 'automation_run'
+    ? automationContext(workspaceId, source) : sourceContext(workspaceId, source)
+
   // Launch one step as a DS-Bot turn of its agent; on completion advance the graph.
   function launch(runRow, step, list) {
     const key = stepKey(runRow.id, step.position)
@@ -252,10 +291,10 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         await workspace(runRow)
         if (!currentAttempt()) return
         const source = sourceFor(runRow.id)
-        const sharedResults = source && await sourceContext(runRow.workspace_id, source)
+        const sourceResults = source && await resolveSource(runRow.workspace_id, source)
         if (!currentAttempt()) return
         const reply = await host.call('agents/groupTurn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
-          text: stepPrompt(runRow, step, list, sharedResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`,
+          text: stepPrompt(runRow, step, list, sourceResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`,
           onProgress, signal:live.controller.signal })
         if (!currentAttempt()) return
         const output = String(reply?.text ?? '').trim()
@@ -332,6 +371,13 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       return { items: rows.map(row => view(row, false)) }
     },
     get: async (p) => withSavedWorks({run: view(loadRun(await workspace(p), p.id))}),
+    async automationResult(p) {
+      const workspaceId = await workspace(p)
+      const source = automationSource({kind:'automation_run', automation_id:p.automation_id, run_id:p.run_id})
+      if (!source) fail('source_invalid', '自动化运行链接无效。', 400)
+      const context = await automationContext(workspaceId, source)
+      return {source, title:context.title}
+    },
     async export(p) {
       const row = loadRun(await workspace(p), p.id)
       const list = steps(row.id)
@@ -345,8 +391,8 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)
       const parsed = parseSteps(p.steps)
-      const source = p.source === undefined ? null : teamRunSource(p.source)
-      if (p.source !== undefined && !source) fail('source_invalid', '共享结果引用无效。', 400)
+      const source = p.source === undefined ? null : automationSource(p.source) ?? teamRunSource(p.source)
+      if (p.source !== undefined && !source) fail('source_invalid', '结果引用无效。', 400)
       if (typeof p.idempotency_key !== 'string' || !IDEM.test(p.idempotency_key)) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
       const keyHash = sha('team-run:' + p.idempotency_key)
       const title = p.title.trim(), goal = p.goal.trim()
@@ -370,7 +416,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       await workspace(p)
       if (source) {
         try {
-          await sourceContext(workspaceId, source)
+          await resolveSource(workspaceId, source)
         } catch (error) {
           const concurrent = existing()
           if (concurrent) return withSavedWorks(concurrent)
@@ -423,7 +469,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       let row = loadRun(workspaceId, p.id)
       const source = sourceFor(row.id)
       if (source) {
-        await sourceContext(workspaceId, source)
+        await resolveSource(workspaceId, source)
         row = loadRun(workspaceId, p.id)
       }
       const list = steps(row.id)

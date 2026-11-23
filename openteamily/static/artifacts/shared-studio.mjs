@@ -33,7 +33,7 @@ function setEditorValue(input, value) {
   input.scrollTop = scrollTop;
 }
 
-export function mountSharedStudio(document, {request, personalWorkspace, onClose, onCatalog, onDocument}) {
+export function mountSharedStudio(document, {request, personalWorkspace, onClose, onOpenCatalog, onCatalog, onDocument}) {
   const get = id => document.getElementById('studio-' + id);
   const button = get('open');
   const dialog = get('dialog');
@@ -61,6 +61,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   let screen;
 
   const searchable = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  const catalogQueryKey = () => 'openteamily.studio-query:' + JSON.stringify([scope.account, scope.id]);
 
   function filterCatalog() {
     if (!catalogQuery || !catalogNoMatch) return;
@@ -72,6 +73,17 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       if (!row.hidden) matches++;
     }
     catalogNoMatch.hidden = !query || !list.children.length || matches > 0;
+  }
+
+  function searchCatalog() {
+    if (scope) {
+      try {
+        const key = catalogQueryKey();
+        if (catalogQuery.value.trim()) view.sessionStorage.setItem(key, catalogQuery.value.slice(0, 80));
+        else view.sessionStorage.removeItem(key);
+      } catch {}
+    }
+    filterCatalog();
   }
 
   function show(text = '', kind = '') {
@@ -430,6 +442,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       const failure = result.status === 403 || result.status === 404
         ? '团队文档不存在，或你没有访问权限。' : '暂时无法打开团队文档。';
       if ([401,403,404,410].includes(result.status)) discardDraft(state);
+      onCatalog?.(scope.id);
       await loadCatalog(failure);
       return;
     }
@@ -488,30 +501,40 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     }
   }
 
-  async function open(id, revision) {
+  async function open(id, revision, returnTo) {
     if (!scope || dialog.open) return false;
     get('workspace-name').textContent = scope.name;
     dialog.showModal();
     closeButton.focus();
     if (id) await openDocument(id, revision);
-    else await loadCatalog();
+    else {
+      onOpenCatalog?.(scope.id);
+      const loading = loadCatalog('', returnTo);
+      if (returnTo) add.focus();
+      await loading;
+    }
     return true;
+  }
+
+  function leaveForNavigation() {
+    if (!dialog.open) return;
+    discardDraft(screen);
+    stopScreen();
+    dialog.close();
   }
 
   function close() {
     if (!mayLeave()) return;
-    discardDraft(screen);
-    stopScreen();
-    dialog.close();
+    leaveForNavigation();
     onClose?.();
     if (!button.hidden) button.focus();
   }
 
   button.addEventListener('click', () => void open());
-  catalogQuery?.addEventListener('input', filterCatalog);
+  catalogQuery?.addEventListener('input', searchCatalog);
   catalogClear?.addEventListener('click', () => {
     catalogQuery.value = '';
-    filterCatalog();
+    searchCatalog();
     catalogQuery.focus();
   });
   closeButton.addEventListener('click', close);
@@ -523,7 +546,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     if (!mayLeave()) return;
     const last = screen?.base?.id;
     discardDraft(screen);
-    onCatalog?.();
+    if (onCatalog?.(scope.id, {back:Boolean(last)})) return;
     void loadCatalog('', last);
     add.focus();
   });
@@ -647,7 +670,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     state.busy = false;
     if (result.status === 200 || result.status === 204) {
       discardDraft(state);
-      onCatalog?.();
+      onCatalog?.(scope.id);
       await loadCatalog();
       return;
     }
@@ -698,21 +721,27 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     setWorkspace(team, account) {
       const next = account && ID.test(team?.id || '') && team.kind === 'team' &&
         ROLES.has(team.role) ? {id: team.id, name: team.name, account} : null;
-      if (next?.id !== scope?.id || next?.account !== scope?.account) {
+      const changed = next?.id !== scope?.id || next?.account !== scope?.account;
+      if (changed) {
         if (dialog.open) {
           rememberDraft(screen);
           stopScreen();
           dialog.close();
           onClose?.();
         }
-        if (catalogQuery) {
-          catalogQuery.value = '';
-          filterCatalog();
-        }
       }
       scope = next;
+      if (changed && catalogQuery) {
+        catalogQuery.value = '';
+        if (scope) {
+          try { catalogQuery.value = (view.sessionStorage.getItem(catalogQueryKey()) || '').slice(0, 80); } catch {}
+        }
+        filterCatalog();
+      }
       button.hidden = !scope;
     },
+    canLeave: () => !dialog.open || mayLeave(),
+    leaveForNavigation,
     open,
   };
 }

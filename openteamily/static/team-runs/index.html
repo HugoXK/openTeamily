@@ -78,6 +78,15 @@
         <label>工作区 <select id="team-runs-workspace"></select></label>
         <button type="button" id="team-runs-refresh">刷新</button>
       </div>
+      <section id="team-run-handoff" class="team-run-confirm" aria-labelledby="team-run-handoff-title" hidden>
+        <h2 id="team-run-handoff-title">跟进自动化运行</h2>
+        <p id="team-run-handoff-status" role="status"></p>
+        <div class="team-run-actions">
+          <button type="button" id="team-run-handoff-continue" class="secondary" hidden>继续现有草稿</button>
+          <button type="button" id="team-run-handoff-replace" hidden>用运行结果新建草稿</button>
+          <button type="button" id="team-run-handoff-retry" class="secondary" hidden>重试读取结果</button>
+        </div>
+      </section>
       <div id="team-run-list-panels">
         <section id="team-runs-list-view" aria-labelledby="team-runs-list-heading">
           <h2 id="team-runs-list-heading" tabindex="-1">我的任务</h2>
@@ -98,6 +107,7 @@
           <div id="team-run-source" class="shared-run-source" hidden>
             <p id="team-run-source-status" class="note"></p>
             <button type="button" class="secondary" id="team-run-review-source">查看共享结果</button>
+            <a class="team-run-link" id="team-run-source-link" hidden>查看原运行</a>
             <button type="button" class="secondary" id="team-run-remove-source">移除引用</button>
           </div>
           <label>任务名称 <input id="team-run-title" type="text" required maxlength="80"></label>
@@ -126,6 +136,7 @@
         <p id="team-run-status" class="note" role="status"></p>
         <div class="team-run-actions">
           <button type="button" class="secondary" id="team-run-open-source" hidden>查看引用的共享结果</button>
+          <a class="team-run-link" id="team-run-detail-source" hidden>查看原运行</a>
           <a class="team-run-link" id="team-run-export" download hidden>导出 Markdown</a>
           <button type="button" class="secondary" id="team-run-reuse" hidden>复用为新任务</button>
           <button type="button" class="secondary" id="team-run-cancel" hidden>取消任务</button>

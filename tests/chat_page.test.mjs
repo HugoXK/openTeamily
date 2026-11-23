@@ -8,7 +8,7 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
-import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/chat/markdown-table.mjs';
+import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/shell/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
@@ -5494,6 +5494,40 @@ test('a pending native older page cannot replace the latest view after the user 
   } finally {
     pending.resolve(page([]));
     fixture.restore();
+  }
+});
+
+test('private pagination keeps an open rich message and replaces it if its source changes', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc, el, fetcher, nativeRows, routes, restore} = fixture;
+  const chat = items => json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items, cursor: linkAgentLatest});
+  const reply = {...nativeRows[1], body: `### 原回复\n\n项目 | 值\n--- | ---\n甲 | 乙\n\n${'背景说明'.repeat(210)}`};
+  let latest = reply;
+  routes.set(path + '?limit=50', () => chat([latest]));
+  routes.set(`${path}?before=${linkAgentLatest}&limit=50`, () => chat([nativeRows[0]]));
+  const body = () => el('message-list').children.find(row => row.dataset.messageId === linkAgentLatest)
+    ?.children.find(node => node.className === 'body');
+  try {
+    await mount(doc, {fetcher});
+    const oldBody = body();
+    const fold = oldBody.children.find(node => node.tagName === 'DETAILS');
+    assert.ok(fold);
+    fold.open = true;
+    await fire(el('chat-load-older'), 'click');
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(body(), oldBody);
+    assert.equal(fold.open, true);
+
+    latest = {...reply, body: '修改后的回复'};
+    await fire(el('chat-back-to-latest'), 'click');
+    await settle();
+    assert.notEqual(body(), oldBody);
+    assert.equal(body().textContent, '修改后的回复');
+  } finally {
+    await settle();
+    restore();
   }
 });
 

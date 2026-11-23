@@ -218,6 +218,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('javascript', asset['headers']['Content-Type'])
         self.assertGreater(len(asset['body']), 256 * 1024)
 
+    def test_discover_reader_modules_load_without_a_session(self):
+        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs'):
+            with self.subTest(path=path):
+                asset = self.raw.call('GET', path)
+                self.assertEqual(asset['status'], 200)
+                self.assertIn('javascript', asset['headers']['Content-Type'])
+
     def test_chat_entry_can_load_from_the_platform_shell(self):
         asset = self.raw.call('GET', '/chat/app.mjs')
         self.assertEqual(asset['status'], 200)

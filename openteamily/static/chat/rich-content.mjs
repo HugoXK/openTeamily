@@ -1,5 +1,5 @@
 import { markdownToBlocks, renderMarkdown } from '../memory/rich.mjs';
-import { readMarkdownTable, renderMarkdownTable } from './markdown-table.mjs';
+import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { renderChatCodeBlock } from './code-block.mjs';
 
 let flowchartModule;

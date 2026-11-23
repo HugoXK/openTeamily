@@ -5,6 +5,17 @@ import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-li
 import { mountSharedStudio } from './shared-studio.mjs';
 import { mountStudioCopy } from './studio-copy.mjs';
 import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
+
+function studioTargetFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  if (!params.has('studio')) return null;
+  const workspace = params.get('workspace');
+  if (params.size === 2 && params.get('studio') === 'catalog' && /^[0-9a-f]{32}$/.test(workspace || '')) {
+    return {workspace, catalog:true};
+  }
+  return studioDocumentFromSearch(search) || {invalid:true};
+}
+
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -699,15 +710,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
     personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
       (!item.owner_id || item.owner_id === currentUser?.id))?.id,
+    onOpenCatalog(workspace) {
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      if (current?.catalog && current.workspace === workspace) return;
+      writeSpaceAddress(studioCatalogAddress(workspace), {push:true});
+    },
     onDocument(workspace, id, revision) {
       const href = studioDocumentHref(workspace, id, revision);
-      if (href) writeSpaceAddress(href);
+      if (!href || spaceLocation() === href) return;
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      const studioFromCatalog = current?.catalog === true && current.workspace === workspace;
+      if (studioFromCatalog) writeSpaceAddress(spaceLocation(), {studioFocus:id});
+      writeSpaceAddress(href, {push:studioFromCatalog, studioFromCatalog});
     },
-    onCatalog() {
-      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    onCatalog(workspace, {back = false} = {}) {
+      const history = document.defaultView?.history;
+      if (back && spaceAddress?.entry.studioFromCatalog && typeof history?.back === 'function') {
+        approvedBack = true;
+        history.back();
+        return true;
+      }
+      writeSpaceAddress(studioCatalogAddress(workspace));
+      return false;
     },
     onClose() {
-      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+      if (studioTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },
   });
   const studioCopy = mountStudioCopy(document, {
@@ -1296,7 +1323,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return trimmed === '/artifacts' ? '/artifacts' : '/space';
   }
 
-  const spaceHistoryId = idempotencyKey();
+  const previousSpaceState = document.defaultView?.history?.state;
+  const previousSpaceEntry = previousSpaceState?.openTeamilySpace;
+  const restoredSpaceEntry = /^[A-Za-z0-9_-]{24}$/.test(previousSpaceEntry?.session || '') &&
+    Number.isSafeInteger(previousSpaceEntry.position) && previousSpaceEntry.position >= 0 ? previousSpaceEntry : null;
+  const spaceHistoryId = restoredSpaceEntry?.session || idempotencyKey();
   let spaceAddress;
   let restoringAddress = false;
   let approvedBack = false;
@@ -1306,12 +1337,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return location ? location.pathname + (location.search || '') + (location.hash || '') : '';
   }
 
-  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView} = {}) {
+  function studioCatalogAddress(workspace) {
+    return worksPath() + '?' + new URLSearchParams({workspace, studio:'catalog'});
+  }
+
+  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView, studioFromCatalog = false, studioFocus} = {}) {
     const history = document.defaultView?.history;
     if (!history?.replaceState || (push && !history.pushState)) return;
     const entry = {
       session: spaceHistoryId, position: (spaceAddress?.entry.position ?? 0) + Number(push),
-      fromCatalog, catalogView,
+      fromCatalog, catalogView, studioFromCatalog, studioFocus,
     };
     const state = {...history.state, openTeamilySpace:entry};
     history[push ? 'pushState' : 'replaceState'](state, '', url);
@@ -3391,8 +3426,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
     const sharedWork = !location?.search && sharedWorkCopyToken(location?.hash);
-    const linkedStudio = new URLSearchParams(location?.search).has('studio')
-      ? studioDocumentFromSearch(location.search) || {invalid: true} : null;
+    const linkedStudio = studioTargetFromSearch(location?.search);
     const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
@@ -3483,7 +3517,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (linkedStudio) {
       void loadList();
       if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
-          !await studio?.open(linkedStudio.id, linkedStudio.revision)) {
+          !await studio?.open(linkedStudio.id, linkedStudio.revision, linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined)) {
         show('error', '团队文档链接无效，或你没有访问权限。');
       }
       return;
@@ -4597,7 +4631,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
-    writeSpaceAddress(spaceLocation());
+    if (restoredSpaceEntry) spaceAddress = {url:spaceLocation(), state:previousSpaceState, entry:restoredSpaceEntry};
+    else writeSpaceAddress(spaceLocation());
     view.addEventListener('popstate', async event => {
       if (restoringAddress) {
         restoringAddress = false;
@@ -4607,7 +4642,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const tracked = next?.session === spaceHistoryId;
       const approved = approvedBack;
       approvedBack = false;
-      if (!approved && !canLeaveEditor()) {
+      if (!approved && (!canLeaveEditor() || studio?.canLeave() === false)) {
         if (spaceAddress) {
           const delta = tracked ? spaceAddress.entry.position - next.position : 0;
           if (delta && typeof view.history?.go === 'function') {
@@ -4623,11 +4658,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceLoad += 1;
       hideEditor();
       sharedWorkCopy?.close();
+      studio?.leaveForNavigation();
       show('', '');
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
-      if (studioDocumentFromSearch(view.location.search) || artifactTargetFromSearch(view.location.search) ||
+      const studioTarget = studioTargetFromSearch(view.location.search);
+      if (studioTarget && !studioTarget.invalid && workspaceResolved && workspaceId() === studioTarget.workspace) {
+        void studio?.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
+        return;
+      }
+      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
           newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;

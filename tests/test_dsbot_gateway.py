@@ -250,6 +250,7 @@ class GatewayTest(unittest.TestCase):
             (f'{base}/{run}/export', 'team-runs'),
             (f'{base}/{run}/steps/7/retry', 'team-runs'),
             (f'{base}/{run}/steps/1/artifact', 'team-runs'),
+            (f'{base}/automation-results/{run}/{workspace}', 'team-runs'),
             (f'{base}/{run}/share', 'shares'),
             (f'{shared}/{share}/revoke', 'shares'),
         ):

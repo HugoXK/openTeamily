@@ -760,7 +760,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const clearSearch = document.getElementById('feed-clear');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'reader', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -797,6 +797,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function disposeWorkPreview() {
+    activeWork?.disposeReader?.();
+    detail.reader.replaceChildren();
     activeWork?.model?.setSource('');
     if (activeWork?.media) {
       const player = activeWork.media;
@@ -1615,6 +1617,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
+    if (item.kind === 'document') {
+      void import('./document-reader.mjs').then(({mountDocumentReader}) => {
+        if (!stillShowing()) return;
+        entry.disposeReader = mountDocumentReader(document, detail.reader, {
+          stillShowing,
+          async read(signal) {
+            const result = await request('GET', '/w/' + item.slug, undefined, {}, signal);
+            const work = result.body;
+            if (result.status !== 200 || work?.kind !== 'work' || work.slug !== item.slug || work.work_kind !== 'document') {
+              return {status:result.status};
+            }
+            return {status:200, source:work.snapshot ?? ''};
+          },
+        });
+      }).catch(() => {});
+    }
     const result = inlinePreview === undefined ? await cachedPreview(item) : {ok: true, preview: inlinePreview};
     if (!stillShowing()) return;
     if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }

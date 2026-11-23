@@ -344,7 +344,8 @@ export function meetingCallHrefInMessage(text, origin) {
 
 function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
   const source = String(text || '');
-  if ((assistantReply && source.trim()) || hasExplicitRichContent(source)) {
+  const rich = Boolean((assistantReply && source.trim()) || hasExplicitRichContent(source));
+  if (rich) {
     renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews,
       (parent, value) => appendChatMarkdown(doc, parent, value));
   } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
@@ -367,6 +368,7 @@ function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
     link.title = '';
     if (!existing) node.append(link);
   }
+  return rich || node.children[0]?.tagName === 'DETAILS';
 }
 
 export function highlightParts(text, query) {
@@ -3035,18 +3037,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function makeAgentMessage(item) {
+  // Message controls can change while the reader is still using the same body.
+  const interactiveMessageBodies = new WeakMap();
+
+  function captureMessageBodies(list, scope) {
+    const bodies = new Map();
+    const scroll = [];
+    const focused = document.activeElement;
+    let restoreFocus = false;
+    if (list.dataset.messageBodyScope === scope) {
+      for (const row of list.children) {
+        if (!row.dataset.messageId) continue;
+        const body = Array.from(row.children).find(child => interactiveMessageBodies.has(child));
+        if (!body) continue;
+        bodies.set(row.dataset.messageId, body);
+        restoreFocus ||= Boolean(focused && body.contains?.(focused));
+        for (const node of body.querySelectorAll?.('.chat-markdown-table-scroll, .chat-flowchart, .chat-code-block pre') || []) {
+          const left = node.scrollLeft;
+          if (left) scroll.push([node, left]);
+        }
+      }
+    }
+    list.dataset.messageBodyScope = scope;
+    return {
+      bodies,
+      restoreView() {
+        for (const [node, left] of scroll) if (node.isConnected) node.scrollLeft = left;
+        if (restoreFocus && focused?.isConnected && document.activeElement === document.body) focused.focus({preventScroll:true});
+      },
+    };
+  }
+
+  function transcriptMessageBody(previous, text, assistantReply = false) {
+    const rendered = interactiveMessageBodies.get(previous);
+    const language = document.documentElement?.lang;
+    if (rendered && rendered.text === text && rendered.assistantReply === assistantReply &&
+        rendered.prefs === chatPreferences && rendered.language === language) return previous;
+
+    const body = document.createElement('div');
+    if (renderMessageBody(document, body, text, chatPreferences, assistantReply)) {
+      interactiveMessageBodies.set(body, {text, assistantReply, prefs:chatPreferences, language});
+    }
+    return body;
+  }
+
+  function makeAgentMessage(item, previousBody) {
     const bubble = document.createElement('li');
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
     role.className = item.role === 'user' ? 'role visually-hidden' : 'role';
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
-    const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
     const failed = item.role === 'assistant' && item.status === 'failed';
     const cancelled = item.role === 'assistant' && item.status === 'cancelled';
     const partial = waiting && servedByDsbot && item.client_key;
+    const body = partial || (failed && item.error_code !== 'session/attachment-invalid')
+      ? document.createElement('div')
+      : transcriptMessageBody(previousBody, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item),
+        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded');
     body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
     if (partial) {
       bubble.dataset.replyProgress = item.client_key;
@@ -3062,11 +3111,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (item.role === 'assistant' && item.status === 'failed' && item.error_code !== 'session/attachment-invalid') {
       body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
         : uiLabel('回复未完成。', 'The reply didn’t finish.');
-    } else {
-      renderMessageBody(document, body, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item), chatPreferences,
-        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded');
-      if ((cancelled || item.attachments?.length) && !item.body) body.hidden = true;
-    }
+    } else body.hidden = Boolean((cancelled || item.attachments?.length) && !item.body);
     if (waiting || failed || cancelled) bubble.dataset.state = item.status;
     bubble.append(role);
     let replyView;
@@ -3112,6 +3157,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const top = anchor?.top ?? scroller.scrollTop;
     const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
+    const bodyViews = captureMessageBodies(list, sendScope());
     list.replaceChildren();
     agentReplyViews.clear();
     lastAgentItems = items || [];
@@ -3134,7 +3180,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         list.append(view.bubble);
         continue;
       }
-      const {bubble, replyView} = makeAgentMessage(item);
+      const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id));
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
     }
@@ -3144,6 +3190,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const anchoredMessage = anchor?.id && Array.from(list.children).find(node => node.dataset.messageId === anchor.id);
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchoredMessage) scroller.scrollTop += anchoredMessage.getBoundingClientRect().top - anchor.offset;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return lastAgentItems.some(waitingAgentReply) && !tracking;
   }
@@ -4681,6 +4728,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearVoicePlayers();
     const list = document.getElementById('message-list');
     const scope = sendScope();
+    const bodyViews = captureMessageBodies(list, scope);
     const sameReplyScope = list.dataset.groupReplyScope === scope;
     list.dataset.groupReplyScope = scope;
     const existingGroupReplies = new Map();
@@ -4762,15 +4810,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
       role.textContent = socialMessageAuthor(item, people);
-      const body = document.createElement('div');
-      body.className = 'body';
-      if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
-      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences,
+      const body = transcriptMessageBody(bodyViews.bodies.get(item.id), item.retracted ? '此消息已撤回' : (item.body || ''),
         servedByDsbot && item.role === 'agent' && !item.retracted);
+      body.className = 'body';
+      body.hidden = item.attachment?.bytes !== undefined && item.body === item.attachment.title;
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
         role.textContent += ' · 转发自 ' + item.forwarded_from.author;
+      } else if (body.dataset.forwarded) {
+        delete body.dataset.forwarded;
+        body.removeAttribute('title');
       }
       const time = document.createElement('p');
       time.className = 'time';
@@ -4940,6 +4990,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
     } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return false;
   }

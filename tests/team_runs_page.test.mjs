@@ -20,9 +20,14 @@ test('team run addresses allow exact workspace, private run or shared snapshot',
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&run=${RUN}&step=7`), {workspace:WS, run:RUN, step:7});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&shared=${shared}`), {workspace: WS, shared});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&draft=1`), {workspace: WS, draft: true});
+  assert.deepEqual(teamRunTarget(`#workspace=${WS}&draft=1&automation=${AGENT}&result=${RUN}`), {
+    workspace:WS, draft:true, automationSource:{kind:'automation_run', automation_id:AGENT, run_id:RUN},
+  });
   for (const bad of [`#workspace=${WS}&draft=2`, `#workspace=${WS}&draft=1&run=${RUN}`, `#run=${RUN}`, `#workspace=${WS}&run=${RUN}&shared=${shared}`,
     `#workspace=${WS}&workspace=${OTHER_WS}`, `#workspace=${WS}&run=wrong`, `#workspace=${WS}&step=0`,
-    `#workspace=${WS}&run=${RUN}&step=8`, `#workspace=${WS}&run=${RUN}&step=0&step=1`]) {
+    `#workspace=${WS}&run=${RUN}&step=8`, `#workspace=${WS}&run=${RUN}&step=0&step=1`,
+    `#workspace=${WS}&draft=1&automation=${AGENT}`, `#workspace=${WS}&automation=${AGENT}&result=${RUN}`,
+    `#workspace=${WS}&draft=1&automation=${AGENT}&result=${RUN}&result=${RUN}`]) {
     assert.deepEqual(teamRunTarget(bad), {invalid: true});
   }
 });
