@@ -1,3 +1,5 @@
+import { WEBSITE_HTML, WEBSITE_PREVIEW_CSP, WEBSITE_PREVIEW_PATH, websitePreviewRevision } from '../lib/website-preview.js'
+
 // POST /api/openteamily: one JSON channel for every OpenTeamily feature that has
 // moved into the user's DS-Bot. Endpoints come from features/<name>/index.js
 // (see src/features.js) as '<name>/<op>'.
@@ -10,6 +12,35 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 })
 
 const failure = (code, message) => json({ ok: false, error: { code, message, details: {} } })
+
+export const REPLY_STREAM_PATH = '/api/openteamily/reply-stream'
+const RUNTIME_ID = /^[a-f0-9]{32}$/
+const SEND_KEY = /^[A-Za-z0-9_-]{16,64}$/
+
+export function createReplyStreamDispatch({ endpoints }) {
+  const table = typeof endpoints === 'function' ? endpoints : async () => endpoints
+  return async request => {
+    if (request.method !== 'GET') return gatewayError(405, 'method', 'Only GET is supported')
+    const query = new URL(request.url).searchParams
+    const workspace_id = query.get('workspace') || ''
+    const id = query.get('agent') || ''
+    const conversation_id = query.get('conversation') || ''
+    const key = query.get('key') || ''
+    if (query.size !== 4 || ![workspace_id,id,conversation_id].every(value => RUNTIME_ID.test(value)) || !SEND_KEY.test(key)) {
+      return gatewayError(400, 'invalid', 'Invalid private reply stream')
+    }
+    try {
+      const handler = (await table())['agents/replyStream']
+      if (typeof handler !== 'function') return gatewayError(503, 'unavailable', 'Private reply stream is not available')
+      return await handler({workspace_id,id,conversation_id,key}, {request,internal:true})
+    } catch (error) {
+      const status = error?.status
+      if (status === 404) return gatewayError(404, 'not_found', 'Reply not found')
+      if (status === 429) return gatewayError(429, 'busy', 'Too many reply streams')
+      return gatewayError(500, 'unavailable', 'Private reply stream is not available')
+    }
+  }
+}
 
 // endpoints: a table or a function returning a table (or a promise of one), so the
 // route can be registered before features finish loading.
@@ -94,6 +125,7 @@ const FEATURE = /^[a-z][a-z0-9-]{0,39}$/
 const V1_PATH = /^\/v1\/[A-Za-z0-9/_.-]{1,240}$/
 const CHAT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations\/[A-Za-z0-9._-]{1,80}\/messages$/
 const AGENT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/messages$/
+const STICKER_FILE = /^\/v1\/stickers\/[0-9a-f]{32}\/file$/
 const CHAT_FILE_MAX = 8 * 1024 * 1024
 
 async function composeAttachments(request, agent) {
@@ -109,7 +141,19 @@ async function composeAttachments(request, agent) {
   for (const file of files) {
     attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
   }
-  return agent ? {body:form.get('body'), reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
+  if (agent) return {body:form.get('body'), chat_language:form.get('chat_language'),
+    reply_language:form.get('reply_language'), attachments}
+  const fields = form.getAll('agent_mentions')
+  const raw = fields[0]
+  if (fields.length > 1 || (raw !== undefined && (typeof raw !== 'string' || raw.length > 8192))) {
+    throw new Error('Invalid group agent mentions')
+  }
+  const mentions = raw === undefined ? undefined : JSON.parse(raw)
+  if (raw !== undefined && (!Array.isArray(mentions) || !mentions.length || mentions.length > 20)) {
+    throw new Error('Invalid group agent mentions')
+  }
+  return {attachment:attachments[0], body:form.get('body') ?? undefined, reply_to:form.get('reply_to') ?? undefined,
+    ...(mentions ? {agent_mentions:mentions} : {})}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {
@@ -123,6 +167,11 @@ function fileResponse(request, {data, content_type, filename, inline}) {
     'content-security-policy': "default-src 'none'; sandbox",
   }
   const bytes = Buffer.from(data, 'base64')
+  if (request.method === 'HEAD') {
+    headers['content-length'] = String(bytes.length)
+    if (inline) headers['accept-ranges'] = 'bytes'
+    return new Response(null, {status:200, headers})
+  }
   if (inline) {
     headers['accept-ranges'] = 'bytes'
     // A single byte range is enough for native media playback and seeking.
@@ -185,10 +234,29 @@ export function createLegacyDispatch({ endpoints }) {
     }
     try {
       const idempotency_key = request.headers.get('idempotency-key') || undefined
-      const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
+      const stickerHead = request.method === 'HEAD' && feature === 'stickers' && STICKER_FILE.test(path)
+      const result = await handler({ method: stickerHead ? 'GET' : request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
-      if (result?.download && status === 200) return fileResponse(request, result.download)
-      return new Response(status === 204 ? null : JSON.stringify(result?.body ?? {}), {
+      if (result?.download && status === 200) {
+        // The interactive document has its own opaque origin. No other
+        // artifacts or attachment responses can opt in to this policy.
+        if (feature === 'artifacts' && request.method === 'GET'
+            && WEBSITE_PREVIEW_PATH.test(path)
+            && websitePreviewRevision(new URLSearchParams(query)) !== null
+            && result.download.content_type === WEBSITE_HTML) {
+          return new Response(Buffer.from(result.download.data, 'base64'), {
+            headers: {
+              'content-type': WEBSITE_HTML,
+              'content-security-policy': WEBSITE_PREVIEW_CSP,
+              'cache-control': 'private, no-store',
+              'x-content-type-options': 'nosniff',
+              'referrer-policy': 'no-referrer',
+            },
+          })
+        }
+        return fileResponse(request, result.download)
+      }
+      return new Response(status === 204 || stickerHead ? null : JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })
     } catch (error) {
