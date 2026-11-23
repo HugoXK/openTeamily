@@ -306,19 +306,21 @@ function meetingPage(req, workspaceId) {
 }
 
 function meetingActionPage(req, workspaceId) {
-  const names = ['view', 'limit', 'cursor', 'mine']
+  const names = ['view', 'limit', 'cursor', 'mine', 'status']
   const limit = Number(req.query.get('limit') ?? 20)
   const cursor = req.query.get('cursor') ?? ''
   const mine = req.query.has('mine')
+  const status = req.query.get('status') ?? 'open'
   const anchor = /^(0|[1-9][0-9]{0,9})\.([0-9a-f]{32})\.(0|[1-9][0-9]?)$/.exec(cursor)
   if ([...req.query.keys()].some(key => !names.includes(key) || req.query.getAll(key).length !== 1) ||
       !/^\d{1,2}$/.test(req.query.get('limit') ?? '20') || limit < 1 || limit > 50 ||
+      !['open', 'completed'].includes(status) ||
       (cursor && (!anchor || !validStartedAt(Number(anchor[1])) || Number(anchor[3]) >= LIMITS.ACTIONS_MAX)) ||
       (mine && (req.query.get('mine') !== '1' || !req.ownerUsername))) {
     refuse(400, 'invalid', '无效的行动项筛选条件。')
   }
-  const filters = ['m.workspace_id=?', "COALESCE(json_extract(a.value,'$.done'),0)=0"]
-  const params = [workspaceId]
+  const filters = ['m.workspace_id=?', "COALESCE(json_extract(a.value,'$.done'),0)=?"]
+  const params = [workspaceId, Number(status === 'completed')]
   if (mine) {
     filters.push("lower(json_extract(a.value,'$.owner'))=lower(?)")
     params.push(req.ownerUsername)
@@ -348,21 +350,22 @@ function savedSnapshot(req, workspaceId, meetingId, revision) {
   return row
 }
 
-async function completeSavedAction(req, workspaceId, meetingId) {
-  if (req.query.size) refuse(405, 'method', 'Only GET is supported for a saved action reference')
-  const {index, revision} = requireBodyKeys(await req.json(1024), ['index', 'revision'])
-  if (!Number.isInteger(index) || index < 0 || index >= LIMITS.ACTIONS_MAX || !Number.isSafeInteger(revision) || revision < 1) {
+async function setSavedActionStatus(req, workspaceId, meetingId) {
+  if (req.query.size) refuse(405, 'method', 'Action status updates do not accept query parameters')
+  const {index, revision, done = true} = requireBodyKeys(await req.json(1024), ['index', 'revision', 'done'])
+  if (!Number.isInteger(index) || index < 0 || index >= LIMITS.ACTIONS_MAX || !Number.isSafeInteger(revision) || revision < 1 ||
+      typeof done !== 'boolean') {
     refuse(400, 'invalid', '请选择已保存的行动项。')
   }
   return req.store.transaction(store => {
     const row = savedSnapshot(req, workspaceId, meetingId, revision)
     const actions = parse(row.action_items)
     if (!actions[index]) refuse(404, 'not_found', '找不到这条行动项。')
-    if (actions[index].done) refuse(409, 'conflict', '这条行动项已完成。')
-    actions[index].done = true
+    if (Boolean(actions[index].done) === done) refuse(409, 'conflict', done ? '这条行动项已完成。' : '这条行动项仍处于待完成状态。')
+    actions[index].done = done
     store.run('UPDATE meetings SET action_items=?,revision=?,updated=?,updated_by=? WHERE workspace_id=? AND id=?',
       JSON.stringify(actions), revision + 1, req.now, req.owner, workspaceId, meetingId)
-    return {body:{meeting:{id:meetingId, workspace_id:workspaceId, revision:revision + 1}, action:{index, done:true}, viewer_username:req.ownerUsername}}
+    return {body:{meeting:{id:meetingId, workspace_id:workspaceId, revision:revision + 1}, action:{index, done}, viewer_username:req.ownerUsername}}
   })
 }
 
@@ -584,7 +587,7 @@ export const spec = {
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/export$/, handle: exportMeeting },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: (req, ...ids) =>
-      req.method === 'POST' ? completeSavedAction(req, ...ids) : readSavedAction(req, ...ids) },
+      req.method === 'POST' ? setSavedActionStatus(req, ...ids) : readSavedAction(req, ...ids) },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/artifact$/, handle: saveMeetingArtifact },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/memory$/, handle: saveMeetingMemory },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings(?:\/([0-9a-f]{32})(?:\/(remove))?)?$/, handle: dispatch },

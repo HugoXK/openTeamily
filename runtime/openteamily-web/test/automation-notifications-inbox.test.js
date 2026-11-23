@@ -32,8 +32,10 @@ function fixture(t) {
   const faults = {}
   setSharedBotSocial({ async request(method, path, body) {
     sharedCalls.push({method, path, body})
-    if (path.startsWith('/v1/ot/teams/by-workspace/')) return {id:'team-row',name:'Workspace'}
-    if (path === '/v1/ot/conversations') return {conversations:[]}
+    if (path.startsWith('/v1/ot/teams/by-workspace/')) {
+      if (path.endsWith(foreign)) throw Object.assign(new Error('Workspace not found'),{status:404,code:'social/not_found'})
+      return {id:'team-row',name:'Workspace'}
+    }
     const url = new URL(path,'http://fixture.test')
     const team = method === 'GET' ? url.searchParams.get('workspace_id') : body.workspace_id
     if (team === foreign) throw Object.assign(new Error('Workspace not found'),{status:404,code:'social/not_found'})
@@ -58,7 +60,10 @@ function fixture(t) {
   t.after(() => setSharedBotSocial(undefined))
   const host = {async call(endpoint, payload) {
     if (endpoint === 'agents/personal-binding') return {workspace_id:workspace}
-    if (['agents/list','automations/list'].includes(endpoint)) return {items:[]}
+    if (endpoint === 'agents/workspaceOverview') return {count:1,items:[{id:'agent-thread',source:'agent',updated:1}]}
+    if (endpoint === 'automations/list') return {items:[]}
+    if (endpoint === 'messenger/v1') return {status:200,body:{items:[{id:'shared-thread',kind:'group',updated:2}]}}
+    if (endpoint === 'social/v1') return social(host).endpoints.v1(payload)
     if (['artifacts/v1','meetings/v1'].includes(endpoint)) return {status:200,body:{items:[]}}
     localCalls.push({endpoint,payload})
     if (faults.missing) throw Object.assign(new Error('Unknown OpenTeamily endpoint'),{code:'openteamily/not-found'})
@@ -162,9 +167,16 @@ test('invalid requests and real source failures cannot masquerade as successful 
 })
 
 test('overview and merged notifications tolerate only a genuinely unregistered local feature', async t => {
-  const {host,get,read,faults,localRows} = fixture(t)
-  const home = () => overview(host).endpoints.v1({method:'GET',path:'/v1/workspaces/'+workspace+'/overview'})
-  assert.equal((await home()).body.unread_notifications,4)
+  const {host,get,read,faults,localRows,sharedCalls} = fixture(t)
+  const home = (wid = workspace) => overview(host).endpoints.v1({method:'GET',path:'/v1/workspaces/'+wid+'/overview'})
+  const personal = (await home()).body
+  assert.deepEqual(personal.workspace,{id:workspace,name:'个人空间',kind:'personal'})
+  assert.equal(personal.unread_notifications,4)
+  assert.equal(personal.counts.agents,1)
+  assert.deepEqual(personal.recent_conversations.map(row=>row.source),['social','agent'])
+  assert.equal(sharedCalls.some(call=>call.path.includes('/teams/by-workspace/')),false)
+  assert.ok(sharedCalls.some(call=>call.path.includes('personal=1')))
+  assert.equal((await home(foreign)).status,404)
   faults.missing = true
   assert.equal((await home()).body.unread_notifications,2)
   assert.equal((await read({all:true})).status,200)

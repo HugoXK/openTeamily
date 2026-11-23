@@ -77,10 +77,16 @@
     </header>
     <section id="meeting-inbox" class="meeting-list-pane" aria-labelledby="meeting-inbox-heading" hidden>
       <header class="meeting-list-head">
-        <h2 id="meeting-inbox-heading" tabindex="-1">待办行动项</h2>
+        <h2 id="meeting-inbox-heading" tabindex="-1">会议行动项</h2>
         <button type="button" id="meeting-inbox-close" class="secondary">返回会议</button>
       </header>
       <div class="meeting-inbox-filters">
+        <label>状态
+          <select id="meeting-inbox-state">
+            <option value="open">待完成</option>
+            <option value="completed">已完成</option>
+          </select>
+        </label>
         <label><input type="checkbox" id="meeting-inbox-mine"> 分配给我</label>
         <button type="button" id="meeting-inbox-refresh" class="secondary">刷新</button>
       </div>
@@ -92,7 +98,7 @@
     <div class="meeting-layout" id="meeting-layout" data-view="catalogue">
       <header class="meeting-mobile-toolbar">
         <button type="button" id="meeting-back-to-list" class="secondary">‹ 会议列表</button>
-        <button type="button" id="meeting-inbox-return" class="secondary" hidden>‹ 待办行动项</button>
+        <button type="button" id="meeting-inbox-return" class="secondary" hidden>‹ 会议行动项</button>
         <button type="submit" id="save-meeting-mobile" form="meeting-form">保存</button>
       </header>
       <section class="meeting-list-pane" id="meeting-list-pane" aria-label="会议列表">

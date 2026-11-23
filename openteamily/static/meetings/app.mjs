@@ -131,7 +131,8 @@ function linkedMeetingAction(params) {
       !/^(?:[0-9]|[1-4][0-9])$/.test(index ?? '') || !/^[1-9][0-9]*$/.test(revision ?? '') ||
       !Number.isSafeInteger(Number(revision))) return null;
   const inbox = params.getAll('from').length === 1 && params.get('from') === 'actions';
-  return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1'};
+  const completed = inbox && params.getAll('status').length === 1 && params.get('status') === 'completed';
+  return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1', completed};
 }
 const unavailable = {status: 0, body: {}};
 const SAVE_TIMEOUT_MS = 12000;
@@ -615,6 +616,7 @@ function mount() {
   const inboxOpen = document.getElementById('meeting-inbox-open');
   const inboxReturn = document.getElementById('meeting-inbox-return');
   const inboxList = document.getElementById('meeting-inbox-list');
+  const inboxState = document.getElementById('meeting-inbox-state');
   const inboxMine = document.getElementById('meeting-inbox-mine');
   const inboxMore = document.getElementById('meeting-inbox-more');
   const inboxStatus = document.getElementById('meeting-inbox-status');
@@ -732,7 +734,8 @@ function mount() {
     return workspaceSelect.value;
   }
 
-  const currentInbox = state => state === inboxView && state.viewer === viewer && state.workspace === workspaceId();
+  const sameInboxScope = state => state.viewer === viewer && state.workspace === workspaceId();
+  const currentInbox = state => state === inboxView && sameInboxScope(state);
   const inboxKey = (state, item) => `${state.viewer}/${state.workspace}/${item.meeting_id}`;
 
   function renderInbox(state) {
@@ -759,14 +762,14 @@ function mount() {
           if (!currentInbox(state)) return;
           setInbox(false, {focus:false});
           await openMeeting(item.meeting_id, undefined, undefined,
-            {index:item.action_index, revision:item.revision, inbox:true, mine:state.mine});
+            {index:item.action_index, revision:item.revision, inbox:true, mine:state.mine, completed:state.completed});
         });
       });
       const done = document.createElement('button');
       done.type = 'button';
-      done.textContent = '标记完成';
+      done.textContent = state.completed ? '重新打开' : '标记完成';
       done.disabled = inboxWrites.has(inboxKey(state, item));
-      done.addEventListener('click', () => finishInboxAction(state, item, done));
+      done.addEventListener('click', () => changeInboxAction(state, item, done));
       buttons.append(source, done);
       row.append(copy, buttons);
       inboxList.append(row);
@@ -774,7 +777,9 @@ function mount() {
     inboxMore.hidden = !state.cursor;
     inboxMore.disabled = Boolean(state.request);
     inboxEmpty.hidden = !state.loaded || state.items.length > 0;
-    inboxEmpty.textContent = state.mine ? '没有分配给你的待办行动项。' : '没有待完成的会议行动项。';
+    inboxEmpty.textContent = state.completed
+      ? state.mine ? '没有分配给你的已完成行动项。' : '没有已完成的会议行动项。'
+      : state.mine ? '没有分配给你的待办行动项。' : '没有待完成的会议行动项。';
   }
 
   async function loadInbox(state, {append = false, notice = ''} = {}) {
@@ -783,6 +788,7 @@ function mount() {
     const controller = state.request = new AbortController();
     const params = new URLSearchParams({view:'actions', limit:'20'});
     if (state.mine) params.set('mine', '1');
+    if (state.completed) params.set('status', 'completed');
     if (append) params.set('cursor', state.cursor);
     inboxMore.disabled = true;
     inboxList.setAttribute('aria-busy', 'true');
@@ -816,47 +822,57 @@ function mount() {
     renderInbox(state);
   }
 
-  async function finishInboxAction(state, item, button) {
+  async function changeInboxAction(state, item, button) {
     const key = inboxKey(state, item);
     if (!currentInbox(state) || inboxWrites.has(key)) return;
     inboxWrites.add(key);
+    const done = !state.completed;
     button.disabled = true;
-    button.textContent = '正在完成…';
+    button.textContent = done ? '正在完成…' : '正在重新打开…';
     const path = `/v1/workspaces/${state.workspace}/meetings/${item.meeting_id}`;
-    const result = await saveRequest('POST', path + '/action', {index:item.action_index, revision:item.revision});
+    const result = await saveRequest('POST', path + '/action', {index:item.action_index, revision:item.revision, done});
     let meeting = result.body.meeting;
     const matchesRevision = ({status, body:{viewer_username, meeting:record}}) => status === 200 &&
       viewer_username === state.viewer && record?.id === item.meeting_id &&
       record.workspace_id === state.workspace && record.revision === item.revision + 1;
-    let success = matchesRevision(result) && result.body.action?.index === item.action_index && result.body.action.done === true;
-    if (!success && currentInbox(state) && (ambiguousSave(result.status) || result.status === 200)) {
+    const sameAction = action => action?.text === item.text && (action.owner || '') === item.owner &&
+      (action.due_date || '') === (item.due_date || '');
+    let success = matchesRevision(result) && result.body.action?.index === item.action_index && result.body.action.done === done;
+    if (!success && sameInboxScope(state) && (ambiguousSave(result.status) || result.status === 200)) {
       button.textContent = '正在确认…';
       const checked = await saveRequest('GET', path);
       meeting = checked.body.meeting;
       const action = meeting?.action_items?.[item.action_index];
-      success = matchesRevision(checked) && action?.done === true && action.text === item.text &&
-        (action.owner || '') === item.owner && (action.due_date || '') === (item.due_date || '');
+      success = matchesRevision(checked) && action?.done === done && sameAction(action);
     }
     inboxWrites.delete(key);
-    if (!currentInbox(state)) return;
+    if (!sameInboxScope(state)) return;
+    if (success && current?.id === item.meeting_id && current.revision === item.revision && !writing && !saveRetry && !saveConflict) {
+      const saved = current.action_items[item.action_index];
+      if (sameAction(saved)) {
+        saved.done = done;
+        current.revision = meeting.revision;
+        const draft = actions.find(row => row.savedIndex === item.action_index && sameAction(row));
+        if (draft) draft.done = done;
+        noteSavedAction(item.action_index, done);
+        clearNoteCopies();
+        document.getElementById('meeting-meta').textContent = '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
+        renderActions();
+      }
+    }
+    if (!currentInbox(state)) {
+      if (inboxView) void loadInbox(inboxView);
+      return;
+    }
     if (success) {
       state.items = state.items.filter(row => row.meeting_id !== item.meeting_id || row.action_index !== item.action_index);
-      if (current?.id === item.meeting_id && current.revision === item.revision && !writing && !saveRetry && !saveConflict) {
-        const saved = current.action_items[item.action_index];
-        if (saved?.text === item.text && (saved.owner || '') === item.owner) {
-          saved.done = true;
-          current.revision = meeting.revision;
-          const draft = actions.find(row => row.savedIndex === item.action_index && row.text === item.text && (row.owner || '') === item.owner);
-          if (draft) draft.done = true;
-          noteSavedAction(item.action_index, true);
-          clearNoteCopies();
-          document.getElementById('meeting-meta').textContent = '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
-          renderActions();
-        }
-      }
       renderInbox(state);
+    } else if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = done ? '标记完成' : '重新打开';
     }
-    const notice = success ? '已标记完成。' : result.status === 409 ? '会议已更新，请核对最新行动项。' : '暂时无法确认完成状态，请核对最新行动项。';
+    const notice = success ? (done ? '已标记完成。' : '已重新打开，行动项已回到待完成。')
+      : result.status === 409 ? '会议已更新，请核对最新行动项。' : '暂时无法确认行动项状态，请核对最新行动项。';
     await loadInbox(state, {notice});
     if (currentInbox(state) && !inbox.contains(document.activeElement)) document.getElementById('meeting-inbox-heading').focus();
   }
@@ -869,7 +885,8 @@ function mount() {
     layout.hidden = open;
     inboxOpen.setAttribute('aria-expanded', String(open));
     if (open) {
-      inboxView = {workspace:workspaceId(), viewer, mine:inboxMine.checked, items:[], cursor:'', loaded:false};
+      inboxView = {workspace:workspaceId(), viewer, mine:inboxMine.checked, completed:inboxState?.value === 'completed',
+        items:[], cursor:'', loaded:false};
       renderInbox(inboxView);
       if (focus) {
         document.getElementById('main').scrollTop = 0;
@@ -1808,6 +1825,7 @@ function mount() {
     if (actionReference) {
       if (actionReference.inbox && inboxReturn) {
         inboxMine.checked = actionReference.mine;
+        if (inboxState) inboxState.value = actionReference.completed ? 'completed' : 'open';
         inboxReturn.hidden = false;
         if (mobileBack) mobileBack.hidden = true;
       }
@@ -1819,7 +1837,8 @@ function mount() {
         target.scrollIntoView({block:'center'});
         (actionReference.inbox ? target.querySelector('input') || target : target).focus({preventScroll:true});
         rewriteLocation({meeting:id, action:actionReference.index, revision:actionReference.revision,
-          ...(actionReference.inbox ? {from:'actions'} : {}), ...(actionReference.mine ? {mine:'1'} : {})});
+          ...(actionReference.inbox ? {from:'actions'} : {}), ...(actionReference.mine ? {mine:'1'} : {}),
+          ...(actionReference.completed ? {status:'completed'} : {})});
       } else show('ok', '会议已更新，当前展示最新纪要。');
     }
     return true;
@@ -2443,6 +2462,9 @@ function mount() {
   document.getElementById('meeting-inbox-refresh')?.addEventListener('click', () => inboxView && loadInbox(inboxView));
   inboxMore?.addEventListener('click', () => inboxView && loadInbox(inboxView, {append:true}));
   inboxMine?.addEventListener('change', () => {
+    if (inboxView) setInbox(true, {focus:false});
+  });
+  inboxState?.addEventListener('change', () => {
     if (inboxView) setInbox(true, {focus:false});
   });
 

@@ -66,6 +66,7 @@ export function chatFileDownload(document, attachment) {
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
+  if (!pending && attachment.path) card.dataset.chatFilePath = attachment.path;
   const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
@@ -184,6 +185,7 @@ export function sendSocialAttachmentMessage(view, path, message, file, headers, 
   form.append('file', file);
   if (message.body) form.set('body', message.body);
   if (message.reply_to) form.set('reply_to', message.reply_to);
+  if (message.agent_mentions?.length) form.set('agent_mentions', JSON.stringify(message.agent_mentions));
   return uploadForm(view, path, headers, form, onProgress);
 }
 

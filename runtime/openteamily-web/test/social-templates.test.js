@@ -59,6 +59,7 @@ async function templateFixture(t) {
   attachRuntime({ ctx: {}, mainBot: async () => 'main', rt: {
     state: { bots, rooms }, botOf: id => bots[id], roomOf: id => rooms[id],
     createBot: async fields => {
+      await social.beforeCreateBot?.(fields.name)
       const id = 'bot-' + ++nextBot
       return (bots[id] = { ...fields, id })
     },
@@ -123,6 +124,7 @@ test('the authenticated native route applies each Chinese template with the exac
   assert.equal(raw.ok, false)
   assert.equal(raw.error.code, 'not_found')
   assert.equal((await bot.endpoint('agents/templateRoles', { workspace_id: WS, names: ['产品经理助理'] })).ok, false)
+  assert.equal((await bot.endpoint('agents/createTemplateRoles', { workspace_id: WS, roles: [] })).ok, false)
   for (let i = 0; i < 26; i++) await createAgent('Existing agent ' + i)
   const reused = await createAgent('产品经理助理')
   bots[reused.native_bot_id].instructions = 'Locally edited instructions'
@@ -145,6 +147,54 @@ test('the authenticated native route applies each Chinese template with the exac
     if (template.slug === 'product-squad') assert.equal(body.created_agents[0], reused.id)
   }
   assert.equal(bots[reused.native_bot_id].instructions, 'Locally edited instructions')
+})
+
+test('cold template prepares independent native roles together and waits for recovery before another request', {timeout: 5000}, async t => {
+  const { bots, creates, social, apply } = await templateFixture(t)
+  const slug = 'product-squad'
+  const names = TEMPLATES[0].agents.map(role => role.name)
+  const requestKey = key()
+  const started = []
+  const entered = Promise.withResolvers()
+  const finish = Promise.withResolvers()
+  social.beforeCreateBot = async name => {
+    started.push(name)
+    if (started.length === names.length) entered.resolve()
+    if (started.length === 1) throw new Error('fixture native session temporarily unavailable')
+    await finish.promise
+  }
+  const original = apply(slug, {requestKey})
+  await entered.promise
+  assert.deepEqual(started, names)
+  assert.equal(creates.length, 0)
+  const repair = apply(slug, {requestKey})
+  const replay = apply(slug, {requestKey})
+  const anotherGroup = apply(slug)
+  finish.resolve()
+  const [failed, repaired, repeated, another] = await Promise.all([original, repair, replay, anotherGroup])
+  assert.equal(failed.status, 500)
+  assert.equal(repaired.status, 201)
+  assert.deepEqual(repeated, {status: 200, body: repaired.body})
+  assert.equal(another.status, 201)
+  assert.notEqual(another.body.conversation.id, repaired.body.conversation.id)
+  assert.deepEqual(another.body.created_agents, repaired.body.created_agents)
+  assert.deepEqual(creates.map(group => group.agents.map(role => role.name)), [names, names])
+  assert.deepEqual(started, [...names, names[0]])
+  assert.equal(Object.keys(bots).length, 4)
+})
+
+test('insufficient quota creates no partial template roster or role reservations', async t => {
+  const { bots, creates, social, apply, createAgent } = await templateFixture(t)
+  for (let i = 0; i < 198; i++) await createAgent('Existing agent ' + i)
+  const names = TEMPLATES[0].agents.map(role => role.name)
+  social.beforeCreateBot = name => assert.ok(!names.includes(name))
+  const result = await apply('product-squad')
+  assert.equal(result.status, 429)
+  assert.equal(result.body.error.code, 'team_template_agent_quota')
+  assert.equal(creates.length, 0)
+  await createAgent('Remaining slot 1')
+  await createAgent('Remaining slot 2')
+  assert.equal(Object.keys(bots).length, 201)
 })
 
 test('partial retry reuses native template agents, handles archives and allows a new renamed role', async t => {

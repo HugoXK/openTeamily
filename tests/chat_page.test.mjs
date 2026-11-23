@@ -200,7 +200,7 @@ test('composeGroupPayload omits a blank title so the existing API can default it
 });
 
 test('group create chrome keeps the recorded labels and no billing copy', () => {
-  assert.equal(GROUP_CREATE_INTRO, '添加名称，然后邀请好友并添加 AI 智能体。');
+  assert.equal(GROUP_CREATE_INTRO, '选择联系人或智能体加入群组。');
   assert.deepEqual(GROUP_CREATE_MODES, [
     ['custom', '自定义群组'],
     ['team', 'AI 智能体团队'],
@@ -340,8 +340,9 @@ class FakeElement {
     if (selector === 'input:not(:disabled)') {
       return descendants(this).find((node) => node.tagName === 'INPUT' && !node.disabled) || null;
     }
-    return null;
+    return this.querySelectorAll(selector)[0] || null;
   }
+  querySelectorAll(selector) { return descendants(this).filter(node => matchesSelector(node, selector)); }
 }
 
 function descendants(node) {
@@ -784,7 +785,7 @@ for (const preset of [true,false]) {
       const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
       const createdAttempt = submit();
       await settle();
-      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建会话/ : /Creating the conversation/);
+      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建产品研发小队/ : /Creating the conversation/);
       assert.equal(el('compose-dialog-submit').disabled,true);
       assert.equal(el('compose-mode-switch').inert,true);
       await fire(el('session-search'),'focus');
@@ -1286,6 +1287,8 @@ test('group progress updates only the original job and attempt and clears stale 
     const jobs = list.children.slice(1);
     assert.ok(jobs.every(row => row.tagName === 'LI' && row.classList.contains('other')));
     assert.deepEqual(jobs.map(row => row.children[0].textContent), ['助手一 · AI 智能体', '助手二 · AI 智能体']);
+    assert.deepEqual(jobs.map(row => row.hidden), [false, true], 'queued agents share one visible indicator');
+    assert.match(jobs[0].children[1].textContent, /等待.*助手一/);
     assert.ok(!descendants(original).some(node => node.dataset.replyJobId));
     const [first, second] = jobs.map(row => row.children.find(node => node.classList.contains('group-reply-preview')));
     t.mock.timers.tick(500); await settle();
@@ -1296,6 +1299,9 @@ test('group progress updates only the original job and attempt and clears stale 
     assert.equal(second.hidden, true);
     assert.equal(jobs[0].dataset.state, 'running');
     assert.equal(jobs[1].dataset.state, 'running', 'a claimed job is running before text arrives');
+    assert.equal(jobs[0].classList.contains('group-reply-thinking'), false, 'partial text uses the regular bubble');
+    assert.equal(jobs[1].classList.contains('group-reply-thinking'), true);
+    assert.match(jobs[1].children[1].textContent, /助手二.*正在思考/);
     for (let index = 0; index < 17; index += 1) {
       t.mock.timers.tick(500);
       await settle();
@@ -1460,6 +1466,7 @@ test('only the matching same-name assistant row becomes the durable reply in tra
     assert.equal(list.children[1], first);
     assert.equal(list.children[3], second);
     assert.equal(second.dataset.state, 'replied');
+    assert.equal(second.hidden, false);
     assert.equal(second.children[0].textContent, '同名助手 · AI 智能体');
     assert.equal(second.children[1].textContent, reply.body);
   } finally { restore(); }
@@ -3514,6 +3521,8 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
 
 test('conversation search lists photos, files and saved resource versions from real attachment fields', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
+  const back = doc.createElement('button');
+  el('conversation-search-return').append(back);
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals();
   const base = '/v1/workspaces/ws-1/social/conversations/conv-1';
@@ -3581,6 +3590,17 @@ test('conversation search lists photos, files and saved resource versions from r
     await fire(jump, 'click');
     const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
     assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
+    const card = located.querySelector('[data-chat-file-path]');
+    assert.equal(card.dataset.attachmentJump, 'true');
+    assert.equal(card.focused, true);
+    results.scrollTop = 50;
+    await fire(el('conversation-search-close'), 'click');
+    assert.equal(el('conversation-search-return').hidden, false);
+    await fire(back, 'click');
+    assert.equal(results.children.length, 2);
+    assert.equal(results.scrollTop, 50);
+    assert.equal(jump.getAttribute('aria-current'), 'true');
+    assert.equal(calls.length, 4, 'returning to loaded attachments does not re-query the first page');
 
     await fire(el('conversation-search-tab-resources'), 'click');
     assert.deepEqual(calls.at(-1), {kind: 'resource', q: '计划', limit: '20'});
@@ -3771,7 +3791,7 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
     const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork
       : path.endsWith(linkSocialPath + '?start=unread') ? path.slice(0, -'?start=unread'.length) : path;
     const override = routes.get(path) || routes.get(compatiblePath);
-    if (override) return override(call);
+    if (override) return override(call, options);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
@@ -5198,7 +5218,12 @@ test('an unavailable session keeps the prior draft and a superseded retry cannot
   const unavailable = Promise.withResolvers();
   const retry = Promise.withResolvers();
   let attempts = 0;
-  fixture.routes.set(scope + linkSocialPath, () => (++attempts === 1 ? unavailable.promise : retry.promise));
+  let retrySignal;
+  fixture.routes.set(scope + linkSocialPath, (_call, options) => {
+    if (++attempts === 1) return unavailable.promise;
+    retrySignal = options.signal;
+    return retry.promise;
+  });
   const click = cid => fire(fixture.el('conversation-list'), 'click', {
     target:sessionRows(fixture.el).find(row => row.dataset.conversation === cid),
   });
@@ -5210,6 +5235,7 @@ test('an unavailable session keeps the prior draft and a superseded retry cannot
     const opening = click(linkSocial);
     await settle();
     assert.equal(sessionRows(fixture.el).find(row => row.dataset.conversation === linkSocial).getAttribute('aria-busy'), 'true');
+    assert.match(fixture.el('session-opening-view').textContent, /Linked group/);
     assert.equal(fixture.el('main-panel').inert, true);
     assert.equal(fixture.el('chat-send').disabled, true);
     assert.equal(fixture.selected(), linkThread);
@@ -5223,11 +5249,17 @@ test('an unavailable session keeps the prior draft and a superseded retry cannot
     await fire(fixture.el('session-transition-retry'), 'click');
     await settle();
     assert.equal(attempts, 2);
+    const countBefore = fixture.calls.length;
+    const firstRow = fixture.el('message-list').children[0];
     await click(linkThread);
+    assert.equal(retrySignal.aborted, true);
+    assert.equal(fixture.calls.slice(countBefore).some(call => call.path === scope + linkNativeLatest), false);
+    assert.equal(fixture.el('message-list').children[0], firstRow);
     retry.resolve(json(200, {conversation:{id:linkSocial,kind:'group',title:'Late group'},items:[]}));
     await settle();
     assert.equal(fixture.selected(), linkThread);
     assert.equal(fixture.el('session-transition').hidden, true);
+    assert.equal(fixture.el('session-opening-view').hidden, true);
     assert.equal(fixture.el('main-panel').inert, false);
     assert.equal(field.value, 'keep this private draft');
   } finally {

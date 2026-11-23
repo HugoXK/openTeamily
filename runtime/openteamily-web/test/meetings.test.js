@@ -106,7 +106,7 @@ test('calendar deadlines survive the saved action, list search, completion and M
   assert.match(exported.text, /\[x\] 核对日程（bob · 截止日期 2032-02-29）/)
 })
 
-test('action inbox pages saved open items and completes only an exact workspace revision', async () => {
+test('action inbox pages each status and toggles only an exact workspace revision', async () => {
   const bot = await boot()
   const own = 'Alice'
   const {meeting} = (await bot.call('meetings','POST',base(),{...body,started_at:100,
@@ -137,6 +137,29 @@ test('action inbox pages saved open items and completes only an exact workspace 
   const remaining = (await bot.call('meetings','GET',list)).body
   assert.equal(remaining.items[0].text,'open other')
   assert.notEqual(remaining.activity_version,first.body.activity_version)
+
+  const done = list + '&status=completed'
+  const completed = await bot.call('meetings','GET',done)
+  assert.equal(completed.status,200)
+  assert.equal(completed.body.items[0].text,'open own')
+  const otherCompleted = await bot.call('meetings','GET',done + '&cursor=' + completed.body.cursor)
+  assert.equal(otherCompleted.body.items[0].text,'closed item')
+  assert.equal(otherCompleted.body.cursor,null)
+  assert.equal((await bot.call('meetings','GET',done + '&status=open')).status,400)
+  assert.equal((await bot.call('meetings','GET',list + '&status=all')).status,400)
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:2,done:'false'})).status,400)
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:1,done:false})).status,409)
+  assert.equal((await bot.call('meetings','POST',base(meeting.id,other)+'/action',{index:0,revision:2,done:false})).status,404)
+  const reopen = await bot.call('meetings','POST',exact,{index:0,revision:2,done:false})
+  assert.equal(reopen.status,200)
+  assert.equal(reopen.body.meeting.revision,3)
+  assert.deepEqual(reopen.body.action,{index:0,done:false})
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:3,done:false})).status,409)
+  assert.equal((await bot.call('meetings','GET',list)).body.items[0].text,'open own')
+  assert.equal((await bot.call('meetings','GET',done)).body.items[0].text,'closed item')
+  const reopened = await bot.call('meetings','GET',exact + '?index=0&revision=3')
+  assert.equal(reopened.status,200)
+  assert.deepEqual(reopened.body.action,{text:'open own',owner:own,done:false})
 })
 
 test('one scoped meeting memory keeps provenance and preserves separate edits across repeated copies', async () => {

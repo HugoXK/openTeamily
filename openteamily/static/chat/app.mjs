@@ -246,7 +246,7 @@ export function applySearchMore(node, state) {
   node.disabled = Boolean(state && state.loading);
 }
 
-export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
+export const GROUP_CREATE_INTRO = '选择联系人或智能体加入群组。';
 export const GROUP_CREATE_MODES = [
   ['custom', '自定义群组'],
   ['team', 'AI 智能体团队'],
@@ -1138,24 +1138,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
+    let asksAgents = false;
     if (everyone) {
       kind = 'targeted';
-      text = agents.length && !hasFiles ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
         : uiLabel('将提及群内所有成员', 'Everyone in the group will be mentioned');
-    } else if (hasFiles && (mentions?.targets.length || hasGroupAllMention(body))) {
-      kind = 'attention';
-      text = uiLabel('请先移除附件，再请求群内智能体回复。', 'Remove the files before requesting replies from group agents.');
-    } else if (hasFiles && !people) {
-      text = uiLabel('附件将在你发送后分享给会话成员。', 'Send to share the files with this conversation.');
     } else if (hasGroupAllMention(body)) {
       kind = 'targeted';
-      text = agents.length ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
         : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
     } else if (mentions?.stale) {
       kind = 'attention';
       text = uiLabel('请移除不可用的智能体后再发送。', 'Remove unavailable agents before sending.');
     } else if (mentions?.targets.length) {
       kind = 'targeted';
+      asksAgents = true;
       const count = mentions.targets.length;
       text = people
         ? uiLabel(`将提及 ${people} 位成员，并请 ${count} 位智能体回复`,
@@ -1164,6 +1163,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (people) {
       kind = 'targeted';
       text = uiLabel(`将提及 ${people} 位群成员`, `${people} group ${people === 1 ? 'member' : 'members'} will be mentioned`);
+    } else if (hasFiles) {
+      text = agents.length
+        ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
+        : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
@@ -1182,6 +1185,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else if (auto) text = uiLabel('开启自动回复的智能体判断是否回复 · 可用 @所有人',
       'Agents with auto-reply enabled decide whether to reply · Use @all to ask all agents');
     else text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
+    if (hasFiles && asksAgents) {
+      if (!body.trim()) {
+        kind = 'attention';
+        text = uiLabel('写一段附言，让选中的智能体知道要回复什么。', 'Add a caption for the selected agents to answer.');
+      } else {
+        text += uiLabel(' · 按附言回复', ' · Replies use the caption');
+      }
+    }
     const label = document.getElementById('group-composer-routing-text');
     if (label.textContent !== text) label.textContent = text;
     node.dataset.kind = kind;
@@ -2499,9 +2510,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const transition = sessionTransition;
     const pending = Boolean(transition?.pending);
     document.getElementById('session-transition').hidden = !transition;
-    document.getElementById('session-transition-status').textContent = !transition ? '' : pending
+    const message = !transition ? '' : pending
       ? uiLabel(`正在打开「${transition.title}」…`, `Opening “${transition.title}”…`)
       : uiLabel(`无法打开「${transition.title}」。`, `Couldn’t open “${transition.title}”.`);
+    document.getElementById('session-transition-status').textContent = message;
+    const openingView = document.getElementById('session-opening-view');
+    openingView.hidden = !pending;
+    openingView.textContent = pending ? message : '';
     const retry = document.getElementById('session-transition-retry');
     retry.hidden = !transition || pending;
     retry.textContent = uiLabel('重试', 'Retry');
@@ -2515,19 +2530,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function clearSessionTransition() {
-    if (!sessionTransition) return;
+    const transition = sessionTransition;
+    if (!transition) return;
     sessionTransition = null;
+    transition.controller.abort();
     syncSessionTransition();
   }
 
-  async function openSessionTarget(target) {
+  function resumeOpenSession(target) {
+    if (target.source !== currentSource || target.cid !== currentConversation?.id ||
+        (target.source === 'agent' && target.agent !== currentAgent?.id)) return false;
+    if (sessionTransition?.pending) socialOpen += 1;
+    clearSessionTransition();
+    setSessionsOpen(false);
+    if (currentSource === 'social') {
+      scheduleUnreadRead();
+      syncGroupReplyProgress();
+      if (!pollTimer && !socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+    } else if (!syncReplyProgress() && lastAgentItems.some(waitingAgentReply) && !pollTimer) schedulePoll();
+    if (narrowScreen()) document.getElementById('chat-title').focus({preventScroll:true});
+    return true;
+  }
+
+  async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
-    const transition = {...target, pending: true};
+    if (resume && resumeOpenSession(target)) return true;
+    sessionTransition?.controller.abort();
+    const controller = new AbortController();
+    const transition = {...target, pending: true, controller};
     sessionTransition = transition;
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition};
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition,
+      signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
     if (sessionTransition !== transition) return false;
@@ -3823,6 +3859,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let privateRefresh = 0;
   let socialOpen = 0;
   let historyJump = 0;
+  let searchHighlightTimer;
   let groupReplyWatch = null;
   const groupReplyViews = new Map();
   const groupReplyRetries = new Map();
@@ -4205,11 +4242,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const follow = messageScrollerAtBottom(scroller);
     const viewportTop = scroller.getBoundingClientRect().top;
     const anchor = !follow && [...document.getElementById('message-list').children]
-      .find(row => row.getBoundingClientRect().bottom > viewportTop);
+      .find(row => !row.hidden && row.getBoundingClientRect().bottom > viewportTop);
     const offset = anchor && anchor.getBoundingClientRect().top;
     update();
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
-    if (anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
+    if (anchor?.isConnected && !anchor.hidden) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
     if (!follow) updateLatestMessageControl();
   }
 
@@ -4242,8 +4279,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         view.preview.textContent = text;
         view.preview.hidden = !text;
         view.row.dataset.state = state;
-        view.note.textContent = groupReplyLabel(state, view.job);
+        view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
       }
+      updateGroupReplyVisibility();
     });
   }
 
@@ -4337,7 +4375,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     running: ['正在生成回复', 'Writing a reply'],
     failed: ['回复未完成', 'Reply could not be completed'],
   };
-  function groupReplyLabel(state, job) {
+  function compactGroupReplies() {
+    return currentConversation?.kind === 'group' && !currentConversation.public_agent;
+  }
+
+  function updateGroupReplyVisibility(list = document.getElementById('message-list')) {
+    if (!compactGroupReplies()) return;
+    const pending = [];
+    let running;
+    let streaming = false;
+    for (const row of list.children) {
+      if (!row.classList.contains('group-reply-job')) continue;
+      const state = row.dataset.state;
+      const waiting = state === 'queued' || state === 'running';
+      const hasText = Boolean(groupReplyViews.get(row.dataset.replyJobId)?.preview.textContent.trim());
+      row.classList.toggle('group-reply-thinking', waiting && !hasText);
+      if (waiting && !hasText) {
+        pending.push(row);
+        if (state === 'running') running ??= row;
+      } else {
+        row.hidden = false;
+        streaming ||= waiting && hasText;
+      }
+    }
+    const shown = running || (!streaming && pending[0]);
+    for (const row of pending) row.hidden = row !== shown;
+  }
+
+  function groupReplyLabel(state, job, compact = false) {
+    if (compact && (state === 'queued' || state === 'running')) {
+      const name = job?.agent_name || uiLabel('智能体', 'Agent');
+      if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
+      return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
+    }
     if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
       return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
     }
@@ -4370,6 +4440,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const previewBefore = sameAttempt ? previous?.preview : null;
     const wasRunning = sameAttempt && row.dataset.state === 'running';
     row.className = 'other group-reply-job';
+    row.hidden = false;
     row.dataset.chatAuthor = 'agent';
     row.tabIndex = -1;
     row.dataset.replyJobId = job.id;
@@ -4381,21 +4452,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const note = document.createElement('div');
     note.className = 'group-reply-state';
     note.setAttribute('role', 'status');
-    note.textContent = groupReplyLabel(job.status, job);
     row.replaceChildren(role, note);
     if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
       const preview = previewBefore || document.createElement('div');
       preview.className = 'group-reply-preview body';
       preview.hidden = !preview.textContent;
       preview.setAttribute('aria-live', 'off');
-      if (wasRunning) {
-        row.dataset.state = 'running';
-        note.textContent = groupReplyLabel('running');
-      }
+      if (wasRunning) row.dataset.state = 'running';
       groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
+    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !previewBefore?.textContent.trim());
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -4437,6 +4505,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           withGroupReplyScroll(() => {
             if (next.status === 'passed') { row.remove(); groupReplyViews.delete(next.id); }
             else renderGroupReplyRow(updated, next, row);
+            updateGroupReplyVisibility();
           });
           if (focused && next.status !== 'passed') (groupReplyButton(row) || row).focus({preventScroll: true});
         }
@@ -4655,6 +4724,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = (groupReplyID && existingGroupReplies.get(groupReplyID)) || document.createElement('li');
       if (groupReplyID) {
         li.replaceChildren();
+        li.hidden = false;
         li.dataset.replyJobId = groupReplyID;
         li.dataset.state = 'replied';
         delete li.dataset.replyAttempt;
@@ -4827,6 +4897,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
       }
     }
+    updateGroupReplyVisibility(list);
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     if (focusedGroupReply) {
       const target = [...list.children].find(row => row.dataset.replyJobId === focusedGroupReply.id);
@@ -5938,7 +6009,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -5966,7 +6037,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const snapshot = startupSnapshot ? await startupSnapshot() : null;
     if (startupSnapshot && !stillOpen()) return false;
     const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
-      undefined, undefined, foreground ? AbortSignal.timeout(5000) : undefined)
+      undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
@@ -6403,6 +6474,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const cancel = document.getElementById('compose-dialog-cancel');
     const progress = document.getElementById('compose-dialog-progress');
     const busy = Boolean(composePhase);
+    const team = composeMode === 'group' && groupMode === 'team';
+    const template = team ? document.querySelector('#team-template-choices input:checked') : null;
     button.disabled = busy || (!composeReceipt && !composeCreateEnabled({
       composeMode,
       groupMode,
@@ -6410,17 +6483,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selectedAgentCount: document.querySelectorAll('#member-choices input[name="agent-member"]:checked').length,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
-      templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
+      templateSelected: Boolean(template),
     }));
+    const action = team ? uiLabel('创建团队', 'Create team') : composeMode === 'group'
+      ? uiLabel('创建群组', 'Create group') : uiLabel('开始私聊', 'Start chat');
     button.textContent = composePhase === 'opening' ? uiLabel('打开中…', 'Opening…')
       : busy ? uiLabel('创建中…', 'Creating…')
-        : composeReceipt ? uiLabel('重新打开', 'Reopen') : uiLabel('创建', 'Create');
+        : composeReceipt ? uiLabel('重新打开', 'Reopen') : action;
     cancel.disabled = busy;
     cancel.textContent = composeReceipt ? uiLabel('关闭', 'Close') : uiLabel('取消', 'Cancel');
     progress.textContent = composePhase === 'opening' ? uiLabel('已创建，正在打开会话…', 'Created. Opening the conversation…')
-      : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
+      : busy && template ? uiLabel(`正在创建${template.dataset.templateName}…`, `Creating ${template.dataset.templateName}…`)
+        : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
     const locked = busy || Boolean(composeReceipt);
-    for (const id of ['compose-mode-switch', 'compose-team-templates', 'compose-title-label', 'compose-member-picker']) {
+    for (const id of ['compose-mode-switch', 'compose-dialog-body']) {
       document.getElementById(id).inert = locked;
     }
   }
@@ -6450,7 +6526,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function syncSelectedCount() {
-    document.getElementById('compose-selected-count').textContent = composeSelectedLabel(selectedMemberCount());
+    const count = selectedMemberCount();
+    document.getElementById('compose-selected-count').textContent = uiLabel(composeSelectedLabel(count), `${count} selected`);
     syncComposeCreate();
   }
 
@@ -6458,43 +6535,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupMode = mode === 'team' ? 'team' : 'custom';
     setComposeError();
     for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
-      button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
+      const selected = button.dataset.groupMode === groupMode;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
     }
     const team = composeMode === 'group' && groupMode === 'team';
-    document.getElementById('compose-team-note').hidden = !team;
-    const templates = document.getElementById('compose-team-templates');
-    if (templates) templates.hidden = !team;
-    if (team) loadTeamTemplates();
-    document.getElementById('compose-member-picker').hidden = team;
-    if (composeMode === 'group') {
-      document.getElementById('compose-title-label').hidden = team;
-    }
+    document.getElementById('compose-team-panel').hidden = !team;
+    document.getElementById('compose-custom-panel').hidden = team;
+    document.getElementById('compose-dialog-body').scrollTop = 0;
+    if (team) void loadTeamTemplates();
     syncComposeCreate();
   }
 
-  let teamTemplates = null;
+  let loadingTeamTemplates = false;
   async function loadTeamTemplates() {
     const holder = document.getElementById('team-template-choices');
-    if (!holder) return;
-    if (teamTemplates === null) {
-      let result;
-      try { result = await request('GET', '/v1/team-templates'); } catch { result = {status: 0, body: {}}; }
-      if (result.status !== 200) {
-        document.getElementById('team-templates-empty').hidden = false;
-        return;
-      }
-      teamTemplates = result.body.items || [];
+    if (loadingTeamTemplates || holder.children.length) return;
+    const status = document.getElementById('team-templates-status');
+    const retry = document.getElementById('team-templates-retry');
+    loadingTeamTemplates = true;
+    retry.hidden = true;
+    status.textContent = uiLabel('正在加载团队模板…', 'Loading team templates…');
+    const result = await request('GET', '/v1/team-templates', undefined, undefined, AbortSignal.timeout(10000)).catch(() => null);
+    loadingTeamTemplates = false;
+    if (result?.status !== 200 || !Array.isArray(result.body.items)) {
+      status.textContent = uiLabel('暂时无法读取团队模板。', 'Could not load team templates.');
+      retry.hidden = false;
+      return;
     }
-    if (holder.children.length) return;
-    for (const template of teamTemplates) {
+    for (const template of result.body.items) {
       const label = document.createElement('label');
+      label.className = 'team-template-option';
       const box = document.createElement('input');
-      box.type = 'radio'; box.name = 'team-template'; box.value = template.slug;
-      const text = `${template.name} · ${template.agents.map(agent => agent.name).join('、')}`;
-      label.append(box, document.createTextNode(text));
+      box.type = 'radio';
+      box.name = 'team-template';
+      box.value = template.slug;
+      box.dataset.templateName = template.name;
+      const content = document.createElement('span');
+      content.className = 'team-template-content';
+      const name = document.createElement('span');
+      name.id = `team-template-${template.slug}-name`;
+      name.className = 'team-template-name';
+      name.textContent = template.name;
+      box.setAttribute('aria-labelledby', name.id);
+      content.append(name);
+      if (template.summary) {
+        const summary = document.createElement('span');
+        summary.className = 'team-template-summary';
+        summary.textContent = template.summary;
+        content.append(summary);
+      }
+      const roles = document.createElement('span');
+      roles.id = `team-template-${template.slug}-roles`;
+      roles.className = 'team-template-roles';
+      for (const agent of template.agents) {
+        const role = document.createElement('span');
+        role.textContent = agent.name;
+        roles.append(role);
+      }
+      box.setAttribute('aria-describedby', roles.id);
+      content.append(roles);
+      label.append(box, content);
       holder.append(label);
     }
-    document.getElementById('team-templates-empty').hidden = teamTemplates.length > 0;
+    status.textContent = result.body.items.length ? '' : uiLabel('暂无可用的团队模板。', 'No team templates are available.');
     syncComposeCreate();
   }
 
@@ -6506,7 +6610,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composePhase = '';
     const opener = composeOpener;
     composeOpener = null;
-    document.getElementById('compose-dialog').hidden = true;
+    const dialog = document.getElementById('compose-dialog');
+    if (dialog.open) dialog.close();
+    dialog.hidden = true;
     document.getElementById('compose-social-form').reset();
     setGroupMode('custom');
     applyMemberFilter();
@@ -6560,22 +6666,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
-    dialog.hidden = false;
     const isGroup = mode === 'group';
-    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '工作区私聊';
-    document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
-    document.getElementById('compose-intro').hidden = !isGroup;
+    document.getElementById('compose-dialog-title').textContent = isGroup ? uiLabel('新建群组', 'New group') : uiLabel('工作区私聊', 'Workspace chat');
+    document.getElementById('compose-members-legend').textContent = isGroup ? uiLabel('成员', 'Members') : uiLabel('选择一位成员', 'Choose a member');
+    const intro = document.getElementById('compose-intro');
+    intro.hidden = !isGroup;
+    if (isGroup) intro.textContent = inPersonalWorkspace() ? uiLabel(GROUP_CREATE_INTRO, 'Choose contacts or agents for your group.')
+      : uiLabel('至少选择一位工作区成员，也可以添加智能体。', 'Choose at least one workspace member. You can also add agents.');
     document.getElementById('compose-mode-switch').hidden = !isGroup;
     document.getElementById('compose-title-label').hidden = !isGroup;
     document.getElementById('compose-member-tools').hidden = !isGroup;
-    document.getElementById('compose-team-note').hidden = true;
-    document.getElementById('compose-member-picker').hidden = false;
+    const panel = document.getElementById('compose-custom-panel');
+    if (isGroup) {
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', 'compose-mode-custom');
+    } else {
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-labelledby');
+    }
     if (!isGroup) document.getElementById('compose-title').value = '';
     document.getElementById('compose-member-search').value = '';
     setGroupMode('custom');
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal?.();
     if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
-    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-title' : 'compose-dialog-title')
+    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-mode-custom' : 'compose-dialog-title')
       .focus({preventScroll: true});
   }
 
@@ -7724,16 +7840,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result.body;
   });
   async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
-    isCurrent = () => true, {signal, onLocated} = {}) {
+    isCurrent = () => true, {signal, onLocated, attachmentPath} = {}) {
     if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findAnchor = target => attachmentPath && target
+      ? Array.from(target.querySelectorAll('[data-chat-file-path]')).find(card => card.dataset.chatFilePath === attachmentPath)
+      : target;
     let target = findTarget();
+    let anchor = findAnchor(target);
     const jump = ++historyJump;
     const privateChat = currentSource === 'agent';
     const currentHistory = () => privateChat ? privateHistory : socialHistory;
     const state = currentHistory();
-    if (!target && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
+    if (!anchor && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
       if (privateChat) {
         state.jumping = jump;
         stopReplyProgress();
@@ -7762,6 +7882,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();
+          anchor = findAnchor(target);
           if (notice) notice.textContent = '';
         }
       } catch {
@@ -7779,20 +7900,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return false;
     }
-    onLocated?.(target);
-    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    if (!anchor) {
+      if (notice) notice.textContent = uiLabel('原消息中的附件已不可用。请刷新附件结果。', 'The attachment is unavailable. Refresh the attachment results.');
+      return false;
+    }
+    onLocated?.(anchor);
+    anchor.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    anchor.tabIndex = -1; anchor.focus?.({preventScroll: true});
     for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    for (const card of list.querySelectorAll('[data-attachment-jump]')) delete card.dataset.attachmentJump;
     target.dataset.searchJump = 'true';
-    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    if (attachmentPath) anchor.dataset.attachmentJump = 'true';
+    clearTimeout(searchHighlightTimer);
+    searchHighlightTimer = setTimeout(() => {
+      delete target.dataset.searchJump;
+      delete anchor.dataset.attachmentJump;
+    }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
-  async function jumpToSearchHit(messageId, view, button) {
-    if (!currentSearchView(view) || view.jump?.messageId === messageId) return;
+  async function jumpToSearchHit(messageId, view, button, attachmentPath) {
+    if (!currentSearchView(view) || view.jump?.button === button) return;
     const status = view.jump?.status ?? inChatStatus.textContent;
     view.jump?.controller.abort();
     const controller = new AbortController();
-    const jump = {messageId, status, controller};
+    const jump = {button, status, controller};
     view.jump = jump;
     button.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = uiLabel('正在定位消息…', 'Finding the message…');
@@ -7800,16 +7931,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const located = await jumpToMessage(messageId, inChatStatus,
         () => currentSearchView(view) && view.jump === jump, {
           signal: controller.signal,
+          attachmentPath,
           onLocated(target) {
             searchScrollSnapshot = null;
+            if (attachmentPath) {
+              view.selected?.removeAttribute('aria-current');
+              view.selected = button;
+              button.setAttribute('aria-current', 'true');
+            }
             if (globalThis.matchMedia?.('(max-width: 900px)').matches) {
-              closeInChatSearch({restoreScroll: false, focus: false});
+              closeInChatSearch({restoreScroll: false, focus: false, preserveAttachments: Boolean(attachmentPath)});
             } else {
               searchJumpTarget = target;
             }
           },
         });
-      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = status;
+      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = view.status || status;
     } finally {
       button.removeAttribute('aria-busy');
       if (view.jump === jump) view.jump = null;
@@ -7863,6 +8000,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const inChatStatus = document.getElementById('conversation-search-status');
   const inChatMore = document.getElementById('conversation-search-more');
   const inChatRetry = document.getElementById('conversation-search-retry');
+  const inChatReturn = document.getElementById('conversation-search-return');
   let conversationScope = 'messages';
   let searchedChat = '';
   let inChatView;
@@ -7884,6 +8022,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inChatMore.hidden = true;
     inChatMore.disabled = false;
     inChatRetry.hidden = true;
+    if (inChatReturn) inChatReturn.hidden = true;
   }
 
   function setConversationScope(tab) {
@@ -7909,7 +8048,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     jump.type = 'button';
     jump.className = 'search-hit attachment-search-jump';
     jump.setAttribute('aria-label', '跳到原消息，' + title);
-    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump));
+    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump, attachment.path));
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -7943,13 +8082,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return li;
   }
 
-  async function searchAttachmentPage(view, {kind, noun, unit}) {
+  async function searchAttachmentPage(view, {kind, noun, unit}, controller) {
     const conversation = currentConversation.id;
     const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
     const params = new URLSearchParams({kind, q: view.query, limit: '20'});
     if (view.cursor) params.set('cursor', view.cursor);
-    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
-    if (!currentSearchView(view)) return;
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, controller.signal);
+    if (!currentSearchView(view) || view.controller !== controller) return;
     if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
     for (const item of result.body.items || []) {
       if (!item.message_id || !item.attachment?.id) continue;
@@ -7960,7 +8099,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const next = result.body.next_cursor;
     view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
-    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+    view.status = inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
       : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
   }
 
@@ -7978,31 +8117,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = CONVERSATION_SCOPES[view.scope];
     const noun = scope.noun || '消息';
     view.loading = true;
-    view.controller = new AbortController();
+    const controller = view.controller = new AbortController();
+    const current = () => currentSearchView(view) && view.controller === controller;
     inChatResults.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
     inChatMore.disabled = true;
     inChatRetry.hidden = true;
     try {
       if (scope.kind) {
-        await searchAttachmentPage(view, scope);
+        await searchAttachmentPage(view, scope, controller);
       } else {
-        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: view.controller.signal});
-        if (!currentSearchView(view)) return;
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: controller.signal});
+        if (!current()) return;
         if (state.error) throw new Error(state.error);
         inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
         view.cursor = state.cursor;
         inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
       }
-      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+      if (current()) inChatMore.hidden = !view.cursor;
     } catch {
-      if (!currentSearchView(view)) return;
-      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      if (!current()) return;
+      view.status = inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
       view.retryAppend = append;
       inChatMore.hidden = true;
       inChatRetry.hidden = false;
     } finally {
-      if (currentSearchView(view)) {
+      if (current()) {
         view.loading = false;
         view.controller = null;
         inChatMore.disabled = false;
@@ -8050,7 +8190,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchScrollSnapshot = null;
   let searchJumpTarget = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  inChatOpen?.addEventListener('click', () => {
+  function openInChatSearch() {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
     if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
@@ -8063,15 +8203,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
     inChatPanel.hidden = false;
     inChatOpen.setAttribute('aria-expanded', 'true');
+    if (inChatReturn) inChatReturn.hidden = true;
+    const view = inChatView;
+    if (currentSearchView(view) && view.suspendedScroll !== undefined) {
+      inChatResults.scrollTop = view.suspendedScroll;
+      delete view.suspendedScroll;
+      (view.selected || inChatQuery).focus({preventScroll: true});
+      return;
+    }
     inChatQuery.focus();
     return searchCurrentConversation();
-  });
-  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+  }
+  inChatOpen?.addEventListener('click', openInChatSearch);
+  inChatReturn?.querySelector('button')?.addEventListener('click', openInChatSearch);
+  function closeInChatSearch({restoreScroll = true, focus = true, preserveAttachments = false} = {}) {
     const target = restoreScroll && searchJumpTarget?.isConnected ? searchJumpTarget : null;
     const targetTop = target?.getBoundingClientRect().top;
+    const view = inChatView;
+    const preserve = preserveAttachments && currentSearchView(view) && CONVERSATION_SCOPES[view.scope].kind && view.seen.size;
+    if (preserve) {
+      view.suspendedScroll = inChatResults.scrollTop;
+      view.controller?.abort();
+      view.jump?.controller.abort();
+      view.controller = view.jump = null;
+      if (view.loading) {
+        view.loading = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+        inChatMore.disabled = false;
+        inChatMore.hidden = !view.cursor;
+      }
+      inChatStatus.textContent = view.status ?? '';
+      if (inChatReturn) inChatReturn.hidden = !view.selected;
+    } else {
+      clearConversationSearch();
+    }
     inChatPanel.hidden = true;
     inChatOpen?.setAttribute('aria-expanded', 'false');
-    clearConversationSearch();
     const scroller = document.getElementById('message-scroller');
     if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) scroller.scrollTop = searchScrollSnapshot.top;
     else if (target) scroller.scrollTop += target.getBoundingClientRect().top - targetTop;
@@ -8082,9 +8249,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       opener?.focus();
     }
   }
-  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
+  const closeSearch = () => closeInChatSearch({preserveAttachments: true});
+  document.getElementById('conversation-search-close')?.addEventListener('click', closeSearch);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeSearch();
   });
   document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
     event.preventDefault();
@@ -8291,7 +8459,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const {source, agent, conversation: cid} = button.dataset;
     const session = sessions.find(item => item.id === cid && item.source === source);
     const title = session?.title || uiLabel('会话', 'conversation');
-    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
+    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0}, {resume:true});
   });
 
   for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
@@ -8499,10 +8667,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-dialog-cancel').addEventListener('click', () => {
     if (!composePhase) closeComposeDialog({focus:true});
   });
-  document.getElementById('compose-mode-switch').addEventListener('click', event => {
+  document.getElementById('compose-dialog').addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
+  const groupModeSwitch = document.getElementById('compose-mode-switch');
+  groupModeSwitch.addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
     if (!button || composeMode !== 'group' || composePhase || composeReceipt) return;
     setGroupMode(button.dataset.groupMode);
+  });
+  groupModeSwitch.addEventListener('keydown', event => {
+    if (composePhase || composeReceipt || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const mode = event.key === 'Home' ? 'custom' : event.key === 'End' ? 'team' : groupMode === 'team' ? 'custom' : 'team';
+    setGroupMode(mode);
+    document.getElementById('compose-mode-' + mode).focus({preventScroll:true});
+  });
+  document.getElementById('team-templates-retry').addEventListener('click', () => {
+    document.getElementById('compose-mode-team').focus({preventScroll:true});
+    void loadTeamTemplates();
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('compose-title').addEventListener('input', () => setComposeError());
@@ -8567,6 +8751,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       closeComposeDialog();
+      document.getElementById('chat-title').focus({preventScroll:true});
       void loadSessions();
       show('ok', template ? '智能体团队已创建。' : '会话已创建。');
     } catch {
@@ -8598,7 +8783,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
-    if (social && files.length && (message.agent_mentions?.length ||
+    const groupFiles = social && currentConversation.kind === 'group' && !currentConversation.public_agent;
+    if (groupFiles && files.length && message.agent_mentions?.length && !message.body.trim()) {
+      show('error', uiLabel('先写附言，再请求智能体回复。', 'Add a caption before asking agents to reply.'));
+      return;
+    }
+    if (social && !groupFiles && files.length && (message.agent_mentions?.length ||
         (hasGroupAllMention(message.body) && !hasEveryoneMention(message.body)))) {
       show('error', uiLabel('请先移除附件，再请求智能体回复。', 'Remove the files before requesting agent replies.'));
       return;
