@@ -1,7 +1,6 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
-import { createLookAvatar } from '../look/app.mjs';
 import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
@@ -103,6 +102,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let loading = false;
   let signingIn = false;
   let overviewRequest = null;
+  let lookAssets;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -131,6 +131,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     globalThis.history.replaceState(null, '', '#workspace=' + encodeURIComponent(workspaceId));
   }
 
+  function loadLook() {
+    if (!lookAssets) {
+      const style = document.createElement('link');
+      style.rel = 'stylesheet';
+      style.href = new URL('../look/app.css', import.meta.url).href;
+      const styled = new Promise((resolve, reject) => {
+        style.addEventListener('load', resolve, {once:true});
+        style.addEventListener('error', reject, {once:true});
+        document.head.append(style);
+      });
+      lookAssets = Promise.all([import('../look/app.mjs'), styled]).then(([renderer]) => renderer).catch(() => {
+        style.remove();
+        lookAssets = null;
+        return null;
+      });
+    }
+    return lookAssets;
+  }
+
   function renderPersonal() {
     const agent = personal && personal.agent;
     const section = document.querySelector('.home-personal');
@@ -143,10 +162,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     document.getElementById('home-personal-title').textContent = agent.name;
     document.getElementById('home-personal-summary').textContent = agent.summary || '你的跨场景个人智能体。';
     const avatar = document.getElementById('home-personal-avatar');
-    avatar.replaceChildren();
-    const lookAvatar = createLookAvatar(personal.look, document);
-    if (lookAvatar) avatar.append(lookAvatar);
-    else avatar.textContent = (agent.name || 'P').trim().slice(0, 1).toUpperCase();
+    const binding = personal;
+    avatar.textContent = (agent.name || 'P').trim().slice(0, 1).toUpperCase();
+    if (binding.look) void loadLook().then(renderer => {
+      if (!renderer || !currentUser || binding !== personal) return;
+      const lookAvatar = renderer.createLookAvatar(binding.look, document);
+      if (lookAvatar) avatar.replaceChildren(lookAvatar);
+    });
     renderPersonalContext();
     const workspaceId = personal.workspace && personal.workspace.id;
     const chat = document.getElementById('home-personal-chat');

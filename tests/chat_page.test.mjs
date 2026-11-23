@@ -3522,6 +3522,38 @@ test('assistant Markdown tables render scoped table headers and delegate only ce
   assert.equal(body.children[0].children[1].textContent, '<img src=x>');
 });
 
+test('the inbox entry leaves Markdown modules outside its static dependency graph', () => {
+  assert.doesNotMatch(chatHtml(), /rel="modulepreload"[^>]*href="[^"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs"/);
+  const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /from\s+['"][^'"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs['"]/);
+});
+
+test('a later rich renderer updates a folded message preview without closing or replacing its details', async () => {
+  const {renderMessageText} = await import('../openteamily/static/chat/utilities.mjs');
+  const {doc} = fakeChatDocument(chatHtml());
+  const root = doc.createElement('div');
+  const source = `### 后续检查\n\n${'保留完整内容。'.repeat(145)}`;
+  let body;
+  let updatePreview;
+  renderMessageText(doc, root, source, 'standard', false, (parent, text, afterRender) => {
+    body = doc.createElement('div');
+    body.textContent = text;
+    parent.append(body);
+    updatePreview = afterRender;
+  });
+  const [details] = root.children;
+  const [summary] = details.children;
+  details.open = true;
+  assert.match(summary.textContent, /^### 后续检查/);
+  const heading = doc.createElement('h3');
+  heading.textContent = '后续检查';
+  body.replaceChildren(heading);
+  updatePreview();
+  assert.equal(root.children[0], details);
+  assert.equal(details.open, true);
+  assert.equal(summary.textContent, '后续检查… 展开全文');
+});
+
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
   const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
   const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');

@@ -1,6 +1,5 @@
 import {readWorkspaceChoices} from '../shell/dsbot-api.mjs';
 import {spaceHref} from '../shell/thumb.mjs';
-import {createTeamRunShares} from './shares.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
 const SHARED_ID = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
@@ -216,6 +215,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
   let linkedStep, focusLinkedStep = false;
   let automationHandoff;
+  let shares, sharesLoad, shareScope, linkedShare;
+  let sharesFailed = false;
+  let showSharedList = false;
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
   let current, currentDraft, tasks = [], agents = [];
@@ -258,9 +260,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  const shares = createTeamRunShares({
-    document, request, adopt: adoptShare, selectAddress: id => updateLocation(id ? {shared: id} : {}),
-  });
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
   const automationResultPath = (space, source) =>
     pathFor(space) + '/automation-results/' + source.automation_id + '/' + source.run_id;
@@ -327,8 +326,54 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (refocus && !trigger.hidden) trigger.focus();
   }
 
+  function loadShares() {
+    if (sharesLoad || !node('team-shared-runs') || !node('share-team-run')) return;
+    const stylesheet = document.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = '/team-runs/shares.css';
+    const styled = new Promise(resolve => {
+      stylesheet.addEventListener('load', resolve, {once:true});
+      stylesheet.addEventListener('error', resolve, {once:true});
+    });
+    document.head.append(stylesheet);
+    sharesLoad = Promise.all([import('./shares.mjs'), styled]).then(([module]) => {
+      shares = module.createTeamRunShares({
+        document, request, adopt:adoptShare, selectAddress:id => updateLocation(id ? {shared:id} : {}),
+      });
+      syncShareWorkspace();
+    }).catch(() => {
+      stylesheet.remove();
+      sharesFailed = true;
+      syncShareWorkspace();
+    });
+  }
+
+  function sharingWorkspace() {
+    if (!viewer || !screen || personalSpaces.has(workspace)) return null;
+    return spaces.find(item => item.id === workspace && ['team', 'workspace'].includes(item.kind)) || null;
+  }
+
+  function clearShareWorkspace() {
+    shareScope = null;
+    shares?.selectWorkspace(null);
+  }
+
   function syncShareWorkspace() {
-    shares.selectWorkspace(screen && !personalSpaces.has(workspace) ? spaces.find(item => item.id === workspace) : null);
+    const team = sharingWorkspace();
+    if (shareScope && (shareScope.viewer !== viewer || shareScope.id !== team?.id)) clearShareWorkspace();
+    if (!team || !(screen === 'list' && showSharedList || screen === 'detail' && REUSABLE.has(current?.status))) return;
+    if (sharesFailed) {
+      show(screen === 'detail' ? 'team-run-status' : 'status', '暂时无法加载团队共享。请刷新页面重试。', 'error');
+      return;
+    }
+    if (!shares) return loadShares();
+    shares.selectWorkspace(team);
+    shareScope = {viewer, id:team.id};
+    if (screen === 'detail') shares.selectRun(current);
+    else if (linkedShare !== undefined) {
+      shares.openTarget(linkedShare);
+      linkedShare = undefined;
+    }
   }
 
   function syncExport(run) {
@@ -364,8 +409,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-open-source').hidden = true;
     syncAutomationSourceLink('team-run-detail-source');
     show('team-run-progress', '');
-    shares.selectRun(null);
-    shares.selectWorkspace(null);
+    showSharedList = false;
+    linkedShare = undefined;
+    clearShareWorkspace();
   }
 
   function changeScreen(next, id = '') {
@@ -374,6 +420,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     doing = '';
     detailId = id;
     automationHandoff = null;
+    linkedShare = undefined;
+    showSharedList = false;
     node('team-run-handoff').hidden = true;
     linkedStep = undefined;
     focusLinkedStep = false;
@@ -395,7 +443,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     show('team-run-start-status', '');
     hideQuestion();
     syncShareWorkspace();
-    shares.selectRun(null);
+    shares?.selectRun(null);
   }
 
   function afterPoll(work, delay = document.hidden ? 8000 : screen === 'detail' ? 1000 : 3500) {
@@ -444,8 +492,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     } else {
       tasks = result.body.items.filter(item => matchesRun(item, workspace));
       newRun.disabled = false;
-      syncShareWorkspace();
+      showSharedList = true;
       show('status', '');
+      syncShareWorkspace();
       renderList(tasks);
     }
     if (tasks.some(item => item.status === 'running')) afterPoll(loadList);
@@ -453,14 +502,16 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function showList({address = true, focus = false, shared, read = true, reading} = {}) {
     changeScreen('list');
-    shares.openTarget(shared);
+    linkedShare = shared || '';
     tasks = [];
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
     if (address) updateLocation(shared ? {shared} : {});
     if (focus) node('team-runs-list-heading').focus();
     if (workspace && read) {
+      showSharedList = true;
       show('status', '正在读取任务…');
+      syncShareWorkspace();
       return loadList(reading);
     }
   }
@@ -823,7 +874,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       hideQuestion();
       if (refocus) node('team-run-heading').focus({preventScroll: true});
     }
-    shares.selectRun(run);
+    syncShareWorkspace();
     renderResults(run);
     if (focusLinkedStep) {
       focusLinkedStep = false;
@@ -844,7 +895,6 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const run = runFromResponse(result, workspace, runId);
     if (run) {
       newRun.disabled = false;
-      syncShareWorkspace();
       if (node('team-run-status').dataset.kind === 'read-error') show('team-run-status', '');
       renderDetail(run);
     } else {
@@ -1019,6 +1069,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const seq = ++auth;
     const startingHash = view.location.hash;
     const startingTarget = teamRunTarget(startingHash);
+    // A direct shared link needs the public UI assets. Reads still wait for
+    // the signed session and the selected workspace below.
+    if (startingTarget.shared) loadShares();
     const sessionRead = request('GET', '/v1/auth/session');
     const personalRead = request('GET', '/v1/workspaces?scope=personal');
     const reading = native && !startingTarget.invalid

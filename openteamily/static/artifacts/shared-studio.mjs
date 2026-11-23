@@ -3,9 +3,9 @@ import {mountStudioHistory} from './studio-history.mjs';
 import {mountStudioDiscussion} from './studio-discussion.mjs';
 import {mountStudioPersonalCopy} from './studio-personal-copy.mjs';
 import {mergeStudioDraft} from './studio-merge.mjs';
+import {requestStudio, studioScope} from './entry.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
-const ROLES = new Set(['owner', 'admin', 'member']);
 const UPDATE_INTERVAL = 4000;
 const WATCH_INTERVAL = 200;
 const WATCH_BACKOFF = 20000;
@@ -160,16 +160,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   savePersonal?.addEventListener('click',()=>saveToPersonal());
 
   function send(method, path, body, signal) {
-    const timeout = AbortSignal.timeout(12000);
-    return request(method, path, body, {signal: signal ? AbortSignal.any([signal, timeout]) : timeout})
-      .catch(() => ({status: 0, body: {}}));
-  }
-
-  function preload(workspace, id, account) {
-    if (!account || !ID.test(workspace || '') || (id !== undefined && !ID.test(id))) return null;
-    const controller = new AbortController();
-    const path = '/v1/workspaces/' + workspace + '/studio/documents' + (id ? '/' + id : '');
-    return {workspace, id, account, controller, response:send('GET', path, undefined, controller.signal)};
+    return requestStudio(request, method, path, body, signal);
   }
 
   async function readOpening(state, path) {
@@ -548,7 +539,6 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     if (!button.hidden) button.focus();
   }
 
-  button.addEventListener('click', () => void open());
   catalogQuery?.addEventListener('input', searchCatalog);
   catalogClear?.addEventListener('click', () => {
     catalogQuery.value = '';
@@ -737,8 +727,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
 
   return {
     setWorkspace(team, account) {
-      const next = account && ID.test(team?.id || '') && team.kind === 'team' &&
-        ROLES.has(team.role) ? {id: team.id, name: team.name, account} : null;
+      const next = studioScope(team, account);
       const changed = next?.id !== scope?.id || next?.account !== scope?.account;
       if (changed) {
         if (dialog.open) {
@@ -760,7 +749,6 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     },
     canLeave: () => !dialog.open || mayLeave(),
     leaveForNavigation,
-    preload,
     open,
   };
 }

@@ -21,7 +21,6 @@ class HomePageTests(unittest.TestCase):
         self.raw = RawClient(self.app)
         self.client = Client(self.app)
         self.client.register('alice')
-        self.wid = self.client.workspace()['body']['workspace']['id']
 
     def test_home_page_and_assets_are_served_with_strict_headers(self):
         page = self.raw.call('GET', '/')
@@ -34,7 +33,8 @@ class HomePageTests(unittest.TestCase):
         self.assertIn('欢迎回来', html)
         self.assertIn('最近对话', html)
         self.assertIn('href="/home/app.css"', html)
-        self.assertIn('href="/look/app.css"', html)
+        self.assertIn('rel="modulepreload" href="/home/runtime-readiness.mjs"', html)
+        self.assertNotIn('href="/look/app.css"', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
         self.assertEqual(page['headers']['Cache-Control'], 'no-store')
         self.assertEqual(self.raw.call('GET', '/home')['status'], 200)
@@ -48,6 +48,7 @@ class HomePageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/home/missing')['status'], 404)
 
     def test_overview_requires_membership_and_returns_real_summaries(self):
+        self.wid = self.client.workspace()['body']['workspace']['id']
         agent = self.client.call(
             'POST', f'/v1/workspaces/{self.wid}/agents',
             {'name': '值班助手', 'summary': '简短回答'}, {'HTTP_IDEMPOTENCY_KEY': 'home-agent-000001'})
