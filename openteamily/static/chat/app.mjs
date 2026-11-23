@@ -1144,6 +1144,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const readingPositions = new Map();
   const sessionRows = new Map();
   const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
@@ -2655,9 +2656,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  function readingPositionKey(source, wid, cid, aid) {
+    return JSON.stringify([currentUser?.id, wid, source, cid, aid || '']);
+  }
+
+  function rememberReadingPosition() {
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    if (!servedByDsbot || !state || state.owner !== currentUser?.id || state.cid !== currentConversation?.id ||
+        !historyScroller.clientHeight) return;
+    const key = readingPositionKey(currentSource, state.wid, state.cid, state.aid);
+    readingPositions.delete(key);
+    if (!state.readingHistory && messageScrollerAtBottom(historyScroller)) return;
+    const {id, offset} = chatHistoryAnchor();
+    if (!id || !Number.isFinite(offset)) return;
+    readingPositions.set(key, {key, id, offset:offset - historyScroller.getBoundingClientRect().top, top:0});
+    if (readingPositions.size > 50) readingPositions.delete(readingPositions.keys().next().value);
+  }
+
+  function readingPositionAnchor(position) {
+    return position && {...position, offset:position.offset + historyScroller.getBoundingClientRect().top};
+  }
+
   async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
     if (resume && resumeOpenSession(target)) return true;
+    rememberReadingPosition();
     sessionTransition?.controller.abort();
     const controller = new AbortController();
     const transition = {...target, pending: true, controller};
@@ -2665,7 +2688,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition,
+    const position = !target.message && readingPositions.get(readingPositionKey(target.source, workspaceId(), target.cid, target.agent));
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position,
       signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
@@ -6254,7 +6278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -6282,11 +6306,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
-    const snapshot = startupSnapshot ? await startupSnapshot() : null;
-    if (startupSnapshot && !stillOpen()) return false;
-    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
+    if (!PRIVATE_THREAD_ID.test(position?.id || '')) position = null;
+    const snapshot = startupSnapshot && !position ? await startupSnapshot() : null;
+    if (startupSnapshot && !position && !stillOpen()) return false;
+    const latestPath = servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path;
+    const read = url => request('GET', url,
       undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
+    let result = snapshot || await read(position ? latestPath + '&around=' + position.id : latestPath);
+    if (position && stillOpen() && (result.status === 404 ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
       if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
@@ -6352,12 +6385,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = conversation;
     renderStudioDiscussionSource(conversation.studio_source);
-    let items = privateHistoryAfterSends(result.body.items || [], sends);
+    let items = position ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
-        readingHistory: !acknowledge};
+        readingHistory: Boolean(position) || !acknowledge};
       state.cursor = result.body.cursor ?? null;
-      if (sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+      if (position && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
+      if (!position && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
         items = items.slice(-Number(HISTORY_PAGE_SIZE));
         state.cursor = items[0].id;
       }
@@ -6367,9 +6401,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderAgentQuickStarts(detailAgent);
     if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(items, {followLatest: !refresh});
+    const pending = renderAgentMessages(items, {followLatest: !refresh, anchor:readingPositionAnchor(position)});
     const finished = items.filter(item => item.role === 'assistant' && item.status === 'succeeded');
-    if (acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const read = request('POST', `${path}/read`,
         {message_id: finished[finished.length - 1].id}).then(acknowledged => {
         if (!sameScope() || acknowledged.status !== 200) return;
@@ -6385,7 +6419,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6400,8 +6434,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
-    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = initialRead || await request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    if (!chatPathId(position?.id)) position = null;
+    const path = `${socialBase()}/${conversationId}`;
+    const latestPath = path + (unreadEntry ? '?start=unread' : '');
+    const read = url => request('GET', url, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    let result = initialRead || await read(position ? path + '?around=' + encodeURIComponent(position.id) : latestPath);
+    if (position && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -6455,7 +6498,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
     const lastSeq = shown.at(-1)?.seq;
-    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const snapshot = !position && unreadEntry ? result.body.unread_window : null;
     const first = snapshot?.first;
     const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
       Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
@@ -6464,7 +6507,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(unread?.firstId), unread});
+      readingHistory: Boolean(position || unread?.firstId), unread,
+      after: position && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
@@ -6487,7 +6531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh});
+    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -6500,7 +6544,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -7347,9 +7391,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const message = start.social
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+    const position = !start.message && !start.directAccess && readingPositions.get(start.social
+      ? readingPositionKey('social', workspace, start.social)
+      : readingPositionKey('agent', workspace, start.conversation, start.agent));
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link, position})
+      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot, position});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -7474,6 +7521,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
+      readingPositions.clear();
       chatSettings = null;
       clearSessionTransition();
       currentAgent = null;
@@ -7505,6 +7553,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      readingPositions.clear();
       clearSessionTransition();
       currentAgent = null;
       currentConversation = null;
@@ -8035,6 +8084,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    rememberReadingPosition();
     closePrivateThreadDialogs();
     if (messageLinkDialog?.open) messageLinkDialog.close();
     resetStickerSurface();
@@ -8695,6 +8745,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   pinButton?.addEventListener('click', toggleConversationPin);
   document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
+    rememberReadingPosition();
     cancelStartupLink();
     stopReplyProgress();
     stopGroupReplyProgress();

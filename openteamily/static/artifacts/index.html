@@ -556,12 +556,20 @@
     <p id="work-version-status" class="note" role="status"></p>
     <button type="button" id="work-version-retry" hidden>重试</button>
     <div id="work-version-tools" hidden>
-      <div class="space-action-row">
+      <div class="work-version-actions">
         <label>导出格式 <select id="work-version-format"></select></label>
         <a id="work-version-download">导出此版本</a>
         <button type="button" id="work-version-copy">复制版本链接</button>
+        <button type="button" id="work-version-restore" hidden>恢复为新修订</button>
       </div>
       <input id="work-version-link" type="url" readonly aria-label="版本链接" hidden>
+      <section id="work-version-restore-review" aria-label="确认恢复版本" hidden>
+        <p id="work-version-restore-summary"></p>
+        <div class="space-action-row">
+          <button type="button" id="work-version-restore-cancel">取消恢复</button>
+          <button type="button" id="work-version-restore-confirm" class="primary">确认恢复</button>
+        </div>
+      </section>
     </div>
   </dialog>
   <dialog id="shared-work-copy-dialog" class="send-dialog-card" aria-labelledby="shared-work-copy-heading">

@@ -2978,8 +2978,79 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const workspace = selection.workspace;
     const href = worksPath() + '?' + new URLSearchParams({workspace, artifact:artifact.id, revision:String(revision)});
     writeSpaceAddress(href, {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)});
+    const canRestore = () => nativeCatalog && currentSelection() && current.revision !== revision;
     workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
-      path:editorPath(selection,artifact.id) + '/versions/' + revision});
+      path:editorPath(selection,artifact.id) + '/versions/' + revision,
+      canRestore,
+      reviewRestore: () => restoreReviewMessage(selection) || {revision:current.revision, key:idempotencyKey()},
+      submitRestore: review => restoreWorkVersion(selection, artifact.id, revision, review),
+    });
+  }
+
+  function restoreReviewMessage(selection) {
+    if (selection.saving || form.inert) return '作品正在保存，请稍候。';
+    if (hasEditorDraft()) return '请先保存当前草稿，再恢复历史版本。';
+    return '';
+  }
+
+  async function restoreWorkVersion(selection, id, to, {revision, key}) {
+    const ownsSelection = () => activeEditor(selection) && current?.id === id;
+    const changed = {conflict:true, message:'当前修订已更新。关闭预览后查看最新版本，再确认恢复。'};
+    if (!ownsSelection() || current.revision !== revision) return changed;
+    const blocked = restoreReviewMessage(selection);
+    if (blocked) return {message:blocked};
+    selection.saving = true;
+    form.inert = true;
+    setSaving(true);
+    try {
+      const path = editorPath(selection, id) + '/restore';
+      const send = () => request('POST', path, {revision,to}, {'Idempotency-Key':key},
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+        .catch(() => ({status:0,body:{}}));
+      const receipt = result => {
+        const {artifact,restore} = result.body || {};
+        return result.status === 200 && artifact?.id === id && artifact.workspace_id === selection.workspace
+          && restore?.base_revision === revision && restore.source_revision === to
+          && [revision, revision+1].includes(restore.result_revision)
+          && Number.isSafeInteger(artifact.revision) && artifact.revision >= restore.result_revision;
+      };
+      const uncertain = result => !result.status || result.status >= 500 || (result.status === 200 && !receipt(result));
+      let result = await send();
+      if (!ownsSelection()) return changed;
+      if (uncertain(result)) result = await send();
+      if (!ownsSelection()) return changed;
+      if (revealRevisionConflict(result)) return changed;
+      if (uncertain(result)) return {uncertain:true, message:'暂未确认服务器是否已恢复。重试会核对同一次请求。'};
+      if (!receipt(result)) return {message:messageFor(result.body?.error, '无法恢复此版本，请重试。')};
+      const next = result.body.artifact;
+      const tools = editorTools(next);
+      if (tools && !tools.instance) {
+        try { await tools.prepare(); }
+        catch {
+          if (ownsSelection()) displayEditorUpdate({failed:true});
+          return {message:'服务器已确认恢复。关闭预览后重新打开作品以查看最新内容。'};
+        }
+      }
+      if (!ownsSelection()) return changed;
+      if (next.revision > current.revision) {
+        current = next;
+        catalog = null;
+        fillEditor(current);
+        readEditorRecovery();
+        liveBanner.hidden = true;
+      }
+      const applied = result.body.restore.result_revision;
+      show('ok', current.revision > applied ? `已恢复为修订 ${applied}。当前为修订 ${current.revision}。`
+        : applied === revision ? `当前修订 ${revision} 已包含所选版本的内容。` : `已恢复为修订 ${applied}。`);
+      if (editorPanels.get('version')?.open) void loadVersions();
+      return {saved:true};
+    } finally {
+      selection.saving = false;
+      if (ownsSelection()) {
+        form.inert = false;
+        setSaving(false);
+      }
+    }
   }
 
   async function loadVersions() {
@@ -3002,6 +3073,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       row.dataset.revision = String(item.revision);
       meta.className = 'note';
       meta.textContent = `修订 ${item.revision} · ${item.title || ''} · ${item.created_by || ''}`;
+      if (Number.isSafeInteger(item.restored_from)) meta.textContent += ' · 恢复自修订 ' + item.restored_from;
       row.appendChild(meta);
       if (typeof document.getElementById('work-version-dialog')?.showModal === 'function') {
         const preview = document.createElement('button');
@@ -3025,50 +3097,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           if (activeEditor(selection) && current.id === artifact.id) openDuplicateDialog(copySource,copy);
         });
         row.appendChild(copy);
-      }
-      if (item.revision !== current.revision) {
-        const restore = document.createElement('button');
-        restore.type = 'button';
-        restore.textContent = '恢复为新修订';
-        restore.addEventListener('click', async () => {
-          if (!activeEditor(selection) || current.id !== artifact.id || selection.saving || form.inert) return;
-          if (hasEditorDraft()) {
-            show('error', '请先保存当前草稿，再恢复历史版本。');
-            return;
-          }
-          const revision = current.revision;
-          selection.saving = true;
-          form.inert = true;
-          setSaving(true);
-          try {
-            const result = await request('POST', editorPath(selection, artifact.id) + '/restore',
-              {revision, to: item.revision}, undefined, selection.controller.signal)
-              .catch(() => ({status: 0, body: {}}));
-            if (!activeEditor(selection) || current.revision !== revision) return;
-            if (revealRevisionConflict(result)) {
-              show('error', '恢复遇到新版本，请先查看服务器版本。');
-              return;
-            }
-            if (result.status !== 200) {
-              show('error', messageFor(result.body.error, '恢复失败。'));
-              return;
-            }
-            current = result.body.artifact;
-            catalog = null;
-            fillEditor(current);
-            readEditorRecovery();
-            liveBanner.hidden = true;
-            show('ok', `已恢复为修订 ${current.revision}。`);
-            await loadVersions();
-          } finally {
-            selection.saving = false;
-            if (activeEditor(selection)) {
-              form.inert = false;
-              setSaving(false);
-            }
-          }
-        });
-        row.appendChild(restore);
       }
       list.appendChild(row);
     }
