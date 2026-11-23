@@ -1,6 +1,7 @@
 """Platform → own DS-Bot gateway decisions (docs/DSBOT_PLUGIN_ARCHITECTURE.md §4)."""
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
@@ -358,7 +359,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('rewrite ^ /_ot_discover_guest$uri last;', conf)
         self.assertIn('return 302 /login;', conf)
         self.assertNotIn('location = /login { return 418; }', conf)
-        self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/discover/(?:agents|works|me/works)$" { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
         routes = gw.load_routes()
@@ -586,19 +587,68 @@ class GatewayTest(unittest.TestCase):
             self.assertIn('feature=discover', headers['X-OT-Upstream-Path'])
         self.assertEqual(gw.moved_api('/v1/profile/follow-work'), 'discover')
 
-    def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
-        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
-        self.assertIn('location = /v1/settings { return 418; }', conf)
+    def test_nginx_fences_every_moved_api_from_the_same_matchers(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social='bot-social:8787')
+        rules = [line for line in conf.splitlines() if line.lstrip().startswith('location ')
+                 and '/v1/' in line and 'return 418;' in line]
+        patterns = [pattern.pattern for pattern, _feature in gw.MOVED_APIS]
+        self.assertEqual(rules, [f'  location ~ "{pattern}" {{ return 418; }}' for pattern in patterns])
+        token = self.tokens['a' * 32]
+        ws, ident = 'a' * 32, 'b' * 32
+        grant, conversation = 'otag_' + 'A' * 26, 'otc_' + 'B' * 26
+        for uri, feature in (
+            ('/v1/settings', 'settings'),
+            ('/v1/stickers/' + ident + '/file', 'stickers'),
+            ('/v1/skills/runs/' + ident + '/artifact', 'skills'),
+            ('/v1/discover/works?kind=slides', 'discover'),
+            ('/v1/discover/agents/test-agent/remix', 'discover'),
+            ('/v1/agent-copy-grants/recipients', 'agents'),
+            (f'/v1/agent-copy-grants/{grant}/remix', 'agents'),
+            ('/v1/profile/follow-work', 'discover'),
+            ('/v1/onboarding/automations', 'automations'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/conversations', 'agents'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/shares/{grant}/revoke', 'agents'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/access/{conversation}/revoke', 'agents'),
+            (f'/v1/workspaces/{ws}/memory/actions/from-chat', 'memory'),
+            (f'/v1/workspaces/{ws}/memory/{ident}/versions/123/restore', 'memory'),
+            (f'/v1/workspaces/{ws}/team-runs/automation-results/{ident}/{ident}', 'team-runs'),
+        ):
+            with self.subTest(uri=uri):
+                path = uri.partition('?')[0]
+                self.assertTrue(any(re.fullmatch(pattern, path) for pattern in patterns))
+                self.assertEqual(gw.moved_api(path), feature)
+                status, headers = self.call(token, uri=uri)
+                self.assertEqual(status, 204)
+                self.assertIn('feature=' + feature, headers['X-OT-Upstream-Path'])
         self.assertIn('location = /space { return 418; }', conf)
         self.assertIn('location = /profile { return 418; }', conf)
-        self.assertIn('location = /v1/profile/social { return 418; }', conf)
-        self.assertIn('location = /v1/profile/follow-work { return 418; }', conf)
-        self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
-        self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
-        self.assertIn('location = /v1/composio/callback', conf)
-        # Exceptions must appear before the prefix locations that would catch them.
-        self.assertLess(conf.index('location = /v1/composio/callback'), conf.index('location ^~ /v1/composio/'))
+        self.assertIn('rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;', conf)
 
+    def test_nginx_leaves_platform_api_exceptions_outside_runtime_fence(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key=KEY)
+        patterns = re.findall(r'^  location ~ "(\^/v1/.*)" \{ return 418; \}$', conf, flags=re.M)
+        self.assertIn('location = /v1/agent-homepages/start { return 410; }', conf)
+        self.assertIn('location = /v1/composio/callback { proxy_pass http://127.0.0.1:8080;', conf)
+        ws, ident = 'a' * 32, 'b' * 32
+        for path in (
+            '/v1/agent-homepages/start',
+            '/v1/runtime/tasks',
+            '/v1/composio/callback',
+            '/v1/skills/unknown',
+            '/v1/discover/unknown',
+            '/v1/agent-copy-grants/unknown',
+            '/v1/onboarding/unknown',
+            '/v1/mcp/servers-other',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime/unbind',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage/revoke',
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(any(re.fullmatch(pattern, path) for pattern in patterns))
+                self.assertIsNone(gw.target_for(path, gw.load_routes()))
+                self.assertEqual(self.call(self.tokens['a' * 32], uri=path)[0], 404)
 
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
         import io

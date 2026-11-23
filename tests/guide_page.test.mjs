@@ -12,6 +12,7 @@ test('catalog only contains known categories and no Teamily guide prose', () => 
     assert.ok(item.title);
     assert.ok(item.body);
     assert.ok(Array.isArray(item.path) && item.path.length > 0);
+    assert.ok(/^\/(?!\/)/.test(item.href), item.id);
   }
 });
 
@@ -347,6 +348,24 @@ test('the opened guide dialog marks the keyword in its title and body', async ()
   }
 });
 
+test('each guide detail links to the destination for the current item', async () => {
+  const page = await mountGuide('?test=links');
+  try {
+    for (const item of CATALOG) {
+      const row = page.el('guide-list').children
+        .flatMap((section) => section.children)
+        .find((child) => child.dataset.itemId === item.id);
+      assert.ok(row, item.id);
+      row.handlers.click();
+      const action = page.el('guide-dialog-action');
+      assert.equal(action.attributes.href, item.href, item.id);
+      assert.equal(action.textContent, `去这里 · ${item.title}`);
+    }
+  } finally {
+    page.restore();
+  }
+});
+
 test('a fruitless search says there is no match and how to clear it', async () => {
   const page = await mountGuide('?q=xyz-not-a-feature');
   try {
@@ -388,7 +407,10 @@ test('the mounted guide paints those dedicated icons in chips, titles and rows',
     for (const section of page.el('guide-list').children) {
       const heading = section.children[0];
       assert.equal(heading.className, 'guide-group-title');
-      const groupId = CATALOG.find((item) => item.id === section.children[1].dataset.itemId).category;
+      const firstRow = section.children.find((child) => child.className === 'guide-item');
+      const groupId = CATALOG.find((item) => item.id === firstRow.dataset.itemId).category;
+      const summary = section.children.find((child) => child.className === 'guide-group-summary');
+      assert.ok(summary?.textContent);
       assert.equal(pathOf(heading.children[0]), guideIconPath('category', groupId));
       assert.equal(heading.children[1].textContent, CATEGORIES.find((item) => item.id === groupId).label);
       for (const child of section.children) {
