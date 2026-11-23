@@ -1,6 +1,7 @@
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {mountActionMenus} from '../openteamily/static/shell/action-menu.mjs';
 import {
   applyResolvedTheme,
   CHANNELS_MENU_HREF,
@@ -156,7 +157,7 @@ test('ensureOnboardingMenuItem does nothing when the account menu is missing', (
   assert.equal(ensureOnboardingMenuItem({getElementById() { return null; }}), null);
 });
 
-test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团队', () => {
+test('ensureOnboardingMenuItem inserts 新手引导 before help, after 创建团队', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
@@ -168,7 +169,7 @@ test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团
   assert.equal(link.getAttribute('role'), 'menuitem');
   assert.equal(link.textContent, ONBOARDING_MENU_LABEL);
   assert.match(link.getAttribute('title'), /新手引导/);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureOnboardingMenuItem moves an existing link into the recorded slot and does not duplicate it', () => {
@@ -184,19 +185,19 @@ test('ensureOnboardingMenuItem moves an existing link into the recorded slot and
   const matches = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === '/onboarding');
   assert.equal(matches.length, 1);
   assert.equal(matches[0], again);
-  assert.equal(again.textContent, '工作背景');
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+  assert.equal(again.textContent, '新手引导');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureChannelsAndConnectorsMenuItems does nothing when the account menu is missing', () => {
   assert.equal(ensureChannelsAndConnectorsMenuItems({getElementById() { return null; }}), null);
 });
 
-test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接器 after 创建团队 and before 工作背景', () => {
+test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接器 after 创建团队 and before 新手引导', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
-    {href: '/onboarding', text: '工作背景'},
+    {href: '/onboarding', text: '新手引导'},
     {kind: 'sub'},
     {href: '/settings', text: '所有设置'},
   ]);
@@ -208,8 +209,8 @@ test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接
   assert.equal(items.connectors.getAttribute('href'), CONNECTORS_MENU_HREF);
   assert.equal(items.connectors.getAttribute('role'), 'menuitem');
   assert.equal(items.connectors.textContent, CONNECTORS_MENU_LABEL);
-  assert.match(items.connectors.getAttribute('title'), /仍未接通/);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.equal(items.connectors.getAttribute('title'), '管理应用连接器');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureChannelsAndConnectorsMenuItems moves existing links into the recorded slot and does not duplicate them', () => {
@@ -231,10 +232,10 @@ test('ensureChannelsAndConnectorsMenuItems moves existing links into the recorde
   assert.equal(channelLinks[0], again.channels);
   assert.equal(connectorLinks[0], again.connectors);
   assert.equal(first.channels, again.channels);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
-test('calling both menu helpers without an existing 工作背景 link keeps the recorded order', () => {
+test('calling both menu helpers without an existing 新手引导 link keeps the recorded order', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
@@ -243,17 +244,23 @@ test('calling both menu helpers without an existing 工作背景 link keeps the 
   ]);
   ensureOnboardingMenuItem(doc);
   ensureChannelsAndConnectorsMenuItems(doc);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
 
-test('shared icon rails keep accessible link names and leave account-menu text visible', () => {
-  for (const name of ['chat', 'discover', 'settings', 'memory', 'artifacts', 'onboarding', 'agents']) {
-    const html = readFileSync(new URL('../openteamily/static/' + name + '/index.html', import.meta.url), 'utf8');
-    const nav = html.split('<nav class="app-rail"')[1].split('<div class="account-slot"')[0];
+test('workspace pages render one accessible account icon in the rail before shell startup', () => {
+  const staticPages = new URL('../openteamily/static/', import.meta.url);
+  for (const page of readdirSync(staticPages, {recursive: true}).filter(path => path.endsWith('/index.html'))) {
+    const html = readFileSync(new URL(page, staticPages), 'utf8');
+    if (!html.includes('<nav class="app-rail"')) continue;
+    const [nav, menu] = html.split('<nav class="app-rail"')[1].split('</nav>')[0].split('<div class="account-slot"');
+    assert.match(nav, /class="rail-actions"/, page);
+    assert.doesNotMatch(nav, /href="\/profile"|class="rail-spacer"/, page);
     assert.match(nav, /href="\/chat"[^>]*aria-label="聊天">[\s\S]*?<svg/);
     assert.match(nav, /class="rail-label">发现<\/span>/);
-    const menu = html.split('<div class="account-slot"')[1].split('</nav>')[0];
+    const trigger = menu.match(/<button[^>]*id="account-menu-button"[^>]*>[\s\S]*?<\/button>/g);
+    assert.equal(trigger?.length, 1, page);
+    assert.match(trigger[0], /aria-label="账户菜单"[^>]*>\s*<svg[^>]*aria-hidden="true"[^>]*>[^<]*<path[^>]*\/>\s*<\/svg>\s*<\/button>/, page);
     assert.doesNotMatch(menu, /class="rail-label"/);
     assert.match(menu, /所有设置<\/a>/);
   }
@@ -261,25 +268,38 @@ test('shared icon rails keep accessible link names and leave account-menu text v
 
 test('workspace tokens meet text contrast in explicit light and dark themes', () => {
   const css = readFileSync(new URL('../openteamily/static/shell/app.css', import.meta.url), 'utf8');
-  const luminance = hex => {
-    const rgb = hex.match(/../g).map(n => parseInt(n, 16) / 255).map(n => n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4);
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, '').split('}');
+  const tokens = selector => {
+    const prefix = selector + ' {';
+    return Object.fromEntries(rules.flatMap(rule => {
+      const block = rule.trim();
+      return block.startsWith(prefix) ? [...block.slice(prefix.length).matchAll(/--ot-([\w-]+):\s*([^;]+);/g)]
+        .map(([, name, value]) => [name, value.trim()]) : [];
+    }));
+  };
+  const luminance = (color, name) => {
+    assert.match(color ?? '', /^#[0-9a-f]{6}$/i, name);
+    const rgb = color.slice(1).match(/../g).map(value => parseInt(value, 16) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
     return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
   };
-  const ratio = (a,b) => { const x = luminance(a), y = luminance(b); return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
-  for (const theme of ['light','dark']) {
-    const block = css.split('html[data-theme-resolved="' + theme + '"] {')[1].split('}')[0];
-    const values = Object.fromEntries([...block.matchAll(/--ot-([\w-]+): #([0-9a-f]{6});/g)].map(m => [m[1],m[2]]));
-    for (const bg of ['bg','surface','surface-2','accent-soft']) {
-      for (const fg of ['ink','muted']) assert.ok(ratio(values[fg], values[bg]) >= 4.5, theme + ' ' + fg + '/' + bg);
+  const defaults = tokens(':root');
+  for (const theme of ['light', 'dark']) {
+    const values = {...defaults, ...tokens(`html[data-theme-resolved="${theme}"]`)};
+    const checkContrast = (fg, bg) => {
+      const pair = `${theme} ${fg}/${bg}`;
+      const first = luminance(values[fg], `${theme} --ot-${fg}`);
+      const second = luminance(values[bg], `${theme} --ot-${bg}`);
+      assert.ok((Math.max(first, second) + .05) / (Math.min(first, second) + .05) >= 4.5, pair);
+    };
+    for (const bg of ['bg', 'surface', 'surface-2', 'accent-soft']) {
+      for (const fg of ['ink', 'muted']) checkContrast(fg, bg);
     }
-    assert.ok(ratio(values.accent, theme === 'light' ? 'ffffff' : '121c17') >= 4.5);
+    checkContrast('on-accent', 'accent');
+    assert.equal(values.glow, 'none');
   }
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /outline: 2px solid var\(--ot-focus\)/);
-  const dark = css.split('html[data-theme-resolved="dark"] {')[1].split('}')[0];
-  assert.doesNotMatch(dark, /#8b7cff|#2ee6e9|--ot-glow: 0 /);
-  assert.match(dark, /--ot-accent: #89d5b5/);
-  assert.match(dark, /--ot-glow: none/);
 });
 
 
@@ -290,4 +310,79 @@ test('shared hover and expanded states keep explicit contrast pairs', () => {
     assert.match(block, /background: var\(--ot-accent(?:-hover)?\)/);
     assert.match(block, /color: var\(--ot-on-accent\)/);
   }
+});
+
+function menuFixture() {
+  const document = new EventTarget();
+  function element(parent) {
+    const element = new EventTarget();
+    const attributes = new Map();
+    const children = [];
+    const ancestry = [element, ...(parent?.ancestry || [])];
+    parent?.children.push(element);
+    return Object.assign(element, {
+      children, ancestry, hidden: false,
+      setAttribute: (name, value) => attributes.set(name, value),
+      getAttribute: name => attributes.get(name),
+      closest: selector => selector === '[hidden]' ? ancestry.find(node => node.hidden) : element,
+      contains: target => target.ancestry.includes(element),
+      querySelectorAll: () => children,
+      focus() {
+        document.activeElement = element;
+        dispatch(document, 'focusin', {target: element});
+      },
+    });
+  }
+  function dispatch(element, type, {target = element, key} = {}) {
+    const event = new Event(type, {cancelable: true});
+    Object.defineProperties(event, {target: {value: target}, key: {value: key}});
+    element.dispatchEvent(event);
+    return event;
+  }
+  const button = element();
+  const menu = element();
+  menu.hidden = true;
+  const first = element(menu);
+  const hidden = element(menu);
+  hidden.hidden = true;
+  const disabled = element(menu);
+  disabled.disabled = true;
+  const last = element(menu);
+  const outside = element();
+  const menus = mountActionMenus(document);
+  return {document, button, menu, first, last, outside, menus, dispatch};
+}
+
+test('action menus skip unavailable entries, wrap arrows and return keyboard focus on Escape or Tab', () => {
+  const {document, button, menu, first, last, menus, dispatch} = menuFixture();
+  menus.bind(button, menu);
+  dispatch(button, 'keydown', {key: 'ArrowUp'});
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  assert.equal(document.activeElement, last);
+  assert.equal(last.tabIndex, -1);
+  dispatch(menu, 'keydown', {key: 'ArrowDown'});
+  assert.equal(document.activeElement, first);
+  dispatch(menu, 'keydown', {key: 'End'});
+  assert.equal(document.activeElement, last);
+  assert.equal(dispatch(menu, 'keydown', {key: 'Escape'}).defaultPrevented, true);
+  assert.equal(document.activeElement, button);
+  assert.equal(menu.hidden, true);
+  dispatch(button, 'click');
+  assert.equal(document.activeElement, first);
+  assert.equal(dispatch(menu, 'keydown', {key: 'Tab'}).defaultPrevented, false);
+  assert.equal(document.activeElement, button);
+  assert.equal(button.getAttribute('aria-expanded'), 'false');
+});
+
+test('outside focus is preserved and activation returns focus before running the selected action', () => {
+  const {document, button, menu, first, outside, dispatch, menus} = menuFixture();
+  menus.bind(button, menu);
+  dispatch(button, 'click');
+  outside.focus();
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, outside);
+  dispatch(button, 'click');
+  dispatch(menu, 'click', {target: first});
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, button);
 });

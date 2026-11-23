@@ -1,6 +1,6 @@
 // Legacy /v1 compatibility for features moved into this DS-Bot, exposed through
 // the stable feature extension point as the endpoint '<feature>/v1':
-//   POST /api/openteamily {endpoint: 'meetings/v1', payload: {method, path, body?, idempotency_key?}}
+//   POST /api/openteamily {endpoint: 'meetings/v1', payload: {method, path, query?, body?, idempotency_key?}}
 // -> {status, body} (legacy JSON shape) or {status, download: {content_type, filename, encoding, data}}.
 // The browser half (openteamily/static/shell/dsbot-api.mjs) translates a page's
 // legacy fetch calls into this envelope only when the page itself was served by
@@ -42,7 +42,12 @@ export function createV1Endpoint({ feature, routes, context }) {
       throw Object.assign(new Error('payload object required'), { code: `${feature}/invalid` })
     }
     const method = String(payload.method ?? 'GET').toUpperCase()
-    const target = parseTarget(payload.path)
+    let path = payload.path
+    // Ordinary download navigation reaches the gateway with path and query split.
+    if (typeof path === 'string' && !path.includes('?') && typeof payload.query === 'string' && payload.query) {
+      path += '?' + payload.query
+    }
+    const target = parseTarget(path)
     if (!METHODS.has(method) || !target) return { status: 404, body: { error: { code: 'not_found', message: 'Not found' } } }
     const found = matchRoute(routes, target.path)
     if (!found) return { status: 404, body: { error: { code: 'not_moved', message: 'This route is not served by DS-Bot yet' } } }

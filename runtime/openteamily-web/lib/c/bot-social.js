@@ -31,8 +31,11 @@ function readJson(path) {
 
 function requestOnSocket(socketPath, host, path, { method, headers, body, signal }) {
   return new Promise((resolve, reject) => {
+    // Node's HTTP client does not enable chunked transfer for DELETE by default.
+    // Frame every serialized JSON body so all methods reach Bot Social intact.
+    const length = body === undefined ? {} : { 'content-length': Buffer.byteLength(body) }
     const req = httpRequest({
-      socketPath, path, method, signal, agent: false, headers: { ...headers, host },
+      socketPath, path, method, signal, agent: false, headers: { ...headers, ...length, host },
     }, response => {
       const status = response.statusCode
       if (status >= 300 && status < 400) {
@@ -77,7 +80,7 @@ export function createBotSocial({
     return { base: String(base).replace(/\/+$/, ''), token: creds.token, home: creds.home ?? null }
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, {signal} = {}) {
     const { base, token } = await connection()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -89,7 +92,7 @@ export function createBotSocial({
         method,
         headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([controller.signal,signal]) : controller.signal,
         redirect: 'error',
       }
       // The socket belongs to this site's Bot Social. An overridden workspace
@@ -114,7 +117,7 @@ export function createBotSocial({
   return {
     connection,
     request,
-    get: (path) => request('GET', path),
+    get: (path,options) => request('GET',path,undefined,options),
     post: (path, body = {}) => request('POST', path, body),
     put: (path, body = {}) => request('PUT', path, body),
     patch: (path, body = {}) => request('PATCH', path, body),

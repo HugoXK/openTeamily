@@ -1,28 +1,14 @@
-// OpenTeamily → DS-Bot bridge. Loaded inside the DSH plugin process, so every
-// management chat task runs as a real DS-Bot turn on this user's own runtime:
-//
-//   management /v1/agent task ──claim──▶ bridge ──rt.sendUser──▶ DS-Bot Bot turn
-//        ▲                                   │                        │
-//        └──────── result (DS-Bot reply) ◀───┘   model + tools ◀──────┘
-//                                     loopback proxy (127.0.0.1 only)
-//
-// - Model access: DS-Bot's provider "openteamily" points at a loopback
-//   OpenAI-compatible proxy and holds only a per-boot placeholder token. The
-//   proxy swaps in the task-scoped model_api (or the operator secret file when
-//   idle), enforcing the exact-HTTP grant (no redirects, IPv4, bounded) or HTTPS.
-//   The real key never enters DS-Bot settings, env, logs or UI.
-// - Skills: digest-verified skill material becomes native DS-Bot skill
-//   capabilities attached to the Bot, then management gets the skills ack.
-// - Connected tools (Composio): a loopback MCP server ("ot-tools") proxies the
-//   task's /v1/agent/tasks/{id}/tools discover/calls endpoints. Credentials stay
-//   on the server; every call still needs the owner's one-shot approval there.
-import { createHash, randomBytes } from 'node:crypto'
+// Native OpenTeamily services run inside the user's DS-Bot plugin. Its model
+// provider holds a per-boot placeholder token and talks to this loopback proxy.
+// Only the proxy resolves the user's model settings or the operator startup
+// file and forwards the configured model name and secret to the upstream.
+import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { startOpenPart, threadOf, threadOfPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { splitRef } from '../ds-bot-upstream/ds-bot/src/host/text.js'
 import { request as httpsRequest } from 'node:https'
-import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-loop.mjs'
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
 
@@ -34,23 +20,27 @@ export function userModelOverride(scope = globalThis) {
 }
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
-export const TOOLS_CAPABILITY = 'ot-tools'
-export const DEFAULT_PORT = 18731
-const BODY_LIMIT = 24 * 1024 * 1024
-const RESULT_TEXT_LIMIT = 12000
-const SKILL_FORMATS = ['openteamily.prompt-skill.v1', 'openteamily.prompt-skill.v2']
-
-export function skillCapabilityName(id) {
-  return 'ot-skill-' + createHash('sha256').update(String(id)).digest('hex').slice(0, 12)
+function modelInput(modelApi) {
+  const model = String(modelApi?.model || '').toLowerCase()
+  const isDeepSeekFlash = model === 'deepseek-flash' || model === 'deepseek-v4-flash-vision-exp'
+    || /^deepseek-v4\.1-flash(?:-\d{4,8})?$/.test(model)
+  return isDeepSeekFlash ? ['text','image'] : ['text']
 }
 
-function readBody(req, limit = BODY_LIMIT) {
+function providerModel(input) {
+  return {id:MODEL_ID,name:'OpenTeamily model',contextWindow:128000,maxTokens:8192,input}
+}
+
+export const DEFAULT_PORT = 18731
+const BODY_LIMIT = 24 * 1024 * 1024
+
+function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = []
     let size = 0
     req.on('data', chunk => {
       size += chunk.length
-      if (size > limit) { reject(Object.assign(new Error('body too large'), { status: 413 })); req.destroy(); return }
+      if (size > BODY_LIMIT) { reject(Object.assign(new Error('body too large'), { status: 413 })); req.destroy(); return }
       chunks.push(chunk)
     })
     req.on('end', () => resolve(Buffer.concat(chunks)))
@@ -90,29 +80,29 @@ export async function forwardModel(modelApi, raw, res, { httpRequester = httpReq
     stream.on('error', () => { res.destroy(); resolve() })
     stream.on('close', resolve)
   })
-  const signal = AbortSignal.timeout(180000)
-  if (httpTask) {
-    return streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
-  }
-  const url = new URL(base + '/chat/completions')
-  const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
-  return new Promise((resolve, reject) => {
-    const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
-      if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
-      resolve(relay(response.statusCode, response.headers, response))
+  const downstream = new AbortController()
+  const closed = () => { if (!res.writableFinished) downstream.abort() }
+  res.once?.('close', closed)
+  if (res.destroyed) closed()
+  const signal = AbortSignal.any([downstream.signal, AbortSignal.timeout(180000)])
+  try {
+    if (httpTask) {
+      return await streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
+    }
+    const url = new URL(base + '/chat/completions')
+    const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
+    return await new Promise((resolve, reject) => {
+      const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
+        if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
+        resolve(relay(response.statusCode, response.headers, response))
+      })
+      req.on('error', () => reject(new Error('model request failed')))
+      req.end(body)
     })
-    req.on('error', () => reject(new Error('model request failed')))
-    req.end(body)
-  })
+  } finally { res.off?.('close', closed) }
 }
 
-export function mcpTool(tool) {
-  const fn = tool?.function || {}
-  return { name: fn.name, description: String(fn.description || '').slice(0, 1024), inputSchema: fn.parameters && typeof fn.parameters === 'object' ? fn.parameters : { type: 'object' } }
-}
-
-// Loopback server: /v1/models + /v1/chat/completions for DS-Bot's provider and
-// /mcp (streamable HTTP, JSON responses) for connected tools.
+// Loopback model server for the native DS-Bot provider.
 export function createBridgeServer(state, { log = () => {}, forward = forwardModel } = {}) {
   return createServer(async (req, res) => {
     try {
@@ -126,29 +116,15 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         if (req.headers.authorization !== 'Bearer ' + state.token) return sendJson(res, 401, { error: { message: 'unauthorized' } })
         const raw = await readBody(req)
-        const task = req.headers['x-openteamily-private-text'] === '1' ? null : state.active
-        const modelApi = task?.modelApi || state.startupModel()
+        const modelApi = state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
-        if (task) task.modelCalls += 1
-        state.modelCalls += 1
         try { await forward(modelApi, raw, res) } catch (error) {
+          if (res.destroyed) return
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))
           if (!res.headersSent) sendJson(res, 502, { error: { message: 'upstream model request failed' } })
           else res.destroy()
         }
         return
-      }
-      if (path === '/mcp') {
-        if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); return res.end() }
-        const message = JSON.parse((await readBody(req, 1024 * 1024)).toString('utf8'))
-        const batch = Array.isArray(message)
-        const replies = []
-        for (const item of batch ? message : [message]) {
-          const reply = await handleMcp(state, item)
-          if (reply) replies.push(reply)
-        }
-        if (!replies.length) { res.writeHead(202); return res.end() }
-        return sendJson(res, 200, batch ? replies : replies[0])
       }
       sendJson(res, 404, { error: { message: 'not found' } })
     } catch (error) {
@@ -157,83 +133,282 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
   })
 }
 
-export async function handleMcp(state, message) {
-  if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
-    return { jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32600, message: 'Invalid Request' } }
-  }
-  if (message.id === undefined) return null // notification
-  const ok = result => ({ jsonrpc: '2.0', id: message.id, result })
-  const fail = (code, text) => ({ jsonrpc: '2.0', id: message.id, error: { code, message: text } })
-  switch (message.method) {
-    case 'initialize':
-      return ok({ protocolVersion: typeof message.params?.protocolVersion === 'string' ? message.params.protocolVersion : '2025-03-26',
-        capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'openteamily-connected-tools', version: '1.0.0' },
-        instructions: 'OpenTeamily connected app tools. Every call waits for the account owner to approve it in OpenTeamily Settings > App connectors.' })
-    case 'ping':
-      return ok({})
-    case 'tools/list':
-      return ok({ tools: state.tools.map(mcpTool) })
-    case 'tools/call': {
-      const name = message.params?.name
-      const args = message.params?.arguments ?? {}
-      const active = state.active
-      if (!active?.bridge) return ok({ isError: true, content: [{ type: 'text', text: 'Connected tools are only available while answering an OpenTeamily message.' }] })
-      if (!active.tools.some(tool => tool.function?.name === name)) return ok({ isError: true, content: [{ type: 'text', text: 'Tool is not connected for this account.' }] })
-      if (!args || typeof args !== 'object' || Array.isArray(args)) return fail(-32602, 'arguments must be an object')
-      try {
-        const callId = 'dsbot_' + randomBytes(9).toString('hex')
-        const result = await active.bridge.execute(callId, name, args)
-        active.toolCalls += 1
-        return ok({ isError: !!result?.error, content: [{ type: 'text', text: JSON.stringify(result).slice(0, 60000) }] })
-      } catch {
-        return ok({ isError: true, content: [{ type: 'text', text: 'Connected tool request failed; no automatic retry.' }] })
+const PROGRESS_TEXT_LIMIT = 20_000
+const PROGRESS_INTERVAL_MS = 50
+
+async function streamedCompletion(body, onProgress) {
+  if (!body) throw new Error('Text inference did not return a stream')
+  let pending = '', text = ''
+  for await (const chunk of body.pipeThrough(new TextDecoderStream())) {
+    pending += chunk
+    let frame
+    while ((frame = /\r?\n\r?\n/.exec(pending))) {
+      const data = pending.slice(0, frame.index).split(/\r?\n/)
+        .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')
+      pending = pending.slice(frame.index + frame[0].length)
+      if (!data) continue
+      if (data === '[DONE]') return text
+      const payload = JSON.parse(data)
+      if (payload.error) throw new Error('Text inference stream failed')
+      const choice = payload.choices?.[0]
+      const next = choice?.delta?.content
+      if (typeof next === 'string' && next) {
+        text += next.slice(0, PROGRESS_TEXT_LIMIT - text.length)
+        onProgress(text.toWellFormed())
       }
+      if (choice?.finish_reason === 'stop' || choice?.finish_reason === 'length' ||
+          text.length === PROGRESS_TEXT_LIMIT) return text
     }
-    default:
-      return fail(-32601, 'Method not found')
+    if (pending.length > 512 * 1024) throw new Error('Text inference event is too large')
+  }
+  throw new Error('Text inference stream ended early')
+}
+
+export async function textOnlyCompletion(bridge, prompt, {system, onProgress} = {}) {
+  await bridge.setup()
+  const stream = typeof onProgress === 'function'
+  const messages = [...(system ? [{role:'system', content:system}] : []), {role:'user', content:prompt}]
+  const response = await fetch(bridge.baseURL + '/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+    body: JSON.stringify({ model: MODEL_ID, messages, stream }),
+    signal: AbortSignal.timeout(170000), redirect: 'error',
+  })
+  if (!response.ok) throw new Error('Text-only model inference failed')
+  const text = stream && response.headers.get('content-type')?.includes('text/event-stream')
+    ? await streamedCompletion(response.body, onProgress)
+    : (await response.json()).choices?.[0]?.message?.content
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
+  return text.slice(0, PROGRESS_TEXT_LIMIT).toWellFormed()
+}
+
+function turnProgress(onProgress) {
+  if (typeof onProgress !== 'function') return
+  let committed = '', draft = '', sent = ''
+  let timer, nextSend = 0
+  function send() {
+    clearTimeout(timer)
+    timer = undefined
+    const snapshot = (committed && draft ? committed + '\n\n' + draft : committed || draft).trimStart()
+    if (snapshot === sent) return
+    sent = snapshot
+    nextSend = Date.now() + PROGRESS_INTERVAL_MS
+    try { void Promise.resolve(onProgress(snapshot)).catch(() => {}) } catch {}
+  }
+  return {
+    append(text) {
+      const remaining = PROGRESS_TEXT_LIMIT - committed.length - draft.length - (committed ? 2 : 0)
+      if (!text || remaining <= 0) return
+      draft += text.slice(0, remaining)
+      if (timer !== undefined) return
+      const wait = nextSend - Date.now()
+      if (wait <= 0) send()
+      else timer = setTimeout(send, wait)
+    },
+    commit(texts) {
+      const writing = sent || draft
+      for (const text of texts) {
+        const remaining = PROGRESS_TEXT_LIMIT - committed.length - (committed ? 2 : 0)
+        if (remaining <= 0) break
+        committed += (committed ? '\n\n' : '') + text.slice(0, remaining)
+      }
+      draft = ''
+      if (writing) send()
+    },
+    discard() {
+      draft = ''
+      send()
+    },
+    reset() {
+      committed = ''
+      draft = ''
+      send()
+    },
+    dispose() { clearTimeout(timer) },
   }
 }
 
-// Wait for the DS-Bot turn that our requestId started; collect the Bot's text.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = []) {
+function ownsLiveChat(rt, botId, sessionId) {
+  return threadOf(rt.botOf(botId), sessionId) !== undefined
+    && rt.chatOwners?.get(sessionId) === botId && !rt.pastOwners?.has(sessionId)
+}
+
+export async function prepareNativeChat(rt, botId, sessionId) {
+  const bot = rt.botOf(botId)
+  if (!threadOfPart(bot, sessionId)) throw new Error('Mapped native chat no longer belongs to this Bot')
+  // Live background parts accept messages directly. Reopening them via
+  // switchPart would reselect the model for every part of the Bot.
+  if (!ownsLiveChat(rt, botId, sessionId)) await rt.switchPart(botId, sessionId)
+  if (!ownsLiveChat(rt, botId, sessionId)) throw new Error('Mapped native chat is no longer active')
+  const ref = await rt.applyModel(bot)
+  const route = splitRef(ref)
+  if (route) {
+    // A session's own composer can select a different model independently.
+    // Reapply the Bot's route only to the part receiving this message.
+    const effort = bot.appliedEffort
+    await rt.selectSessionModel(sessionId, {...route, ...(effort === undefined ? {} : {reasoningEffort:effort})})
+  }
+  if (rt.chatOf(botId) !== sessionId) await rt.applyPermission(bot, sessionId, undefined)
+}
+
+// Join progress to the native request echo and durable turn. The settled display
+// items remain the source of truth for the returned reply.
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId, signal, managedGroup = false } = {}) {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
+  if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
+  sessionId ??= rt.chatOf(botId)
   return new Promise((resolve, reject) => {
-    let sessionId
+    const progress = turnProgress(onProgress)
+    let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
+    let stopping
+    let revision = 0
+    let phase = 'preparing'
+    function emitPhase(next) {
+      if (next === phase || typeof onPhase !== 'function') return
+      phase = next
+      try { void Promise.resolve(onPhase(next)).catch(() => {}) } catch {}
+    }
     let settled = false
     const parts = []
-    let off = () => {}
+    const listeners = []
     const finish = (error, value) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try { off() } catch {}
-      error ? reject(error) : resolve(value)
+      progress?.dispose()
+      signal?.removeEventListener('abort', cancelNative)
+      for (const listener of listeners) {
+        try {
+          if (typeof listener === 'function') listener()
+          else listener?.dispose?.()
+        } catch {}
+      }
+      const complete = () => error ? reject(error) : resolve(value)
+      if (stopping) void stopping.then(complete, complete)
+      else complete()
     }
     const timer = setTimeout(() => finish(new Error('DS-Bot turn timed out')), timeoutMs)
-    const disposer = ctx.on('session/event', (session, event) => {
-      if (settled) return
-      if (event?.type === 'user/message' && event.data?.source?.rpcId === requestId) { sessionId = session.id; return }
-      if (!sessionId || session?.id !== sessionId) return
-      for (const item of rt.displayItems(session.id, [event]) ?? []) {
-        if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+    const emptyReply = () => Object.assign(new Error('DS-Bot turn ended without a reply'), {code:'agents/empty-reply'})
+    function cancelNative() {
+      if (settled || stopping || !boundSession || boundTurn === undefined) return
+      const session = boundSession, turn = boundTurn
+      stopping = Promise.resolve().then(() => rt.resolveAgent(sessionId)).then(agent => {
+        // Do not stop another turn even if it now owns the same Bot or Session.
+        if (settled || boundSession !== session || agent?.session !== session || boundTurn !== turn ||
+            rt.live?.get(sessionId)?.turn !== turn || !ownsLiveChat(rt, botId, sessionId)) return
+        const children = rt.stopSubagents?.(sessionId)
+        agent.cancel({kind:'user'})
+        return children
+      }).catch(() => {})
+    }
+    signal?.addEventListener('abort', cancelNative, {once:true})
+    function discardAttempt() {
+      attempt = undefined
+      progress?.discard()
+      emitPhase('preparing')
+    }
+    function resetTurn() {
+      boundSession = undefined
+      boundTurn = undefined
+      attempt = undefined
+      parts.length = 0
+      progress?.reset()
+      emitPhase('preparing')
+    }
+    try {
+      listeners.push(ctx.on('session/event', (session, event) => {
+        if (settled || session?.id !== sessionId || !event || (boundSession && session !== boundSession)) return
+        const turn = event.data?.turn
+        if (event.type === 'turn/start' && Number.isSafeInteger(turn)) {
+          if (session === observedSession && turn <= observedTurn) return
+          if (boundTurn !== undefined && turn !== boundTurn) resetTurn()
+          observedTurn = turn
+          observedSession = session
+          return
+        }
+        if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) {
+          boundSession = session
+          boundTurn = session === observedSession ? observedTurn : undefined
+          if (signal?.aborted) cancelNative()
+          return
+        }
+        if (!boundSession) {
+          if (event.type === 'turn/end' && session === observedSession && turn === observedTurn) {
+            observedTurn = undefined
+            observedSession = undefined
+          }
+          return
+        }
+        if (boundTurn !== undefined && turn !== undefined && turn !== boundTurn) return
+        if (attempt && attempt.step === event.data?.step && (event.type === 'assistant/attempt' || event.type === 'llm/retry-started')) {
+          discardAttempt()
+        }
+        const start = parts.length
+        for (const item of rt.displayItems(sessionId, [event]) ?? []) {
+          if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+        }
+        if (event.type === 'assistant/message') {
+          if (attempt?.step === event.data?.step) attempt = undefined
+          progress?.commit(parts.slice(start))
+        }
+        if (event.type === 'turn/end') {
+          if (signal?.aborted) { finish(signal.reason); return }
+          const reason = event.data?.reason
+          const disposed = reason?.kind === 'aborted' && reason.reason?.kind === 'disposed'
+          if (managedGroup && disposed) { finish(emptyReply()); return }
+          const reply = parts.join('\n\n').trim()
+          if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
+          else if (event.data?.error || (managedGroup && reason && reason.kind !== 'completed')) finish(new Error('DS-Bot turn failed'))
+          else finish(emptyReply())
+        }
+      }))
+      if (progress || typeof onPhase === 'function') {
+        listeners.push(ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+          if (settled || !boundSession || boundTurn === undefined || agent?.id !== sessionId || agent?.session !== boundSession
+              || !Number.isSafeInteger(frame?.revision)) return
+          if (frame.type === 'start') {
+            if (frame.turn !== boundTurn || typeof frame.attemptId !== 'string' || !frame.attemptId || !Number.isSafeInteger(frame.step)
+                || rt.state?.exchangeTurns?.[sessionId]?.includes(boundTurn)) return
+            if (lastAgent === agent && (frame.revision <= revision || frame.attemptId === attempt?.id)) return
+            if (attempt) discardAttempt()
+            lastAgent = agent
+            revision = frame.revision
+            attempt = { id: frame.attemptId, step: frame.step }
+            return
+          }
+          if (!attempt || lastAgent !== agent || frame.attemptId !== attempt.id || frame.revision <= revision) return
+          revision = frame.revision
+          if (frame.type === 'end') {
+            discardAttempt()
+          } else if (frame.type === 'chunk' && frame.chunk?.type === 'text-delta' && typeof frame.chunk.text === 'string') {
+            progress?.append(frame.chunk.text)
+            emitPhase('writing')
+          } else if (frame.type === 'chunk' && frame.chunk?.type === 'reasoning-delta') {
+            emitPhase('thinking')
+          }
+        }, { global: true }))
+        listeners.push(ctx.on('agent/disposed', ({ agent }) => {
+          if (managedGroup && boundSession && agent?.id === sessionId && agent.session === boundSession && !settled) {
+            finish(signal?.aborted ? signal.reason : emptyReply())
+          } else if (agent === lastAgent && !settled) {
+            resetTurn()
+            observedTurn = undefined
+            observedSession = undefined
+            lastAgent = undefined
+          }
+        }, { global: true }))
       }
-      if (event.type === 'turn/end') {
-        const reply = parts.join('\n\n').trim()
-        if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
-        else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
-      }
-    })
-    off = typeof disposer === 'function' ? disposer : () => disposer?.dispose?.()
-    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }, ...files], requestId }))
-      .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
+      Promise.resolve(rt.sendUser({ sessionId, content: [{ type: 'text', text }, ...files], requestId }))
+        .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error('DS-Bot rejected the message'))
+    }
   })
 }
 
-export function createBridge(rt, ctx, { env = process.env, log = console.error, port, requester = call } = {}) {
+export function createBridge(rt, { env = process.env, port } = {}) {
   const state = {
     token: randomBytes(24).toString('hex'),
-    active: null,
-    tools: [],
-    modelCalls: 0,
     // The account's own model settings (B4 @openteamily/web model-api feature,
     // in-process, sealed at rest) win over the manager-mounted startup file.
     startupModel: () => { try { return userModelOverride() || loadModelApi(env) || null } catch { return null } },
@@ -241,9 +416,8 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
   const listenPort = port ?? (Number(env.OPENTEAMILY_BRIDGE_PORT) || DEFAULT_PORT)
   const baseURL = `http://127.0.0.1:${listenPort}/v1`
   let ready = null
+  let hasImageInput
   let botId = null
-  let skillNames = new Set()
-  let toolsAttached = false
   const chatsPath = join(env.DSH_HOME || '/data', 'openteamily-chats.json')
   let chats
   const loadChats = () => {
@@ -268,160 +442,94 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     renameSync(chatsPath + '.tmp', chatsPath)
   }
 
+  function effectiveInput() {
+    return modelInput(state.startupModel())
+  }
+
+  async function saveInput(input) {
+    await rt.saveProviderModels({provider:PROVIDER,models:[providerModel(input)]})
+    hasImageInput = input.includes('image')
+  }
+
   async function setup() {
+    const input = effectiveInput()
     try {
       await rt.addProvider({ provider: PROVIDER, custom: true, api: 'openai-completions', name: 'OpenTeamily', baseURL,
-        models: [{ id: MODEL_ID, name: 'OpenTeamily model', contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
-        key: state.token })
+        models:[providerModel(input)],key:state.token })
+      hasImageInput = input.includes('image')
     } catch (error) {
       if (!/already set up/.test(String(error?.message))) throw error
-      await rt.setProviderKey(PROVIDER, state.token)
+      await rt.setProviderKey(PROVIDER,state.token)
+      await saveInput(input)
     }
     await rt.bootstrap()
     botId = rt.state.mainBotIds.find(id => rt.botOf(id))
     if (!botId) throw new Error('DS-Bot has no Main Bot')
+    // Remove the generated capability for the retired task MCP endpoint. The
+    // native connector plugin manages its own separate capability (ot-apps).
+    const retiredTools = rt.state.capabilities?.items?.['ot-tools']
+    if (retiredTools?.kind === 'mcp' && retiredTools.transport === 'streamable-http'
+      && /^http:\/\/127\.0\.0\.1:\d+\/mcp\?catalog=[a-f0-9]{16}$/.test(retiredTools.url)) {
+      await rt.capabilityDelete('ot-tools', { ui: true })
+    }
     const bot = rt.botOf(botId)
     if (!String(bot.model || '').endsWith('/' + MODEL_ID) && bot.model !== MODEL_ID) await rt.updateBot(botId, { model: MODEL_ID })
     return botId
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
 
-  const attachedNow = () => new Set(rt.botOf(botId)?.capabilities ?? [])
-  async function syncSkills(material) {
-    const wanted = new Map(material.map(item => [skillCapabilityName(item.id), item]))
-    // Survives restarts: what is attached lives in DS-Bot's own team state.
-    skillNames = new Set([...attachedNow()].filter(name => name.startsWith('ot-skill-')))
-    for (const [name, item] of wanted) {
-      await rt.capabilitySave({ name, kind: 'skill', description: `${item.name} (OpenTeamily skill ${item.id} v${item.version}, instruction-only)`.slice(0, 200), content: item.content }, { ui: true })
-      if (!skillNames.has(name)) await rt.changeCapabilityAttachment('attach', { name }, botId)
-    }
-    for (const name of skillNames) {
-      if (!wanted.has(name)) await rt.changeCapabilityAttachment('detach', { name }, botId).catch(() => {})
-    }
-    skillNames = new Set(wanted.keys())
-    return [...wanted.keys()]
+  let modelUpdates = Promise.resolve()
+  function prepareModel() {
+    const update = modelUpdates.then(async () => {
+      await ensureSetup()
+      const input = effectiveInput()
+      if (input.includes('image') !== hasImageInput) await saveInput(input)
+    })
+    modelUpdates = update.catch(() => {})
+    return update
   }
 
-  async function syncTools(connected) {
-    toolsAttached = attachedNow().has(TOOLS_CAPABILITY)
-    if (connected) {
-      const catalog = createHash('sha256').update(JSON.stringify(state.tools)).digest('hex').slice(0, 16)
-      await rt.capabilitySave({ name: TOOLS_CAPABILITY, kind: 'mcp', description: 'OpenTeamily connected app tools (owner approves every call)', transport: 'streamable-http', url: `http://127.0.0.1:${listenPort}/mcp?catalog=${catalog}` }, { ui: true })
-      if (!toolsAttached) await rt.changeCapabilityAttachment('attach', { name: TOOLS_CAPABILITY }, botId)
-      toolsAttached = true
-    } else if (!connected && toolsAttached) {
-      await rt.changeCapabilityAttachment('detach', { name: TOOLS_CAPABILITY }, botId).catch(() => {})
-      toolsAttached = false
+  function requireModel(botId) {
+    const model = rt.botOf(botId)?.model
+    if ((!model || model === MODEL_ID || model === PROVIDER + '/' + MODEL_ID) && !state.startupModel()) {
+      throw Object.assign(new Error('Configure a model API for this OpenTeamily runtime.'), {
+        code: 'agents/model-unconfigured', status: 503,
+      })
     }
   }
 
-  // One DS-Bot turn at a time per runtime: management tasks and @openteamily/web
-  // plugin chat both switch the Main Bot's active part, so they share this lock.
-  let turnQueue = Promise.resolve()
-  function exclusive(fn) {
-    const run = turnQueue.then(() => fn())
-    turnQueue = run.catch(() => {})
+  // Switching parts can only affect turns for the same Bot. Operations that
+  // move a thread between Bots still wait for the whole roster to be idle.
+  const botTurns = new Map()
+  let rosterWork = Promise.resolve()
+  function exclusive(fn, botId) {
+    const pending = botId ? [botTurns.get(botId)] : [...botTurns.values()]
+    const run = Promise.all([rosterWork, ...pending]).then(() => fn())
+    const wait = run.catch(() => {})
+    if (botId) {
+      botTurns.set(botId, wait)
+      void wait.then(() => {
+        if (botTurns.get(botId) === wait) botTurns.delete(botId)
+      })
+    } else {
+      rosterWork = wait
+    }
     return run
   }
-  const infer = (origin, token, payload) => exclusive(() => inferUnlocked(origin, token, payload))
-
-  async function inferUnlocked(origin, token, payload) {
-    const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, { skill_format: 'openteamily.prompt-skill.v2' })
-    const active = { taskId: payload.id, modelApi: access.model_api, modelCalls: 0, toolCalls: 0, bridge: null, tools: [] }
-    let stage = 'DS-Bot setup'
-    // Active before setup: picking the Bot's model may release DS-Bot's greeting turn.
-    state.active = active
-    try {
-      await ensureSetup()
-      await selectConversation(access.conversation_id || (rt.createSession ? 'task:' + payload.id : null))
-      stage = 'skill verification/loading'
-      const material = access.skills || []
-      loadSkillMaterial(material, '')
-      const skills = await syncSkills(material)
-      if (material.length) {
-        const ack = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/skills/ack`, { digests: material.map(item => item.digest) })
-        if (ack.acknowledged !== true) throw new Error('Skill loading was not acknowledged')
-      }
-      stage = 'connected tool discovery'
-      if (access.connected_tools) {
-        active.bridge = toolBridge(origin, token, payload, requester)
-        active.tools = ((await active.bridge.discover()).tools || []).filter(tool => typeof tool?.function?.name === 'string')
-        state.tools = active.tools
-      }
-      await syncTools(!!access.connected_tools)
-      stage = 'DS-Bot turn'
-      const requestId = 'ot:' + payload.id
-      const beat = setInterval(() => { requester(origin, token, 'POST', '/v1/agent/heartbeat', {}).catch(() => {}) }, 10000)
-      let turn
-      const deadlineMs = payload.deadline ? payload.deadline * 1000 - Date.now() - 2000 : 170000
-      try { turn = await runTurn(rt, ctx, botId, payload.prompt, requestId, Math.max(5000, Math.min(deadlineMs, 600000))) }
-      catch (error) { await rt.stopChat?.(botId).catch(() => {}); throw error }
-      finally { clearInterval(beat) }
-      if (!active.modelCalls) throw new Error('DS-Bot turn did not use the OpenTeamily model')
-      // Read through DSH's native history API, not grep over its binary store.
-      let historyVerified = false
-      if (rt.eventsBackwards && rt.resolveAgent && ctx.sessions?.flush) {
-        const agent = await rt.resolveAgent(turn.sessionId)
-        await ctx.sessions.flush(agent.session)
-        for await (const event of rt.eventsBackwards(turn.sessionId, AbortSignal.timeout(5000), 3)) {
-          if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) { historyVerified = true; break }
-        }
-        if (!historyVerified) throw new Error('DS-Bot persisted turn verification failed')
-      }
-      return { text: turn.text.slice(0, RESULT_TEXT_LIMIT), model: active.modelApi?.model, source: active.modelApi?.source, engine: 'ds-bot',
-        ds_bot: { bot_id: botId, session_id: turn.sessionId, request_id: requestId, turn_id: turn.turnId, model_calls: active.modelCalls,
-          tool_calls: active.toolCalls, history_verified: historyVerified, skills, tools: active.tools.length } }
-    } catch (error) {
-      log('ds-bot-bridge: ' + stage + ' failed: ' + redact(error?.message || 'error'))
-      throw Object.assign(new Error(stage), { stage })
-    } finally {
-      if (state.active === active) state.active = null
-      if (active.modelApi) delete active.modelApi.api_key
-    }
+  return {
+    state, setup: ensureSetup, prepareModel, requireModel, exclusive, selectConversation,
+    legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId },
   }
-
-  async function cycle(config, { once = true } = {}) {
-    const { origin, token, hostname } = config
-    await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: SKILL_FORMATS })
-    await requester(origin, token, 'POST', '/v1/agent/heartbeat', {})
-    const listed = await requester(origin, token, 'GET', '/v1/agent/tasks')
-    const processed = []
-    for (const task of listed.items || []) {
-      let claimed
-      try { claimed = await requester(origin, token, 'POST', `/v1/agent/tasks/${task.id}/claim`, {}) }
-      catch (error) { if ([404, 409].includes(error.status)) continue; throw error }
-      const payload = claimed.task || task
-      let status = 'failed'
-      let result = { error: 'unsupported task kind' }
-      try {
-        if (payload.kind === 'echo') { status = 'succeeded'; result = { echo: payload.prompt } }
-        else if (payload.kind === 'infer') { result = await infer(origin, token, payload); status = 'succeeded' }
-      } catch (error) {
-        status = 'failed'
-        result = { error: (error?.stage || 'model access or runtime compatibility') + ' failed; check configuration and upgrade runtime if required; no automatic retry' }
-      }
-      try { await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/result`, { status, result }) }
-      catch (error) { if ([404, 409].includes(error.status)) continue; throw error }
-      processed.push(payload.id)
-    }
-    return processed
-  }
-
-  return { state, setup: ensureSetup, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId } }
 }
 
-// Plugin entry: start the loopback server and the management task loop.
+// Plugin entry: start the model proxy on the loopback interface.
 export function startBridge(rt, ctx, options = {}) {
   const log = options.log ?? console.error
-  const env = options.env ?? process.env
-  const bridge = createBridge(rt, ctx, { ...options, env, log })
+  const bridge = createBridge(rt, options)
   const server = createBridgeServer(bridge.state, { log })
   server.on('error', error => log('ds-bot-bridge: loopback server error: ' + redact(error?.message || 'error')))
   server.listen(bridge.port, '127.0.0.1')
-  let stopped = false
-  const loop = agentMain(env, log, { cycle: config => (stopped ? Promise.resolve([]) : bridge.cycle(config)) })
-    .then(code => { if (code) log('ds-bot-bridge: management task loop stopped') })
-  const dispose = () => { stopped = true; server.close() }
+  const dispose = () => server.close()
   ctx.on?.('dispose', dispose)
-  return { bridge, server, loop, dispose }
+  return { bridge, server, dispose }
 }

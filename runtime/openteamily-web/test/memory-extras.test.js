@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { attachRuntime, detachRuntime } from '../src/host.js'
-import { boot, key, WS } from './helpers.js'
+import { bootMemory as boot, key, WS } from './helpers.js'
 
 const base = (rest = '') => `/v1/workspaces/${WS}/memory${rest}`
 
@@ -22,7 +22,60 @@ test('memory actions run in DS-Bot: create linked to a page, filter, update, con
   assert.equal(done.body.action.status, 'done')
   assert.equal((await call('POST', base(`/actions/${action.id}`), { revision: 1, changes: { status: 'open' } })).status, 409)
   assert.equal((await call('GET', base('/actions?status=open'))).body.items.length, 0)
+  const edits = await Promise.all(['下周一复查','下周五复查'].map(notes =>
+    call('POST',base(`/actions/${action.id}`),{revision:2,changes:{notes}})))
+  assert.deepEqual(edits.map(result => result.status).sort(),[200,409])
+  const winner = edits.find(result => result.status === 200).body.action
+  const {automation_followups, ...canonical} = winner
+  assert.deepEqual(automation_followups, [])
+  assert.deepEqual(edits.find(result => result.status === 409).body.error.current,canonical)
+  assert.deepEqual((await call('GET',base(`/actions/${action.id}`))).body.action,winner)
   assert.equal((await call('POST', base(`/actions/${action.id}/remove`), {})).status, 200)
+})
+
+test('a committed action create remains replayable after its linked page is removed', async () => {
+  const team = 'e'.repeat(32)
+  const bot = await boot(undefined,{teams:[team]})
+  const call = (...args) => bot.call('memory', ...args)
+  const source = (await call('POST',base(),{title:'发布原始记忆',body:'确认发布联系人'},key())).body.page
+  const payload = {title:'确认发布联系人',notes:'周五前确认',memory_page_id:source.id}
+  const clientKey = key()
+  const created = await call('POST',base('/actions'),payload,clientKey)
+  assert.equal(created.status,201)
+  assert.equal(created.body.action.memory_page_id,source.id)
+  assert.equal((await call('POST',base(`/${source.id}/remove`),{})).status,200)
+
+  const replay = await call('POST',base('/actions'),payload,clientKey)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body.action.id,created.body.action.id)
+  assert.equal(replay.body.action.memory_page_id,null)
+  assert.equal((await call('POST',base('/actions'),{...payload,title:'不同的行动'},clientKey)).status,409)
+  assert.equal((await call('POST',base('/actions'),payload,key())).status,400)
+  assert.equal((await call('POST',`/v1/workspaces/${team}/memory/actions`,payload,clientKey)).status,400)
+  assert.equal((await call('GET',base('/actions'))).body.items.length,1)
+})
+
+test('due-ordered action paging uses an immutable boundary and keeps legacy cursors', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('memory', ...args)
+  const add = async (title, due_at) => (await call('POST', base('/actions'), {title, due_at}, key())).body.action
+  const later = await add('later', 1800000000)
+  const earliest = [await add('first tied', 1700000000), await add('second tied', 1700000000)]
+    .sort((a,b) => a.id.localeCompare(b.id))
+  const unscheduled = await add('without a due date', null)
+  const finished = await add('finished', 1600000000)
+  await call('POST', base('/actions/' + finished.id), {revision:1, changes:{status:'done'}})
+  const listing = base('/actions?order=due&limit=1')
+  const first = (await call('GET', listing)).body
+  assert.equal(first.items[0].id, earliest[0].id)
+  await call('POST', base('/actions/' + earliest[0].id + '/remove'), {})
+  const after = (await call('GET', base('/actions?order=due&limit=5&after=' + encodeURIComponent(first.cursor)))).body
+  assert.deepEqual(after.items.map(row => row.id), [earliest[1].id, later.id, unscheduled.id, finished.id])
+  assert.equal(after.cursor, null)
+  const legacy = (await call('GET', base('/actions?limit=1'))).body
+  assert.match(legacy.cursor, /^[0-9a-f]{32}$/)
+  assert.equal((await call('GET', listing + '&after=bogus')).status, 400)
+  assert.equal((await call('GET', listing + '&cursor=' + later.id)).status, 400)
 })
 
 test('links and the graph (topics, [[mentions]], manual links) are computed in DS-Bot', async () => {
@@ -45,7 +98,8 @@ test('links and the graph (topics, [[mentions]], manual links) are computed in D
 })
 
 test('profile and preferences belong to this DS-Bot owner and feed memory/personal', async () => {
-  const bot = await boot()
+  const otherWorkspace = 'e'.repeat(32)
+  const bot = await boot(undefined, {teams:[otherWorkspace]})
   const call = (...args) => bot.call('memory', ...args)
   assert.equal((await call('GET', base('/profile'))).body.profile.revision, 0)
   const saved = await call('POST', base('/profile'), { revision: 0, professional: '产品经理', work_style: '早起', communication: '简洁' })
@@ -55,7 +109,6 @@ test('profile and preferences belong to this DS-Bot owner and feed memory/person
   assert.equal(pref.status, 201)
   assert.equal((await call('POST', base('/preferences'), { text: '回复用中文 ' }, key())).status, 200, 'same text is not duplicated')
   assert.equal((await call('GET', base('/preferences'))).body.items.length, 1)
-  const otherWorkspace = 'e'.repeat(32)
   const outside = `/v1/workspaces/${otherWorkspace}/memory`
   await call('POST', outside + '/profile', { revision: 0, professional: '另一工作区', work_style: '', communication: '' })
   await call('POST', outside + '/preferences', { text: '回复用德语' }, key())
@@ -76,7 +129,7 @@ test('profile and preferences belong to this DS-Bot owner and feed memory/person
 })
 
 test('profile organization uses only this workspace and stays a draft during a concurrent edit', async () => {
-  const bot = await boot()
+  const bot = await boot(undefined, {teams:['e'.repeat(32)]})
   const call = (...args) => bot.call('memory', ...args)
   const profile = {revision:0,professional:'我做产品设计。',work_style:'',communication:'写短段落。'}
   const dream = (body = profile) => call('POST', base('/profile/dream'), body)
@@ -132,6 +185,7 @@ test('workspace capture waits for opt-in, proposes asynchronously and saves one 
   const memory = memoryFeature({
     dataDir:dir, featureDir:()=>dir,
     async call(endpoint,payload) {
+      if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(endpoint,'agents/captureSource')
       assert.deepEqual(payload,source)
       return {title:'日常偏好',text:'以后给我的周报用三条要点。'}
@@ -160,7 +214,7 @@ test('workspace capture waits for opt-in, proposes asynchronously and saves one 
     assert.equal(list.items.length,1)
     assert.equal(calls,1)
     assert.equal(list.items[0].source.message_id,source.message_id)
-    assert.equal((await route('GET',`/v1/workspaces/${'e'.repeat(32)}/memory/candidates`)).body.items.length,0)
+    assert.equal((await route('GET',`/v1/workspaces/${'e'.repeat(32)}/memory/candidates`)).status,404)
     const decision = {action:'save',title:'我的周报格式',body:'每份周报包含三条要点。'}
     const saved = await route('POST',path+'/'+source.message_id,decision)
     assert.equal(saved.status,201)
@@ -187,6 +241,7 @@ test('selected history combines explicit context and remains separate from autom
   let calls = 0
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
+      if (name === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(name,'agents/captureSource')
       assert.equal(payload.selected,true)
       assert.equal(payload.workspace_id,WS)
@@ -222,7 +277,7 @@ test('selected history combines explicit context and remains separate from autom
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
 
-test('group drafts recheck the full batch on save and hide when group access is lost', async () => {
+test('group draft review and save both verify the exact source batch', async () => {
   const {default: memoryFeature} = await import('../features/memory/index.js')
   const {mkdtempSync, rmSync} = await import('node:fs')
   const {tmpdir} = await import('node:os')
@@ -234,13 +289,14 @@ test('group drafts recheck the full batch on save and hide when group access is 
     {id:'otm_context',revision:1,title:'发布群',author:'甲',text:'我们在讨论荔枝项目。'},
     {id:'otm_decision',revision:1,title:'发布群',author:'乙',text:'确定周五发布。'},
   ]
-  let accessible = true
+  let sourceError
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
+      if (name === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(name,'messenger/captureSources')
       assert.equal(payload.workspace_id,WS)
       assert.equal(payload.conversation_id,scope.conversation_id)
-      if (!accessible) throw new Error('Group inaccessible')
+      if (sourceError) throw sourceError
       return {items:input.filter(item => payload.message_ids.includes(item.id))}
     },
     currentRuntime:()=>({async backgroundTextOnly(prompt) {
@@ -266,17 +322,34 @@ test('group drafts recheck the full batch on save and hide when group access is 
     assert.equal(draft.source.kind,'group')
     assert.equal(draft.source.message_id,input[1].id)
     assert.equal(draft.source.conversation_id,scope.conversation_id)
-    accessible = false
-    assert.equal((await v1('GET')).body.items.length,0)
     const save = () => v1('POST','/'+draft.id,{action:'save',title:draft.title,body:draft.body})
-    assert.equal((await save()).status,409)
-    accessible = true
+    sourceError = new Error('Source service offline')
+    const pending = (await v1('GET')).body
+    assert.deepEqual(pending.items,[])
+    assert.equal(pending.source_check_pending,true)
+    assert.equal(pending.invalidated,undefined)
+    assert.equal((await save()).body.error.code,'conflict')
+    sourceError = Object.assign(new Error('Group inaccessible'),{status:404})
+    const inaccessible = (await v1('GET')).body
+    assert.deepEqual(inaccessible.items,[])
+    assert.deepEqual(inaccessible.invalidated,[draft.id])
+    assert.doesNotMatch(JSON.stringify(inaccessible),/发布群|荔枝|周五|otm_decision/)
+    assert.equal((await save()).body.error.code,'source_changed')
+    sourceError = null
     input[0].revision = 2
-    assert.equal((await save()).status,409, 'a supporting source changed')
+    const changed = (await v1('GET')).body
+    assert.deepEqual(changed.items,[])
+    assert.deepEqual(changed.invalidated,[draft.id])
+    assert.equal((await save()).body.error.code,'source_changed', 'a supporting source changed')
+    assert.equal(memory.store.get('SELECT state FROM memory_capture_items WHERE id=?',draft.id).state,'ready')
+    assert.equal(memory.store.get('SELECT COUNT(*) AS count FROM memory_pages').count,0)
     input[0].revision = 1
     const done = await save()
     assert.equal(done.status,201)
     assert.equal(done.body.page.source.message_id,input[1].id)
+    sourceError = Object.assign(new Error('Group inaccessible'),{status:404})
+    assert.deepEqual((await v1('GET')).body.items,[])
+    assert.equal((await memory.endpoints.v1({method:'GET',path:base('/'+done.body.page.id)})).body.page.id,done.body.page.id)
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
 
@@ -297,6 +370,7 @@ test('automatic group capture has its own cursor and can be paused during extrac
   const release = new Promise(resolve => { finish = resolve })
   const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
     async call(endpoint,payload) {
+      if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
       assert.equal(endpoint,'messenger/captureSources')
       assert.equal(payload.conversation_id,scope.conversation_id)
       if (payload.after !== undefined) {
@@ -333,4 +407,43 @@ test('automatic group capture has its own cursor and can be paused during extrac
     assert.equal(paused.queued,0)
     assert.deepEqual(paused.items,[])
   } finally { finish(); memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
+})
+
+test('cross-workspace recall searches approved pages and actions using live membership', async () => {
+  const {default: memoryFeature} = await import('../features/memory/index.js')
+  const {mkdtempSync, rmSync} = await import('node:fs')
+  const {tmpdir} = await import('node:os')
+  const {join} = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(),'memory-authorized-recall-'))
+  const team = 'b'.repeat(32), revoked = 'f'.repeat(32)
+  let memberships = [{id:team,name:'Project team'},{id:revoked,name:'Revoked team'}]
+  const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,async call(endpoint) {
+    if (endpoint === 'agents/personal-binding') return {workspace_id:WS}
+    assert.equal(endpoint,'teams/activeWorkspaces')
+    if (!memberships) throw new Error('Membership service unavailable')
+    return memberships
+  }})
+  const create = (workspaceId, path, body, key) => memory.endpoints.v1({
+    method:'POST',path:`/v1/workspaces/${workspaceId}/memory${path}`,body,idempotency_key:key,
+  })
+  const params = {workspace_id:WS,query:'Launch action item'}
+  try {
+    const personal = await create(WS,'',{title:'Launch overview',body:'Personal notes'},'cross-recall-personal')
+    const accessible = await create(team,'/actions',{title:'Launch handoff',notes:'Confirm the scope.',due_at:1803945600},'cross-recall-action')
+    await create(revoked,'',{title:'Launch action item',body:'Unshared memo'},'cross-recall-revoked')
+    memberships = [{id:team,name:'Project team'}]
+    assert.equal(personal.status,201)
+    assert.equal(accessible.status,201)
+    await assert.rejects(memory.endpoints.recallAcrossWorkspaces(params))
+    const recall = () => memory.endpoints.recallAcrossWorkspaces(params,{internal:true})
+    const matched = (await recall()).map(({page})=>page)
+    assert.deepEqual(new Set(matched.map(page=>page.workspace_id)),new Set([WS,team]))
+    const action = matched.find(page=>page.kind==='action')
+    assert.equal(action.id,accessible.body.action.id)
+    assert.match(action.facts,/open.*2027-03-02/)
+    memberships = []
+    assert.deepEqual((await recall()).map(({page})=>page.id),[personal.body.page.id])
+    memberships = null
+    assert.deepEqual((await recall()).map(({page})=>page.id),[personal.body.page.id])
+  } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
