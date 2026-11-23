@@ -392,6 +392,46 @@ test('native startup overlaps authentication and the owned list, then requests t
   }
 });
 
+test('a native recurring automation switches only after its revision-checked save succeeds', async t => {
+  const {doc, elements} = fakeDocument();
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const {promise: saving, resolve: finishSave} = Promise.withResolvers();
+  const base = '/v1/workspaces/' + projectedWorkspace + '/automations';
+  let recurring = {id: projectedAutomation, workspace_id: projectedWorkspace, title: '工作日报',
+    enabled: false, revision: 3, schedule: {kind: 'daily', time: '09:00'}, schedule_status: {state: 'paused'}};
+  const linked = {...recurring, id: 'e'.repeat(32), title: '关联会议', source_meeting: {meeting_id: 'f'.repeat(32)}};
+  const requests = [];
+  const fetcher = (path, options = {}) => {
+    if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+    if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: 'alice',
+      automations: {items: [recurring, linked]}});
+    if (path === '/v1/workspaces?limit=100') return respond({items: [projectedPersonal]});
+    if (path === base + '?category=mine') return respond({items: [recurring, linked]});
+    if (path === base + '/' + projectedAutomation && options.method === 'POST') {
+      requests.push(JSON.parse(options.body));
+      return saving;
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher});
+  const list = elements.get('automation-list');
+  const switchFor = row => row.children.find(child => child.getAttribute('role') === 'switch');
+  const control = switchFor(list.children[0]);
+  assert.equal(control.getAttribute('aria-checked'), 'false');
+  assert.equal(switchFor(list.children[1]), undefined);
+  const toggled = control.handlers.click[0]();
+  assert.equal(control.disabled, true);
+  assert.equal(control.getAttribute('aria-checked'), 'false');
+  assert.deepEqual(requests, [{revision: 3, changes: {enabled: true}}]);
+  recurring = {...recurring, enabled: true, revision: 4, schedule_status: {state: 'scheduled'}};
+  finishSave(respond({automation: recurring}));
+  await toggled;
+  assert.equal(switchFor(list.children[0]).getAttribute('aria-checked'), 'true');
+});
+
 test('native startup falls back on a different viewer or an out-of-workspace automation row', async t => {
   for (const viewer of ['someone-else', 'alice']) await t.test(viewer, async scenario => {
     const {doc, elements} = fakeDocument();

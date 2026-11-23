@@ -513,13 +513,14 @@ function monogram(name) {
   return {label, tone: (tone % 6) + 1};
 }
 
-function renderList(items, list, empty, onOpen) {
+function renderList(items, list, empty, onOpen, onToggle, togglePending) {
   list.textContent = '';
   list.classList.remove('template-catalog');
   setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
+    row.className = 'automation-entry';
     const mark = monogram(item.title);
     const avatar = document.createElement('span');
     avatar.className = 'avatar';
@@ -565,16 +566,31 @@ function renderList(items, list, empty, onOpen) {
         copy.appendChild(next);
       }
     }
-    const state = document.createElement('span');
-    state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
+    const canToggle = onToggle && !consumed && !item.source_meeting && !item.source_memory_action
+      && RECURRING_KINDS.has(item.schedule?.kind) && /^[0-9a-f]{32}$/.test(item.id)
+      && ['paused', 'scheduled', 'due'].includes(item.schedule_status?.state)
+      && Number.isSafeInteger(item.revision) && item.revision > 0;
+    const state = document.createElement(canToggle ? 'button' : 'span');
+    state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
     state.id = 'automation-state-' + item.id;
     state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
-    description.push(state.id);
+    if (canToggle) {
+      state.type = 'button';
+      state.dataset.automationToggle = item.id;
+      state.setAttribute('role', 'switch');
+      state.setAttribute('aria-label', item.title + '自动运行');
+      state.setAttribute('aria-checked', String(Boolean(item.enabled)));
+      state.disabled = togglePending(item);
+      setBusy(state, state.disabled);
+      state.addEventListener('click', () => onToggle(item, state));
+    } else {
+      description.push(state.id);
+    }
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
     open.appendChild(copy);
-    open.appendChild(state);
     row.appendChild(open);
+    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -682,6 +698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const runSubmissions = new Map();
   const watchedRuns = new Map();
   const cancellingRuns = new Set();
+  const pendingScheduleSwitches = new Set();
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
@@ -778,6 +795,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const viewerId = () => currentUser?.id || currentUser?.username;
+
+  function scheduleSwitchKey(workspace, viewer, automation) {
+    return JSON.stringify([workspace, viewer, automation]);
+  }
+
+  async function toggleSchedule(item, control, workspace, viewer) {
+    const key = scheduleSwitchKey(workspace, viewer, item.id);
+    const isCurrent = () => workspaceId() === workspace && viewerId() === viewer
+      && !mainPanel.hidden && !listPanel.hidden && category === 'mine';
+    if (item.workspace_id !== workspace || !isCurrent() || pendingScheduleSwitches.has(key)) return;
+    pendingScheduleSwitches.add(key);
+    control.disabled = true;
+    setBusy(control, true);
+    show('', '');
+    const result = await request('POST', `/v1/workspaces/${workspace}/automations/${item.id}`,
+      {revision: item.revision, changes: {enabled: !item.enabled}})
+      .catch(() => ({status: 0, body: {}}));
+    pendingScheduleSwitches.delete(key);
+    if (!isCurrent()) return;
+    const visibleControl = control.isConnected ? control
+      : document.querySelector(`#automation-list [data-automation-toggle="${item.id}"]`);
+    if (visibleControl) {
+      visibleControl.disabled = false;
+      setBusy(visibleControl, false);
+    }
+    const saved = result.body?.automation;
+    if (result.status === 200 && saved?.id === item.id && saved.workspace_id === workspace) {
+      Object.assign(item, saved);
+      if (visibleControl) {
+        visibleControl.setAttribute('aria-checked', String(Boolean(item.enabled)));
+        visibleControl.className = 'status-pill automation-switch' + (item.enabled ? ' is-on' : '');
+        visibleControl.textContent = item.enabled ? '已启用' : '未启用';
+      }
+      await loadList({quiet: true});
+    } else if (result.status === 409) {
+      await loadList({quiet: true});
+      if (isCurrent()) show('error', '这条自动化已更新。请确认最新状态后再切换。');
+    } else {
+      show('error', messageFor(result.body?.error, '无法确认自动运行状态，请重新读取列表。'));
+      await loadList({quiet: true});
+    }
+  }
 
   function runScope() {
     const workspace = workspaceId(), automation = current?.id, viewer = viewerId();
@@ -1999,6 +2058,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     const searchText = search.value;
+    const viewer = viewerId();
     const refreshPending = () => {
       listTimer = globalThis.setTimeout(() => {
         if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
@@ -2007,13 +2067,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const renderItems = items => {
       const fingerprint = JSON.stringify(items);
       if (!quiet || listFingerprint !== fingerprint) {
-        const focused = document.activeElement?.dataset?.automationId;
+        const active = document.activeElement?.dataset;
+        const focused = active?.automationToggle || active?.automationId;
         listFingerprint = fingerprint;
         renderList(items, list, empty, (item, opener) => {
           openEditor(item, null, opener);
           if (native && /^[0-9a-f]{32}$/.test(item.id) && item.workspace_id === id) replaceAutomationLink(item);
-        });
-        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
+        }, native && viewer ? (item, control) => toggleSchedule(item, control, id, viewer) : null,
+        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)));
+        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) {
+          const replacement = active?.automationToggle && list.querySelector?.(`[data-automation-toggle="${focused}"]`);
+          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`))?.focus({preventScroll: true});
+        }
       }
       if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
     };
