@@ -601,6 +601,51 @@ async function mountSettingsPage({secrets} = {}) {
   };
 }
 
+test('notification settings load native values, save only the changed switch and restore it on failure', async () => {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const calls = [];
+  const stored = {mentions: true, task_completion: false, artifacts: true};
+  let fail = false;
+  const fetcher = async (path, options) => {
+    if (path !== '/v1/notification-prefs') return api.fetcher(path, options);
+    calls.push(options.method);
+    if (options.method === 'PUT') {
+      if (fail) throw new Error('network unavailable');
+      const {changes} = JSON.parse(options.body);
+      assert.deepEqual(changes, {mentions: false});
+      Object.assign(stored, changes);
+    }
+    return settingsJson(200, {prefs: {...stored}});
+  };
+  const restore = stubWindowListeners();
+  stubFormData(doc.getElementById('settings-form'));
+  try {
+    await mount(doc, {fetcher});
+    const mention = doc.getElementById('notify-mentions');
+    const task = doc.getElementById('notify-task-completion');
+    const work = doc.getElementById('notify-artifacts');
+    assert.deepEqual([mention.checked, task.checked, work.checked], [true, false, true]);
+    assert.deepEqual([mention.disabled, task.disabled, work.disabled], [false, false, false]);
+    mention.checked = false;
+    doc.fire('change', {target: mention});
+    await settleSettings();
+    assert.equal(mention.checked, false);
+    assert.match(doc.getElementById('notification-prefs-state').textContent, /隐藏/);
+    fail = true;
+    task.checked = true;
+    doc.fire('change', {target: task});
+    await settleSettings();
+    assert.equal(task.checked, false);
+    assert.equal(task.disabled, false);
+    assert.match(doc.getElementById('notification-prefs-state').textContent, /未能保存/);
+    assert.deepEqual(calls, ['GET', 'PUT', 'PUT']);
+  } finally {
+    globalThis.FormData = REAL_FORM_DATA;
+    restore();
+  }
+});
+
 async function checkMediaModelForm(type, provider, model) {
   const {doc} = settingsDocument();
   const api = makeSettingsApi({});

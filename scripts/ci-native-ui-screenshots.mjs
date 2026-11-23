@@ -50,6 +50,10 @@ async function openNative(page, path, instanceId, selector) {
   assert.equal(response.status(),200,path);
   assert.equal(await page.locator('meta[name="openteamily-instance"]').getAttribute('content'),instanceId,path);
   await page.locator(selector).waitFor({state:'visible'});
+  const stylesheet = await page.locator('link[rel="stylesheet"][href$="/shell/app.css"]').getAttribute('href');
+  assert.match(stylesheet, /^\/chat\/assets\/[a-f0-9]{32}\/shell\/app\.css$/, path);
+  assert.equal(await page.evaluate(asset => Array.from(document.styleSheets).some(sheet =>
+    sheet.href === new URL(asset,location.href).href),stylesheet),true,path);
 }
 
 async function chat(page, name, send) {
@@ -129,6 +133,7 @@ try {
   const {page} = desktop;
   await page.goto(fixture.origin+'/login');
   await page.locator('#login-form').waitFor({state:'visible'});
+  assert.equal(await page.locator('link[rel="stylesheet"][href="/shell/app.css"]').count(),1);
   await screenshot(page,'desktop-login');
   await signIn(page,fixture.owner);
   await screenshot(page,'desktop-home');

@@ -572,6 +572,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let revision = 0;
   let current = null;
   let loadSequence = 0;
+  const notificationState = document.getElementById('notification-prefs-state');
+  const notificationInputs = Object.fromEntries(['mentions', 'task_completion', 'artifacts'].map(key =>
+    [key, document.getElementById('notify-' + key.replaceAll('_', '-'))]).filter(([, input]) => input));
+  let notificationValues = {};
   let languageSave = null;
   let modelRevision = null;
   let pendingSecretConfirm = null;
@@ -682,8 +686,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: payload};
   }
 
+  function prepareNotificationPrefs() {
+    notificationValues = {};
+    if (notificationState) notificationState.textContent = '';
+    for (const input of Object.values(notificationInputs)) {
+      input.disabled = true;
+      input.checked = false;
+    }
+  }
+
+  async function renderNotificationPrefs(sequence, pending) {
+    if (!pending) return;
+    const result = await pending;
+    if (sequence !== loadSequence) return;
+    if (result?.status !== 200 || !result.body?.prefs) {
+      if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.load-error');
+      return;
+    }
+    for (const [key, input] of Object.entries(notificationInputs)) {
+      const value = result.body.prefs[key];
+      const supported = typeof value === 'boolean';
+      const row = document.getElementById('row-notify-' + key.replaceAll('_', '-'));
+      if (row) row.hidden = !supported;
+      if (!supported) continue;
+      notificationValues[key] = value;
+      input.checked = value;
+      input.disabled = false;
+    }
+  }
+
+  for (const [key, input] of Object.entries(notificationInputs)) {
+    input.addEventListener('change', async () => {
+      const previous = notificationValues[key];
+      if (input.disabled || typeof previous !== 'boolean') return;
+      const sequence = loadSequence;
+      input.disabled = true;
+      const saved = await request('PUT', '/v1/notification-prefs', {changes:{[key]:input.checked}}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      const value = saved?.status === 200 ? saved.body?.prefs?.[key] : undefined;
+      input.disabled = false;
+      if (typeof value !== 'boolean') {
+        input.checked = previous;
+        if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.save-error');
+        return;
+      }
+      input.checked = notificationValues[key] = value;
+      if (notificationState) notificationState.textContent = uiText(document, value ? 'settings.notify.enabled' : 'settings.notify.disabled');
+    });
+  }
+
   async function load() {
     const sequence = ++loadSequence;
+    prepareNotificationPrefs();
     if (modelForm) {
       modelRevision = null;
       renderModelApi(document, modelForm);
@@ -713,6 +767,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     switchImageAccount(account);
     for (const api of mediaApis) api.setAccount(account);
     const modelRead = modelForm && request('GET', '/v1/model-api').catch(() => null);
+    const location = globalThis.location || {};
+    const prefsRead = Object.keys(notificationInputs).length > 0 && settingsViewFromLocation(location.pathname, location.hash) === 'hub'
+      ? request('GET', '/v1/notification-prefs').catch(() => null) : null;
     const settings = await request('GET', '/v1/settings');
     if (sequence !== loadSequence) return;
     if (settings.status !== 200) {
@@ -727,6 +784,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillForm(form, current);
     refreshAppearance();
     renderView();
+    void renderNotificationPrefs(sequence, prefsRead);
     if (modelRead) {
       const model = await modelRead;
       if (sequence !== loadSequence) return;

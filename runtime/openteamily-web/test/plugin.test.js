@@ -164,25 +164,31 @@ test('Chat versions its static dependency graph, keeps HTML private, and never c
   assert.equal(await current.text(), 'export const item = 2')
 })
 
-test('the native Chat page and its module dependencies are served from one versioned package', async () => {
+test('native pages and their module dependencies are served from one versioned package', async () => {
   const pagesDir = fileURLToPath(new URL('../../../openteamily/static/', import.meta.url))
-  const route = {fetch: createPageHandler({pagesDir, identity:{instanceId:'chat-modules'}})}
-  const page = await get(route, '/chat')
-  assert.equal(page.status, 200)
-  assert.equal(page.headers.get(SERVED_BY_HEADER), 'ds-bot; instance=chat-modules')
-  const html = await page.text()
-  const modules = new Set([...html.matchAll(/(?:href|src)="(\/[^"]+\.mjs)"/g)].map(match => match[1]))
-  const main = [...modules].find(path => path.endsWith('/chat/app.mjs'))
-  assert.match(main ?? '', /^\/chat\/assets\/[a-f0-9]{32}\/chat\/app\.mjs$/)
-  const base = main.slice(0, -'/chat/app.mjs'.length)
+  const route = {fetch: createPageHandler({pagesDir, identity:{instanceId:'page-modules'}})}
+  const modules = new Set()
+  let base
+  for (const path of ['/agents', '/artifacts', '/automations', '/chat', '/contacts', '/discover',
+    '/meetings', '/members', '/memory', '/onboarding', '/profile', '/settings/connectors', '/skills', '/team', '/team-runs']) {
+    const page = await get(route, path)
+    assert.equal(page.status, 200, path)
+    assert.equal(page.headers.get(SERVED_BY_HEADER), 'ds-bot; instance=page-modules')
+    const html = await page.text()
+    const stylesheet = /href="(\/chat\/assets\/[a-f0-9]{32})\/shell\/app\.css"/.exec(html)?.[1]
+    assert.ok(stylesheet, path + ' uses the runtime shell stylesheet')
+    base ??= stylesheet
+    assert.equal(stylesheet, base, path)
+    for (const [, asset] of html.matchAll(/(?:href|src)="(\/[^"]+\.mjs)"/g)) modules.add(asset)
+  }
   for (const module of ['dsbot.mjs', 'files.mjs', 'translation.mjs']) {
-    assert.ok(modules.has(base + '/chat/' + module), `Missing Chat preload for ${module}`)
+    assert.ok(modules.has(base + '/chat/' + module), 'Missing Chat preload for ' + module)
   }
 
   // Follow shipped imports, including literal paths passed to Chat's deferred loader.
   const origin = 'https://runtime.test'
   for (const path of modules) {
-    assert.ok(path.startsWith(base + '/'), `Chat module escaped its package: ${path}`)
+    assert.ok(path.startsWith(base + '/'), 'Native module escaped its package: ' + path)
     const response = await get(route, path)
     assert.equal(response.status, 200, path)
     assert.match(response.headers.get('content-type'), /^text\/javascript/, path)
@@ -192,6 +198,8 @@ test('the native Chat page and its module dependencies are served from one versi
       modules.add(new URL(specifier, origin + path).pathname)
     }
   }
+  const publicPage = await get(route, '/help')
+  assert.match(await publicPage.text(), /href="\/shell\/app\.css"/)
 })
 
 test('built Chat pages can open before an optional dependency is read', async t => {
