@@ -63,6 +63,13 @@ function scope(ot: OtContext, req: FastifyRequest): Scope {
   return { teamId, ownerId, role };
 }
 
+function requireSourceWorkspace(ot: OtContext, access: Scope, workspace: unknown) {
+  assert(typeof workspace === "string" && HEX_ID.test(workspace), 400, "invalid_request", "Invalid source workspace");
+  const source = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=? AND slug IS NOT NULL", workspace);
+  assert(source, 404, "team_not_found", "no such team");
+  requireMember(ot, source.id, access.ownerId);
+}
+
 function fields(req: FastifyRequest, keys: string[]): Record<string, unknown> {
   const value: unknown = body(req);
   assert(value && typeof value === "object" && !Array.isArray(value)
@@ -153,12 +160,14 @@ export function registerStudio(app: FastifyInstance, ot: OtContext) {
   app.post(COLLECTION, async (req, reply) => {
     const result = ot.db.transaction(() => {
       const access = scope(ot, req);
-      const input = fields(req, ["title", "body", "client_key"]);
+      const input = fields(req, ["title", "body", "client_key", "source_workspace_id"]);
+      if (input.source_workspace_id !== undefined) requireSourceWorkspace(ot, access, input.source_workspace_id);
       const draft = content(input);
       assert(typeof input.client_key === "string" && CREATE_KEY.test(input.client_key),
         400, "invalid_request", "Invalid client_key");
       const keyHash = hashCode(input.client_key);
-      const requestHash = hashCode(JSON.stringify(draft));
+      const requestHash = hashCode(JSON.stringify(input.source_workspace_id === undefined
+        ? draft : {...draft, source_workspace_id:input.source_workspace_id}));
       const prior = ot.get<{id: string; request_hash: string; deleted_at: number | null}>(`
         SELECT id, request_hash, deleted_at FROM ot_studio_documents
         WHERE team_id=? AND created_by=? AND key_hash=?`, access.teamId, access.ownerId, keyHash);

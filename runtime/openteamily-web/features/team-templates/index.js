@@ -1,6 +1,6 @@
 // Stream C: AI team templates (#290). Applying a template creates (or reuses same-name)
 // workspace agents in this user's DS-Bot and a Bot Social group with those agents attached.
-// Agents do not auto-reply; they speak when mentioned (legacy team_templates.py).
+// Explicit requests and ordinary messages use the native group reply policy.
 import { compatHandler } from '../../lib/b4/compat.js'
 import { Fault } from '../../lib/b4/http.js'
 import { createHash } from 'node:crypto'
@@ -66,23 +66,21 @@ export default function teamTemplates(host) {
         for (const agent of existing) {
           if (agent.archived || agent.native_deleted) throw roleConflict(agent.name)
         }
-        const agents = []
-        for (const a of tmpl.agents) {
-          let agent = existing.find(x => x.name === a.name)
-          if (!agent) {
-            const roleKey = hash(JSON.stringify(['team-template-role', workspace_id, tmpl.slug, a.name, p.idempotency_key]))
-            const created = await host.call('agents/create', { ...a, workspace_id, idempotency_key: roleKey }).catch(error => {
-              if (['agents/conflict', 'agents/native-deleted'].includes(error?.code)) throw roleConflict(a.name)
-              if (error?.code === 'agents/quota') {
-                throw new Fault(429, 'team_template_agent_quota', '这个工作区已达到智能体数量上限。')
-              }
-              throw error
-            })
-            agent = created.agent
-          }
-          if (agent.archived || agent.native_deleted || agent.name !== a.name) throw roleConflict(a.name)
-          agents.push(agent)
+        const byName = new Map(existing.map(agent => [agent.name, agent]))
+        const roles = tmpl.agents.filter(role => !byName.has(role.name)).map(role => ({
+          ...role, idempotency_key: hash(JSON.stringify(['team-template-role', workspace_id, tmpl.slug, role.name, p.idempotency_key])),
+        }))
+        if (roles.length) {
+          const {items} = await host.call('agents/createTemplateRoles', {workspace_id, roles}).catch(error => {
+            if (error?.code === 'agents/template-role-conflict') throw roleConflict(error.roleName)
+            if (error?.code === 'agents/quota') {
+              throw new Fault(429, 'team_template_agent_quota', '这个工作区已达到智能体数量上限。')
+            }
+            throw error
+          })
+          for (const agent of items) byName.set(agent.name, agent)
         }
+        const agents = tmpl.agents.map(role => byName.get(role.name))
         const group = await socialRequest(() => bs().post('/v1/ot/conversations', {
           kind: 'group', title: p?.title || tmpl.name, team_id: p?.team_id || undefined,
           account_group: p?.account_group === true, members: p?.members ?? [],

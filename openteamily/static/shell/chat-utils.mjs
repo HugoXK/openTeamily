@@ -22,11 +22,18 @@ export function socialMessageFromHash(hash) {
 }
 
 const directId = /^otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
-const agentId = /^[0-9a-f]{32}$/;
+const nativeId = /^[0-9a-f]{32}$/;
 const socialOwnerId = /^[A-Za-z0-9._-]{1,80}$/;
 
+export function agentDirectoryHref(workspace, agent) {
+  if (!nativeId.test(workspace || '')) return '/agents';
+  const target = new URLSearchParams({workspace});
+  if (nativeId.test(agent || '')) target.set('agent', agent);
+  return '/agents#' + target;
+}
+
 export function directAgentAccessHref({conversation, ownerId, agentId: id}) {
-  if (!directId.test(conversation || '') || !socialOwnerId.test(ownerId || '') || !agentId.test(id || '')) return '';
+  if (!directId.test(conversation || '') || !socialOwnerId.test(ownerId || '') || !nativeId.test(id || '')) return '';
   return '/chat#' + new URLSearchParams({social:conversation, access_owner:ownerId, access_agent:id});
 }
 

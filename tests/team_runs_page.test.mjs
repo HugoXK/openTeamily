@@ -16,10 +16,18 @@ test('team run addresses allow exact workspace, private run or shared snapshot',
   assert.deepEqual(teamRunTarget(''), {});
   assert.deepEqual(teamRunTarget('#workspace=' + WS), {workspace: WS});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&run=${RUN}`), {workspace: WS, run: RUN});
+  assert.deepEqual(teamRunTarget(`#workspace=${WS}&run=${RUN}&step=0`), {workspace:WS, run:RUN, step:0});
+  assert.deepEqual(teamRunTarget(`#workspace=${WS}&run=${RUN}&step=7`), {workspace:WS, run:RUN, step:7});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&shared=${shared}`), {workspace: WS, shared});
   assert.deepEqual(teamRunTarget(`#workspace=${WS}&draft=1`), {workspace: WS, draft: true});
+  assert.deepEqual(teamRunTarget(`#workspace=${WS}&draft=1&automation=${AGENT}&result=${RUN}`), {
+    workspace:WS, draft:true, automationSource:{kind:'automation_run', automation_id:AGENT, run_id:RUN},
+  });
   for (const bad of [`#workspace=${WS}&draft=2`, `#workspace=${WS}&draft=1&run=${RUN}`, `#run=${RUN}`, `#workspace=${WS}&run=${RUN}&shared=${shared}`,
-    `#workspace=${WS}&workspace=${OTHER_WS}`, `#workspace=${WS}&run=wrong`]) {
+    `#workspace=${WS}&workspace=${OTHER_WS}`, `#workspace=${WS}&run=wrong`, `#workspace=${WS}&step=0`,
+    `#workspace=${WS}&run=${RUN}&step=8`, `#workspace=${WS}&run=${RUN}&step=0&step=1`,
+    `#workspace=${WS}&draft=1&automation=${AGENT}`, `#workspace=${WS}&automation=${AGENT}&result=${RUN}`,
+    `#workspace=${WS}&draft=1&automation=${AGENT}&result=${RUN}&result=${RUN}`]) {
     assert.deepEqual(teamRunTarget(bad), {invalid: true});
   }
 });
@@ -60,6 +68,7 @@ test('terminal run reuse carries definition and dependency identities without co
   assert.ok(draft.title.length <= 80 && draft.title.endsWith('（副本）') && draft.title.isWellFormed());
   assert.deepEqual(draft.steps, [step(41,AGENT,'搜集'),step(42,OTHER_AGENT,'复核',[41])]);
   assert.equal(draft.sourceRun,RUN);
+  assert.equal(teamRunPayload(draft, AGENTS).reused_from,RUN);
   assert.equal(draft.goal,source.goal);
   assert.ok(!JSON.stringify(draft).includes('private result'));
   assert.equal(teamRunDraftFromHistory({...source,status:'running'}, () => ++serial),null);
@@ -81,6 +90,7 @@ function fixture(hash = '', storage = new Map()) {
     }
     get childElementCount() { return this.children.length; }
     addEventListener(type, handler) { this.events[type] = handler; }
+    removeAttribute(name) { delete this[name]; }
     append(...items) { this.children.push(...items); }
     replaceChildren(...items) { this.children = items; }
     focus() { document.activeElement = this; }
@@ -135,6 +145,65 @@ test('startup overlaps account and workspace reads before rendering private task
   await mounted;
   assert.equal(calls.at(-1), BASE);
   assert.equal(node('team-runs-workspace').value, WS);
+});
+
+test('native history overlaps sign-in and uses only the exact read for the verified viewer', async () => {
+  const {document, node} = fixture(`#workspace=${OTHER_WS}&run=${RUN}`);
+  document.querySelector = () => ({content:'ds-bot'});
+  const authenticate = Promise.withResolvers();
+  const directory = Promise.withResolvers();
+  const read = Promise.withResolvers();
+  const path = `/v1/workspaces/${OTHER_WS}/team-runs/${RUN}`;
+  const exact = {...run, workspace_id:OTHER_WS};
+  let requests = 0;
+  const mounted = mountTeamRuns(document, async address => {
+    if (address === '/v1/auth/session') return authenticate.promise;
+    if (address === '/v1/workspaces?limit=100') return directory.promise;
+    if (address === path) {
+      if (++requests === 1) return ok({viewer_username:'previous-owner', run:{...exact, title:'Different owner'}});
+      return read.promise;
+    }
+    return baseRead(address);
+  });
+  assert.equal(requests, 1);
+  authenticate.resolve(ok({user}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 1);
+  assert.equal(node('team-run-results').children.length, 0);
+  assert.equal(node('team-run-heading').textContent, '');
+
+  directory.resolve(ok({items:[workspace, alternate]}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 2);
+  assert.equal(node('team-run-heading').textContent, '任务详情');
+  read.resolve(ok({viewer_username:user.username, run:exact}));
+  await mounted;
+  assert.equal(node('team-runs-workspace').value, OTHER_WS);
+  assert.equal(node('team-run-heading').textContent, exact.title);
+  assert.equal(node('team-run-results').children.length, 2);
+});
+
+test('a pending reused draft sends exactly the tracked version of the create body after reload', async () => {
+  const sourceRun = '9'.repeat(32);
+  const createKey = 'team-run-' + '1'.repeat(32);
+  for (const createSourceRun of [undefined, sourceRun]) {
+    const storage = new Map([['ot-team-run-draft:' + user.id + ':' + WS, JSON.stringify({
+      title:'复用草稿', goal:'确认跟进', sourceRun, createKey, createSourceRun,
+      steps:AGENTS.map(agent => ({agent:agent.id, instruction:'执行检查', dependsOn:[]})),
+    })]]);
+    const {document, node} = fixture(`#workspace=${WS}&draft=1`, storage);
+    const requests = [];
+    await mountTeamRuns(document, async (path, options) => {
+      if (path === BASE && options.method === 'POST') {
+        requests.push({key:options.headers['Idempotency-Key'], from:JSON.parse(options.body).reused_from});
+        return ok({run});
+      }
+      if (path.endsWith('/agents?limit=100')) return ok({items:AGENTS});
+      return baseRead(path);
+    });
+    await node('team-run-form').events.submit({preventDefault() {}});
+    assert.deepEqual(requests, [{key:createKey, from:createSourceRun}]);
+  }
 });
 
 test('a lost create response survives reload and only its owner can retry the exact request', async () => {
@@ -223,6 +292,7 @@ test('transient read errors keep visible results, but permission loss clears tas
   await mountTeamRuns(document, async path => baseRead(path) || ok(status === 200 ? {run: finished} : {}, status));
   assert.equal(node('team-run-results').children.length, 2);
   assert.equal(node('team-run-remove').hidden, false);
+  assert.equal(node('team-run-export').href, BASE + '/' + RUN + '/export');
   status = 503;
   await node('team-runs-refresh').events.click();
   assert.equal(node('team-run-results').children.length, 2);
@@ -231,6 +301,42 @@ test('transient read errors keep visible results, but permission loss clears tas
   assert.equal(node('team-run-results').children.length, 0);
   assert.equal(node('team-run-goal-detail').textContent, '');
   assert.equal(node('team-run-remove').hidden, true);
+  assert.equal(node('team-run-export').hidden, true);
+  assert.equal(node('team-run-export').href, undefined);
   assert.equal(node('team-runs-new').disabled, true);
   assert.match(node('team-run-status').textContent, /没有权限/);
+});
+
+test('lost deletion responses need an empty scoped result from the original signed owner', async () => {
+  for (const [listStatus, sessionUser] of [[200, user], [403, user], [200, {id: OTHER_WS}]]) {
+    const confirmed = listStatus === 200 && sessionUser === user;
+    const {document, node} = fixture(`#workspace=${WS}&run=${RUN}`);
+    const requests = [];
+    let posted = false;
+    const listing = Promise.withResolvers();
+    await mountTeamRuns(document, async (path, {method}) => {
+      if (path === '/v1/auth/session' && posted) return ok({user: sessionUser});
+      const base = baseRead(path);
+      if (base) return base;
+      requests.push([method, path]);
+      if (path === BASE + '/' + RUN + '/remove') {
+        posted = true;
+        return ok({}, 503);
+      }
+      if (path === BASE + '/' + RUN) return posted ? ok({}, 404) : ok({run});
+      if (path === BASE) return listing.promise;
+      throw new Error(path);
+    });
+    node('team-run-remove').events.click();
+    node('team-run-confirm-action').events.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(node('team-run-remove').disabled, true);
+    assert.match(node('team-run-status').textContent, /正在核对/);
+    listing.resolve(ok({items: []}, listStatus));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.filter(([method]) => method === 'POST').length, 1);
+    assert.equal(node('team-run-detail').hidden, confirmed);
+    assert.equal(node('team-run-results').children.length, 0);
+    assert.equal(document.defaultView.location.hash, `#workspace=${WS}${confirmed ? '' : '&run=' + RUN}`);
+  }
 });

@@ -45,8 +45,18 @@ test("personal groups share confirmed contacts and atomic agent rosters without 
   assert.ok((await owner.ok("GET",search)).items.some((row:any)=>row.message_id===msg.id));
   assert.deepEqual((await stranger.ok("GET",search)).items,[]);
   assert.equal((await peer.call("POST",room+"/announcement",{body:"Member",revision:0})).status,403);
-  await owner.ok("POST",room+"/announcement",{body:"Group plan",revision:0});
-  assert.equal((await peer.ok("GET",room+"/announcement")).announcement.body,"Group plan");
+  const saved = await owner.ok("POST",room+"/announcement",{body:"Group plan",revision:0});
+  const read = await peer.ok("GET",room+"/announcement");
+  assert.equal(read.announcement.body,"Group plan");
+  assert.equal(read.announcement.author_name,(await owner.ok("GET","/v1/ot/me")).display_name);
+  assert.equal(read.announcement.updated_at,saved.announcement.updated_at);
+  assert.ok(Number.isSafeInteger(read.announcement.updated_at));
+  assert.equal((await stranger.call("GET",room+"/announcement")).status,404);
+  assert.equal((await owner.call("POST",room+"/announcement",{body:"",revision:0})).status,409);
+  await owner.ok("POST",room+"/announcement",{body:"",revision:1});
+  const cleared = (await peer.ok("GET",room+"/announcement")).announcement;
+  assert.equal(cleared.body,"");
+  assert.equal(cleared.author_name,undefined);
   const translated = await owner.ok("POST",room+"/translation-sources",{items:[{id:msg.id,revision:1}]});
   assert.equal(translated.sources[0].body,"@agent_1 personal launch");
   assert.equal((await stranger.call("POST",room+"/translation-sources",{items:[]})).status,404);
@@ -194,10 +204,12 @@ test("managed reply claims replay without renewing the lease and fence each atte
   assert.equal((await post(progress, snapshot)).data.error.code, "reply_progress_stale");
   now++;
   assert.equal((await post(job, start)).status, 409);
-  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: claim})).status, 409);
+  assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
+  assert.equal((await sender.ok("GET", room + "/messages")).messages[0].reply_jobs[0].error_code, "reply_timeout");
 
   assert.equal((await sender.call("POST", retry, {job_id: id, attempt: "1"})).status, 400);
   await sender.ok("POST", retry, {job_id: id, attempt: 1});
+  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: claim})).status, 409);
   await owner.ok("POST", job, {...start, attempt: 2, claim_id: other});
   assert.equal((await post(progress, {...snapshot, attempt: 2})).status, 409);
   await owner.ok("POST", job, {action: "fail", attempt: 2, claim_id: other});

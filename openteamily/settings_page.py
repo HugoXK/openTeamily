@@ -66,9 +66,13 @@ class SettingsPage:
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/entry.mjs': ('artifacts', 'entry.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/shared-studio.mjs': ('artifacts', 'shared-studio.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-personal-copy.mjs': ('artifacts', 'studio-personal-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/shared-work-copy.mjs': ('artifacts', 'shared-work-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/version-preview.mjs': ('artifacts', 'version-preview.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/studio-merge.mjs': ('artifacts', 'studio-merge.mjs', 'text/javascript; charset=utf-8'),
@@ -88,6 +92,8 @@ class SettingsPage:
         '/shell/system-locale.mjs': ('shell', 'system-locale.mjs', 'text/javascript; charset=utf-8'),
         '/shell/system-locale-catalog.mjs': ('shell', 'system-locale-catalog.mjs', 'text/javascript; charset=utf-8'),
         '/shell/system-locale-chat.mjs': ('shell', 'system-locale-chat.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/markdown.mjs': ('shell', 'markdown.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/markdown-table.mjs': ('shell', 'markdown-table.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-preview.mjs': ('shell', 'model3d-preview.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
@@ -98,6 +104,8 @@ class SettingsPage:
         '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/call-audio-handoff.mjs': ('shell', 'call-audio-handoff.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/action-followup-events.mjs': ('shell', 'action-followup-events.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
@@ -108,6 +116,7 @@ class SettingsPage:
         '/shell/group-invite-link.mjs': ('shell', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
+        '/chat/prompt-templates.mjs': ('chat', 'prompt-templates.mjs', 'text/javascript; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/group-management.mjs': ('chat', 'group-management.mjs', 'text/javascript; charset=utf-8'),
         '/chat/group-invite-link.mjs': ('chat', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
@@ -123,6 +132,7 @@ class SettingsPage:
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/discover/document-reader.mjs': ('discover', 'document-reader.mjs', 'text/javascript; charset=utf-8'),
         '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
@@ -147,6 +157,9 @@ class SettingsPage:
         '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
+        '/look/assistant-portraits.webp': ('look', 'assistant-portraits.webp', 'image/webp'),
+        '/look/assistant-notebook.webp': ('look', 'assistant-notebook.webp', 'image/webp'),
+        '/look/assistant-accessories.webp': ('look', 'assistant-accessories.webp', 'image/webp'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
         '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
         '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
@@ -279,6 +292,8 @@ class SettingsPage:
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':
+            if query in ('tab=teams', 'tab=teams&new=1'):
+                return True
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
