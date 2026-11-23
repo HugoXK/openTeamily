@@ -84,6 +84,29 @@ export function describeAppearance(values, now = new Date(), media) {
   return '当前为' + look + '（跟随系统）。';
 }
 
+export function choiceTitle(input) {
+  if (!input) return '';
+  const span = input.closest('label')?.querySelector('span');
+  const text = span?.childNodes[0]?.textContent;
+  return (text || '').trim();
+}
+
+export function syncOverviewCurrentValues(document, values) {
+  const form = document.getElementById('settings-form');
+  const appearance = document.getElementById('appearance-current');
+  if (appearance) {
+    const value = values && values.appearance;
+    const input = value ? form?.querySelector(`[name="appearance"][value="${value}"]`) : null;
+    appearance.textContent = choiceTitle(input);
+  }
+  const folding = document.getElementById('folding-current');
+  if (folding) {
+    const value = values && values.message_folding;
+    const input = value ? form?.querySelector(`[name="message_folding"][value="${value}"]`) : null;
+    folding.textContent = choiceTitle(input);
+  }
+}
+
 
 const AUTOSAVE_KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end',
                        'language', 'chat_language', 'auto_translate', 'send_shortcut',
@@ -645,6 +668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncAppearanceExtras(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    syncOverviewCurrentValues(document, current);
     const languageCurrent = document.getElementById('language-current');
     const languageSelect = form.querySelector('select[name="language"]');
     if (languageCurrent && languageSelect) {

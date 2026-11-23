@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioMessage, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioMessage, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, choiceTitle, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncOverviewCurrentValues, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -80,6 +80,80 @@ test('describeAppearance names the current look and next switch without inventin
   assert.doesNotMatch(auto, /拿不到你所在的位置/);
   assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: false}), /当前为浅色（跟随系统）。/);
   assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: true}), /当前为深色（跟随系统）。/);
+});
+
+
+function radioInput(title) {
+  const span = {childNodes: [{textContent: title}]};
+  const label = {querySelector: (sel) => sel === 'span' ? span : null};
+  return {closest: (sel) => sel === 'label' ? label : null};
+}
+
+test('choiceTitle reads the option title and ignores the hint', () => {
+  assert.equal(choiceTitle(radioInput('自动')), '自动');
+  assert.equal(choiceTitle(radioInput('标准')), '标准');
+  assert.equal(choiceTitle(null), '');
+});
+
+test('syncOverviewCurrentValues paints appearance and folding labels from the saved choices', () => {
+  const appearanceCurrent = {textContent: ''};
+  const foldingCurrent = {textContent: ''};
+  const radios = {
+    'appearance=auto': radioInput('自动'),
+    'appearance=light': radioInput('浅色'),
+    'message_folding=standard': radioInput('标准'),
+    'message_folding=compact': radioInput('紧凑'),
+  };
+  const document = {
+    getElementById(id) {
+      if (id === 'settings-form') {
+        return {
+          querySelector(sel) {
+            const match = /\[name="([^"]+)"\]\[value="([^"]+)"\]/.exec(sel);
+            return match ? radios[`${match[1]}=${match[2]}`] || null : null;
+          },
+        };
+      }
+      if (id === 'appearance-current') return appearanceCurrent;
+      if (id === 'folding-current') return foldingCurrent;
+      return null;
+    },
+  };
+  syncOverviewCurrentValues(document, {appearance: 'auto', message_folding: 'standard'});
+  assert.equal(appearanceCurrent.textContent, '自动');
+  assert.equal(foldingCurrent.textContent, '标准');
+  syncOverviewCurrentValues(document, {appearance: 'light', message_folding: 'compact'});
+  assert.equal(appearanceCurrent.textContent, '浅色');
+  assert.equal(foldingCurrent.textContent, '紧凑');
+  syncOverviewCurrentValues(document, {appearance: 'unknown', message_folding: ''});
+  assert.equal(appearanceCurrent.textContent, '');
+  assert.equal(foldingCurrent.textContent, '');
+});
+
+test('the settings overview lists preference and support rows in the recorded Teamily order', () => {
+  const html = readFileSync(new URL('../openteamily/static/settings/index.html', import.meta.url), 'utf8');
+  const prefs = html.slice(html.indexOf('id="group-prefs"'), html.indexOf('id="group-notification-prefs"'));
+  const prefHrefs = [...prefs.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(prefHrefs, [
+    '/settings/message-folding',
+    '/settings/appearance',
+    '/settings/privacy',
+    '/settings/shortcuts',
+  ]);
+  assert.match(prefs, /id="folding-current"/);
+  assert.match(prefs, /id="appearance-current"/);
+  assert.match(prefs, /settings-row-label">隐私设置</);
+  const support = html.slice(html.indexOf('id="group-support"'), html.indexOf('id="settings-form"'));
+  const supportHrefs = [...support.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(supportHrefs, [
+    '/help',
+    '/guide',
+    '/terms',
+    '/privacy',
+    '/about',
+    'https://github.com/openTeamily/openTeamily/issues',
+  ]);
+  assert.doesNotMatch(support, /退款政策/);
 });
 
 test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
