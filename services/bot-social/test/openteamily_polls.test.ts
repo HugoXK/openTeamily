@@ -192,3 +192,71 @@ test("bad option sets, foreign option ids and bad questions are refused without 
   assert.equal(unknown.status, 404, "an unknown conversation is not found, not invalid");
   assert.deepEqual((await owner.ok("GET", `/v1/ot/polls?conversation_id=${conv.id}`)).items, []);
 });
+
+async function teamRoom(name: string) {
+  const owner = await home(S.base, name + "-owner");
+  const peer = await home(S.base, name + "-peer");
+  const t = await owner.ok("POST", "/v1/ot/teams", { name });
+  const { code } = await owner.ok("POST", `/v1/ot/teams/${t.id}/invites`, {});
+  await peer.ok("POST", "/v1/ot/invites/accept", { code });
+  const room = await owner.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: name, team_id: t.id, members: [peer.handle],
+  });
+  return { owner, peer, team: t, room };
+}
+
+test("a suspended teammate loses the team room's polls on every verb", async () => {
+  const { owner, peer, team, room } = await teamRoom("poll-team-suspended");
+  const visible = await created(owner, room, { question: "Owner's poll" });
+  await peer.ok("POST", `/v1/ot/polls/${visible.id}/vote`, { option_ids: [visible.options[0].id] });
+  const own = await created(peer, room, { question: "Peer's poll" });
+  await owner.ok("PATCH", `/v1/ot/teams/${team.id}/members/${peer.handle}`, { suspended: true });
+
+  assert.deepEqual({
+    list: (await peer.call("GET", `/v1/ot/polls?conversation_id=${room.id}`)).status,
+    read: (await peer.call("GET", "/v1/ot/polls/" + visible.id)).status,
+    vote: (await peer.call("POST", `/v1/ot/polls/${visible.id}/vote`, { option_ids: [visible.options[1].id] })).status,
+    close: (await peer.call("POST", `/v1/ot/polls/${own.id}/close`)).status,
+    delete: (await peer.call("DELETE", `/v1/ot/polls/${own.id}`)).status,
+  }, { list: 404, read: 404, vote: 404, close: 404, delete: 404 },
+  "a suspended teammate loses every poll verb, including the read that names voters");
+  assert.equal((await owner.ok("GET", "/v1/ot/polls/" + visible.id)).poll.total, 1, "the owner's view is untouched");
+
+  await owner.ok("PATCH", `/v1/ot/teams/${team.id}/members/${peer.handle}`, { suspended: false });
+  assert.equal((await peer.ok("GET", "/v1/ot/polls/" + own.id)).poll.id, own.id, "readmission restores the gate");
+});
+
+test("a teammate removed from the team loses the room's polls", async () => {
+  const { owner, peer, team, room } = await teamRoom("poll-team-removed");
+  const own = await created(peer, room, { question: "Peer's poll" });
+  await owner.ok("DELETE", `/v1/ot/teams/${team.id}/members/${peer.handle}`);
+
+  assert.deepEqual({
+    list: (await peer.call("GET", `/v1/ot/polls?conversation_id=${room.id}`)).status,
+    read: (await peer.call("GET", "/v1/ot/polls/" + own.id)).status,
+    vote: (await peer.call("POST", `/v1/ot/polls/${own.id}/vote`, { option_ids: [own.options[0].id] })).status,
+    delete: (await peer.call("DELETE", `/v1/ot/polls/${own.id}`)).status,
+  }, { list: 404, read: 404, vote: 404, delete: 404 },
+  "a teammate removed from the team loses the room's polls");
+});
+
+test("an archived group hides its polls from every member", async () => {
+  const { owner, peers, conv } = await group(["poll-archived-owner", "poll-archived-peer"]);
+  const peer = peers[0];
+  const poll = await created(peer, conv);
+  const management = `/v1/ot/conversations/${conv.id}/management`;
+  const live = await owner.ok("GET", "/v1/ot/conversations/" + conv.id);
+  const peerId = (await peer.ok("GET", "/v1/ot/me")).owner_id;
+  await owner.ok("POST", management, { direct: true, action: "transfer", revision: live.group_management.revision, member_id: peerId });
+  const handed = await owner.ok("GET", "/v1/ot/conversations/" + conv.id);
+  await owner.ok("POST", management, { direct: true, action: "leave", revision: handed.group_management.revision });
+  const solo = await peer.ok("GET", "/v1/ot/conversations/" + conv.id);
+  await peer.ok("POST", management, { direct: true, action: "leave", revision: solo.group_management.revision });
+
+  assert.deepEqual({
+    former_owner_read: (await owner.call("GET", "/v1/ot/polls/" + poll.id)).status,
+    last_owner_read: (await peer.call("GET", "/v1/ot/polls/" + poll.id)).status,
+    former_owner_list: (await owner.call("GET", `/v1/ot/polls?conversation_id=${conv.id}`)).status,
+  }, { former_owner_read: 404, last_owner_read: 404, former_owner_list: 404 },
+  "an archived group hides its polls from every member");
+});

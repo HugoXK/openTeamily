@@ -91,6 +91,12 @@ function pollRow(ot: OtContext, id: string, owner: string) {
     JOIN ot_conversation_members m ON m.conversation_id=p.conversation_id AND m.owner_id=?
     WHERE p.id=?`, owner, id);
   assert(row, 404, "poll_not_found", "no such poll");
+  // The id is only visible to members of its conversation, so the poll goes through the
+  // same gate as the list: a suspended, removed or archived-out member gets the missing-poll
+  // 404 rather than a view that names voters. Reusing memberOf keeps that one definition.
+  let visible = true;
+  try { memberOf(ot, row.conversation_id, owner); } catch { visible = false; }
+  assert(visible, 404, "poll_not_found", "no such poll");
   return row;
 }
 

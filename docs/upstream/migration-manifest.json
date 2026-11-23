@@ -2256,16 +2256,16 @@
       "path": "src/openteamily/polls.ts",
       "reason": "OpenTeamily-authored addition (MIT): polls held in a member conversation, stored in Bot Social (#586).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "2ea951a0f72a8174f533104faab8ce27c0d4983c70047e057d52f435c90e25e2",
-      "bytes": 10891
+      "new_sha256": "a32afd8a9c744b2c8421ccfd24e2909049b02e436520f06e7230bb24efc79a7d",
+      "bytes": 11324
     },
     "services/bot-social/test/openteamily_polls.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_polls.test.ts",
       "reason": "OpenTeamily-authored addition (MIT): polls held in a member conversation, stored in Bot Social (#586).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "15f5a9eea3402004c817e8eaa894746d9d521addce10b551faa2fa6359cb1b05",
-      "bytes": 11440
+      "new_sha256": "6886152e76c8dd94c35493c02fc770a2e2fdec13aba16fa6003d53fbf4dfcc21",
+      "bytes": 15588
     }
   },
   "core_fork_removed": {
