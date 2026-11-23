@@ -1,7 +1,7 @@
 const MAX_COLUMNS = 24;
 const MAX_ROWS = 120;
 const MAX_LINE_LENGTH = 16_384;
-const SEPARATOR = /^:?-{3,}:?$/;
+const SEPARATOR = /^:?-+:?$/;
 const BLOCK_START = /^(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|~~~)/;
 
 // Match equal backtick runs in one pass. An unmatched run is ordinary text.
@@ -19,10 +19,10 @@ function codeClosers(line) {
   return closers;
 }
 
-function pipeRow(source) {
+function pipeRow(source, {separator = false} = {}) {
   if (!source || source.length > MAX_LINE_LENGTH || !source.includes('|')) return null;
   const line = source.trim();
-  if (BLOCK_START.test(line)) return null;
+  if (!separator && BLOCK_START.test(line)) return null;
   const closers = codeClosers(line);
   if (line.startsWith('```') && !closers.has(0)) return null;
   const cells = [];
@@ -61,7 +61,7 @@ function pipeRow(source) {
 export function readMarkdownTable(lines, index) {
   if (!lines[index + 1]?.includes('-')) return null;
   const header = pipeRow(lines[index]);
-  const separator = header && pipeRow(lines[index + 1]);
+  const separator = header && pipeRow(lines[index + 1], {separator:true});
   if (!separator || header.length !== separator.length || !separator.every(cell => SEPARATOR.test(cell))) return null;
 
   const alignments = separator.map(cell => {
