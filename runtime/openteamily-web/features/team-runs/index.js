@@ -8,11 +8,11 @@
 // independent branches continue. No runtime_tasks row exists. Runs are private to
 // the owner; sharing a run with a team goes through Bot Social (phase C).
 import { createHash } from 'node:crypto'
-import { BODY_MAX, TITLE_MAX, validBody } from '../artifacts/model.js'
+import { BODY_MAX, validBody } from '../artifacts/model.js'
 import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { openDatabase, newId } from '../../src/store.js'
-import { teamRunSource, teamRunWorkKey } from '../shares/team-run-source.js'
+import { teamRunSource } from '../shares/team-run-source.js'
 
 export const MIN_STEPS = 2
 export const MAX_STEPS = 8
@@ -207,10 +207,11 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
 
   async function withSavedWorks(receipt) {
     const run = receipt.run
-    const positions = run.steps.filter(step => step.status === 'succeeded' && step.output.trim()).map(step => step.position)
-    if (!positions.length) return receipt
+    const completed = run.steps.filter(step => step.status === 'succeeded' && step.output.trim())
+    if (!completed.length) return receipt
     try {
-      const {items} = await host.call('artifacts/savedTeamRunWorks', {workspace_id: run.workspace_id, run_id: run.id, positions})
+      const {items} = await host.call('artifacts/savedTeamRunWorks', {workspace_id:run.workspace_id, run_id:run.id,
+        run_title:run.title, positions:completed.map(step => step.position), output_hashes:completed.map(step => sha(step.output))})
       const found = new Map(items.map(item => [item.position, item.id]))
       for (const step of run.steps) {
         const id = found.get(step.position)
@@ -450,19 +451,9 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       const step = steps(row.id)[p.position]
       if (!step || step.status !== 'succeeded' || !step.output.trim()) fail('conflict', 'Only a finished step with output can be saved', 409)
       if (!validBody(step.output)) fail('too_large', `步骤结果无法保存为 ${BODY_MAX} 字以内的文档。`, 413)
-      const base = `${row.title} · 第 ${step.position + 1} 步`.slice(0, TITLE_MAX).toWellFormed()
-      const key = teamRunWorkKey(row.id, step.position)
-      const save = title => host.call('artifacts/v1', { method: 'POST', path: `/v1/workspaces/${row.workspace_id}/artifacts`,
-        body: { title, body: step.output, kind: 'document' }, idempotency_key: key })
       try {
-        let result = await save(base)
-        if (result.status === 409 && result.body?.error?.code === 'conflict') {
-          result = await save(base.slice(0, TITLE_MAX - 11).toWellFormed() + ' · ' + key.slice(0, 8))
-        }
-        if (result.status !== 200 && result.status !== 201) {
-          fail(result.body?.error?.code ?? 'unavailable', result.body?.error?.message ?? '无法保存步骤结果。', result.status ?? 503)
-        }
-        return { status: result.status, artifact: result.body.artifact }
+        return await host.call('artifacts/saveTeamRunWork', {workspace_id:row.workspace_id, run_id:row.id,
+          run_title:row.title, position:step.position, body:step.output})
       } catch (error) {
         if (error?.code === 'openteamily/not-found') fail('unavailable', '资料空间暂不可用。', 503)
         throw error

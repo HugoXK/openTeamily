@@ -11,7 +11,15 @@ import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
-import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
+import {agentDirectoryHref, directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
+
+test('Agent directory links preserve the native workspace and optional exact agent', () => {
+  const workspace = 'a'.repeat(32);
+  const agent = 'b'.repeat(32);
+  assert.equal(agentDirectoryHref(workspace, agent), `/agents#workspace=${workspace}&agent=${agent}`);
+  assert.equal(agentDirectoryHref(workspace, 'invalid'), `/agents#workspace=${workspace}`);
+  assert.equal(agentDirectoryHref('invalid', agent), '/agents');
+});
 
 test('group mention feedback counts only eligible human members addressed outside literal text', () => {
   const members = [

@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
   owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','running','failed','replied')),
   attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, source_revision INTEGER,
-  progress_revision INTEGER NOT NULL DEFAULT 0, claim_id TEXT, direct_grant_id TEXT,
+  progress_revision INTEGER NOT NULL DEFAULT 0, claim_id TEXT, direct_grant_id TEXT, lease_expires_at INTEGER,
   discretionary INTEGER NOT NULL DEFAULT 0, passed INTEGER NOT NULL DEFAULT 0,
   UNIQUE (message_id, owner_id, agent_ref)
 );
@@ -139,7 +139,8 @@ CREATE TABLE IF NOT EXISTS ot_reactions (
 
 export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
-const REPLY_JOB_TIMEOUT = 180_000;
+const REPLY_JOB_LEASE_MS = 180_000;
+const REPLY_JOB_QUEUE_MS = 600_000;
 const REPLY_JOB_ATTEMPTS = 3;
 const DISCRETIONARY_HEAD_START_MS = 2_500;
 const REPLY_PROGRESS_CAPACITY = 512;
@@ -153,6 +154,7 @@ type ReplyJob = {
   id: string; message_id: string; owner_id: string; agent_ref: string; agent_name: string;
   conversation_id: string; quoted_message_id: string | null;
   status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
+  lease_expires_at: number | null;
   available: number; source_revision: number | null; current_revision: number; progress_revision: number;
   claim_id: string | null; direct_grant_id: string | null;
   discretionary: number; passed: number;
@@ -209,18 +211,33 @@ const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.reply_to AS quote
 // Only a claimed turn for this same message can give another owner a reason to
 // wait. The oldest valid claim sets the limit, even if it is still running.
 // Queued jobs, old revisions, and lost membership never hold up a round.
-const DISCRETIONARY_READY_AT = `CASE WHEN j.discretionary=1 THEN COALESCE((
+const runningReplyExpirySql = (alias: string) => `COALESCE(${alias}.lease_expires_at,${alias}.updated_at+${REPLY_JOB_LEASE_MS})`;
+const discretionaryReadyAt = (now: string) => `CASE WHEN j.discretionary=1 THEN COALESCE((
   SELECT MIN(active.updated_at)+${DISCRETIONARY_HEAD_START_MS} FROM (${REPLY_JOB_SOURCE}) active
   WHERE active.message_id=j.message_id AND active.owner_id<>j.owner_id AND active.discretionary=1
     AND active.status='running' AND active.claim_id IS NOT NULL AND active.source_revision=active.current_revision
-    AND active.available AND active.studio_available
+    AND active.available AND active.studio_available AND ${runningReplyExpirySql("active")}>${now}
 ),0) ELSE 0 END`;
+
+function runningReplyExpiry(job: ReplyJob) {
+  return job.lease_expires_at ?? job.updated_at + REPLY_JOB_LEASE_MS;
+}
+
+function replyJobExpired(job: ReplyJob, now: number) {
+  return job.status === "queued" ? job.updated_at + REPLY_JOB_QUEUE_MS <= now
+    : job.status === "running" && runningReplyExpiry(job) <= now;
+}
 
 function replyJobState(job: ReplyJob, now: number) {
   if ((job.status === "queued" || job.status === "running")
-      && (!job.available || job.updated_at <= now - REPLY_JOB_TIMEOUT
+      && (!job.available || replyJobExpired(job, now)
         || (job.source_revision !== null && job.source_revision !== job.current_revision))) return "failed";
   return job.status === "replied" && job.passed ? "passed" : job.status;
+}
+
+function currentRunningClaim(job: ReplyJob, claim: string | null) {
+  return job.status === "running" && claim !== null && job.claim_id === claim && job.available && job.studio_available
+    && job.source_revision === job.current_revision;
 }
 
 function replyClaimId(value: unknown) {
@@ -237,10 +254,13 @@ function replyJobViews(ot: OtContext, message: any, viewer?: string) {
   const now = ot.now();
   return ot.all<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.message_id=? ORDER BY j.rowid", message.id).map(job => {
     const status = !job.studio_available && job.status !== "replied" ? "failed" : replyJobState(job, now);
+    const errorCode = status !== "failed" ? null : !job.available
+      ? (job.direct_grant_id ? "direct_agent_unavailable" : "group_agent_unavailable")
+      : job.studio_available && (job.source_revision === null || job.source_revision === job.current_revision) && replyJobExpired(job, now)
+        ? "reply_timeout" : null;
     return {id: job.id, agent_name: job.agent_name, agent_id: job.agent_ref,
       agent_owner_id: job.owner_id, agent_owner_name: job.agent_owner_name, status, attempt: job.attempt,
-      ...(status === "failed" && !job.available
-        ? {error_code:job.direct_grant_id ? "direct_agent_unavailable" : "group_agent_unavailable"} : {}),
+      ...(errorCode ? {error_code:errorCode} : {}),
       can_retry: Boolean(viewer === message.author_id && job.available && job.studio_available
         && status === "failed" && job.attempt < REPLY_JOB_ATTEMPTS)};
   });
@@ -962,6 +982,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   if (!jobCols.has("direct_grant_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN direct_grant_id TEXT");
   if (!jobCols.has("source_revision")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN source_revision INTEGER");
   if (!jobCols.has("claim_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN claim_id TEXT");
+  if (!jobCols.has("lease_expires_at")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN lease_expires_at INTEGER");
   if (!jobCols.has("discretionary")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN discretionary INTEGER NOT NULL DEFAULT 0");
   if (!jobCols.has("passed")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN passed INTEGER NOT NULL DEFAULT 0");
   if (!jobCols.has("progress_revision")) {
@@ -989,7 +1010,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     if (!inboxWake.hasWaiters()) return;
     const peers = ot.all<{owner_id: string}>(`SELECT DISTINCT owner_id FROM (${REPLY_JOB_SOURCE}) queued
       WHERE message_id=? AND owner_id<>? AND discretionary=1 AND status='queued' AND available AND updated_at>?`,
-      messageId, ownerId, ot.now() - REPLY_JOB_TIMEOUT);
+      messageId, ownerId, ot.now() - REPLY_JOB_QUEUE_MS);
     for (const peer of peers) inboxWake.notify(peer.owner_id);
   }
 
@@ -1824,7 +1845,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         && replyJobState(job, now) === "failed" && job.attempt < REPLY_JOB_ATTEMPTS,
         409, "reply_job_unavailable", "当前无法重试这次回复。");
       ot.run(`UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=?,source_revision=NULL,
-        progress_revision=0,claim_id=NULL WHERE id=?`, now, job.id);
+        progress_revision=0,claim_id=NULL,lease_expires_at=NULL WHERE id=?`, now, job.id);
       replyProgress.delete(job.id);
       return {result: {reply_jobs: replyJobViews(ot, original, me.ownerId)}, owner: job.owner_id};
     });
@@ -1836,18 +1857,33 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     reply.header("cache-control", "private, no-store");
     const me = ot.me(req);
     const b = body(req);
-    assert(b.action === "start" || b.action === "fail" || b.action === "pass", 400, "invalid_request", "Invalid reply job action");
+    assert(b.action === "start" || b.action === "fail" || b.action === "pass" || b.action === "keepalive",
+      400, "invalid_request", "Invalid reply job action");
     if (b.action === "pass") {
       assert(Object.keys(b).every(key => ["action", "attempt", "claim_id"].includes(key)),
         400, "invalid_request", "Unexpected fields on a silent completion");
     }
-    const claim = replyClaimId(b.claim_id);
+    if (b.action === "keepalive") {
+      assert(Object.keys(b).every(key => ["action", "attempt", "claim_token"].includes(key))
+        && Number.isSafeInteger(b.attempt) && b.attempt > 0 && typeof b.claim_token === "string",
+      400, "invalid_request", "Invalid reply job keepalive");
+    }
+    const claim = replyClaimId(b.action === "keepalive" ? b.claim_token : b.claim_id);
     let releasedMessage: string | undefined;
     const receipt = ot.tx(() => {
       const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
       assert(job, 404, "reply_job_not_found", "找不到这次回复。");
       assert(job.attempt === b.attempt, 409, "reply_job_unavailable", "这次回复的状态已更新。");
       const now = ot.now(), state = replyJobState(job, now);
+      if (b.action === "keepalive") {
+        assert(state === "running" && currentRunningClaim(job, claim),
+          409, "reply_job_unavailable", "这次回复的状态已更新。");
+        const expires = Math.max(runningReplyExpiry(job), now + REPLY_JOB_LEASE_MS);
+        ot.run("UPDATE ot_agent_reply_jobs SET lease_expires_at=? WHERE id=?", expires, job.id);
+        const snapshot = replyProgress.get(job.id);
+        if (snapshot?.attempt === job.attempt) snapshot.expires = expires;
+        return {ok: true};
+      }
       if (b.action === "start") {
         assert(b.source_revision === undefined || b.source_revision === job.current_revision,
           409, "reply_job_unavailable", "原消息已更新。");
@@ -1868,7 +1904,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
             409, "reply_job_unavailable", "当前智能体暂时无法读取团队文档引用。");
           if (!job.studio_available && (state === "queued" || (job.claim_id === claim && job.status !== "replied"))) {
             if (job.status !== "failed") {
-              ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=?,claim_id=? WHERE id=?", now, claim, job.id);
+              ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=?,claim_id=?,lease_expires_at=NULL WHERE id=?",
+                now, claim, job.id);
             }
             replyProgress.delete(job.id);
             return {ok: true, studio_reference_unavailable: true};
@@ -1877,21 +1914,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (state === "running" && claim !== null && job.claim_id === claim) return replyClaimReceipt(ot, job);
         assert(state === "queued", 409, "reply_job_unavailable", "这次回复的状态已更新。");
         if (job.discretionary) {
-          const ready = ot.get<{ready_at: number}>(`SELECT ${DISCRETIONARY_READY_AT} AS ready_at
-            FROM ot_agent_reply_jobs j WHERE j.id=?`, job.id);
+          const ready = ot.get<{ready_at: number}>(`SELECT ${discretionaryReadyAt("?")} AS ready_at
+            FROM ot_agent_reply_jobs j WHERE j.id=?`, now, job.id);
           assert(ready && ready.ready_at <= now, 409, "reply_job_unavailable", "请等候同一条消息的上一位智能体。");
         }
-        ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=? WHERE id=?",
-          now, job.current_revision, claim, job.id);
+        ot.run(`UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=?,lease_expires_at=?
+          WHERE id=?`, now, job.current_revision, claim, now + REPLY_JOB_LEASE_MS, job.id);
       } else if (b.action === "pass") {
-        assert(!job.direct_grant_id && !job.studio_document_id && job.available && claim !== null && job.claim_id === claim
-          && job.source_revision === job.current_revision && (state === "running" || state === "passed"),
+        const alreadyPassed = state === "passed" && job.available && claim !== null && job.claim_id === claim
+          && job.source_revision === job.current_revision;
+        assert(!job.direct_grant_id && !job.studio_document_id && (currentRunningClaim(job, claim) || alreadyPassed),
         409, "reply_job_unavailable", "这次回复的状态已更新。");
         if (state === "passed") return {ok: true};
-        ot.run("UPDATE ot_agent_reply_jobs SET status='replied',passed=1,updated_at=? WHERE id=?", now, job.id);
+        ot.run("UPDATE ot_agent_reply_jobs SET status='replied',passed=1,updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       } else {
         assert(state === "running" && job.claim_id === claim, 409, "reply_job_unavailable", "这次回复的状态已更新。");
-        ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=? WHERE id=?", now, job.id);
+        ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);
       if (job.discretionary && b.action !== "start") releasedMessage = job.message_id;
@@ -1928,7 +1966,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       AND status='running' AND attempt=? AND claim_id IS ? AND progress_revision<?`,
     b.revision, job.id, job.attempt, claim, b.revision);
     assert(accepted.changes === 1, 409, "reply_job_unavailable", "这次回复的状态已更新。");
-    replyProgress.set(job.id, {attempt: job.attempt, text: b.text, expires: job.updated_at + REPLY_JOB_TIMEOUT});
+    replyProgress.set(job.id, {attempt: job.attempt, text: b.text, expires: runningReplyExpiry(job)});
     return {ok: true};
   });
 
@@ -1943,10 +1981,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(Object.keys(query(req)).length === 0, 400, "invalid_request", "Unexpected reply progress query");
     const now = ot.now();
     const jobs = ot.all<ReplyJob>(REPLY_JOB_SOURCE + ` WHERE src.conversation_id=? AND available AND studio_available
-      AND j.status IN ('queued','running') AND j.updated_at>?
+      AND ((j.status='queued' AND j.updated_at>?) OR (j.status='running' AND ${runningReplyExpirySql("j")}>?))
       AND (j.source_revision IS NULL OR j.source_revision=src.revision)
       AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=? AND h.message_id=src.id)
-      ORDER BY src.seq DESC,j.rowid DESC LIMIT ?`, conv.id, now - REPLY_JOB_TIMEOUT, me.ownerId, REPLY_PROGRESS_PAGE);
+      ORDER BY src.seq DESC,j.rowid DESC LIMIT ?`, conv.id, now - REPLY_JOB_QUEUE_MS, now, me.ownerId, REPLY_PROGRESS_PAGE);
     return {items: jobs.map(job => {
       const snapshot = replyProgress.get(job.id);
       return {id: job.id, message_id: job.message_id, attempt: job.attempt, status: job.status,
@@ -2081,8 +2119,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const now = ot.now();
     const jobs = managed ? ot.all<ReplyJob & {conversation_id: string; conversation_title: string; seq: number}>(
       REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
-        AND available AND ${DISCRETIONARY_READY_AT}<=? ORDER BY j.updated_at,j.rowid LIMIT ?`,
-      ownerId, now - REPLY_JOB_TIMEOUT, now, Math.min(8, limit),
+        AND available AND ${discretionaryReadyAt("?")}<=? ORDER BY j.updated_at,j.rowid LIMIT ?`,
+      ownerId, now - REPLY_JOB_QUEUE_MS, now, now, Math.min(8, limit),
     ).map(job => {
       if (job.direct_grant_id) {
         return {job_id:job.id, attempt:job.attempt, conversation_id:job.conversation_id,
@@ -2135,9 +2173,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   function nextDiscretionaryWait(ownerId: string, maxWait: number) {
     const now = ot.now();
     const next = ot.get<{ready_at: number | null}>(`SELECT MIN(ready_at) AS ready_at FROM (
-      SELECT ${DISCRETIONARY_READY_AT} AS ready_at FROM (${REPLY_JOB_SOURCE}) j
+      SELECT ${discretionaryReadyAt("?")} AS ready_at FROM (${REPLY_JOB_SOURCE}) j
       WHERE j.owner_id=? AND j.status='queued' AND j.discretionary=1 AND j.updated_at>? AND j.available
-    ) ready`, ownerId, now - REPLY_JOB_TIMEOUT)?.ready_at;
+    ) ready`, now, ownerId, now - REPLY_JOB_QUEUE_MS)?.ready_at;
     // The deadline can pass between the initial inbox read and this lookup.
     return next == null ? maxWait : Math.max(1, Math.min(maxWait, next - now));
   }
@@ -2225,8 +2263,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           409, "reply_job_unavailable", "这次回复的状态已更新。");
       }
       if (b.job_id !== undefined || claim !== null || job?.claim_id != null) {
+        // Expiry makes the job retryable. Only the same, still-running claim may
+        // finish late, and a retry or invalidation wins if it happened first.
         assert(mode === "mention" && job && job.id === b.job_id && job.attempt === b.attempt
-          && job.claim_id === claim && (replyJobState(job, ot.now()) === "running" || job.status === "replied"),
+          && job.claim_id === claim && (currentRunningClaim(job, claim) || job.status === "replied"
+            || (claim === null && replyJobState(job, ot.now()) === "running")),
         409, "reply_job_unavailable", "这次回复的状态已更新。");
       } else if (job) {
         // Older inbox clients can finish a first attempt while containers update.
@@ -2269,7 +2310,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         clientKey });
       for (const id of refs) ot.run("INSERT OR IGNORE INTO ot_group_memory_references VALUES(?,?)",response.id,id);
       if (job) {
-        ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
+        ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=?,lease_expires_at=NULL WHERE id=?", ot.now(), job.id);
         replyProgress.delete(job.id);
         if (job.discretionary) releasedMessage = job.message_id;
       }

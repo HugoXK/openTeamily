@@ -17,7 +17,7 @@ import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
-  chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
+  agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -4408,6 +4408,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
       return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
     }
+    if (state === 'failed' && job?.error_code === 'reply_timeout') {
+      return uiLabel('回复超时', 'The reply timed out');
+    }
     if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
       return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
     }
@@ -4938,7 +4941,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = personal ? '/contacts' : membersHref;
       link.textContent = personal ? uiLabel('联系人', 'Contacts') : uiLabel('成员', 'Members');
     } else {
-      link.href = '/agents';
+      const workspace = workspaceId();
+      const agent = currentAgent?.workspace_id && currentAgent.workspace_id !== workspace ? null : currentAgent?.id;
+      link.href = agentDirectoryHref(workspace, agent);
       link.textContent = uiLabel('资料', 'Resources');
     }
   }
@@ -5536,6 +5541,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupInfoAddRetry.hidden = !state.reload;
     groupInfoAddRetry.disabled = state.loading || state.view.busy;
     groupInfoAddDirectory.hidden = !empty;
+    if (empty) groupInfoAddDirectory.href = agentDirectoryHref(state.workspace);
     groupInfoAddCancel.disabled = Boolean(state.view.busy);
   }
 
@@ -5902,7 +5908,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-send').disabled = state?.open === false || directClosed;
   }
 
+  function renderStudioDiscussionSource(source) {
+    const panel = document.getElementById('chat-studio-discussion-source');
+    const link = document.getElementById('chat-studio-discussion-link');
+    if (!panel || !link) return;
+    const href = source && Number.isSafeInteger(source.revision)
+      ? studioDocumentHref(source.workspace_id, source.document_id, source.revision) : '';
+    panel.hidden = !href;
+    if (!href) {
+      link.removeAttribute('href');
+      link.textContent = '';
+      return;
+    }
+    link.href = href;
+    link.textContent = uiLabel(`查看来源团队文档 · 版本 ${source.revision}`, `View source team document · Version ${source.revision}`);
+  }
+
   function setSocialHeaderTools(social) {
+    renderStudioDiscussionSource(null);
     if (social && captureButton) captureButton.hidden = true;
     const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
@@ -6103,6 +6126,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = conversation;
+    renderStudioDiscussionSource(conversation.studio_source);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
         readingHistory: !acknowledge};

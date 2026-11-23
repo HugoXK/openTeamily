@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAgents } from '../features/agents/index.js'
 import { createTeamRuns, stages } from '../features/team-runs/index.js'
+import { teamRunWorkKey } from '../features/shares/team-run-source.js'
 import artifacts from '../features/artifacts/index.js'
 import { featureHost, loadFeatures, registerFeature } from '../src/features.js'
 
@@ -281,6 +282,11 @@ test('browser routes create once, replay after an agent changes, and save the ac
   const artifact = kept.body.artifact
   assert.equal(artifact.body, 'out:0')
   assert.notEqual(artifact.id, existing.body.artifact.id)
+  const source = {kind:'team_run_step', id, position:0, run_title:'调研报告'}
+  assert.deepEqual(artifact.source, source)
+  const forged = await host.call('artifacts/v1', {method:'POST', path:`/v1/workspaces/${W}/artifacts`,
+    body:{title:'伪造来源', kind:'document', body:'Not a step result', source}, idempotency_key:'forged-work-key-1'})
+  assert.equal(forged.status,403)
   const replay = await save()
   assert.equal(replay.status, 200)
   assert.equal(replay.body.artifact.id, artifact.id)
@@ -288,6 +294,20 @@ test('browser routes create once, replay after an agent changes, and save the ac
   const saved = (await details()).body.run
   assert.equal(saved.status, 'succeeded')
   assert.deepEqual(saved.steps.map(step => step.saved_artifact_id), [artifact.id, undefined, undefined])
+  const readArtifact = id => host.call('artifacts/v1', {method:'GET', path:`/v1/workspaces/${W}/artifacts/${id}`})
+  assert.deepEqual((await readArtifact(artifact.id)).body.artifact.source, source)
+  // Older saves get their source from the exact receipt key and original output.
+  const legacy = await host.call('artifacts/v1', {method:'POST', path:`/v1/workspaces/${W}/artifacts`,
+    body:{title:'调研报告 · 第 2 步',kind:'document',body:saved.steps[1].output}, idempotency_key:teamRunWorkKey(id,1)})
+  assert.equal(legacy.body.artifact.source,undefined)
+  const legacyId = legacy.body.artifact.id
+  const edited = await host.call('artifacts/v1', {method:'POST',path:`/v1/workspaces/${W}/artifacts/${legacyId}`,
+    body:{revision:1,changes:{title:'我编辑过的旧结果',body:'这份结果已经修改'}}})
+  assert.equal(edited.status,200)
+  assert.equal((await details()).body.run.steps[1].saved_artifact_id,legacyId)
+  const repaired = (await readArtifact(legacyId)).body.artifact
+  assert.deepEqual(repaired.source,{...source,position:1})
+  assert.equal(repaired.body,'这份结果已经修改')
   assert.equal((await e.v1({method:'GET', path})).body.items.length, 1)
   const wrongWorkspace = await host.call('artifacts/savedTeamRunWorks', {workspace_id: TEAM, run_id: id, positions: [0]})
   assert.deepEqual(wrongWorkspace.items, [])

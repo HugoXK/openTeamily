@@ -27,6 +27,7 @@ const publicConversation = (row, workspaceId, agentId) => ({
   archived: row.archived_at != null, archived_at: row.archived_at ?? null, title_edited: row.initial_title != null,
   ...(row.deferred ? {deferred:true} : {}),
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
+  ...(row.studio_source ? {studio_source:JSON.parse(row.studio_source)} : {}),
 })
 const publicFile = ({title,mime,bytes,resource,sticker}, index, workspaceId, agentId, conversationId, messageId) => ({
   title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${conversationId}/messages/${messageId}/files/${index}`,
@@ -212,7 +213,7 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
           key = idempotencyKey(req.headers)
         }
         const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title,
-          memory_recall: body.memory_recall,memory_scope:body.memory_scope,idempotency_key:key })
+          memory_recall: body.memory_recall,memory_scope:body.memory_scope,idempotency_key:key,studio_source:body.studio_source })
         const conversation = publicConversation(result.conversation, workspaceId, id)
         if (!first) return {status:result.status ?? 201,body:{conversation}}
         const message = await sendMessage(workspaceId, id, conversation.id, {...first,accept_pending:true}, key)

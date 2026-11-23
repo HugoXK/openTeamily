@@ -95,6 +95,7 @@ export function createAgents({ db, host }) {
   const conversationColumns = new Set(db.prepare('PRAGMA table_info(agent_conversations)').all().map(column => column.name))
   if (!conversationColumns.has('archived_at')) db.exec('ALTER TABLE agent_conversations ADD COLUMN archived_at INTEGER')
   if (!conversationColumns.has('initial_title')) db.exec('ALTER TABLE agent_conversations ADD COLUMN initial_title TEXT')
+  if (!conversationColumns.has('studio_source')) db.exec('ALTER TABLE agent_conversations ADD COLUMN studio_source TEXT')
   db.exec(`CREATE INDEX IF NOT EXISTS active_agent_conversations ON agent_conversations(agent_id, updated DESC, id)
     WHERE archived_at IS NULL;
     CREATE INDEX IF NOT EXISTS archived_agent_conversations ON agent_conversations(agent_id, archived_at DESC, id DESC)
@@ -896,16 +897,38 @@ export function createAgents({ db, host }) {
       const key = p.idempotency_key
       if (key != null && (typeof key !== 'string' || !IDEM.test(key))) fail('invalid', 'Invalid conversation create key', 400)
       const id = key ? sha(`conversation:${agent.id}:${key}`).slice(0,32) : newId()
+      let studioSource = null
+      if (p.studio_source !== undefined) {
+        const source = p.studio_source
+        if (!source || typeof source !== 'object' || Array.isArray(source) || Object.keys(source).length !== 3 ||
+            ![source.workspace_id,source.document_id].every(id => typeof id === 'string' && ID.test(id)) ||
+            !Number.isSafeInteger(source.revision) || source.revision < 1 || !key || memoryModeChoice !== 'off') {
+          fail('invalid', 'Invalid team document discussion source', 400)
+        }
+        personalDiscussionBinding(agent)
+        studioSource = JSON.stringify({workspace_id:source.workspace_id,document_id:source.document_id,revision:source.revision})
+        if (!activeConversation(agent,id)) {
+          const check = await host.call('studio/v1',{method:'GET',
+            path:`/v1/workspaces/${source.workspace_id}/studio/documents/${source.document_id}`})
+          const document = check.body?.document
+          if ([401,403,404].includes(check.status)) fail('not-found', '团队文档已不可访问。', 404)
+          if (check.status !== 200 || document?.id !== source.document_id) {
+            fail('unavailable', '暂时无法核对团队文档。', 503)
+          }
+          if (document.revision !== source.revision) fail('studio_revision_changed', '团队文档已有更新。', 409)
+        }
+      }
       const stamp = now()
       db.exec('BEGIN')
       try {
-        const inserted = run('INSERT OR IGNORE INTO agent_conversations (id,agent_id,title,created,updated) VALUES(?,?,?,?,?)',
-          id, agent.id, title, stamp, stamp)
+        const inserted = run('INSERT OR IGNORE INTO agent_conversations (id,agent_id,title,created,updated,studio_source) VALUES(?,?,?,?,?,?)',
+          id, agent.id, title, stamp, stamp, studioSource)
         if (inserted.changes && memoryModeChoice !== undefined) setMemoryMode(id,memoryModeChoice)
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
       const row = conversation(agent, id)
       if ((row.initial_title ?? row.title) !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
+      if (row.studio_source !== studioSource) fail('conflict', 'Conversation create key was used for a different document source', 409)
       const keyForSession = `agent:${agent.id}:${row.id}`
       const mapping = row.archived_at === null ? await native.session(agent, keyForSession, row.title) : native.mappedSession(agent, keyForSession)
       const memory = memorySetting(await conversationMemoryMode(row, agent))
@@ -1418,7 +1441,7 @@ export default async function agents(host) {
   }
   wrapped.groupTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
-    return endpoints.turn(payload, {onProgress:payload.onProgress, signal:payload.signal})
+    return endpoints.turn(payload, {onProgress:payload.onProgress, signal:payload.signal, managedGroup:true})
   }
   return { pages: ['agents'], endpoints: wrapped, migrate }
 }

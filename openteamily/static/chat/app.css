@@ -2784,6 +2784,28 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
   background: transparent;
   box-shadow: none;
 }
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: .5rem;
+  min-height: 0;
+  padding: .375rem .625rem;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+  box-shadow: none;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .role {
+  grid-area: 1 / 1;
+  margin: 0;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .group-reply-state {
+  grid-area: 2 / 1;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .group-reply-retry {
+  grid-area: 1 / 2 / span 2;
+  margin: 0;
+}
 #message-list > .group-reply-job[hidden],
 #message-list > .group-reply-thinking > :not(.group-reply-state) { display: none; }
 #message-list > .group-reply-thinking > .group-reply-state {

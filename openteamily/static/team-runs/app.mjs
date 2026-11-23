@@ -30,11 +30,14 @@ export function teamRunTarget(hash = '') {
   if (!hash || hash === '#') return {};
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   const workspace = params.get('workspace'), run = params.get('run'), shared = params.get('shared'), draft = params.get('draft');
+  const step = params.get('step');
   const selections = [run, shared, draft].filter(value => value !== null).length;
-  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections ||
+  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections + Number(step !== null) ||
       (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared)) ||
+      (step !== null && (!run || !/^[0-7]$/.test(step))) ||
       (draft !== null && draft !== '1')) return {invalid: true};
-  return {workspace, ...(run ? {run} : {}), ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
+  return {workspace, ...(run ? {run} : {}), ...(step !== null ? {step:Number(step)} : {}),
+    ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
 }
 
 function readSource(value) {
@@ -197,6 +200,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const creates = new Map();
   const previewNodes = new Map();
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
+  let linkedStep, focusLinkedStep = false;
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
   let current, currentDraft, tasks = [], agents = [];
@@ -315,6 +319,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     clearTimeout(timer);
     doing = '';
     detailId = id;
+    linkedStep = undefined;
+    focusLinkedStep = false;
     current = null;
     screen = next;
     main.dataset.screen = next;
@@ -644,6 +650,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     for (const item of run.steps) {
       const card = make('li', '', 'result-step');
       card.dataset.position = String(item.position);
+      if (item.position === linkedStep) card.dataset.linkedStep = '';
       const header = make('header', '', 'result-step-header');
       const heading = make('h3', `第 ${item.position + 1} 步 · ${item.agent_name}`);
       heading.tabIndex = -1;
@@ -713,6 +720,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
     shares.selectRun(run);
     renderResults(run);
+    if (focusLinkedStep) {
+      focusLinkedStep = false;
+      const heading = node('team-run-results').querySelector('[data-linked-step] h3');
+      if (heading) {
+        heading.scrollIntoView({block:'center'});
+        heading.focus({preventScroll:true});
+      } else show('team-run-status', '找不到链接中的步骤，已打开原任务。');
+    }
   }
 
   async function loadDetail() {
@@ -736,10 +751,12 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     else if (current?.status === 'running') afterPoll(loadDetail);
   }
 
-  function openDetail(id, initial, {address = true} = {}) {
+  function openDetail(id, initial, {address = true, step} = {}) {
     if (!workspace || !ID.test(id)) return;
     changeScreen('detail', id);
-    if (address) updateLocation({run: id});
+    linkedStep = step;
+    focusLinkedStep = step !== undefined;
+    if (address) updateLocation({run:id, ...(step !== undefined ? {step} : {})});
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
@@ -873,7 +890,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
     hydrateDraft();
     if (target.draft) return showEditor({address});
-    if (target.run) return openDetail(target.run, null, {address});
+    if (target.run) return openDetail(target.run, null, {address, step:target.step});
     return showList({address: address && !target.shared, shared: target.shared});
   }
 

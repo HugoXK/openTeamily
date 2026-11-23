@@ -194,10 +194,12 @@ test("managed reply claims replay without renewing the lease and fence each atte
   assert.equal((await post(progress, snapshot)).data.error.code, "reply_progress_stale");
   now++;
   assert.equal((await post(job, start)).status, 409);
-  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: claim})).status, 409);
+  assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
+  assert.equal((await sender.ok("GET", room + "/messages")).messages[0].reply_jobs[0].error_code, "reply_timeout");
 
   assert.equal((await sender.call("POST", retry, {job_id: id, attempt: "1"})).status, 400);
   await sender.ok("POST", retry, {job_id: id, attempt: 1});
+  assert.equal((await post(answer, {...final, job_id: id, attempt: 1, claim_id: claim})).status, 409);
   await owner.ok("POST", job, {...start, attempt: 2, claim_id: other});
   assert.equal((await post(progress, {...snapshot, attempt: 2})).status, 409);
   await owner.ok("POST", job, {action: "fail", attempt: 2, claim_id: other});

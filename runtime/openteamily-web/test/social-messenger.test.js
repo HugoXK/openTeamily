@@ -309,10 +309,10 @@ test('a managed reply retries transient delivery once with the same payload and 
   const scenarios = [
     {name:'connection drops after commit', outcomes:['lost','ok'], replied:1},
     {name:'server recovers from 503', outcomes:[503,'ok'], replied:1},
-    {name:'repeated 503 runs out of retries', outcomes:[503,503], replied:0},
+    {name:'repeated 503 keeps the final reply pending', outcomes:[503,503], replied:0, pending:true},
     {name:'conflict is not retried', outcomes:[409], replied:0},
   ]
-  for (const {name,outcomes,replied} of scenarios) {
+  for (const {name,outcomes,replied,pending} of scenarios) {
     await t.test(name, async () => {
       const dir = fixture()
       const deliveries = []
@@ -360,8 +360,11 @@ test('a managed reply retries transient delivery once with the same payload and 
       })
       assert.deepEqual(actions,[
         {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true},
-        ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
+        ...(replied || pending ? [] : [{action:'fail',attempt:2,claim_id}]),
       ])
+      const saved = JSON.parse(readFileSync(join(dir,'inbox.json'), 'utf8')).completions
+      assert.deepEqual(Object.values(saved).map(completion => completion.payload),
+        pending ? [JSON.parse(deliveries[0])] : [])
     })
   }
 })

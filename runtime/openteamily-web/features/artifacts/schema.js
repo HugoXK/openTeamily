@@ -110,6 +110,14 @@ CREATE TABLE artifact_share_keys (
   secret TEXT NOT NULL
 );
 ALTER TABLE artifact_shares ADD COLUMN recovery_version INTEGER NOT NULL DEFAULT 0;
+`, `
+CREATE TABLE artifact_team_run_sources (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 7),
+  run_title TEXT NOT NULL,
+  UNIQUE(workspace_id, run_id, position));
 `]
 
 export const IMPORT_TABLES = {

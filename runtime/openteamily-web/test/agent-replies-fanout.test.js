@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -162,4 +162,137 @@ test('explicit group mentions keep native silence out of progress and history', 
   assert.deepEqual(await worker.once(), {replied:1, cursor:1})
   assert.deepEqual(passed, ['/v1/ot/agent-reply-jobs/teammate'])
   assert.deepEqual(posted, ['I have one suggestion.'])
+})
+
+test('a finished reply or pass survives a worker restart without rerunning the native turn', async t => {
+  for (const outcome of ['reply', 'pass']) {
+    await t.test(outcome, {timeout:4000}, async t => {
+      const root = await mkdtemp(join(tmpdir(), 'openteamily-pending-reply-'))
+      t.after(() => rm(root, {recursive:true, force:true}))
+      const stateFile = join(root, 'inbox.json')
+      const discretionary = outcome === 'pass'
+      const job = {job_id:'pending', attempt:3, conversation_id:'room', mode:'mention', discretionary,
+        agent_ref:'local', agent_name:'Local', message:{id:'source', revision:4, body:'Review the proposal'}}
+      const startPath = '/v1/ot/agent-reply-jobs/pending'
+      const completedPath = discretionary ? startPath : '/v1/ot/conversations/room/agent-messages'
+      const transfers = [], heartbeats = [], turns = [], reads = [], committed = []
+      const firstHeartbeat = Promise.withResolvers()
+      let claimed, available = false
+      const bs = {
+        async get(path) {
+          reads.push(path)
+          return {cursor:8, jobs:claimed ? [] : [job]}
+        },
+        async post(path, data) {
+          if (data.action === 'start') {
+            assert.equal(path,startPath)
+            assert.equal(claimed,undefined)
+            claimed = data.claim_id
+            assert.match(claimed,/^[a-f0-9-]{36}$/)
+            assert.equal(data.source_revision,4)
+            return {discretionary}
+          }
+          if (data.action === 'keepalive') {
+            assert.equal(path,startPath)
+            assert.deepEqual(data,{action:'keepalive',attempt:3,claim_token:claimed})
+            heartbeats.push(data)
+            firstHeartbeat.resolve()
+            return {}
+          }
+          assert.equal(path,completedPath)
+          assert.equal(data.attempt,3)
+          assert.equal(data.claim_id,claimed)
+          if (discretionary) assert.deepEqual(data,{action:'pass',attempt:3,claim_id:claimed})
+          else {
+            assert.equal(data.job_id,job.job_id)
+            assert.equal(data.reply_to,job.message.id)
+            assert.match(data.client_key,/^r:[a-f0-9]{64}$/)
+            assert.equal(data.body,'Completed native analysis')
+          }
+          transfers.push({path,payload:structuredClone(data)})
+          if (!available) throw Object.assign(new Error('Temporary transport loss'), {status:503})
+          committed.push(data)
+          return {}
+        },
+      }
+      const host = {
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint, request) {
+          turns.push([endpoint,request.request_id])
+          assert.equal(endpoint,'agents/groupTurn')
+          await Promise.all([firstHeartbeat.promise,delay(30)])
+          return {text:discretionary?'[PASS]':'Completed native analysis'}
+        },
+      }
+      const original = createAgentReplier({bs,host,stateFile,keepaliveIntervalMs:10})
+      assert.deepEqual(await original.once(),{replied:0,cursor:8})
+      assert.ok(heartbeats.length > 0)
+      assert.equal(transfers.length,2)
+      assert.deepEqual(committed,[])
+      const persisted = JSON.parse(await readFile(stateFile,'utf8'))
+      assert.equal(persisted.cursor,8)
+      const [{path,payload}] = Object.values(persisted.completions)
+      assert.deepEqual({path,payload},transfers[0])
+
+      available = true
+      const restarted = createAgentReplier({bs,host,stateFile})
+      await restarted.once()
+      await restarted.once()
+      assert.deepEqual(turns,[['agents/groupTurn','ots:pending:3']])
+      assert.deepEqual(transfers,Array.from({length:3},()=>({path,payload})))
+      assert.deepEqual(committed,[payload])
+      assert.deepEqual(reads.map(path=>new URL(path,'http://localhost').searchParams.get('after')),['0','8','8'])
+      assert.deepEqual(JSON.parse(await readFile(stateFile,'utf8')).completions,{})
+    })
+  }
+})
+
+test('same-owner group turns use one text-only fallback after a typed empty native reply', async t => {
+  for (const discretionary of [false,true]) {
+    await t.test(discretionary ? 'ordinary message can still pass' : 'explicit mention returns one reply', async t => {
+      const root = await mkdtemp(join(tmpdir(), 'openteamily-empty-reply-'))
+      t.after(() => rm(root, {recursive:true, force:true}))
+      const body = discretionary ? 'What should we adjust?' : '@Local Please review'
+      const message = {id:'source', revision:1, body}
+      const job = {job_id:'empty', attempt:1, conversation_id:'room', mode:'mention', discretionary,
+        agent_ref:'local', agent_name:'Local', message, context:[message]}
+      const turns = [], replies = [], passes = [], previews = []
+      const bs = {
+        async get() { return {cursor:1,jobs:[job]} },
+        async post(path, data) {
+          if (data.action === 'start') return {discretionary}
+          if (data.action === 'pass') passes.push(data)
+          else if (path.endsWith('/agent-messages')) replies.push(data.body)
+          else if (path.endsWith('/progress')) previews.push(data.text)
+          else assert.fail('The recovered turn must not mark the original job failed')
+          return {}
+        },
+      }
+      const host = {
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint, request) {
+          turns.push(endpoint)
+          assert.ok(request.text.includes(body))
+          if (endpoint === 'agents/groupTurn') throw Object.assign(new Error('No native message'), {code:'agents/empty-reply'})
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(request.includePersona,true)
+          assert.equal(request.discretionary,discretionary)
+          assert.equal(request.request_id,undefined)
+          assert.match(request.text,/Use only the shared material/)
+          if (discretionary) {
+            request.onProgress('[P')
+            request.onProgress('[PASS]')
+            return {text:'[PASS]'}
+          }
+          return {text:'One change to the release plan.'}
+        },
+      }
+      const worker = createAgentReplier({bs,host,stateFile:join(root,'inbox.json')})
+      assert.deepEqual(await worker.once(),{replied:Number(!discretionary),cursor:1})
+      assert.deepEqual(turns,['agents/groupTurn','agents/groupTextTurn'])
+      assert.deepEqual(replies,discretionary?[]:['One change to the release plan.'])
+      assert.equal(passes.length,Number(discretionary))
+      assert.ok(previews.every(text=>text===''), 'Fallback may clear the preview, but it must never expose PASS')
+    })
+  }
 })
