@@ -8,6 +8,7 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
+import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/chat/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
@@ -3469,6 +3470,56 @@ test('team document links open the exact same-origin workspace and document', as
   assert.equal(studioDocumentHrefInMessage('讨论 ' + href,origin),href);
   assert.equal(studioDocumentHrefInMessage('https://elsewhere.test'+href,origin),'');
   assert.equal(studioDocumentHrefInMessage(origin+href+'&studio='+id,origin),'');
+});
+
+test('assistant Markdown tables handle alignment, optional outer pipes, escapes and code spans', () => {
+  const lines = [
+    '左 | 中 | 右 | 默认',
+    ':--- | :---: | ---: | ---',
+    '| 甲\\|乙 | `A|B` | ``C`|D`` | `E\\|F` |',
+    '短行 | 中间 | 右边',
+    '| 多余 | 单元格 | 会被 | 忽略 | 不属于表格 |',
+    '### 后续段落 | 继续显示',
+  ];
+  const result = readMarkdownTable(lines, 0);
+  assert.deepEqual(result, {
+    next:5,
+    block:{
+      type:'table', header:['左','中','右','默认'], alignments:['left','center','right',null],
+      rows:[['甲|乙','`A|B`','``C`|D``','`E|F`'], ['短行','中间','右边',''], ['多余','单元格','会被','忽略']],
+    },
+  });
+  assert.equal(readMarkdownTable(['甲 | 乙','--- | ouch'], 0), null);
+  assert.equal(readMarkdownTable(['甲 | 乙','--- | --- | ---'], 0), null);
+  assert.equal(readMarkdownTable(['甲 \\| 乙','--- | ---'], 0), null);
+  assert.deepEqual(readMarkdownTable(['| 单列 |','| --- |','| 行 |'], 0).block.rows, [['行']]);
+  const rows = Array.from({length:121}, () => '甲 | 乙');
+  const bounded = readMarkdownTable([lines[0],lines[1],...rows], 0);
+  assert.equal(bounded.block.rows.length, 120);
+  assert.equal(bounded.next, 122);
+});
+
+test('assistant Markdown tables render scoped table headers and delegate only cell content', () => {
+  const {doc} = fakeChatDocument(chatHtml());
+  doc.documentElement = {lang:'zh-Hans'};
+  const lines = ['| 名称 | 数据 |','| --- | ---: |','| **本周** | <img src=x> |'];
+  const cells = [];
+  const content = renderMarkdownTable(doc, readMarkdownTable(lines, 0).block, (node, text) => {
+    cells.push(text);
+    node.textContent = text;
+  });
+  const [table] = content.children;
+  const [head, body] = table.children;
+  const headers = head.children[0].children;
+  assert.equal(content.className, 'chat-markdown-table-scroll');
+  assert.equal(content.tabIndex, 0);
+  assert.equal(content.getAttribute('aria-label'), '表格');
+  assert.deepEqual([table.tagName, head.tagName, body.tagName], ['TABLE','THEAD','TBODY']);
+  assert.ok(headers.every(cell => cell.tagName === 'TH' && cell.getAttribute('scope') === 'col'));
+  assert.equal(headers[1].getAttribute('data-align'), 'right');
+  assert.deepEqual(cells, ['名称','数据','**本周**','<img src=x>']);
+  assert.deepEqual(body.children[0].children.map(cell => cell.tagName), ['TD','TD']);
+  assert.equal(body.children[0].children[1].textContent, '<img src=x>');
 });
 
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {

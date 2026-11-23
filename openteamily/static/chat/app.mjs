@@ -9,7 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
-import { renderMarkdown } from '../memory/rich.mjs';
+import { appendChatMarkdown, hasExplicitRichContent } from './rich-content.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
@@ -344,14 +344,9 @@ export function meetingCallHrefInMessage(text, origin) {
 
 function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
   const source = String(text || '');
-  if (assistantReply && source.trim()) {
-    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews, (parent, value) => {
-      const markdown = doc.createElement('div');
-      markdown.className = 'chat-markdown';
-      renderMarkdown(doc, markdown, value);
-      parent.append(markdown);
-      return markdown;
-    });
+  if ((assistantReply && source.trim()) || hasExplicitRichContent(source)) {
+    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews,
+      (parent, value) => appendChatMarkdown(doc, parent, value));
   } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;

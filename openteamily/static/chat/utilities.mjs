@@ -252,9 +252,12 @@ export function renderMessageText(document, root, text, folding = 'standard', li
     let preview = String(text);
     if (renderBody) {
       const body = renderBody(details, text);
-      preview = Array.from(body.children, block => ['OL', 'UL'].includes(block.tagName)
-        ? Array.from(block.children, item => item.textContent).join(' · ')
-        : block.textContent).join(' ').trim() || preview;
+      preview = Array.from(body.children, block => {
+        if (block.dataset?.summary) return block.dataset.summary;
+        if (['OL', 'UL'].includes(block.tagName)) return Array.from(block.children, item => item.textContent).join(' · ');
+        const headings = block.querySelectorAll?.('thead th');
+        return headings?.length ? Array.from(headings, cell => cell.textContent).join(' · ') : block.textContent;
+      }).join(' ').trim() || preview;
     } else {
       const content = document.createElement('span'); content.setAttribute('style','white-space:pre-wrap'); content.textContent = text;
       details.append(content);

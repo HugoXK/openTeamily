@@ -4,7 +4,7 @@
 // innerHTML) and serialises the edited DOM back. Self-written, no upstream.
 
 const SAFE_HREF = /^(https?:\/\/|mailto:|\/(?!\/)|#)/i;
-const ESCAPABLE = '\\`*_~[]#>-+.!';
+const ESCAPABLE = '\\`*_~[]#>-+.!|';
 
 export function safeHref(url) {
   const value = String(url || '').trim();
@@ -12,20 +12,30 @@ export function safeHref(url) {
 }
 
 // ---- markdown -> blocks -------------------------------------------------
-export function markdownToBlocks(source) {
+export function markdownToBlocks(source, {readTable} = {}) {
   const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n');
   const blocks = [];
   let i = 0;
+  const tableAt = index => lines[index]?.includes('|') ? readTable?.(lines, index) : null;
   while (i < lines.length) {
     const line = lines[i];
     if (!line.trim()) { i += 1; continue; }
-    const fence = /^```\s*([\w-]{0,20})\s*$/.exec(line.trim());
+    const fence = /^(`{3,}|~{3,})\s*([\w+.#-]{0,30})\s*$/.exec(line.trim());
     if (fence) {
       const body = [];
+      const marker = fence[1];
+      const closes = value => value.length >= marker.length && !Array.from(value).some(character => character !== marker[0]);
       i += 1;
-      while (i < lines.length && lines[i].trim() !== '```') { body.push(lines[i]); i += 1; }
-      i += 1;
-      blocks.push({type: 'code', text: body.join('\n')});
+      while (i < lines.length && !closes(lines[i].trim())) { body.push(lines[i]); i += 1; }
+      const closed = i < lines.length;
+      if (closed) i += 1;
+      blocks.push({type: 'code', text: body.join('\n'), language:fence[2].toLowerCase(), closed});
+      continue;
+    }
+    const table = tableAt(i);
+    if (table) {
+      blocks.push(table.block);
+      i = table.next;
       continue;
     }
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);
@@ -49,7 +59,7 @@ export function markdownToBlocks(source) {
     }
     const body = [line];
     i += 1;
-    while (i < lines.length && lines[i].trim() && !/^(#{1,3})\s|^```|^\s*>|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^\s*(-{3,}|\*{3,})\s*$/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !tableAt(i) && !/^(#{1,3})\s|^\s*(?:`{3,}|~{3,})|^\s*>|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^\s*(-{3,}|\*{3,})\s*$/.test(lines[i])) {
       body.push(lines[i]); i += 1;
     }
     blocks.push({type: 'p', text: body.join('\n')});
@@ -78,8 +88,25 @@ export function inlineTokens(text) {
     if (ch === '\\' && i + 1 < src.length && ESCAPABLE.includes(src[i + 1])) { buf += src[i + 1]; i += 2; continue; }
     if (ch === '\n') { flush(); out.push({type: 'br'}); i += 1; continue; }
     if (ch === '`') {
-      const end = src.indexOf('`', i + 1);
-      if (end > i + 1) { flush(); out.push({type: 'code', text: src.slice(i + 1, end)}); i = end + 1; continue; }
+      let start = i + 1;
+      while (src[start] === '`') start += 1;
+      const length = start - i;
+      let end = src.indexOf('`', start);
+      while (end !== -1) {
+        let after = end + 1;
+        while (src[after] === '`') after += 1;
+        if (after - end === length) break;
+        end = src.indexOf('`', after);
+      }
+      if (end > start) {
+        flush();
+        out.push({type:'code', text:src.slice(start, end)});
+        i = end + length;
+        continue;
+      }
+      buf += src.slice(i, start);
+      i = start;
+      continue;
     }
     if (ch === '[' && src[i + 1] !== '[') {
       const close = src.indexOf('](', i + 1);
@@ -143,12 +170,15 @@ function appendInline(document, parent, tokens) {
   }
 }
 
-export function renderMarkdown(document, root, source) {
+export function renderMarkdown(document, root, source, {readTable, renderTable, renderCode} = {}) {
   if (!root) return;
   while (root.firstChild) root.removeChild(root.firstChild);
-  for (const block of markdownToBlocks(source)) {
+  for (const block of markdownToBlocks(source, {readTable})) {
     let el;
-    if (block.type === 'hr') el = document.createElement('hr');
+    if (block.type === 'table') {
+      el = renderTable(document, block, (cell, text) => appendInline(document, cell, inlineTokens(text)));
+    } else if (block.type === 'code' && renderCode) el = renderCode(document, block);
+    else if (block.type === 'hr') el = document.createElement('hr');
     else if (block.type === 'code') {
       el = document.createElement('pre');
       const code = document.createElement('code');
