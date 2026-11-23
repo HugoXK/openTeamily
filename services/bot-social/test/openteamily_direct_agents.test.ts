@@ -91,6 +91,7 @@ test("a human DM keeps its thread and sends paired prompts through isolated mana
   assert.deepEqual(receipt,{ok:true,direct_text_only:true,direct_prompt:first.body,
     quoted_message:{author:(await worker.ok("GET","/v1/ot/me")).display_name,text:quote.body}});
   assert.deepEqual(await worker.ok("POST",jobPath(selected),claim),receipt);
+  assert.equal((await worker.call("POST",jobPath(selected),{action:"pass",attempt:1,claim_id:claim.claim_id})).status,409);
   assert.equal((await sender.call("POST",jobPath(sameOwner),{...claim,accept_direct_text_turn:undefined})).status,409);
   const sameOwnerClaim = {...claim,claim_id:randomUUID()};
   assert.equal((await sender.ok("POST",jobPath(sameOwner),sameOwnerClaim)).direct_text_only,true);

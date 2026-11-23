@@ -1,28 +1,34 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
-import { mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { countMentionedGroupMembers, hasEveryoneMention, hasGroupAllMention, mountAgentMentions } from './mentions.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, chatUploadProgress, deferModule, localChatFile, mountChatFiles,
+  ownSocialReceipt, renderChatFile, sendPrivateAttachmentMessage, sendSocialAttachmentMessage, unclearSocialDelivery } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
-import { mountGroupInviteLink } from './group-invite-link.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { meetingCodeFromHash, meetingDraftFromCallHref, stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, personalDraftScope, signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
+import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
+  signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
+const loadRichContent = deferModule('./rich-content.mjs');
+let richContent;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
-  chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
+  agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
-import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
+import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
-  ['artifacts', 'Artifacts'],
+  ['artifacts', '作品'],
+  ['memory', '记忆'],
   ['contacts', '联系人'],
   ['groups', '群组'],
   ['agents', '智能体'],
@@ -243,7 +249,7 @@ export function applySearchMore(node, state) {
   node.disabled = Boolean(state && state.loading);
 }
 
-export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
+export const GROUP_CREATE_INTRO = '选择联系人或智能体加入群组。';
 export const GROUP_CREATE_MODES = [
   ['custom', '自定义群组'],
   ['team', 'AI 智能体团队'],
@@ -338,10 +344,90 @@ export function meetingCallHrefInMessage(text, origin) {
   return '';
 }
 
-function renderMessageBody(doc, node, text, prefs) {
+function mayContainChatMarkdown(text, assistantReply) {
+  if (/^[ \t]*(?:```|~~~)/m.test(text) ||
+      (text.includes('|') && text.includes('\n') && /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\||$)/m.test(text))) return true;
+  return assistantReply && (/[\\`*_~]/.test(text) || /\]\(|\n[ \t]*\n/.test(text) ||
+    /^(?:#{1,6}\s|[ \t]*(?:>|[-+]\s|\d+[.)]\s|-{3,}$))/m.test(text));
+}
+
+function appendMessageMarkdown(doc, parent, source, assistantReply, updatePreview) {
+  const node = doc.createElement('div');
+  node.textContent = source;
+  parent.append(node);
+  const format = module => {
+    if (!assistantReply && !module.hasExplicitRichContent(source)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    module.renderChatMarkdown(doc, node, source);
+    updatePreview?.();
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  };
+  if (richContent) format(richContent);
+  else {
+    void loadRichContent().then(module => {
+      richContent = module;
+      if (node.isConnected !== false) format(module);
+    }).catch(() => {
+      // The message text and transcript remain usable if formatting fails to load.
+    });
+  }
+}
+
+const streamingReplies = new WeakMap();
+const streamingReplySource = node => streamingReplies.get(node)?.source || '';
+
+function paintStreamingReply(doc, node, source) {
+  const view = streamingReplies.get(node) || {};
+  view.source = source;
+  streamingReplies.set(node, view);
+  node.hidden = !source;
+  if (!source || (!view.markdown && !mayContainChatMarkdown(source, true))) {
+    view.markdown = null;
+    node.textContent = source;
+    return;
+  }
+
+  const format = module => {
+    if (!view.markdown) {
+      view.markdown = doc.createElement('div');
+      view.markdown.className = 'chat-markdown';
+      node.replaceChildren(view.markdown);
+    }
+    module.renderStreamingMarkdown(doc, view.markdown, view.source);
+  };
+  if (richContent) {
+    format(richContent);
+    return;
+  }
+
+  node.textContent = source;
+  view.loading ??= loadRichContent().then(module => {
+    richContent = module;
+    if (node.isConnected === false || !mayContainChatMarkdown(view.source, true)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    format(module);
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  }).catch(() => {}).finally(() => { view.loading = null; });
+}
+
+function renderMessageBody(doc, node, text, prefs, assistantReply = false, preview) {
   const source = String(text || '');
-  // Bold markers are ours; everything else keeps the shared folding and link preview path.
-  if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
+  const rich = mayContainChatMarkdown(source, assistantReply) &&
+    (!richContent || assistantReply || richContent.hasExplicitRichContent(source));
+  if (rich) {
+    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews, (parent, value, updatePreview) => {
+      const streamed = assistantReply && streamingReplies.get(preview);
+      if (!streamed?.markdown || !value.startsWith(streamed.source.trimEnd())) {
+        appendMessageMarkdown(doc, parent, value, assistantReply, updatePreview);
+        return;
+      }
+      richContent.renderStreamingMarkdown(doc, streamed.markdown, value, {complete:true});
+      parent.append(streamed.markdown);
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    });
+  } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
   const references = [
@@ -361,6 +447,7 @@ function renderMessageBody(doc, node, text, prefs) {
     link.title = '';
     if (!existing) node.append(link);
   }
+  return rich || node.children[0]?.tagName === 'DETAILS';
 }
 
 export function highlightParts(text, query) {
@@ -388,7 +475,12 @@ export function groupInfoCounts(conversation) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
+    + '。用 @ 指定智能体，或用 @所有人请群内智能体回复。' : '';
+}
+
+function activeGroupAgent(conversation, target) {
+  return target && (conversation?.agent_members || []).find(agent => !agent.archived && !agent.native_deleted &&
+    agent.owner_id === target.owner_id && (agent.id || agent.agent_id) === target.agent_id);
 }
 
 // Personal-runtime states from server-side auto-provisioning (operator opt-in).
@@ -444,7 +536,7 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function writeHash(values) {
+function writeHash(values, {push = false} = {}) {
   const params = new URLSearchParams();
   if (values.workspace) params.set('workspace', values.workspace);
   if (values.agent) params.set('agent', values.agent);
@@ -453,7 +545,10 @@ function writeHash(values) {
   if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
-  if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
+  if (location.hash === hash) return;
+  const path = location.pathname + hash;
+  if (push) history.pushState(null, '', path);
+  else history.replaceState(null, '', path);
 }
 
 function formatTime(value) {
@@ -589,7 +684,17 @@ export function notificationBadgeText(count) {
   return value > 99 ? '99+' : String(value);
 }
 
-export function notificationSummary(item) {
+const AUTOMATION_RUN_FINISHED = 'automation.run_finished';
+
+export function notificationSummary(item, label = zh => zh) {
+  if (item.kind === AUTOMATION_RUN_FINISHED) {
+    const status = {
+      succeeded: label('已完成', 'completed'), failed: label('失败', 'failed'),
+      timeout: label('已超时', 'timed out'), interrupted: label('已中断', 'was interrupted'),
+    }[item.status] || label('已结束', 'ended');
+    const title = item.title || label('自动化', 'Automation');
+    return label(`「${title}」运行${status}`, `“${title}” ${status}`);
+  }
   const workSummary = workNotificationSummary(item);
   if (workSummary) return workSummary;
   if (item.kind === 'discover.published') {
@@ -778,10 +883,16 @@ const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
 const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
 const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
-const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder', 'team.owner_transferred']);
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder', 'team.owner_transferred', AUTOMATION_RUN_FINISHED]);
 
 export function notificationTarget(item, workspace) {
   if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === AUTOMATION_RUN_FINISHED) {
+    const {workspace_id, automation_id:automation, run_id:run} = item;
+    if (workspace_id !== workspace || ![workspace, automation, run].every(id => typeof id === 'string' && NOTIFICATION_ID.test(id))) return null;
+    const target = '/automations?' + new URLSearchParams({workspace, automation, run});
+    return item.path == null || item.path === target ? target : null;
+  }
   if (item?.kind === 'team.owner_transferred') {
     if (!NOTIFICATION_ID.test(workspace || '') || item.workspace_id !== workspace) return null;
     return '/members#' + new URLSearchParams({workspace});
@@ -826,7 +937,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaces = [];
   let agents = [];
   let members = [];
-  let artifacts = [];
   let socialConversations = [];
   let sessions = [];
   let currentAgent = null;
@@ -841,6 +951,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pinReceipt = 0;
   let sessionTransition = null;
   let currentSource = 'agent';
+  const workspaceInvite = mountWorkspaceInvite(document, {
+    request,
+    context() {
+      if (!servedByDsbot || !currentUser || !currentConversation || currentConversation.public_agent) return null;
+      const space = workspaces.find(item => item.id === workspaceId());
+      if (!space || space.kind === 'personal' || !canManage(space.role)) return null;
+      if (currentConversation.workspace_id && currentConversation.workspace_id !== space.id) return null;
+      return {workspace:space.id,scope:sendScope()};
+    },
+  });
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
@@ -849,7 +969,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let stickerPicker;
   const stickerSaves = new Map();
   const messageUtilities = mountMessageUtilities(document, {
-    request, notify: show,
+    request, notify: show, formatAnnouncementTime: value => formatTime(value / 1000),
     composerContext: () => {
       if (!currentConversation && !(currentSource === 'agent' && currentAgent)) return null;
       const wid = workspaceId();
@@ -922,11 +1042,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     },
   };
+  let groupMentions = null;
   const agentMentions = mountAgentMentions(document, () => {
     const direct = directAgentRoom(currentConversation);
     if (!currentUser || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
         (currentConversation.kind !== 'group' && !direct)) return null;
-    return {scope: sendScope(), agents: currentConversation.agent_members || [], direct};
+    return {scope:sendScope(), agents:currentConversation.agent_members || [],
+      members:currentConversation.members || [], viewerId:currentUser.id, direct};
+  }, (targets, stale) => {
+    groupMentions = {scope:sendScope(), targets, stale};
+    renderGroupComposerRouting();
   });
   function voiceContext() {
     if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -941,6 +1066,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const {wid, cid, scope} = destination;
       const draftScope = sendScope();
       const reply = replyDrafts.get(draftScope);
+      if (reply?.available === false) throw new Error(uiLabel('请先确认或取消引用。', 'Check or remove the quote before sending.'));
       const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
         {voice, ...(reply ? {reply_to: reply.message_id} : {})}, {'Idempotency-Key': key});
       if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
@@ -1020,6 +1146,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let attachmentSender;
   const pendingSends = new Map();
   const privateReplyRetries = new Map();
+  const stoppingPrivateReplies = new Set();
+  const replyStopButton = document.getElementById('chat-reply-stop');
   const privateThreadWrites = new Map();
   const privateThreadReceipts = new Map();
   let privateThreadReceipt = 0;
@@ -1027,6 +1155,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const readingPositions = new Map();
   const sessionRows = new Map();
   const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
@@ -1045,7 +1174,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncMemoryRecall(scope = sendScope()) {
     if (!memoryRecall) return;
-    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
+    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent) && !currentConversation?.deferred;
     memoryRecall.hidden = !visible;
     if (!visible) return;
     memoryRecall.value = memoryWrites.get(scope) ?? recallMode(scope);
@@ -1084,34 +1213,178 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const replyPanel = document.getElementById('chat-reply-preview');
   const replyDraftTitle = document.getElementById('chat-reply-author');
   const replyDraftBody = document.getElementById('chat-reply-excerpt');
+  const replyDraftRetry = document.getElementById('chat-reply-retry');
+  const replyDraftKey = scope => 'openteamily.chat-quote:' + scope;
+  const quoteBlocksSend = scope => replyDrafts.get(scope)?.available === false;
+  document.getElementById('chat-body').addEventListener('input', renderGroupComposerRouting);
+
+  function renderGroupComposerRouting() {
+    const node = document.getElementById('group-composer-routing');
+    const conversation = currentSource === 'social' && currentConversation?.kind === 'group' &&
+      !currentConversation.public_agent ? currentConversation : null;
+    const scope = sendScope();
+    const mentions = groupMentions?.scope === scope ? groupMentions : null;
+    const agents = (conversation?.agent_members || []).filter(agent => !agent.archived && !agent.native_deleted);
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    const body = document.getElementById('chat-body').value;
+    const everyone = conversation && hasEveryoneMention(body);
+    node.hidden = !conversation || quoteBlocksSend(scope);
+    if (node.hidden) return;
+    const people = countMentionedGroupMembers(body, {members:conversation.members, viewerId:currentUser?.id});
+    const hasFiles = Boolean(attachmentSender?.draftFiles(scope).length);
+    const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
+    const auto = agents.some(agent => agent.auto_reply);
+    let text, kind = 'default';
+    let asksAgents = false;
+    if (everyone) {
+      kind = 'targeted';
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
+        : uiLabel('将提及群内所有成员', 'Everyone in the group will be mentioned');
+    } else if (hasGroupAllMention(body)) {
+      kind = 'targeted';
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
+        : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (mentions?.stale) {
+      kind = 'attention';
+      text = uiLabel('请移除不可用的智能体后再发送。', 'Remove unavailable agents before sending.');
+    } else if (mentions?.targets.length) {
+      kind = 'targeted';
+      asksAgents = true;
+      const count = mentions.targets.length;
+      text = people
+        ? uiLabel(`将提及 ${people} 位成员，并请 ${count} 位智能体回复`,
+          `Mention ${people} ${people === 1 ? 'member' : 'members'} and ask ${count} ${count === 1 ? 'agent' : 'agents'} to reply`)
+        : uiLabel(`已指定 ${count} 位智能体回复`, `${count} ${count === 1 ? 'agent' : 'agents'} selected to reply`);
+    } else if (people) {
+      kind = 'targeted';
+      text = uiLabel(`将提及 ${people} 位群成员`, `${people} group ${people === 1 ? 'member' : 'members'} will be mentioned`);
+    } else if (hasFiles) {
+      text = agents.length
+        ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
+        : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
+    } else if (quote) {
+      kind = 'targeted';
+      text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
+    } else if (policy?.mode === 'everyone') {
+      text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
+    } else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) text = uiLabel(`${lead.name} 优先判断是否回复 · 可用 @所有人`, `${lead.name} decides whether to reply first · Use @all to ask them all`);
+      else {
+        kind = 'attention';
+        text = agents.length
+          ? uiLabel('优先智能体不可用 · 由其他智能体判断是否回复', 'Preferred agent unavailable · Other agents decide whether to reply')
+          : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+      }
+    } else if (!agents.length) text = uiLabel('用 @所有人提及群内所有成员', 'Use @all to mention everyone in the group');
+    else if (auto) text = uiLabel('开启自动回复的智能体判断是否回复 · 可用 @所有人',
+      'Agents with auto-reply enabled decide whether to reply · Use @all to ask all agents');
+    else text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
+    if (hasFiles && asksAgents) {
+      if (!body.trim()) {
+        kind = 'attention';
+        text = uiLabel('写一段附言，让选中的智能体知道要回复什么。', 'Add a caption for the selected agents to answer.');
+      } else {
+        text += uiLabel(' · 按附言回复', ' · Replies use the caption');
+      }
+    }
+    const label = document.getElementById('group-composer-routing-text');
+    if (label.textContent !== text) label.textContent = text;
+    node.dataset.kind = kind;
+  }
 
   function renderReplyDraft() {
     if (!replyPanel) return;
-    const reply = currentSource === 'social' && replyDrafts.get(sendScope());
+    const scope = sendScope();
+    const reply = currentSource === 'social' && replyDrafts.get(scope);
     replyPanel.hidden = !reply;
-    const title = reply ? '回复 ' + reply.author : '';
-    const excerpt = reply ? reply.excerpt : '';
+    const state = reply?.state || '';
+    const title = !reply ? '' : state ? uiLabel('回复引用', 'Reply quote') : uiLabel('回复 ' + reply.author, 'Reply to ' + reply.author);
+    const excerpt = state === 'checking' ? uiLabel('正在核对原消息…', 'Checking the original message…')
+      : state === 'retry' ? uiLabel('无法核对原消息，请重试或取消引用。', 'Couldn’t check the original message. Retry or remove the quote.')
+        : state === 'missing' ? uiLabel('原消息已不可用，请取消引用。', 'The original message is unavailable. Remove the quote to send.')
+          : reply?.excerpt || '';
     if (replyDraftTitle.textContent !== title) replyDraftTitle.textContent = title;
     if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
+    if (replyDraftRetry) replyDraftRetry.hidden = state !== 'retry';
+    const changed = (replyPanel.dataset.state || '') !== state;
+    replyPanel.dataset.state = state;
+    syncComposerSend(scope);
+    if (changed) syncPlusState();
+    renderGroupComposerRouting();
+  }
+
+  function setReplyDraft(scope, reply) {
+    if (reply) replyDrafts.set(scope, reply);
+    else replyDrafts.delete(scope);
+    try {
+      const storage = document.defaultView?.sessionStorage;
+      if (reply) storage?.setItem(replyDraftKey(scope), reply.message_id);
+      else storage?.removeItem(replyDraftKey(scope));
+    } catch {}
+    if (sendScope() === scope) renderReplyDraft();
+  }
+
+  async function restoreReplyDraft(items, {allowLookup = true, retry = false} = {}) {
+    if (currentSource !== 'social' || !currentUser || !currentConversation?.id) return;
+    const scope = sendScope();
+    const current = replyDrafts.get(scope);
+    let id = current?.message_id;
+    if (!id) {
+      try { id = document.defaultView?.sessionStorage?.getItem(replyDraftKey(scope)); } catch {}
+    }
+    if (!chatPathId(id)) return;
+    const cid = currentConversation.id;
+    const wid = workspaceId();
+    const matching = item => item.id === id && (!item.conversation_id || item.conversation_id === cid)
+      && (!item.workspace_id || item.workspace_id === wid);
+    const pending = {message_id:id, available:false, state:'checking'};
+    const apply = item => setReplyDraft(scope, item && !item.retracted
+      ? composerReply(item, socialMessageAuthor(item)) : {...pending, state:'missing'});
+    const visible = items.find(matching);
+    if (visible) {
+      if (!current?.available || visible.retracted) apply(visible);
+      return;
+    }
+    if (!allowLookup || current?.available || (!retry && current?.state === 'missing')) return;
+    setReplyDraft(scope, pending);
+    const query = new URLSearchParams({around:id, limit:'1'});
+    const result = await request('GET', `${socialBase()}/${cid}/messages?${query}`, undefined, undefined, AbortSignal.timeout(4500))
+      .catch(() => ({status:0}));
+    if (sendScope() !== scope || replyDrafts.get(scope) !== pending) return;
+    if (result.status === 200 || [403,404,410].includes(result.status)) {
+      const items = result.status === 200 && Array.isArray(result.body?.items) ? result.body.items : [];
+      apply(items.find(matching));
+    } else setReplyDraft(scope, {...pending, state:'retry'});
+  }
+
+  function socialMessageAuthor(item, people = currentConversation?.members || members) {
+    if (item.role === 'agent') return item.reply_job_id ? groupReplyAuthor(item)
+      : (item.agent_name || uiLabel('智能体', 'Agent')) + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot');
+    if (item.user_id === currentUser?.id) return uiLabel('我', 'Me');
+    return people.find(entry => entry.user_id === item.user_id)?.username || uiLabel('成员', 'Member');
   }
 
   function composerReply(item, author) {
     const excerpt = String(item.body || item.attachment?.title || (item.voice ? '语音消息' : '消息'))
       .replace(/\s+/g, ' ').trim().slice(0, 120);
-    return {message_id: item.id, author, excerpt, available: true};
+    const agentTarget = item.role === 'agent' && item.agent_id && item.agent_owner_id ?
+      {agent_id:item.agent_id, owner_id:item.agent_owner_id} : undefined;
+    return {message_id: item.id, author, excerpt, available: true, agentTarget};
   }
 
   function composeReply(item, author) {
     if (currentSource !== 'social' || item.retracted) return;
-    replyDrafts.set(sendScope(), composerReply(item, author));
-    renderReplyDraft();
+    setReplyDraft(sendScope(), composerReply(item, author));
     document.getElementById('chat-body').focus();
   }
 
   function consumeReplyDraft(scope, reply) {
     if (reply && replyDrafts.get(scope) === reply) {
-      replyDrafts.delete(scope);
-      if (sendScope() === scope) renderReplyDraft();
+      setReplyDraft(scope, null);
     }
   }
 
@@ -1119,6 +1392,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     consumeReplyDraft(sendScope(), replyDrafts.get(sendScope()));
     document.getElementById('chat-body').focus();
   });
+  replyDraftRetry?.addEventListener('click', () => void restoreReplyDraft(lastSocialItems, {retry:true}));
 
   function quoteBlock(reply, interactive = false) {
     const canJump = interactive && reply.available;
@@ -1156,6 +1430,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Boolean(sessionTransition?.pending) || (currentSource === 'social'
       ? currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false
       : Boolean(currentAgent?.archived || currentAgent?.native_deleted || currentConversation?.archived || currentConversation?.open === false));
+  }
+
+  function syncComposerSend(scope = sendScope()) {
+    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope) || quoteBlocksSend(scope);
   }
 
   function stickerContext() {
@@ -1295,7 +1573,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const closed = sendClosed();
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
-    document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncComposerSend(scope);
+    syncPrivateReplyStop();
     agentMentions.refresh();
     syncStickers();
     syncPrivateThreadControls();
@@ -1324,7 +1603,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentSource === 'agent' && currentAgent) {
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
-      const label = pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
+      const label = pending ? uiLabel('正在回复…', 'Replying…') : currentConversation?.deferred
+        ? uiLabel('草稿 · 发送首条消息后保存对话', 'Draft · Send the first message to save this chat')
+        : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot');
       setChatSubtitle(currentConversation?.title_edited ? `${currentAgent.name} · ${pending ? label : 'DS-Bot'}` : label, pending);
     }
     const empty = document.getElementById('chat-empty');
@@ -1338,10 +1619,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
+    const action = job.quoteUnavailable ? uiLabel('恢复到输入框', 'Restore to composer') : uiLabel('重试', 'Retry');
+    if (job.retry.textContent !== action) job.retry.textContent = action;
   }
 
-  function makeSendJob(queue, message, files, reply, sticker) {
-    const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+  function restoreUnavailableQuote(queue, job) {
+    if (sendScope() !== queue.scope || sendClosed()) return false;
+    const input = document.getElementById('chat-body');
+    if (input.value || replyDrafts.has(queue.scope) || attachmentSender?.draftFiles?.(queue.scope)?.length ||
+        !agentMentions.restoreDraft(job.message.agent_mentions)) return false;
+    if (job.files.length && !attachmentSender?.addFiles(job.files, queue.scope, {stage:true})) return false;
+    input.value = job.message.body;
+    publicDraft.persist();
+    setReplyDraft(queue.scope, {message_id:job.reply.message_id, state:'missing', available:false});
+    removeSendJob(queue, job);
+    return true;
+  }
+
+  function makeSendJob(queue, message, files, reply, sticker, sendKey) {
+    const firstText = servedByDsbot && !queue.social && !queue.conversationId &&
+      !queue.jobs.length && !files.length && !reply && !sticker;
+    const key = sendKey || (firstText ? queue.createKey : idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-'));
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
     const body = document.createElement('div');
@@ -1377,6 +1675,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
+      if (job.quoteUnavailable) {
+        if (restoreUnavailableQuote(queue, job)) {
+          renderPendingSend();
+          document.getElementById('chat-body').focus({preventScroll:true});
+        } else {
+          job.state = uiLabel('请先处理输入框中的草稿、引用或提及，再恢复这条消息。',
+            'Finish or clear the current draft, quote, or mentions before restoring this message.');
+          paintSendJob(job);
+        }
+        return;
+      }
       job.failed = false;
       job.state = '等待发送…';
       paintSendJob(job);
@@ -1390,8 +1699,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return job;
   }
 
-  function removeSendJob(queue, job) {
+  function removeSendJob(queue, job, {keepStored = false} = {}) {
     queue.jobs = queue.jobs.filter(item => item !== job);
+    if (job.storedText && !keepStored) savePendingPrivateText(document.defaultView, queue.scope, job.key);
     job.bubble.remove();
     job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
@@ -1403,10 +1713,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopGroupReplyProgress();
     stopPolling();
     for (const queue of pendingSends.values()) {
-      for (const job of queue.jobs) removeSendJob(queue,job);
+      for (const job of queue.jobs) removeSendJob(queue,job,{keepStored:true});
     }
     pendingSends.clear();
     privateReplyRetries.clear();
+    stoppingPrivateReplies.clear();
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
     groupManagementReceipts.clear();
@@ -1435,10 +1746,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? {message, reply} : null;
   }
 
-  async function privateSendReceipt(target, key, current, accept = () => true) {
+  function privateHistoryAfterSends(items, sends) {
+    if (!sends?.length) return items;
+    const delivered = new Map();
+    for (const {delivery} of sends) {
+      if (!delivery) continue;
+      delivered.set(delivery.message.id, delivery.message);
+      delivered.set(delivery.reply.id, delivery.reply);
+    }
+    if (!delivered.size) return items;
+    const reconciled = items.map(item => {
+      const receipt = delivered.get(item.id);
+      delivered.delete(item.id);
+      return receipt && waitingAgentReply(item) && !waitingAgentReply(receipt) ? receipt : item;
+    });
+    return [...reconciled, ...delivered.values()];
+  }
+
+  async function privateSendReceipt(target, key, current, accept = () => true, delays = [0, 350, 800]) {
     const query = new URLSearchParams({key, receipt: '1'});
     const path = `${target.base}/${target.conversationId}/reply-progress?${query}`;
-    for (const delay of [0, 350, 800]) {
+    for (const delay of delays) {
       if (delay) await new Promise(resolve => globalThis.setTimeout(resolve, delay));
       if (!current()) return null;
       const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(3000)).catch(() => null);
@@ -1454,6 +1782,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.receipt ||= privateSendReceipt(queue, job.key, () => queue.owner === currentUser?.id &&
       pendingSends.get(queue.scope) === queue && queue.jobs.includes(job)).finally(() => { job.receipt = null; });
     return job.receipt;
+  }
+
+  async function socialSendReceipt(target, key, current, isExpected = () => true) {
+    const active = () => target.owner === currentUser?.id && current();
+    if (!active()) return null;
+    const path = `/v1/workspaces/${target.wid}/social/conversations/${target.conversationId}/messages?limit=50`;
+    const result = await request('GET', path, undefined, undefined, AbortSignal.timeout(4000)).catch(() => null);
+    if (!active() || result?.status !== 200 || !Array.isArray(result.body?.items)) return null;
+    return result.body.items.find(message => ownSocialReceipt(message, target, key) && isExpected(message)) || null;
   }
 
   async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
@@ -1744,20 +2081,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const agent of saved) {
       const li = document.createElement('li');
       li.className = 'agent-chip';
+      const glyph = document.createElement('span');
+      glyph.className = 'group-roster-glyph';
+      glyph.setAttribute('aria-hidden', 'true');
+      glyph.textContent = leadGlyph(agent.name);
       const name = document.createElement('span');
       const fullName = paired ? groupAgentName(agent.name, groupAgentOwnerLabel(agent), agent.owner_id,
         agent.mine === false ? agent.owner_handle : '') : agent.name;
-      name.textContent = fullName + (agent.archived ? '（已归档）' : '');
+      name.className = 'group-roster-name';
+      name.textContent = fullName + (agent.archived ? uiLabel('（已归档）', ' (archived)') : '');
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = uiLabel('移除', 'Remove');
       const id = agent.id || agent.agent_id;
       remove.dataset.removeAgent = id;
+      remove.setAttribute('aria-label', uiLabel(`移除 ${fullName}`, `Remove ${fullName}`));
       if (direct) {
         remove.dataset.agentOwnerId = agent.owner_id;
-        remove.setAttribute('aria-label', uiLabel(`移除 ${fullName}`, `Remove ${fullName}`));
       }
-      li.append(name);
+      li.append(glyph, name);
       if (direct ? Boolean(agent.owner_id && groupAgentKey(id, agent.owner_id)) : agent.mine !== false) li.append(remove);
       chips.append(li);
     }
@@ -1834,17 +2176,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     panel.hidden = !isGroup && !direct;
     if (panel.hidden) {
-      if (agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterSheet.open = false;
       agentRosterView = null;
       setGroupStudio();
       return;
     }
     if (agentRosterView?.scope !== scope || agentRosterView.direct !== direct) {
-      if (direct || agentRosterView?.direct) agentRosterSheet.open = false;
+      agentRosterSheet.open = false;
       agentRosterView = {scope, direct};
     }
     const label = direct ? uiLabel('私聊智能体', 'Chat agents') : uiLabel('群内智能体', 'Group agents');
-    document.getElementById('conversation-agents-label').textContent = label;
+    document.getElementById('conversation-agents-text').textContent = label;
     document.getElementById('conversation-agents-heading').textContent = label;
     document.getElementById('group-agent-request-help').hidden = direct;
     document.getElementById('direct-agent-help').hidden = !direct;
@@ -1852,6 +2194,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('group-agent-requests');
     list.hidden = direct;
     const saved = currentConversation.agent_members || [];
+    renderGroupRosterSummary(saved, {direct});
     const paired = direct || currentConversation.group_agent_requests === true;
     renderAgentRoster(saved, {direct, paired});
     if (direct) {
@@ -1931,7 +2274,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('group-agent-empty');
     empty.hidden = choices.size > 0;
     list.replaceChildren();
-    for (const request of requests || []) {
+    for (const request of (requests || []).filter(item => item.status !== 'passed')) {
       const item = document.createElement('li');
       item.textContent = groupAgentName(request.agent_name, request.agent_owner_name,
         request.agent_owner_id, request.agent_owner_handle) + ' · ' +
@@ -1941,6 +2284,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     setGroupStudio(namedTeamGroup() ? scope : '');
     syncGroupReplySubmit(scope);
+  }
+
+  function renderGroupRosterSummary(saved, {direct}) {
+    const count = document.getElementById('conversation-agents-count');
+    const preview = document.getElementById('conversation-agents-preview');
+    const help = document.getElementById('social-agent-members');
+    const available = saved.filter(agent => !agent.archived);
+    count.hidden = false;
+    count.textContent = String(available.length);
+    const previews = available.slice(0, 2).map(agent => {
+      const chip = document.createElement('span');
+      chip.className = 'group-roster-preview-chip';
+      chip.textContent = agent.name;
+      return chip;
+    });
+    if (available.length > previews.length) {
+      const extra = document.createElement('span');
+      extra.className = 'group-roster-preview-more';
+      extra.textContent = `+${available.length - previews.length}`;
+      previews.push(extra);
+    }
+    preview.replaceChildren(...previews);
+    preview.hidden = !available.length;
+    document.getElementById('group-agent-manage').hidden = direct;
+    help.textContent = available.length ? (!currentConversation.group_agent_routing && !direct ? groupAgentSummary(currentConversation) : '')
+      : uiLabel('还没有可回复的智能体。', 'There are no agents available to reply.');
+    help.hidden = !help.textContent;
+  }
+
+  function groupHeaderSubtitle(conversation) {
+    const {people, agents} = groupInfoCounts(conversation);
+    return uiLabel(`${people} 人`, `${people} ${people === 1 ? 'person' : 'people'}`) +
+      (agents ? uiLabel(` · ${agents} 位智能体`, ` · ${agents} ${agents === 1 ? 'agent' : 'agents'}`) : '');
   }
 
   function stopPolling() {
@@ -2005,7 +2381,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function currentPrivateThread() {
     const wid = workspaceId(), aid = currentAgent?.id, cid = currentConversation?.id;
     if (!currentThreadWorkspace() || currentSource !== 'agent' || !PRIVATE_THREAD_ID.test(aid || '') ||
-        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.workspace_id !== wid || currentConversation.agent_id !== aid ||
+        !PRIVATE_THREAD_ID.test(cid || '') || currentConversation.deferred || currentConversation.workspace_id !== wid ||
+        currentConversation.agent_id !== aid ||
         typeof currentConversation.archived !== 'boolean') return null;
     return {owner: currentUser.id, wid, aid, cid, agent: currentAgent, conversation: currentConversation};
   }
@@ -2248,9 +2625,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const transition = sessionTransition;
     const pending = Boolean(transition?.pending);
     document.getElementById('session-transition').hidden = !transition;
-    document.getElementById('session-transition-status').textContent = !transition ? '' : pending
+    const message = !transition ? '' : pending
       ? uiLabel(`正在打开「${transition.title}」…`, `Opening “${transition.title}”…`)
       : uiLabel(`无法打开「${transition.title}」。`, `Couldn’t open “${transition.title}”.`);
+    document.getElementById('session-transition-status').textContent = message;
+    const openingView = document.getElementById('session-opening-view');
+    openingView.hidden = !pending;
+    openingView.textContent = pending ? message : '';
     const retry = document.getElementById('session-transition-retry');
     retry.hidden = !transition || pending;
     retry.textContent = uiLabel('重试', 'Retry');
@@ -2264,19 +2645,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function clearSessionTransition() {
-    if (!sessionTransition) return;
+    const transition = sessionTransition;
+    if (!transition) return;
     sessionTransition = null;
+    transition.controller.abort();
     syncSessionTransition();
   }
 
-  async function openSessionTarget(target) {
+  function resumeOpenSession(target) {
+    if (target.source !== currentSource || target.cid !== currentConversation?.id ||
+        (target.source === 'agent' && target.agent !== currentAgent?.id)) return false;
+    if (sessionTransition?.pending) socialOpen += 1;
+    clearSessionTransition();
+    setSessionsOpen(false);
+    if (currentSource === 'social') {
+      scheduleUnreadRead();
+      syncGroupReplyProgress();
+      if (!pollTimer && !socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+    } else if (!syncReplyProgress() && lastAgentItems.some(waitingAgentReply) && !pollTimer) schedulePoll();
+    if (narrowScreen()) document.getElementById('chat-title').focus({preventScroll:true});
+    return true;
+  }
+
+  function readingPositionKey(source, wid, cid, aid) {
+    return JSON.stringify([currentUser?.id, wid, source, cid, aid || '']);
+  }
+
+  function rememberReadingPosition() {
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    if (!servedByDsbot || !state || state.owner !== currentUser?.id || state.cid !== currentConversation?.id ||
+        !historyScroller.clientHeight) return;
+    const key = readingPositionKey(currentSource, state.wid, state.cid, state.aid);
+    readingPositions.delete(key);
+    if (!state.readingHistory && messageScrollerAtBottom(historyScroller)) return;
+    const {id, offset} = chatHistoryAnchor();
+    if (!id || !Number.isFinite(offset)) return;
+    readingPositions.set(key, {key, id, offset:offset - historyScroller.getBoundingClientRect().top, top:0});
+    if (readingPositions.size > 50) readingPositions.delete(readingPositions.keys().next().value);
+  }
+
+  function readingPositionAnchor(position) {
+    return position && {...position, offset:position.offset + historyScroller.getBoundingClientRect().top};
+  }
+
+  async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
-    const transition = {...target, pending: true};
+    if (resume && resumeOpenSession(target)) return true;
+    rememberReadingPosition();
+    sessionTransition?.controller.abort();
+    const controller = new AbortController();
+    const transition = {...target, pending: true, controller};
     sessionTransition = transition;
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition};
+    const position = !target.message && readingPositions.get(readingPositionKey(target.source, workspaceId(), target.cid, target.agent));
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position,
+      signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
     if (sessionTransition !== transition) return false;
@@ -2301,7 +2726,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return JSON.stringify([currentUser?.id, workspaceId(), session.source, session.agent_id, session.id]);
   }
 
+  const visibleSessionUnread = session => session.muted ? 0 : session.unread_count;
+
   function paintSessionPreview({button, preview, session}, value) {
+    const unread = visibleSessionUnread(session);
     const draft = value.trim().replace(/\s+/g, ' ').slice(0, 160);
     if (draft) {
       const mark = document.createElement('span');
@@ -2310,7 +2738,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       preview.replaceChildren(mark, document.createTextNode(draft));
     } else fillBold(document, preview, session.preview || '');
     button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
-      (session.unread_count ? uiLabel(`，${session.unread_count} 条未读消息`, `, ${session.unread_count} unread`) : '') +
+      (unread ? uiLabel(`，${unread} 条未读消息`, `, ${unread} unread`) : '') +
       (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
   }
 
@@ -2342,7 +2770,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'drafts' && Boolean(draftFor(item).trim()))
-      || (filter === 'unread' && item.unread_count > 0)
+      || (filter === 'unread' && visibleSessionUnread(item) > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     const heading = filter === 'drafts' ? uiLabel('草稿', 'Drafts') : uiLabel('对话', 'Conversations');
@@ -2353,7 +2781,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
     const readAll = document.getElementById('conversations-read-all');
     if (readAll) {
-      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.hidden = !sessions.some(item => item.source === 'social' && visibleSessionUnread(item) > 0);
       readAll.disabled = markingConversationsRead;
     }
     const items = [];
@@ -2396,11 +2824,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
-      if (session.unread_count > 0) {
+      const count = visibleSessionUnread(session);
+      if (count > 0) {
         button.classList.add('is-unread');
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
-        unread.textContent = String(session.unread_count);
+        unread.textContent = String(count);
         unread.setAttribute('aria-hidden', 'true');
         time.append(unread);
       }
@@ -2482,7 +2911,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncCaptureButton() {
     if (!captureButton) return;
-    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation
+    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation || currentConversation.deferred
       || !lastAgentItems.some(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id));
   }
 
@@ -2593,6 +3022,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return scroller.scrollHeight - scroller.scrollTop - viewportHeight < 48;
   }
 
+  function activeStoppableReply() {
+    if (!servedByDsbot || currentSource !== 'agent' || !currentConversation?.id || !currentAgent?.id ||
+        sendClosed() || readingPrivateContext()) return null;
+    const wid = workspaceId(), agentId = currentAgent.id, conversationId = currentConversation.id;
+    const item = lastAgentItems.find(row => row.role === 'assistant' && row.status === 'running' &&
+      row.can_stop === true && typeof row.client_key === 'string' && /^[a-f0-9]{32}$/.test(row.id) &&
+      Number.isSafeInteger(row.attempt) && row.attempt > 0 &&
+      row.workspace_id === wid && row.agent_id === agentId && row.conversation_id === conversationId);
+    if (!item) return null;
+    const scope = sendScope(), key = item.client_key;
+    return {wid, agentId, conversationId, replyId:item.id, attempt:item.attempt, key, scope,
+      base:`${agentBase()}/conversations`, operation:JSON.stringify([scope, key, item.attempt])};
+  }
+
+  function syncPrivateReplyStop() {
+    if (!replyStopButton) return;
+    const target = activeStoppableReply();
+    const stopping = target && stoppingPrivateReplies.has(target.operation);
+    const label = stopping ? uiLabel('正在停止生成…', 'Stopping reply…') : uiLabel('停止生成', 'Stop generating');
+    if (!target && document.activeElement === replyStopButton) document.getElementById('chat-body').focus({preventScroll:true});
+    replyStopButton.hidden = !target;
+    replyStopButton.disabled = Boolean(stopping);
+    replyStopButton.setAttribute('aria-label', label);
+    replyStopButton.title = label;
+  }
+
+  replyStopButton?.addEventListener('click', async () => {
+    const target = activeStoppableReply();
+    if (!target || stoppingPrivateReplies.has(target.operation)) return;
+    stoppingPrivateReplies.add(target.operation);
+    syncPrivateReplyStop();
+    const current = () => target.scope === sendScope() && stoppingPrivateReplies.has(target.operation);
+    const cancelled = reply => reply.id === target.replyId && reply.attempt === target.attempt && reply.status === 'cancelled';
+    try {
+      const result = await request('POST', `${target.base}/${target.conversationId}/reply-stop`,
+        {key:target.key, attempt:target.attempt}, undefined, AbortSignal.timeout(10000)).catch(() => ({status:0}));
+      if (!current()) return;
+      let pair = result.status === 200 && privateReplyPair(result.body, target, target.key);
+      if (!pair || !cancelled(pair.reply)) {
+        pair = result.status === 409 ? null : await privateSendReceipt(target, target.key, current, cancelled);
+      }
+      if (!current()) return;
+      if (!pair) {
+        await openAgentConversation(target.agentId, target.conversationId, {refresh:true});
+        if (current() && activeStoppableReply()?.operation === target.operation) {
+          show('error', uiLabel('暂时无法停止这条回复，请重试。', 'Couldn’t stop this reply. Try again.'));
+        }
+        return;
+      }
+      privateRefresh += 1;
+      const items = lastAgentItems.map(row => row.id === pair.reply.id ? pair.reply : row.id === pair.message.id ? pair.message : row);
+      if (renderAgentMessages(items, {followLatest:false})) schedulePoll();
+      show('ok', uiLabel('已停止生成。', 'Reply stopped.'), {announceOnly:true});
+    } finally {
+      stoppingPrivateReplies.delete(target.operation);
+      syncPrivateReplyStop();
+    }
+  });
+
   function addPrivateReplyRetry(bubble, item) {
     if (!servedByDsbot || item.status !== 'failed' || item.can_retry !== true ||
         !item.client_key || !Number.isSafeInteger(item.attempt) || item.attempt < 1 ||
@@ -2669,17 +3157,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function makeAgentMessage(item) {
+  // Message controls can change while the reader is still using the same body.
+  const interactiveMessageBodies = new WeakMap();
+
+  function captureMessageBodies(list, scope) {
+    const bodies = new Map();
+    const previews = new Map();
+    const scroll = [];
+    const focused = document.activeElement;
+    let restoreFocus = false;
+    if (list.dataset.messageBodyScope === scope) {
+      for (const row of list.children) {
+        const body = Array.from(row.children).find(child =>
+          interactiveMessageBodies.has(child) || streamingReplies.get(child)?.markdown);
+        if (!body) continue;
+        if (interactiveMessageBodies.has(body) && row.dataset.messageId) bodies.set(row.dataset.messageId, body);
+        else if (row.dataset.replyProgress) previews.set(row.dataset.replyProgress, body);
+        restoreFocus ||= Boolean(focused && body.contains?.(focused));
+        for (const node of body.querySelectorAll?.('.chat-markdown-table-scroll, .chat-flowchart, .chat-code-block pre') || []) {
+          const left = node.scrollLeft;
+          if (left) scroll.push([node, left]);
+        }
+      }
+    }
+    list.dataset.messageBodyScope = scope;
+    return {
+      bodies, previews,
+      restoreView() {
+        for (const [node, left] of scroll) if (node.isConnected) node.scrollLeft = left;
+        if (restoreFocus && focused?.isConnected && document.activeElement === document.body) focused.focus({preventScroll:true});
+      },
+    };
+  }
+
+  function transcriptMessageBody(previous, text, assistantReply = false, preview) {
+    const rendered = interactiveMessageBodies.get(previous);
+    const language = document.documentElement?.lang;
+    if (rendered && rendered.text === text && rendered.assistantReply === assistantReply &&
+        rendered.prefs === chatPreferences && rendered.language === language) return previous;
+
+    const body = document.createElement('div');
+    if (renderMessageBody(document, body, text, chatPreferences, assistantReply, preview)) {
+      interactiveMessageBodies.set(body, {text, assistantReply, prefs:chatPreferences, language});
+    }
+    return body;
+  }
+
+  function makeAgentMessage(item, previousBody, preview) {
     const bubble = document.createElement('li');
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
     role.className = item.role === 'user' ? 'role visually-hidden' : 'role';
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
-    const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
-    const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+    const failed = item.role === 'assistant' && item.status === 'failed';
+    const cancelled = item.role === 'assistant' && item.status === 'cancelled';
     const partial = waiting && servedByDsbot && item.client_key;
+    const body = partial || (failed && item.error_code !== 'session/attachment-invalid')
+      ? document.createElement('div')
+      : transcriptMessageBody(previousBody, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item),
+        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded', preview);
     body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
     if (partial) {
       bubble.dataset.replyProgress = item.client_key;
@@ -2695,11 +3233,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (item.role === 'assistant' && item.status === 'failed' && item.error_code !== 'session/attachment-invalid') {
       body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
         : uiLabel('回复未完成。', 'The reply didn’t finish.');
-    } else {
-      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
-      if (item.attachments?.length && !item.body) body.hidden = true;
-    }
-    if (waiting || failed) bubble.dataset.state = waiting ? item.status : 'failed';
+    } else body.hidden = Boolean((cancelled || item.attachments?.length) && !item.body);
+    if (waiting || failed || cancelled) bubble.dataset.state = item.status;
     bubble.append(role);
     let replyView;
     if (waiting) {
@@ -2712,6 +3247,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (partial) replyView = {bubble, heading, body};
     }
     bubble.append(body);
+    if (cancelled) {
+      const label = document.createElement('p');
+      label.className = 'reply-stopped';
+      label.textContent = uiLabel('已停止生成', 'Reply stopped');
+      bubble.append(label);
+    }
     for (const attachment of item.attachments || []) bubble.append(renderMessageFile(attachment));
     const sources = memorySources(item);
     if (sources) bubble.append(sources);
@@ -2738,10 +3279,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const top = anchor?.top ?? scroller.scrollTop;
     const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
+    const bodyViews = captureMessageBodies(list, sendScope());
     list.replaceChildren();
     agentReplyViews.clear();
     lastAgentItems = items || [];
     syncCaptureButton();
+    restorePendingPrivateText(lastAgentItems);
     const queue = pendingSends.get(sendScope());
     if (queue && !queue.social) {
       const delivered = new Set(lastAgentItems.filter(item => item.role === 'user').map(item => item.client_key).filter(Boolean));
@@ -2759,7 +3302,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         list.append(view.bubble);
         continue;
       }
-      const {bubble, replyView} = makeAgentMessage(item);
+      const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id), bodyViews.previews.get(item.client_key));
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
     }
@@ -2769,6 +3312,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const anchoredMessage = anchor?.id && Array.from(list.children).find(node => node.dataset.messageId === anchor.id);
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchoredMessage) scroller.scrollTop += anchoredMessage.getBoundingClientRect().top - anchor.offset;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return lastAgentItems.some(waitingAgentReply) && !tracking;
   }
@@ -2799,11 +3343,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
       : uiLabel('正在生成回复', 'Writing a reply');
     if (view.heading.textContent !== label) view.heading.textContent = label;
-    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
+    if (typeof snapshot.text !== 'string' || streamingReplySource(view.body) === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
-    view.body.textContent = snapshot.text;
-    view.body.hidden = !snapshot.text;
+    paintStreamingReply(document, view.body, snapshot.text);
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     else updateLatestMessageControl();
   }
@@ -3047,7 +3590,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else for (const id of ids) selectedMessages.delete(id);
     syncForwardBar();
     const scope = sendScope(), reply = replyDrafts.get(scope);
-    if (removed.has(reply?.message_id)) consumeReplyDraft(scope, reply);
+    if (removed.has(reply?.message_id)) setReplyDraft(scope, {message_id:reply.message_id, state:'missing', available:false});
     const pins = document.getElementById('pinned-message-list');
     for (const row of [...pins.children]) if (removed.has(row.dataset.pinnedMessage)) row.remove();
     for (const id of ids) pinnedIds.delete(id);
@@ -3250,10 +3793,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         composeReply(item, author);
       } else if (action === 'ask-group' && scope === sendScope()) {
         const reply = composerReply(item, li.querySelector('.role')?.textContent || uiLabel('成员', 'Member'));
-        agentMentions.openPicker({reply, onApply: () => {
-          replyDrafts.set(scope, reply);
-          renderReplyDraft();
-        }});
+        agentMentions.openPicker({reply, onApply: () => setReplyDraft(scope, reply)});
       } else if (action === 'translate' || action === 'ask') {
         messageUtilities.open(item, action);
       } else if (action === 'save') {
@@ -3508,6 +4048,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let privateRefresh = 0;
   let socialOpen = 0;
   let historyJump = 0;
+  let searchHighlightTimer;
   let groupReplyWatch = null;
   const groupReplyViews = new Map();
   const groupReplyRetries = new Map();
@@ -3574,18 +4115,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     updateLatestMessageControl();
     const unread = currentSource === 'social' ? state?.unread : null;
+    const canLoadNewer = Boolean(state?.after || unread?.after);
+    const canMarkRead = Boolean(unread && unread.committed < unread.latest);
     if (newerMessages) {
-      newerMessages.hidden = !unread?.after;
-      newerMessages.disabled = Boolean(state?.loading);
+      newerMessages.hidden = !canLoadNewer;
+      newerMessages.disabled = Boolean(state?.loading || state?.jumping || state?.restoring);
     }
     if (markThreadRead) {
-      markThreadRead.hidden = !unread || unread.committed >= unread.latest;
+      markThreadRead.hidden = !canMarkRead;
       markThreadRead.disabled = Boolean(unread?.saving);
     }
-    if (unreadActions) unreadActions.hidden = !unread || (newerMessages.hidden && markThreadRead.hidden);
+    if (unreadActions) unreadActions.hidden = !canLoadNewer && !canMarkRead && !unreadNotice?.textContent;
   }
 
-  function visibleUnreadView(state) {
+  function visibleSocialHistory(state) {
     return state && state === socialHistory && currentSource === 'social' && state.owner === currentUser?.id &&
       state.wid === workspaceId() && state.cid === currentConversation?.id && viewingSocialMessages() &&
       document.visibilityState !== 'hidden' && !sessionTransition?.pending;
@@ -3593,13 +4136,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function scheduleUnreadRead() {
     const state = socialHistory;
-    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleUnreadView(state)) return;
+    if (!state?.unread?.firstId || state.unread.committed >= state.unread.latest || !visibleSocialHistory(state)) return;
     clearTimeout(unreadScrollTimer);
     unreadScrollTimer = setTimeout(() => readVisibleUnread(state), 160);
   }
 
   function readVisibleUnread(state) {
-    if (!visibleUnreadView(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
+    if (!visibleSocialHistory(state) || state.loading || selecting || document.querySelector?.('dialog[open]')) return;
     const unread = state.unread;
     const scroller = document.getElementById('message-scroller');
     const bounds = scroller.getBoundingClientRect();
@@ -3622,7 +4165,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function commitUnread(state, seq, explicit = false) {
     const unread = state?.unread;
-    if (!visibleUnreadView(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
+    if (!visibleSocialHistory(state) || !unread || unread.saving || !Number.isSafeInteger(seq) || seq <= unread.committed) return;
     const latestOnRead = unread.latest;
     unread.saving = true;
     updateHistoryControls();
@@ -3653,9 +4196,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function historyPage(state, query, signal) {
+    const open = socialOpen;
     const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`, undefined, undefined, signal);
-    return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
-      && currentConversation?.id === state.cid ? result : null;
+    return socialHistory === state && open === socialOpen && currentSource === 'social' &&
+      workspaceId() === state.wid && currentConversation?.id === state.cid && currentUser?.id === state.owner ? result : null;
   }
 
   async function privateHistoryPage(state, query, signal) {
@@ -3767,7 +4311,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     historyScroller.focus({preventScroll: true});
     if (currentSource === 'social' && (socialHistory?.readingHistory || (liveBanner && !liveBanner.hidden))) {
       void openSocialLatest();
-    } else if (currentSource === 'agent' && privateHistory?.readingHistory) {
+    } else if (currentSource === 'agent' && privateHistory && (privateHistory.readingHistory || (liveBanner && !liveBanner.hidden))) {
       void restorePrivateLatest(privateHistory);
     } else {
       historyScroller.scrollTop = historyScroller.scrollHeight;
@@ -3800,29 +4344,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   globalThis.addEventListener('resize', updateLatestMessageControl);
   newerMessages?.addEventListener('click', async () => {
-    const state = socialHistory;
-    const unread = state?.unread;
-    if (!visibleUnreadView(state) || !unread?.after || state.loading) return;
+    const privateChat = currentSource === 'agent';
+    const currentHistory = () => privateChat ? privateHistory : socialHistory;
+    const state = currentHistory();
+    const unread = !privateChat && state?.unread;
+    const timeline = state?.after ? state : unread;
+    const after = timeline?.after;
+    const scope = sendScope();
+    const visible = () => privateChat
+      ? privateHistory === state && scope === sendScope() && canWatchReply() && !sessionTransition?.pending
+      : visibleSocialHistory(state);
+    if (!after || !visible() || state.loading || state.jumping || state.restoring) return;
+    const jump = historyJump;
+    const open = socialOpen;
+    const stillCurrent = () => open === socialOpen && jump === historyJump && visible();
+    const hadButtonFocus = document.activeElement === newerMessages;
     state.loading = true;
-    updateHistoryControls();
     if (unreadNotice) unreadNotice.textContent = '';
+    updateHistoryControls();
     try {
-      const result = await historyPage(state, new URLSearchParams({after: unread.after, limit: HISTORY_PAGE_SIZE, scope:'workspace'}));
-      if (!result) return;
+      const query = new URLSearchParams({after, limit: HISTORY_PAGE_SIZE});
+      if (!privateChat) query.set('scope', 'workspace');
+      const signal = AbortSignal.timeout(8000);
+      const result = await (privateChat ? privateHistoryPage(state, query, signal) : historyPage(state, query, signal));
+      if (!result || !stillCurrent()) return;
       if (result.status !== 200 || !Array.isArray(result.body.items)) throw new Error('history');
-      const items = result.body.items.filter(message => Number.isSafeInteger(message.seq) && message.seq > unread.after);
+      const currentItems = privateChat ? lastAgentItems : lastSocialItems;
+      const existing = new Set(currentItems.map(message => message.id));
+      const items = result.body.items.filter(message => !existing.has(message.id) &&
+        (privateChat ? PRIVATE_THREAD_ID.test(message.id || '') : Number.isSafeInteger(message.seq) && message.seq > after));
       if (result.body.has_newer && !items.length) throw new Error('history cursor');
       const anchor = chatHistoryAnchor();
-      if (Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
-      unread.after = result.body.has_newer ? items.at(-1).seq : null;
-      if (items.length) renderSocialMessages([...lastSocialItems, ...items], {anchor});
+      if (unread && Number.isSafeInteger(result.body.last_seq)) unread.latest = Math.max(unread.latest, result.body.last_seq);
+      timeline.after = result.body.has_newer ? (privateChat ? items.at(-1).id : items.at(-1).seq) : null;
+      if (items.length) {
+        const updated = [...currentItems, ...items];
+        if (privateChat) {
+          searchScrollSnapshot = null;
+          renderAgentMessages(updated, {anchor});
+        } else renderSocialMessages(updated, {anchor});
+      }
+      if ((!privateChat || !timeline.after) && hadButtonFocus && [document.body, newerMessages].includes(document.activeElement)) {
+        historyScroller?.focus({preventScroll:true});
+      }
+      if (!timeline.after && timeline === state && unreadNotice) unreadNotice.textContent =
+        uiLabel('已加载到最新消息。', 'All newer messages are loaded.');
     } catch {
-      if (state === socialHistory && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
+      if (stillCurrent() && unreadNotice) unreadNotice.textContent = uiLabel('后续消息加载失败，请重试。', 'Could not load newer messages. Try again.');
     } finally {
       state.loading = false;
-      if (state === socialHistory) {
+      if (state === currentHistory()) {
         updateHistoryControls();
-        scheduleUnreadRead();
+        if (stillCurrent()) {
+          if (hadButtonFocus && document.activeElement === document.body && !newerMessages.hidden) {
+            newerMessages.focus({preventScroll:true});
+          }
+          if (!privateChat) scheduleUnreadRead();
+        }
       }
     }
   });
@@ -3847,17 +4425,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
   }
 
+  function visibleGroupReply(id) {
+    const view = groupReplyViews.get(id);
+    if (!view || view.row.hidden || !streamingReplySource(view.preview)) return false;
+    const viewport = document.getElementById('message-scroller').getBoundingClientRect();
+    const reply = view.row.getBoundingClientRect();
+    return reply.bottom > viewport.top && reply.top < viewport.bottom;
+  }
+
   function withGroupReplyScroll(update) {
     const scroller = document.getElementById('message-scroller');
     const top = scroller.scrollTop;
     const follow = messageScrollerAtBottom(scroller);
     const viewportTop = scroller.getBoundingClientRect().top;
     const anchor = !follow && [...document.getElementById('message-list').children]
-      .find(row => row.getBoundingClientRect().bottom > viewportTop);
+      .find(row => !row.hidden && row.getBoundingClientRect().bottom > viewportTop);
     const offset = anchor && anchor.getBoundingClientRect().top;
     update();
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
-    if (anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
+    if (anchor?.isConnected && !anchor.hidden) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
     if (!follow) updateLatestMessageControl();
   }
 
@@ -3871,18 +4457,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (Date.now() - view.missingSince < 2000) continue;
       } else view.missingSince = null;
       const snapshot = matchesGroupReply(item, view) ? item : null;
+      if (snapshot?.status === 'passed') {
+        changes.push({id, view, passed:true});
+        continue;
+      }
+      const previousText = streamingReplySource(view.preview);
+      // The progress feed can drop a reply before the transcript receives it.
+      // Keep the same attempt readable until its durable result replaces it.
+      if (preserveMissing && previousText && !snapshot?.text && (!item || snapshot)) continue;
       const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
-      if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
+      if (previousText !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
     withGroupReplyScroll(() => {
-      for (const {view, text, state} of changes) {
-        view.preview.textContent = text;
-        view.preview.hidden = !text;
+      for (const {id, view, text, state, passed} of changes) {
+        if (passed) {
+          view.row.remove();
+          groupReplyViews.delete(id);
+          continue;
+        }
+        if (streamingReplySource(view.preview) !== text) paintStreamingReply(document, view.preview, text);
         view.row.dataset.state = state;
-        view.note.textContent = groupReplyLabel(state, view.job);
+        view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
       }
+      updateGroupReplyVisibility();
     });
   }
 
@@ -3935,6 +4534,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       // durable transcript even when this watch never saw an active snapshot.
       if (missing.length) {
         if (readingSocialContext()) {
+          // A long preview can put the reader above the bottom of the timeline.
+          // Reconcile that visible reply without interrupting history or a draft edit.
+          const finishing = new Set(missing.filter(([id]) => !items.has(id) && visibleGroupReply(id)).map(([id]) => id));
+          if (finishing.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+              !watch.reconciling && (transitioned || Date.now() >= watch.nextReconcileAt)) {
+            watch.nextReconcileAt = Date.now() + 8000;
+            watch.reconciling = true;
+            void openSocialConversation(currentConversation.id, {refresh:true, finishing})
+              .finally(() => { watch.reconciling = false; });
+          }
           if (liveBanner) liveBanner.hidden = false;
         } else if (!pollTimer && (transitioned || Date.now() >= watch.nextReconcileAt)) {
           // The progress feed is bounded. Throttle repeated reads for any
@@ -3976,7 +4585,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     running: ['正在生成回复', 'Writing a reply'],
     failed: ['回复未完成', 'Reply could not be completed'],
   };
-  function groupReplyLabel(state, job) {
+  function compactGroupReplies() {
+    return currentConversation?.kind === 'group' && !currentConversation.public_agent;
+  }
+
+  function updateGroupReplyVisibility(list = document.getElementById('message-list')) {
+    if (!compactGroupReplies()) return;
+    const pending = [];
+    let running;
+    let streaming = false;
+    for (const row of list.children) {
+      if (!row.classList.contains('group-reply-job')) continue;
+      const state = row.dataset.state;
+      const waiting = state === 'queued' || state === 'running';
+      const preview = groupReplyViews.get(row.dataset.replyJobId)?.preview;
+      const hasText = Boolean(streamingReplySource(preview).trim());
+      row.classList.toggle('group-reply-thinking', waiting && !hasText);
+      if (waiting && !hasText) {
+        pending.push(row);
+        if (state === 'running') running ??= row;
+      } else {
+        row.hidden = false;
+        streaming ||= waiting && hasText;
+      }
+    }
+    const shown = running || (!streaming && pending[0]);
+    for (const row of pending) row.hidden = row !== shown;
+  }
+
+  function groupReplyLabel(state, job, compact = false) {
+    if (compact && (state === 'queued' || state === 'running')) {
+      const name = job?.agent_name || uiLabel('智能体', 'Agent');
+      if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
+      return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
+    }
+    if (state === 'failed' && job?.error_code === 'reply_timeout') {
+      return uiLabel('回复超时', 'The reply timed out');
+    }
     if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
       return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
     }
@@ -4009,6 +4654,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const previewBefore = sameAttempt ? previous?.preview : null;
     const wasRunning = sameAttempt && row.dataset.state === 'running';
     row.className = 'other group-reply-job';
+    row.hidden = false;
+    row.dataset.chatAuthor = 'agent';
     row.tabIndex = -1;
     row.dataset.replyJobId = job.id;
     row.dataset.state = job.status;
@@ -4019,21 +4666,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const note = document.createElement('div');
     note.className = 'group-reply-state';
     note.setAttribute('role', 'status');
-    note.textContent = groupReplyLabel(job.status, job);
     row.replaceChildren(role, note);
     if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
       const preview = previewBefore || document.createElement('div');
       preview.className = 'group-reply-preview body';
-      preview.hidden = !preview.textContent;
+      preview.hidden = !streamingReplySource(preview);
       preview.setAttribute('aria-live', 'off');
-      if (wasRunning) {
-        row.dataset.state = 'running';
-        note.textContent = groupReplyLabel('running');
-      }
+      if (wasRunning) row.dataset.state = 'running';
       groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
+    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !streamingReplySource(previewBefore).trim());
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -4072,8 +4716,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         lastSocialItems = lastSocialItems.map(message => message === source ? updated : message);
         if (row?.dataset.state && row.dataset.state !== 'replied') {
           const focused = Boolean(button && document.activeElement === button);
-          withGroupReplyScroll(() => renderGroupReplyRow(updated, next, row));
-          if (focused) (groupReplyButton(row) || row).focus({preventScroll: true});
+          withGroupReplyScroll(() => {
+            if (next.status === 'passed') { row.remove(); groupReplyViews.delete(next.id); }
+            else renderGroupReplyRow(updated, next, row);
+            updateGroupReplyVisibility();
+          });
+          if (focused && next.status !== 'passed') (groupReplyButton(row) || row).focus({preventScroll: true});
         }
         syncGroupReplyProgress();
       } else setGroupReplyRetryButton(button, false);
@@ -4223,6 +4871,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearVoicePlayers();
     const list = document.getElementById('message-list');
     const scope = sendScope();
+    const bodyViews = captureMessageBodies(list, scope);
     const sameReplyScope = list.dataset.groupReplyScope === scope;
     list.dataset.groupReplyScope = scope;
     const existingGroupReplies = new Map();
@@ -4246,6 +4895,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    const queue = pendingSends.get(scope);
+    if (servedByDsbot && queue?.social) {
+      for (const job of queue.jobs) {
+        if (lastSocialItems.some(item => ownSocialReceipt(item, queue, job.key))) removeSendJob(queue, job);
+      }
+    }
     if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
       const attempt = groupReplyDraft(scope).attempt;
       if (attempt && lastSocialItems.some(item => item.client_key === attempt.key) && confirmGroupReplyDraft(scope, attempt.key)) {
@@ -4284,6 +4939,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = (groupReplyID && existingGroupReplies.get(groupReplyID)) || document.createElement('li');
       if (groupReplyID) {
         li.replaceChildren();
+        li.hidden = false;
         li.dataset.replyJobId = groupReplyID;
         li.dataset.state = 'replied';
         delete li.dataset.replyAttempt;
@@ -4291,22 +4947,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       li.dataset.messageId = item.id;
       if (Number.isSafeInteger(item.seq)) li.dataset.messageSeq = String(item.seq);
-      const mine = item.user_id === (currentUser && currentUser.id);
+      const mine = item.role !== 'agent' && item.user_id === (currentUser && currentUser.id);
+      li.dataset.chatAuthor = item.role === 'agent' ? 'agent' : 'person';
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
-      const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = groupReplyID ? groupReplyAuthor(item)
-        : item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
-        : (mine ? uiLabel('我', 'Me') : ((member && member.username) || uiLabel('成员', 'Member')));
-      const body = document.createElement('div');
+      role.textContent = socialMessageAuthor(item, people);
+      const body = transcriptMessageBody(bodyViews.bodies.get(item.id), item.retracted ? '此消息已撤回' : (item.body || ''),
+        servedByDsbot && item.role === 'agent' && !item.retracted, previousGroupViews.get(groupReplyID)?.preview);
       body.className = 'body';
-      if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
-      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
+      body.hidden = item.attachment?.bytes !== undefined && item.body === item.attachment.title;
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
         role.textContent += ' · 转发自 ' + item.forwarded_from.author;
+      } else if (body.dataset.forwarded) {
+        delete body.dataset.forwarded;
+        body.removeAttribute('title');
       }
       const time = document.createElement('p');
       time.className = 'time';
@@ -4453,11 +5110,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
       if (!item.retracted) {
         for (const job of item.reply_jobs || []) {
-          if (job.status === 'replied' || durableGroupReplies.has(job.id)) continue;
+          if (job.status === 'replied' || job.status === 'passed' || durableGroupReplies.has(job.id)) continue;
           list.append(renderGroupReplyRow(item, job, existingGroupReplies.get(job.id), previousGroupViews.get(job.id)));
         }
       }
     }
+    updateGroupReplyVisibility(list);
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     if (focusedGroupReply) {
       const target = [...list.children].find(row => row.dataset.replyJobId === focusedGroupReply.id);
@@ -4475,6 +5133,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
     } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return false;
   }
@@ -4498,7 +5157,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = personal ? '/contacts' : membersHref;
       link.textContent = personal ? uiLabel('联系人', 'Contacts') : uiLabel('成员', 'Members');
     } else {
-      link.href = '/agents';
+      const workspace = workspaceId();
+      const agent = currentAgent?.workspace_id && currentAgent.workspace_id !== workspace ? null : currentAgent?.id;
+      link.href = agentDirectoryHref(workspace, agent);
       link.textContent = uiLabel('资料', 'Resources');
     }
   }
@@ -4552,7 +5213,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('notification-list');
     if (!list) return;
     const mentionsOnly = notificationKind?.value === 'mention';
+    const automationsOnly = notificationKind?.value === 'automation';
     const items = (body.items || []).filter(item => (!mentionsOnly || item.kind === 'mention' || item.kind === 'messenger.mention')
+      && (!automationsOnly || item.kind === AUTOMATION_RUN_FINISHED)
       && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
@@ -4562,17 +5225,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (target) button.href = target;
       else {
         button.type = 'button';
-        if (invalidLink) { button.disabled = true; button.title = '通知目标不可用'; }
+        if (invalidLink) { button.disabled = true; button.title = uiLabel('通知目标不可用', 'Notification destination unavailable'); }
       }
       button.className = 'notification-item' + (item.read ? '' : ' is-unread');
       button.dataset.notification = item.id;
       button.dataset.notificationKind = item.kind;
       const readKey = `${scope.epoch}:${item.id}`;
       if (notificationReads.has(readKey)) button.setAttribute('aria-busy', 'true');
-      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
-      const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item, uiLabel);
+      button.append(summary);
+      if (item.kind !== AUTOMATION_RUN_FINISHED) {
+        const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+        button.append(excerpt);
+      }
       const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
-      button.append(summary, excerpt, time);
+      button.append(time);
       button.addEventListener('click', async event => {
         if (target) event.preventDefault();
         if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
@@ -4612,7 +5279,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('notifications-empty');
     if (empty) {
       empty.hidden = items.length > 0 || Boolean(notificationNotice && !notificationNotice.hidden);
-      empty.textContent = mentionsOnly
+      empty.textContent = automationsOnly
+        ? (notificationUnread?.checked ? uiLabel('暂无未读自动化通知。', 'No unread automation notices.')
+          : uiLabel('暂无自动化运行通知。', 'No automation run notices.')) : mentionsOnly
         ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
         : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
     }
@@ -4714,12 +5383,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
   }
 
-  function readingSocialContext(viewportHeight) {
+  function readingSocialContext(viewportHeight, {allowScrolled = false} = {}) {
     const scroller = document.getElementById('message-scroller');
     const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
       || (unread && unread.committed < unread.latest)
-      || !messageScrollerAtBottom(scroller, viewportHeight)
+      || (!allowScrolled && !messageScrollerAtBottom(scroller, viewportHeight))
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
   }
@@ -4767,10 +5436,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
     if (currentSource === 'social' && currentConversation) await openSocialLatest();
+    else if (currentSource === 'agent' && privateHistory) await restorePrivateLatest(privateHistory);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
-  let membersStatus = '', artifactsStatus = '';
-  async function loadSessions(link, {nativeDirectory, onPrivate} = {}) {
+  let startingInboxDirectory = null;
+  let membersStatus = '';
+  async function loadSessions(link, {nativeDirectory, pendingNativeDirectory, onPrivate} = {}) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
@@ -4780,13 +5451,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
-      sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
-      membersStatus = artifactsStatus = 'loading';
+      sessions = []; agents = []; members = []; socialConversations = [];
+      membersStatus = 'loading';
       renderSessions();
     }
     if (!id) return;
+    const startupRead = pendingNativeDirectory || (currentSource === 'social' && startingInboxDirectory?.owner === user &&
+      startingInboxDirectory.workspace === id ? startingInboxDirectory.read : null);
     const isLocalPersonal = inPersonalWorkspace();
-    const readThreadReceipt = nativeDirectory ? 0 : privateThreadReceipt;
+    const threadReceiptAtStart = privateThreadReceipt;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const path = `/v1/workspaces/${id}`;
     const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
@@ -4802,17 +5475,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (['all', 'contacts'].includes(searchTab)) refreshDirectorySearch();
       });
     }
-    void read('/artifacts?limit=100').then(result => {
-      if (!current()) return;
-      artifactsStatus = result.status === 200 ? '' : 'failed';
-      if (!artifactsStatus) artifacts = result.body.items || [];
-      if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
-    });
-    // Group conversations can wait on Bot Social. An owned local directory
-    // can already paint and open an explicitly selected private agent.
+    function applyReceipt(source, directory) {
+      const receipt = link?.readReceipt;
+      if (receipt?.source !== source) return;
+      const row = directory.find(item => item.id === receipt.id);
+      const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
+        ? row.last_seq <= receipt.seq
+        : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
+      if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
+    }
+    let privateReady = false, socialReady = false;
     const readPinReceipt = pinReceipt;
-    const socialRequest = read('/social/conversations?limit=100');
-    const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
+    const socialRequest = read('/social/conversations?limit=100').then(social => {
+      if (!current()) return social;
+      socialReady = true;
+      socialConversations = social.status === 200
+        ? (social.body.items || []).map(row => mergeGroupRead(
+          mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
+        : [];
+      applyReceipt('social', socialConversations);
+      if (!privateReady && socialConversations.length) {
+        sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], socialConversations, user.id)]);
+        renderSessions();
+        if (currentSource === 'social') syncConversationPin(currentConversation);
+        if (['all', 'groups'].includes(searchTab)) refreshDirectorySearch();
+      }
+      return social;
+    });
+    const startupDirectory = nativeDirectory || (startupRead ? await startupRead : null);
+    if (!current()) return;
+    const readThreadReceipt = startupDirectory ? 0 : threadReceiptAtStart;
+    const listed = startupDirectory ? {status: 200, body: startupDirectory}
       : await read('/agents?limit=100&include=conversations');
     if (!current()) return;
     const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
@@ -4828,16 +5521,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? (response.body.items || []).map(row => ({...row, agent_id: agent.id})) : []);
       partial ||= results.some(({response}) => response.status !== 200);
     }
+    privateReady = true;
     agents = nextAgents;
-    function applyReceipt(source, directory) {
-      const receipt = link?.readReceipt;
-      if (receipt?.source !== source) return;
-      const row = directory.find(item => item.id === receipt.id);
-      const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
-        ? row.last_seq <= receipt.seq
-        : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
-      if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
-    }
     const agentById = new Map(agents.map(agent => [agent.id, agent]));
     const privateRows = () => {
       const included = new Set(rows.map(row => row.id));
@@ -4855,22 +5540,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return currentRow.archived === true ? [] : [{...currentRow, agent}];
       });
     };
-    const localRows = isLocalPersonal ? privateRows() : [];
-    if (localRows.length) {
-      applyReceipt('agent', localRows);
-      sessions = mergeSessions(localRows, socialConversations, user.id);
-      renderSessions();
+    const listedPrivate = !socialReady || onPrivate ? privateRows() : [];
+    if (listedPrivate.length) {
+      applyReceipt('agent', listedPrivate);
+      sessions = mergeSessions(listedPrivate, socialConversations, user.id);
+      if (!socialReady) renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(localRows.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null, socialReady);
     }
     const social = await socialRequest;
     if (!current()) return;
     partial ||= social.status !== 200;
-    socialConversations = social.status === 200
-      ? (social.body.items || []).map(row => mergeGroupRead(
-        mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
-      : [];
     applyReceipt('social', socialConversations);
     const finalPrivateRows = privateRows();
     applyReceipt('agent', finalPrivateRows);
@@ -4928,7 +5609,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
         conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
     const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
-    const fields = Object.fromEntries(['title','members','agent_members','group_management','updated'].map(name => [name,conversation[name]]));
+    const fields = Object.fromEntries(['title','members','agent_members','group_management','group_agent_routing','updated']
+      .filter(name => Object.hasOwn(conversation, name)).map(name => [name,conversation[name]]));
     const revision = conversation.group_management.revision;
     if (revision < (groupManagementReceipts.get(key)?.revision ?? -1)) return;
     groupManagementReceipts.set(key,{revision,fields});
@@ -4938,8 +5620,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!groupMatches(target) || currentConversation.group_management.revision > revision) return;
     Object.assign(currentConversation, fields);
     applyChatIdentity(document, conversationLabel(currentConversation,currentUser.id), currentConversation);
-    setChatSubtitle(groupInfoCounts(currentConversation).text);
+    setChatSubtitle(groupHeaderSubtitle(currentConversation));
     setGroupInfo(currentConversation);
+    renderGroupRosterSummary(currentConversation.agent_members || [], {direct:false});
+    agentMentions.refresh();
+    renderGroupComposerRouting();
   }
 
   function forgetGroup(target, revoked = false) {
@@ -4957,7 +5642,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         for (const job of pending.jobs.slice()) removeSendJob(pending,job);
         pendingSends.delete(exactScope);
       }
-      replyDrafts.delete(exactScope);
+      setReplyDraft(exactScope, null);
       publicDraft.forget(exactScope);
       agentMentions.forget(exactScope);
       attachmentSender?.forget?.(exactScope);
@@ -5010,6 +5695,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupInfo(currentConversation);
   }
 
+  function renderGroupReplyPolicy(conversation) {
+    const section = document.getElementById('group-reply-policy');
+    const summary = document.getElementById('group-reply-policy-summary');
+    const routing = conversation?.group_agent_routing;
+    const policy = routing?.policy;
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
+      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    if (section.hidden) return;
+    if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
+    else if (policy?.mode === 'lead') {
+      const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
+      if (lead) {
+        const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
+        summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
+      } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+        summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
+          'The preferred agent is unavailable. Other group agents decide whether to reply.');
+      } else summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
+      summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
+        'Group default · Agents with auto-reply enabled decide');
+    } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
+  }
+
   function setGroupInfoTab(which) {
     const agentsTab = document.getElementById('group-info-tab-agents');
     const peopleTab = document.getElementById('group-info-tab-people');
@@ -5022,6 +5731,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
+    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -5053,6 +5763,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupInfoAddRetry.hidden = !state.reload;
     groupInfoAddRetry.disabled = state.loading || state.view.busy;
     groupInfoAddDirectory.hidden = !empty;
+    if (empty) groupInfoAddDirectory.href = agentDirectoryHref(state.workspace);
     groupInfoAddCancel.disabled = Boolean(state.view.busy);
   }
 
@@ -5143,6 +5854,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupInvite = document.getElementById('group-invite-dialog');
   const groupInviteQuery = document.getElementById('group-invite-query');
   const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteSelection = document.getElementById('group-invite-selection');
+  const groupInviteSelectedCount = document.getElementById('group-invite-selected-count');
+  const groupInviteReview = document.getElementById('group-invite-review');
   const groupInviteStatus = document.getElementById('group-invite-status');
   const groupInviteSubmit = document.getElementById('group-invite-submit');
   let inviteTarget = null;
@@ -5150,27 +5864,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const inviteMatches = (target) => target && target.owner === currentUser?.id && target.workspace === workspaceId() &&
     currentSource === 'social' && currentConversation?.id === target.conversation;
-  const showGroupInviteLink = mountGroupInviteLink(document, request, target =>
-    groupInvite.open && inviteTarget === target && inviteMatches(target));
+  const groupInviteLinkPanel = document.getElementById('group-invite-link-panel');
+  const groupInviteLinkStatus = document.getElementById('group-invite-link-status');
+  const groupInviteLinkCreate = document.getElementById('group-invite-link-create');
+  let showGroupInviteLink;
+  const currentInvite = target => groupInvite.open && inviteTarget === target && inviteMatches(target);
+
+  async function prepareGroupInviteLink(target, conversation) {
+    if (!currentInvite(target) || !conversation.group_management?.can_rename) return;
+    if (showGroupInviteLink) return showGroupInviteLink(target, conversation);
+    groupInviteLinkPanel.hidden = false;
+    groupInviteLinkCreate.disabled = true;
+    groupInviteLinkCreate.textContent = uiLabel('正在加载…', 'Loading…');
+    groupInviteLinkStatus.textContent = '';
+    try {
+      const {mountGroupInviteLink} = await loadGroupInviteModule();
+      if (!currentInvite(target)) return;
+      showGroupInviteLink ||= mountGroupInviteLink(document, request, currentInvite);
+      showGroupInviteLink(target, conversation);
+    } catch {
+      if (!currentInvite(target)) return;
+      groupInviteLinkCreate.disabled = false;
+      groupInviteLinkCreate.textContent = uiLabel('重试', 'Retry');
+      groupInviteLinkStatus.textContent = uiLabel('邀请链接暂时无法加载。', 'Could not load invitation links.');
+    }
+  }
+
+  groupInviteLinkCreate.addEventListener('click', () => {
+    if (!showGroupInviteLink && inviteTarget) void prepareGroupInviteLink(inviteTarget, currentConversation);
+  });
   const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+  const inviteSearchText = value => value.normalize('NFKC').trim().toLocaleLowerCase();
+  const reviewingGroupInvite = () => groupInviteReview.getAttribute('aria-pressed') === 'true';
 
   function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
     groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+    groupInviteReview.disabled = invitingMembers;
+    groupInviteQuery.disabled = invitingMembers || reviewingGroupInvite();
+    groupInviteChoices.inert = invitingMembers;
   }
 
   function syncGroupInvite() {
-    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    const count = selectedInviteMembers().length;
+    const wasReviewing = reviewingGroupInvite();
+    const reviewing = count > 0 && wasReviewing;
+    groupInviteReview.setAttribute('aria-pressed', String(reviewing));
+    groupInviteSelection.hidden = !count;
+    groupInviteSelectedCount.textContent = count
+      ? uiLabel(`已选 ${count} 位成员`, `${count} ${count === 1 ? 'member' : 'members'} selected`) : '';
+    const needle = inviteSearchText(groupInviteQuery.value).replace(/^@/, '');
     let visible = 0;
     for (const choice of groupInviteChoices.children) {
-      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      choice.hidden = reviewing ? !choice.children[0].checked : !choice.dataset.search.includes(needle);
       if (!choice.hidden) visible++;
     }
-    const count = selectedInviteMembers().length;
     syncGroupInviteSubmit(count);
+    if (wasReviewing && !reviewing) groupInviteQuery.focus({preventScroll:true});
     if (groupInviteChoices.children.length) {
-      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
-        : !visible ? '没有匹配的成员。'
-        : count ? `已选 ${count} 位成员` : '';
+      groupInviteStatus.textContent = count > 50 ? uiLabel('一次最多添加 50 位成员。', 'You can add up to 50 members at once.')
+        : !visible ? uiLabel('没有匹配的成员。', 'No matching members.') : '';
     }
   }
 
@@ -5181,17 +5933,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inviteTarget = target;
     groupInviteQuery.value = '';
     groupInviteChoices.replaceChildren();
-    groupInviteSubmit.disabled = true;
+    groupInviteChoices.scrollTop = 0;
+    groupInviteReview.setAttribute('aria-pressed', 'false');
+    groupInviteReview.textContent = uiLabel('仅显示已选', 'Show selected only');
+    syncGroupInvite();
     const personal = Boolean(conversation.account_group);
     const roster = personal ? '联系人' : '工作区成员';
-    const searchLabel = personal ? uiLabel('搜索联系人', 'Search contacts') : uiLabel('搜索工作区成员', 'Search workspace members');
+    const searchLabel = personal ? uiLabel('搜索联系人姓名或 @用户名', 'Search contacts by name or @handle')
+      : uiLabel('搜索工作区成员姓名或 @用户名', 'Search workspace members by name or @handle');
     groupInviteQuery.placeholder = searchLabel;
     groupInviteQuery.setAttribute('aria-label', searchLabel);
     groupInviteStatus.textContent = '正在加载' + roster + '…';
     document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
     groupInvite.showModal();
     groupInviteQuery.focus();
-    showGroupInviteLink(target, conversation);
+    void prepareGroupInviteLink(target, conversation);
     const result = await request('GET', personal ? '/v1/contacts' : `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
     if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
     if (result.status !== 200) {
@@ -5201,12 +5957,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const joined = new Set((currentConversation.members || []).map(member => personal ? member.handle : member.user_id));
     const candidates = memberChoices(personal ? contactMembers(result) : result.body.items, currentUser?.id)
       .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
-    for (const member of candidates) {
+    for (const [index, member] of candidates.entries()) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.value = member.handle || member.user_id;
-      label.append(box, document.createTextNode(member.username || box.value));
+      const identity = document.createElement('span');
+      identity.className = 'group-invite-identity';
+      const name = document.createElement('span');
+      name.id = `group-invite-member-name-${index}`;
+      name.textContent = member.username || box.value;
+      box.setAttribute('aria-labelledby', name.id);
+      identity.append(name);
+      const handle = member.handle ? '@' + member.handle.replace(/^@/, '') : '';
+      if (handle) {
+        const descriptor = document.createElement('small');
+        descriptor.id = `group-invite-member-handle-${index}`;
+        descriptor.textContent = handle;
+        box.setAttribute('aria-describedby', descriptor.id);
+        identity.append(descriptor);
+      }
+      label.dataset.search = inviteSearchText(`${name.textContent} ${handle}`);
+      label.append(box, identity);
       groupInviteChoices.append(label);
     }
     groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的' + roster + '。';
@@ -5219,10 +5991,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   groupInvite.addEventListener('close', () => {
     if (groupInvite.open) return;
     inviteTarget = null;
-    showGroupInviteLink(null);
+    showGroupInviteLink?.(null);
+    groupInviteLinkPanel.hidden = true;
   });
   groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
   groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteReview.addEventListener('click', () => {
+    groupInviteReview.setAttribute('aria-pressed', String(!reviewingGroupInvite()));
+    groupInviteChoices.scrollTop = 0;
+    syncGroupInvite();
+  });
   groupInviteChoices.addEventListener('change', syncGroupInvite);
   document.getElementById('group-invite-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -5232,7 +6010,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invitingMembers = true;
     const cancel = document.getElementById('group-invite-cancel');
     cancel.disabled = true;
-    groupInviteSubmit.disabled = true;
+    syncGroupInviteSubmit(memberIds.length);
     groupInviteSubmit.textContent = '添加中…';
     try {
       const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
@@ -5246,8 +6024,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentConversation = result.body.conversation;
       const title = conversationLabel(currentConversation, currentUser?.id);
       applyChatIdentity(document, title, currentConversation);
-      setChatSubtitle(groupInfoCounts(currentConversation).text);
+      setChatSubtitle(groupHeaderSubtitle(currentConversation));
       setGroupInfo(currentConversation);
+      renderGroupRosterSummary(currentConversation.agent_members || [], {direct:false});
+      agentMentions.refresh();
+      renderGroupComposerRouting();
       groupInvite.close();
       show('ok', '群成员已更新。');
     } catch {
@@ -5294,6 +6075,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (result.status !== 200 || result.body.auto_reply !== enabled) throw new Error('Automatic replies were not updated');
         const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
         if (currentAgent) currentAgent.auto_reply = enabled;
+        renderGroupComposerRouting();
         if (currentConversation === activeConversation && currentAgent === agent) {
           toggle.setAttribute('aria-checked', String(enabled));
           const description = row.children[1]?.children[1];
@@ -5323,6 +6105,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
+    renderGroupReplyPolicy(conversation);
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     const feedbackScope = group ? sendScope() : '';
     if (feedbackScope !== groupInfoFeedbackScope) groupInfoAddFeedback.textContent = '';
@@ -5386,21 +6169,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-send').disabled = state?.open === false || directClosed;
   }
 
+  function renderStudioDiscussionSource(source) {
+    const panel = document.getElementById('chat-studio-discussion-source');
+    const link = document.getElementById('chat-studio-discussion-link');
+    if (!panel || !link) return;
+    const href = source && Number.isSafeInteger(source.revision)
+      ? studioDocumentHref(source.workspace_id, source.document_id, source.revision) : '';
+    panel.hidden = !href;
+    if (!href) {
+      link.removeAttribute('href');
+      link.textContent = '';
+      return;
+    }
+    link.href = href;
+    link.textContent = uiLabel(`查看来源团队文档 · 版本 ${source.revision}`, `View source team document · Version ${source.revision}`);
+  }
+
   function setSocialHeaderTools(social) {
+    renderStudioDiscussionSource(null);
     if (social && captureButton) captureButton.hidden = true;
-    const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
     const group = social && currentConversation?.kind === 'group' && !publicChat;
+    const kind = group ? 'group' : '';
+    if (mainPanel.dataset.chatKind !== kind) document.getElementById('chat-more').setAttribute('aria-expanded', 'false');
+    mainPanel.dataset.chatKind = kind;
+    document.getElementById('chat-empty').dataset.group = String(group);
+    if (!social) {
+      document.getElementById('group-agent-action').hidden = true;
+      agentRosterSheet.open = false;
+      agentRosterView = null;
+    }
     document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social || group || Boolean(publicChat);
+    workspaceInvite.sync();
     if (multi) multi.hidden = !social || Boolean(publicChat);
-    if (!social || group || publicChat) {
-      const panel = document.getElementById('chat-invite-panel');
-      if (panel) panel.hidden = true;
-      invite?.setAttribute('aria-expanded', 'false');
-    }
     if (!social || publicChat) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
       if (!social) renderPinned([]);
@@ -5484,7 +6287,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -5504,14 +6307,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readThreadReceipt = startupSnapshot ? 0 : privateThreadReceipt;
     const wid = workspaceId();
     const owner = currentUser;
+    // A send can finish after the returning read was taken and before it reaches this view.
+    const sends = servedByDsbot && !refresh
+      ? pendingSends.get(JSON.stringify([owner?.id, wid, 'agent', agentId, conversationId]))?.jobs.slice() : null;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
+      && (!foreground || (foreground === foregroundPrivateRead && canRefreshForegroundPrivate()))
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
-    const snapshot = startupSnapshot ? await startupSnapshot() : null;
-    if (startupSnapshot && !stillOpen()) return false;
-    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path)
+    if (!PRIVATE_THREAD_ID.test(position?.id || '')) position = null;
+    const snapshot = startupSnapshot && !position ? await startupSnapshot() : null;
+    if (startupSnapshot && !position && !stillOpen()) return false;
+    const latestPath = servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path;
+    const read = url => request('GET', url,
+      undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
+    let result = snapshot || await read(position ? latestPath + '&around=' + position.id : latestPath);
+    if (position && stillOpen() && (result.status === 404 ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
       if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
@@ -5532,11 +6349,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const listedAgent = agents.find(item => item.id === agentId);
     const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
     const conversation = threadAfterRead(result.body.conversation, {owner: owner?.id, wid, aid: agentId, cid: conversationId}, readThreadReceipt);
-    if (!agent || conversation?.id !== conversationId || (link && (
+    if (!agent || conversation?.id !== conversationId || ((link || foreground) && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
       if (!refresh) show('error', '无法打开对话。');
       return false;
+    }
+    if (foreground) {
+      if (!Array.isArray(result.body.items)) return false;
+      const sameHistory = JSON.stringify(result.body.items) === JSON.stringify(lastAgentItems);
+      const sameConversation = JSON.stringify(conversation) === JSON.stringify(currentConversation);
+      if (sameHistory && sameConversation && JSON.stringify(agent) === JSON.stringify(currentAgent)) return true;
+      const scroller = document.getElementById('message-scroller');
+      const selection = document.getSelection?.();
+      if (!messageScrollerAtBottom(scroller) || scroller.contains?.(document.activeElement) ||
+          (selection && !selection.isCollapsed && scroller.contains?.(selection.anchorNode))) {
+        if (liveBanner) liveBanner.hidden = false;
+        return true;
+      }
     }
     setSocialHistory(null);
     agentMentions.clear();
@@ -5556,26 +6386,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
     syncPlusState();
-    applyChatIdentity(document, agent.name);
+    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
     if (currentConversation?.id !== conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
       closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = conversation;
+    renderStudioDiscussionSource(conversation.studio_source);
+    let items = position ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
-        readingHistory: !acknowledge};
+        readingHistory: Boolean(position) || !acknowledge};
       state.cursor = result.body.cursor ?? null;
+      if (position && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
+      if (!position && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+        items = items.slice(-Number(HISTORY_PAGE_SIZE));
+        state.cursor = items[0].id;
+      }
       setPrivateHistory(state);
     } else setPrivateHistory(null);
     publicDraft.enter(sendScope());
     renderAgentQuickStarts(detailAgent);
     if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
-    const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
-    if (acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+    const pending = renderAgentMessages(items, {followLatest: !refresh, anchor:readingPositionAnchor(position)});
+    const finished = items.filter(item => item.role === 'assistant' && item.status === 'succeeded');
+    if (!position && acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const read = request('POST', `${path}/read`,
         {message_id: finished[finished.length - 1].id}).then(acknowledged => {
         if (!sameScope() || acknowledged.status !== 200) return;
@@ -5591,7 +6428,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -5606,8 +6443,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
-    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = await request('GET', path).catch(() => ({status: 0, body: {}}));
+    if (!chatPathId(position?.id)) position = null;
+    const path = `${socialBase()}/${conversationId}`;
+    const latestPath = path + (unreadEntry ? '?start=unread' : '');
+    const read = url => request('GET', url, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    let result = initialRead || await read(position ? path + '?around=' + encodeURIComponent(position.id) : latestPath);
+    if (position && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -5619,19 +6465,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         scheduleSocialPoll(currentConversation);
         return false;
       }
-      show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
+      if (!quiet) show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
         : messageFor(result.body?.error, '无法打开会话。'));
       if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
     const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
-    if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
+    if (updated?.id !== conversationId || ((link || initialRead) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
     }
     if (publicStartCurrent && (!updated.public_agent || updated.public_agent.open === false)) return false;
-    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
+    const finishedVisibleReply = finishing?.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+      (result.body.items || []).some(item => (finishing.has(item.reply_job_id) && visibleGroupReply(item.reply_job_id))
+        || item.reply_jobs?.some(job => !waitingGroupReply(job) && finishing.has(job.id) && visibleGroupReply(job.id)));
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || (readingSocialContext() && !finishedVisibleReply)
+        || pendingSends.get(sendScope())?.active)) {
       if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
       scheduleSocialPoll(currentConversation);
       return false;
@@ -5643,6 +6493,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return true;
     }
     if (currentSource !== 'social' || currentConversation?.id !== updated.id) {
+      document.getElementById('chat-more').setAttribute('aria-expanded', 'false');
       voiceRecorder.clear();
       closeInChatSearch({restoreScroll: false, focus: false});
     }
@@ -5651,11 +6502,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = updated;
     if (privateHistory) setPrivateHistory(null);
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
+    const shown = result.body.items || [];
+    void restoreReplyDraft(shown, {allowLookup:!refresh});
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
-    const shown = result.body.items || [];
     const lastSeq = shown.at(-1)?.seq;
-    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const snapshot = !position && unreadEntry ? result.body.unread_window : null;
     const first = snapshot?.first;
     const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
       Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
@@ -5664,16 +6516,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(unread?.firstId), unread});
+      readingHistory: Boolean(position || unread?.firstId), unread,
+      after: position && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
     voiceRecorder.refresh();
     setSessionsOpen(false);
     syncMuteButton(currentConversation);
-    const agentNote = document.getElementById('social-agent-members');
-    agentNote.textContent = groupAgentSummary(currentConversation);
-    agentNote.hidden = currentConversation.kind !== 'group' || Boolean(currentConversation.public_agent) || !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social', public_agent: currentConversation.public_agent});
@@ -5688,9 +6538,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageUtilities.refreshAnnouncement();
     const publicChat = currentConversation.public_agent;
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
-      : currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+      : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh});
+    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -5703,7 +6553,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -5840,9 +6690,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }, delay);
   }
 
+  function canRefreshForegroundPrivate() {
+    if (!currentPrivateThread() || !privateHistory || !canWatchReply() || readingPrivateContext() ||
+        sessionTransition?.pending || openingStartupLink()) return false;
+    const scope = sendScope();
+    const queue = pendingSends.get(scope);
+    return !queue?.active && !memoryWrites.has(scope) && !replyWatch && !lastAgentItems.some(waitingAgentReply);
+  }
+
+  let foregroundPrivateRead;
+  function refreshForegroundPrivate() {
+    if (!canRefreshForegroundPrivate()) return false;
+    const scope = sendScope();
+    const now = performance.now();
+    if (foregroundPrivateRead?.scope === scope && (foregroundPrivateRead.busy || now - foregroundPrivateRead.started < 750)) return true;
+    const reading = foregroundPrivateRead = {scope, started:now, busy:true};
+    void openAgentConversation(currentAgent.id, currentConversation.id, {refresh:true, foreground:reading})
+      .finally(() => { reading.busy = false; });
+    return true;
+  }
+
+  globalThis.addEventListener('focus', refreshForegroundPrivate);
+  globalThis.addEventListener('blur', () => { foregroundPrivateRead = null; });
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') foregroundPrivateRead = null;
     if (currentSource === 'agent') {
-      if (document.visibilityState === 'visible') void refreshAgentQuickStarts();
+      if (document.visibilityState === 'visible' && !refreshForegroundPrivate()) void refreshAgentQuickStarts();
       if (!canWatchReply()) stopPolling();
       if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       return;
@@ -5870,8 +6743,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return document.querySelectorAll('#member-choices input:checked').length;
   }
 
-  let composing = false;
+  let composePhase = '';
   let composeAttempt = null;
+  let composeReceipt = null;
   let composeView = 0;
   const composeError = document.getElementById('compose-dialog-error');
   function setComposeError(text = '') {
@@ -5908,15 +6782,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncComposeCreate() {
     const button = document.getElementById('compose-dialog-submit');
-    button.disabled = composing || !composeCreateEnabled({
+    const cancel = document.getElementById('compose-dialog-cancel');
+    const progress = document.getElementById('compose-dialog-progress');
+    const busy = Boolean(composePhase);
+    const team = composeMode === 'group' && groupMode === 'team';
+    const template = team ? document.querySelector('#team-template-choices input:checked') : null;
+    button.disabled = busy || (!composeReceipt && !composeCreateEnabled({
       composeMode,
       groupMode,
       personal: inPersonalWorkspace(),
       selectedAgentCount: document.querySelectorAll('#member-choices input[name="agent-member"]:checked').length,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
-      templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
-    });
+      templateSelected: Boolean(template),
+    }));
+    const action = team ? uiLabel('创建团队', 'Create team') : composeMode === 'group'
+      ? uiLabel('创建群组', 'Create group') : uiLabel('开始私聊', 'Start chat');
+    button.textContent = composePhase === 'opening' ? uiLabel('打开中…', 'Opening…')
+      : busy ? uiLabel('创建中…', 'Creating…')
+        : composeReceipt ? uiLabel('重新打开', 'Reopen') : action;
+    cancel.disabled = busy;
+    cancel.textContent = composeReceipt ? uiLabel('关闭', 'Close') : uiLabel('取消', 'Cancel');
+    progress.textContent = composePhase === 'opening' ? uiLabel('已创建，正在打开会话…', 'Created. Opening the conversation…')
+      : busy && template ? uiLabel(`正在创建${template.dataset.templateName}…`, `Creating ${template.dataset.templateName}…`)
+        : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
+    const locked = busy || Boolean(composeReceipt);
+    for (const id of ['compose-mode-switch', 'compose-dialog-body']) {
+      document.getElementById(id).inert = locked;
+    }
   }
 
   function applyMemberFilter() {
@@ -5944,7 +6837,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function syncSelectedCount() {
-    document.getElementById('compose-selected-count').textContent = composeSelectedLabel(selectedMemberCount());
+    const count = selectedMemberCount();
+    document.getElementById('compose-selected-count').textContent = uiLabel(composeSelectedLabel(count), `${count} selected`);
     syncComposeCreate();
   }
 
@@ -5952,57 +6846,90 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupMode = mode === 'team' ? 'team' : 'custom';
     setComposeError();
     for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
-      button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
+      const selected = button.dataset.groupMode === groupMode;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
     }
     const team = composeMode === 'group' && groupMode === 'team';
-    document.getElementById('compose-team-note').hidden = !team;
-    const templates = document.getElementById('compose-team-templates');
-    if (templates) templates.hidden = !team;
-    if (team) loadTeamTemplates();
-    document.getElementById('compose-member-picker').hidden = team;
-    if (composeMode === 'group') {
-      document.getElementById('compose-title-label').hidden = team;
-    }
+    document.getElementById('compose-team-panel').hidden = !team;
+    document.getElementById('compose-custom-panel').hidden = team;
+    document.getElementById('compose-dialog-body').scrollTop = 0;
+    if (team) void loadTeamTemplates();
     syncComposeCreate();
   }
 
-  let teamTemplates = null;
+  let loadingTeamTemplates = false;
   async function loadTeamTemplates() {
     const holder = document.getElementById('team-template-choices');
-    if (!holder) return;
-    if (teamTemplates === null) {
-      let result;
-      try { result = await request('GET', '/v1/team-templates'); } catch { result = {status: 0, body: {}}; }
-      if (result.status !== 200) {
-        document.getElementById('team-templates-empty').hidden = false;
-        return;
-      }
-      teamTemplates = result.body.items || [];
+    if (loadingTeamTemplates || holder.children.length) return;
+    const status = document.getElementById('team-templates-status');
+    const retry = document.getElementById('team-templates-retry');
+    loadingTeamTemplates = true;
+    retry.hidden = true;
+    status.textContent = uiLabel('正在加载团队模板…', 'Loading team templates…');
+    const result = await request('GET', '/v1/team-templates', undefined, undefined, AbortSignal.timeout(10000)).catch(() => null);
+    loadingTeamTemplates = false;
+    if (result?.status !== 200 || !Array.isArray(result.body.items)) {
+      status.textContent = uiLabel('暂时无法读取团队模板。', 'Could not load team templates.');
+      retry.hidden = false;
+      return;
     }
-    if (holder.children.length) return;
-    for (const template of teamTemplates) {
+    for (const template of result.body.items) {
       const label = document.createElement('label');
+      label.className = 'team-template-option';
       const box = document.createElement('input');
-      box.type = 'radio'; box.name = 'team-template'; box.value = template.slug;
-      const text = `${template.name} · ${template.agents.map(agent => agent.name).join('、')}`;
-      label.append(box, document.createTextNode(text));
+      box.type = 'radio';
+      box.name = 'team-template';
+      box.value = template.slug;
+      box.dataset.templateName = template.name;
+      const content = document.createElement('span');
+      content.className = 'team-template-content';
+      const name = document.createElement('span');
+      name.id = `team-template-${template.slug}-name`;
+      name.className = 'team-template-name';
+      name.textContent = template.name;
+      box.setAttribute('aria-labelledby', name.id);
+      content.append(name);
+      if (template.summary) {
+        const summary = document.createElement('span');
+        summary.className = 'team-template-summary';
+        summary.textContent = template.summary;
+        content.append(summary);
+      }
+      const roles = document.createElement('span');
+      roles.id = `team-template-${template.slug}-roles`;
+      roles.className = 'team-template-roles';
+      for (const agent of template.agents) {
+        const role = document.createElement('span');
+        role.textContent = agent.name;
+        roles.append(role);
+      }
+      box.setAttribute('aria-describedby', roles.id);
+      content.append(roles);
+      label.append(box, content);
       holder.append(label);
     }
-    document.getElementById('team-templates-empty').hidden = teamTemplates.length > 0;
+    status.textContent = result.body.items.length ? '' : uiLabel('暂无可用的团队模板。', 'No team templates are available.');
     syncComposeCreate();
   }
 
   let composeOpener;
   function closeComposeDialog({focus = false} = {}) {
     composeView += 1;
+    const saved = composeReceipt;
+    composeReceipt = null;
+    composePhase = '';
     const opener = composeOpener;
     composeOpener = null;
-    document.getElementById('compose-dialog').hidden = true;
+    const dialog = document.getElementById('compose-dialog');
+    if (dialog.open) dialog.close();
+    dialog.hidden = true;
     document.getElementById('compose-social-form').reset();
     setGroupMode('custom');
     applyMemberFilter();
     syncSelectedCount();
     if (focus && opener?.isConnected !== false) opener?.focus({preventScroll: true});
+    if (focus && saved) void loadSessions();
   }
 
   function renderMemberChoices(single, preserveSelection = false) {
@@ -6044,27 +6971,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openComposeDialog(mode, {keyboard = false} = {}) {
+    if (composePhase || composeReceipt) return;
     composeView += 1;
     composeMenu.close({focus: true});
     composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
-    dialog.hidden = false;
     const isGroup = mode === 'group';
-    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '工作区私聊';
-    document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
-    document.getElementById('compose-intro').hidden = !isGroup;
+    document.getElementById('compose-dialog-title').textContent = isGroup ? uiLabel('新建群组', 'New group') : uiLabel('工作区私聊', 'Workspace chat');
+    document.getElementById('compose-members-legend').textContent = isGroup ? uiLabel('成员', 'Members') : uiLabel('选择一位成员', 'Choose a member');
+    const intro = document.getElementById('compose-intro');
+    intro.hidden = !isGroup;
+    if (isGroup) intro.textContent = inPersonalWorkspace() ? uiLabel(GROUP_CREATE_INTRO, 'Choose contacts or agents for your group.')
+      : uiLabel('至少选择一位工作区成员，也可以添加智能体。', 'Choose at least one workspace member. You can also add agents.');
     document.getElementById('compose-mode-switch').hidden = !isGroup;
     document.getElementById('compose-title-label').hidden = !isGroup;
     document.getElementById('compose-member-tools').hidden = !isGroup;
-    document.getElementById('compose-team-note').hidden = true;
-    document.getElementById('compose-member-picker').hidden = false;
+    const panel = document.getElementById('compose-custom-panel');
+    if (isGroup) {
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', 'compose-mode-custom');
+    } else {
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-labelledby');
+    }
     if (!isGroup) document.getElementById('compose-title').value = '';
     document.getElementById('compose-member-search').value = '';
     setGroupMode('custom');
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal?.();
     if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
-    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-title' : 'compose-dialog-title')
+    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-mode-custom' : 'compose-dialog-title')
       .focus({preventScroll: true});
   }
 
@@ -6077,6 +7015,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openSearchPanel(tab, conversationId = '', {fromSessionList = true} = {}) {
+    if (composePhase) return;
+    if (!document.getElementById('compose-dialog').hidden) {
+      const saved = composeReceipt;
+      closeComposeDialog();
+      if (saved) void loadSessions();
+    }
     searchFromSessionList = fromSessionList;
     searchConversation = conversationId;
     searchConversationTitle = document.getElementById('chat-title').textContent;
@@ -6084,7 +7028,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('search-close').hidden = false;
     document.getElementById('conversation-group').hidden = true;
     document.getElementById('pinned-group').hidden = true;
-    document.getElementById('compose-dialog').hidden = true;
     composeMenu.close();
     setFilterOpen(false, {focus: false});
     setNotificationsOpen(false);
@@ -6104,6 +7047,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function closeSearchPanel({focus = false} = {}) {
     searchSeq++;
     void messageSearch.load('');
+    stopSearchSources();
     searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
@@ -6145,18 +7089,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     root.append(section);
   }
 
-  function artifactKind(item) {
-    return item.kind || item.public_kind || '';
+  const worksSearchTabs = new Set(['artifacts', 'documents', 'media']);
+  let sourceSearch;
+
+  function stopSearchSources() {
+    sourceSearch?.controller.abort();
+    sourceSearch = null;
   }
 
-  function artifactItems(kind) {
-    return artifacts.filter(item => !kind || artifactKind(item) === kind).map(item => ({
-      type: 'artifact',
-      id: item.id,
-      title: item.title || '未命名',
-      preview: artifactKind(item) || '作品',
-      href: '/space',
-    }));
+  function loadSearchSources(owner, workspace, tab, query) {
+    const everySource = tab === 'all' && Boolean(query);
+    const works = everySource || worksSearchTabs.has(tab);
+    const memories = servedByDsbot && (everySource || tab === 'memory');
+    if (!owner?.id || !PRIVATE_THREAD_ID.test(workspace || '') || (!works && !memories)) {
+      stopSearchSources();
+      return null;
+    }
+    const key = JSON.stringify([owner.id, workspace, tab, query]);
+    if (sourceSearch?.key === key) return sourceSearch;
+    stopSearchSources();
+    const controller = new AbortController();
+    const pending = {key, controller, sections:null};
+    const params = new URLSearchParams({limit:'50', order:'recent'});
+    if (query) params.set('q', query);
+    if (tab === 'documents') params.set('kind','document');
+    if (tab === 'media') params.set('kind','media');
+    pending.results = Promise.all([
+      ...(works ? [{path:'artifacts', title:uiLabel('作品','Works')}] : []),
+      ...(memories ? [{path:'memory', title:uiLabel('记忆','Memory')}] : []),
+    ].map(async ({path, title}) => {
+      const result = await request('GET', `/v1/workspaces/${workspace}/${path}?${params}`,
+        undefined, undefined, controller.signal).catch(() => ({status:0,body:{}}));
+      const failed = result.status !== 200 || !Array.isArray(result.body.items);
+      const items = (failed ? [] : result.body.items).filter(item =>
+        item?.workspace_id === workspace && PRIVATE_THREAD_ID.test(item.id || '')
+      ).map(item => ({
+        title:item.title || uiLabel('未命名','Untitled'),
+        preview:item.match?.text || (path === 'artifacts' ? artifactKindLabel(item.kind) : ''),
+        href:path === 'artifacts' ? spaceHref(workspace,item.id)
+          : '/memory?' + new URLSearchParams({workspace,page:item.id}),
+      }));
+      return {title, items, failed};
+    })).then(sections => pending.sections = sections);
+    sourceSearch = pending;
+    return pending;
   }
 
   function contactItems() {
@@ -6192,7 +7168,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
     const note = document.getElementById('search-source-note');
+    const more = document.getElementById('search-more');
     const paged = searchTab === 'messages' || searchTab === 'all';
+    const owner = currentUser, workspace = workspaceId();
     results.replaceChildren();
     empty.hidden = true;
     note.hidden = Boolean(query) && !searchConversation;
@@ -6200,22 +7178,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? '仅搜索当前对话：' + searchConversationTitle
       : '搜索当前工作区。';
     const seq = ++searchSeq;
+    const current = () => seq === searchSeq && owner === currentUser && workspace === workspaceId();
+    if (more) more.hidden = true;
 
     if (searchTab === 'files' || searchTab === 'links') {
+      stopSearchSources();
       const params = new URLSearchParams({kind: searchTab, q: query, limit: '20'});
       if (appendResources && resourceCursor) params.set('cursor', resourceCursor);
-      const found = await request('GET', `/v1/workspaces/${workspaceId()}/search/resources?${params}`);
-      if (seq !== searchSeq) return;
+      const found = await request('GET', `/v1/workspaces/${workspace}/search/resources?${params}`)
+        .catch(() => ({status:0,body:{}}));
+      if (!current()) return;
       if (found.status !== 200) { empty.hidden = false; empty.textContent = '无法加载搜索结果。'; return; }
       resourceItems = appendResources ? resourceItems.concat(found.body.items || []) : (found.body.items || []);
       resourceCursor = found.body.cursor || '';
       addSearchSection(results, searchTab === 'files' ? '文件' : '链接', resourceItems, () => {});
       empty.hidden = Boolean(resourceItems.length); empty.textContent = '没有匹配的结果。';
-      const more = document.getElementById('search-more');
       if (more) { more.hidden = !resourceCursor; more.disabled = false; }
       return;
     }
     if (searchTab === 'messages' && !query) {
+      stopSearchSources();
       empty.hidden = false;
       empty.textContent = searchConversation
         ? '输入关键词，搜索当前对话中你有权查看的消息。'
@@ -6224,9 +7206,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     let messageItems = [];
+    const sources = loadSearchSources(owner, workspace, searchTab, query);
     if (paged && query) {
       if (!reuseMessages) await messageSearch.load(query, searchConversation);
-      if (seq !== searchSeq) return;
+      if (!current()) return;
       const state = messageSearch.state;
       if (state.error && searchTab === 'messages' && !state.hits.length) {
         empty.hidden = false;
@@ -6240,6 +7223,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       messageItems = state.hits;
     }
+    let searchable = sources?.sections || [];
+    if (sources && !sources.sections) {
+      if (searchTab === 'all') {
+        void sources.results.then(() => {
+          if (current()) void renderSearch({reuseMessages:true});
+        });
+      } else {
+        note.hidden = false;
+        note.textContent = uiLabel('正在搜索…','Searching…');
+        searchable = await sources.results;
+        if (!current()) return;
+        note.hidden = Boolean(query);
+        note.textContent = uiLabel('搜索当前工作区。','Searching the current workspace.');
+      }
+    }
+    if (!current()) return;
+    const failedSources = searchable.filter(source => source.failed).map(source => source.title);
+    if (failedSources.length) {
+      const warning = uiLabel('暂时无法搜索：','Search unavailable: ') + failedSources.join(' · ');
+      note.textContent = note.hidden ? warning : [note.textContent, warning].filter(Boolean).join(' ');
+      note.hidden = false;
+    }
 
     const filtered = (items) => items.filter(item => matchesQuery(item, query));
     const sections = [];
@@ -6252,18 +7257,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (searchTab === 'all' || searchTab === 'groups') {
       sections.push(['群组', filtered(groupItems())]);
     }
-    if (searchTab === 'all' || searchTab === 'artifacts') {
-      sections.push(['Artifacts', filtered(artifactItems())]);
-    }
-    if (searchTab === 'documents') {
-      sections.push(['云文档', filtered(artifactItems('document'))]);
-    }
-    if (searchTab === 'media') {
-      sections.push(['媒体', filtered(artifactItems('media'))]);
-    }
     if (searchTab === 'all' || searchTab === 'messages') {
       sections.push(['消息', messageItems]);
     }
+    for (const {title, items} of searchable) sections.push([title, items]);
 
     let total = 0;
     for (const [title, items] of sections) {
@@ -6291,12 +7288,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      const directoryStatus = searchTab === 'contacts' ? membersStatus
-        : (['artifacts', 'documents', 'media'].includes(searchTab) ? artifactsStatus : '');
+      const directoryStatus = searchTab === 'contacts' ? membersStatus : '';
       if (directoryStatus === 'loading') empty.textContent = '正在加载…';
       else if (directoryStatus === 'failed') empty.textContent = '无法加载搜索范围。';
       else if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
-      else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
+      else if (failedSources.length || (paged && messageSearch.state.warning)) empty.textContent = '可搜索的内容里没有匹配结果。';
       else empty.textContent = '当前工作区里没有匹配的结果。';
     }
     if (paged && query && messageSearch.state.error) {
@@ -6404,9 +7400,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const message = start.social
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+    const position = !start.message && !start.directAccess && readingPositions.get(start.social
+      ? readingPositionKey('social', workspace, start.social)
+      : readingPositionKey('agent', workspace, start.conversation, start.agent));
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link, position})
+      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot, position});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -6467,6 +7466,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     workspaceSelect.value = (items.find(space => space.id === preferred)
       || items.find(space => space.id === personal) || items[0])?.id || '';
+    workspaceInvite.sync();
+  }
+
+  function setPersonalChat(personal) {
+    personalWorkspaceId = personal?.workspace?.id || '';
+    personalAgentId = personal?.agent?.id || '';
+    personalLook = personal ? chatSettings?.look || personal.look || null : null;
   }
 
   function loadChatSettings(owner) {
@@ -6491,7 +7497,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (settings.look && personalAgentId) {
           personalLook = settings.look;
           renderSessions();
-          if (currentSource === 'agent' && currentAgent?.id === personalAgentId && !currentConversation) {
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
             applyChatIdentity(document, currentAgent.name, null, personalLook);
           }
         }
@@ -6525,6 +7531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
+      readingPositions.clear();
       chatSettings = null;
       clearSessionTransition();
       currentAgent = null;
@@ -6556,6 +7563,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      readingPositions.clear();
       clearSessionTransition();
       currentAgent = null;
       currentConversation = null;
@@ -6592,20 +7600,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!sessions.length) setSessionsStatus('正在加载对话…');
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
     const sharedRequest = servedByDsbot ? listWorkspaces() : null;
-    const local = ownedChatStartup(await localRequest, owner);
+    const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
+    let personalRequest;
+    const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
+      const identity = ownedChatStartup(result, owner);
+      return identity ? {workspace: identity.space, agent: {id: identity.agentId}, look: result.body.personal_look ?? null} : null;
+    });
+    const socialTarget = start.social && chatPathId(start.social);
+    const exactTarget = start.social ? socialTarget : chatPathId(start.agent) && chatPathId(start.conversation);
+    const workspaceOnly = !start.social && !start.agent && !start.conversation;
+    const validWorkspace = /^[0-9a-f]{32}$/.test(start.workspace);
+    const inboxEntry = workspaceOnly && (!start.workspace || validWorkspace);
+    const scopedEntry = sharedRequest && !publicIntent && (inboxEntry || (validWorkspace && exactTarget));
+    // The signed workspace list authorizes scoped entries while the personal snapshot is pending.
+    const {local, shared, personalSpace} = scopedEntry ? await Promise.any([
+      localReady.then(async local => {
+        if (!local && bootCurrent()) await readPersonal();
+        return {local};
+      }),
+      sharedRequest.then(shared => {
+        const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
+        const personalSpace = items.find(space => space.kind === 'personal' && (!space.owner_id || space.owner_id === owner.id));
+        const target = start.workspace ? items.find(space => space.id === start.workspace) : personalSpace;
+        const authorized = target && (['team', 'workspace'].includes(target.kind) ||
+          ((socialTarget || inboxEntry) && target === personalSpace));
+        return personalSpace && authorized ? {shared, personalSpace} : Promise.reject();
+      }),
+    ]).catch(() => ({})) : {local: await localReady};
     if (!bootCurrent()) return;
 
     const openLocal = local && (!start.workspace || start.workspace === local.space.id);
     let personalEntity = local ? {workspace: local.space, agent: {id: local.agentId}} : null;
     let listed;
-    if (openLocal) {
+    if (shared) {
+      listed = shared;
+      personalEntity = {workspace: personalSpace};
+      void localReady.then(async local => {
+        if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname) return;
+        const personal = local ? {workspace: local.space, agent: {id: local.agentId}} : await readPersonal();
+        if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname ||
+            personal?.workspace?.id !== personalSpace.id || !personal.agent?.id) return;
+        setPersonalChat(personal);
+        if (workspaceId() === personalWorkspaceId) {
+          renderSessions();
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
+            applyChatIdentity(document, currentAgent.name, null, personalLook);
+          }
+        }
+      });
+    } else if (openLocal) {
       listed = {status: 200, body: {items: [local.space]}};
     } else if (local) {
       listed = await sharedRequest;
     } else {
       if (servedByDsbot) {
-        const personal = await read('/v1/personal-agent');
-        personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+        personalEntity = await readPersonal();
         if (personalEntity?.agent?.id && personalEntity.workspace?.id) {
           listed = await sharedRequest;
           if (listed.status !== 200 || !listed.body?.items?.some(space => space.id === personalEntity.workspace.id)) listed = null;
@@ -6621,9 +7670,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!bootCurrent()) return;
     const personalWorkspace = personalEntity?.workspace?.id || '';
-    personalWorkspaceId = personalWorkspace;
-    personalAgentId = personalEntity?.agent?.id || '';
-    personalLook = personalEntity ? chatSettings?.look || personalEntity.look || null : null;
+    setPersonalChat(personalEntity);
     if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
       setSessionsStatus('无法加载工作区，请重试。');
       if (publicIntent && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === publicAgentContinuation(publicIntent)) {
@@ -6697,14 +7744,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     };
     let openingAgent;
     let firstSnapshot;
-    const snapshotOnStartup = openLocal && local.directory && !hash && !narrowScreen();
+    // A partial inbox can be used immediately, while the same native request
+    // still supplies private sessions and the final default session order.
+    const pendingNativeDirectory = shared && inboxEntry && workspaceId() === personalWorkspace
+      ? localReady.then(local => local?.space.id === personalWorkspace ? local.directory : null) : null;
+    if (pendingNativeDirectory) {
+      const opening = {owner, workspace: personalWorkspace, read: pendingNativeDirectory};
+      startingInboxDirectory = opening;
+      void pendingNativeDirectory.then(() => {
+        if (startingInboxDirectory === opening) startingInboxDirectory = null;
+      });
+    }
+    const snapshotOnStartup = (openLocal && local.directory || pendingNativeDirectory) && !hash && !narrowScreen();
     await loadSessions(undefined, {
       nativeDirectory: openLocal ? local.directory : null,
-      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? recent => {
+      pendingNativeDirectory,
+      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? (recent, socialReady) => {
         if (!bootCurrent()) return;
         if (start.agent) {
           openingAgent = openStartingAgent();
-        } else if (recent) {
+        } else if (recent && (!socialReady || sessions[0] === recent)) {
           firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
         }
       } : null,
@@ -6972,33 +8031,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       syncForwardBar();
     }
   });
-  const chatInvite = document.getElementById('chat-invite');
-  if (chatInvite) chatInvite.addEventListener('click', () => {
-    const panel = document.getElementById('chat-invite-panel');
-    panel.hidden = !panel.hidden;
-    chatInvite.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
-    document.getElementById('chat-invite-result').textContent = '';
-  });
-  const inviteClose = document.getElementById('chat-invite-close');
-  if (inviteClose) inviteClose.addEventListener('click', () => {
-    document.getElementById('chat-invite-panel').hidden = true;
-    if (chatInvite) chatInvite.setAttribute('aria-expanded', 'false');
-  });
-  const chatInviteForm = document.getElementById('chat-invite-form');
-  if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
-    event.preventDefault();
-    const out = document.getElementById('chat-invite-result');
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
-      role: 'member', expires_in: 7 * 86400, max_uses: 1,
-      requires_approval: document.getElementById('chat-invite-approval').checked,
-    });
-    if (result.status !== 201) {
-      out.textContent = result.status === 404 || result.status === 403
-        ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
-      return;
-    }
-    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
-  });
   notificationKind?.addEventListener('change', () => {
     if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);
   });
@@ -7018,7 +8050,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   globalThis.addEventListener('pageshow', event => {
     if (!event.persisted) return;
     void loadNotifications();
-    void refreshAgentQuickStarts();
+    if (!refreshForegroundPrivate()) void refreshAgentQuickStarts();
   });
   const readAll = document.getElementById('notifications-read-all');
   if (readAll) readAll.addEventListener('click', async () => {
@@ -7037,6 +8069,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    rememberReadingPosition();
     closePrivateThreadDialogs();
     if (messageLinkDialog?.open) messageLinkDialog.close();
     resetStickerSurface();
@@ -7067,7 +8100,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
     closeInChatSearch({restoreScroll: false, focus: false});
     applyChatIdentity(document, '聊天');
-    showPublicChatState(null);
+    setSocialHeaderTools(false);
     renderReplyDraft();
     document.getElementById('message-list').replaceChildren();
     document.getElementById('chat-empty').hidden = false;
@@ -7078,7 +8111,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', async () => {
     clearChatScope();
-    writeHash({workspace: workspaceId()});
+    // The selected conversation updates this workspace entry as usual.
+    writeHash({workspace: workspaceId()}, {push: true});
     await loadSessions();
   });
 
@@ -7089,7 +8123,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!isSearchOpen()) openSearchPanel();
     else renderSearch();
   });
-  const inChatSearch = createMessageSearch(async (query, conversationId, cursor, signal) => {
+  async function readConversationMessageMatches(query, conversationId, cursor, signal) {
     if (currentSource === 'social') {
       const params = new URLSearchParams({q: query, limit: '20'});
       if (cursor) params.set('before', cursor);
@@ -7116,18 +8150,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`, undefined, undefined, signal);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
-  });
+  }
   async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
-    isCurrent = () => true, {signal, onLocated} = {}) {
+    isCurrent = () => true, {signal, onLocated, attachmentPath} = {}) {
     if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findAnchor = target => attachmentPath && target
+      ? Array.from(target.querySelectorAll('[data-chat-file-path]')).find(card => card.dataset.chatFilePath === attachmentPath)
+      : target;
     let target = findTarget();
+    let anchor = findAnchor(target);
     const jump = ++historyJump;
     const privateChat = currentSource === 'agent';
     const currentHistory = () => privateChat ? privateHistory : socialHistory;
     const state = currentHistory();
-    if (!target && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
+    if (!anchor && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
       if (privateChat) {
         state.jumping = jump;
         stopReplyProgress();
@@ -7142,16 +8180,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const window = {...state, cursor: result.body.cursor ?? null, readingHistory: true, loading: false};
           searchScrollSnapshot = null;
           if (privateChat) {
-            setPrivateHistory({...window, jumping: null});
+            const last = result.body.items.at(-1)?.id;
+            const after = result.body.has_newer && PRIVATE_THREAD_ID.test(last || '') ? last : null;
+            setPrivateHistory({...window, after, jumping: null});
             renderAgentMessages(result.body.items, {followLatest: false});
           } else {
             const unread = state.unread;
             const retained = unread && unread.committed < unread.latest
               ? {committed: unread.committed, latest: unread.latest, seen: new Set()} : null;
-            setSocialHistory({...window, unread: retained});
+            const last = result.body.items.at(-1)?.seq;
+            const after = result.body.has_newer && Number.isSafeInteger(last) && last > 0 ? last : null;
+            setSocialHistory({...window, after, unread: retained});
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();
+          anchor = findAnchor(target);
           if (notice) notice.textContent = '';
         }
       } catch {
@@ -7169,20 +8212,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return false;
     }
-    onLocated?.(target);
-    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    if (!anchor) {
+      if (notice) notice.textContent = uiLabel('原消息中的附件已不可用。请刷新附件结果。', 'The attachment is unavailable. Refresh the attachment results.');
+      return false;
+    }
+    onLocated?.(anchor);
+    anchor.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    anchor.tabIndex = -1; anchor.focus?.({preventScroll: true});
     for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    for (const card of list.querySelectorAll('[data-attachment-jump]')) delete card.dataset.attachmentJump;
     target.dataset.searchJump = 'true';
-    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    if (attachmentPath) anchor.dataset.attachmentJump = 'true';
+    clearTimeout(searchHighlightTimer);
+    searchHighlightTimer = setTimeout(() => {
+      delete target.dataset.searchJump;
+      delete anchor.dataset.attachmentJump;
+    }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
-  async function jumpToSearchHit(messageId, view, button) {
-    if (!currentSearchView(view) || view.jump?.messageId === messageId) return;
+  async function jumpToSearchHit(messageId, view, button, attachmentPath) {
+    if (!currentSearchView(view) || view.jump?.button === button) return;
     const status = view.jump?.status ?? inChatStatus.textContent;
     view.jump?.controller.abort();
     const controller = new AbortController();
-    const jump = {messageId, status, controller};
+    const jump = {button, status, controller};
     view.jump = jump;
     button.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = uiLabel('正在定位消息…', 'Finding the message…');
@@ -7190,16 +8243,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const located = await jumpToMessage(messageId, inChatStatus,
         () => currentSearchView(view) && view.jump === jump, {
           signal: controller.signal,
+          attachmentPath,
           onLocated(target) {
             searchScrollSnapshot = null;
+            view.selected?.removeAttribute('aria-current');
+            view.selected = button;
+            button.setAttribute('aria-current', 'true');
             if (globalThis.matchMedia?.('(max-width: 900px)').matches) {
-              closeInChatSearch({restoreScroll: false, focus: false});
+              closeInChatSearch({restoreScroll: false, focus: false, preserveResults: true});
             } else {
               searchJumpTarget = target;
             }
           },
         });
-      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = status;
+      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = view.status || status;
     } finally {
       button.removeAttribute('aria-busy');
       if (view.jump === jump) view.jump = null;
@@ -7253,6 +8310,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const inChatStatus = document.getElementById('conversation-search-status');
   const inChatMore = document.getElementById('conversation-search-more');
   const inChatRetry = document.getElementById('conversation-search-retry');
+  const inChatReturn = document.getElementById('conversation-search-return');
+  const inChatReturnButton = inChatReturn?.querySelector('button');
   let conversationScope = 'messages';
   let searchedChat = '';
   let inChatView;
@@ -7266,7 +8325,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inChatView?.controller?.abort();
     inChatView?.jump?.controller.abort();
     inChatView = null;
-    void inChatSearch.load('');
     inChatResults.replaceChildren();
     inChatResults.scrollTop = 0;
     inChatResults.setAttribute('aria-busy', 'false');
@@ -7274,6 +8332,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inChatMore.hidden = true;
     inChatMore.disabled = false;
     inChatRetry.hidden = true;
+    if (inChatReturn) inChatReturn.hidden = true;
   }
 
   function setConversationScope(tab) {
@@ -7299,7 +8358,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     jump.type = 'button';
     jump.className = 'search-hit attachment-search-jump';
     jump.setAttribute('aria-label', '跳到原消息，' + title);
-    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump));
+    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump, attachment.path));
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -7333,13 +8392,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return li;
   }
 
-  async function searchAttachmentPage(view, {kind, noun, unit}) {
+  async function searchAttachmentPage(view, {kind, noun, unit}, controller) {
     const conversation = currentConversation.id;
     const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
     const params = new URLSearchParams({kind, q: view.query, limit: '20'});
     if (view.cursor) params.set('cursor', view.cursor);
-    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
-    if (!currentSearchView(view)) return;
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, controller.signal);
+    if (!currentSearchView(view) || view.controller !== controller) return;
     if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
     for (const item of result.body.items || []) {
       if (!item.message_id || !item.attachment?.id) continue;
@@ -7350,7 +8409,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const next = result.body.next_cursor;
     view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
-    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+    view.status = inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
       : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
   }
 
@@ -7368,31 +8427,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = CONVERSATION_SCOPES[view.scope];
     const noun = scope.noun || '消息';
     view.loading = true;
-    view.controller = new AbortController();
+    const controller = view.controller = new AbortController();
+    const current = () => currentSearchView(view) && view.controller === controller;
     inChatResults.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
     inChatMore.disabled = true;
     inChatRetry.hidden = true;
     try {
       if (scope.kind) {
-        await searchAttachmentPage(view, scope);
+        await searchAttachmentPage(view, scope, controller);
       } else {
-        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: view.controller.signal});
-        if (!currentSearchView(view)) return;
-        if (state.error) throw new Error(state.error);
-        inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
-        view.cursor = state.cursor;
-        inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
+        const page = await readConversationMessageMatches(view.query, currentConversation.id, view.cursor, controller.signal);
+        if (!current()) return;
+        for (const item of page.items || []) {
+          const hit = searchHitFromItem(item);
+          if (!hit.messageId || view.seen.has(hit.messageId)) continue;
+          view.seen.add(hit.messageId);
+          inChatResults.append(searchHitRow(hit, view));
+        }
+        view.cursor = page.cursor && page.cursor !== view.cursor ? page.cursor : '';
+        view.status = inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} 条消息` : '没有找到匹配的消息。试试其他关键词。';
       }
-      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+      if (current()) inChatMore.hidden = !view.cursor;
     } catch {
-      if (!currentSearchView(view)) return;
-      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      if (!current()) return;
+      view.status = inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
       view.retryAppend = append;
       inChatMore.hidden = true;
       inChatRetry.hidden = false;
     } finally {
-      if (currentSearchView(view)) {
+      if (current()) {
         view.loading = false;
         view.controller = null;
         inChatMore.disabled = false;
@@ -7416,6 +8480,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-agent-manage').addEventListener('click', () => {
+      if (!agentRosterCurrent(agentRosterView) || agentRosterView.direct) return;
+      agentRosterSheet.open = false;
+      closeInChatSearch({restoreScroll:false, focus:false});
+      setGroupInfoOpen(true);
+      setGroupInfoTab('agents');
+      document.getElementById('group-info-tab-agents').focus({preventScroll:true});
+    });
     document.getElementById('group-info-search').addEventListener('click', () => {
       setGroupInfoOpen(false);
       document.getElementById('conversation-search-open').click();
@@ -7432,7 +8504,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchScrollSnapshot = null;
   let searchJumpTarget = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  inChatOpen?.addEventListener('click', () => {
+  function openInChatSearch() {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
     if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
@@ -7445,15 +8517,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
     inChatPanel.hidden = false;
     inChatOpen.setAttribute('aria-expanded', 'true');
+    if (inChatReturn) inChatReturn.hidden = true;
+    const view = inChatView;
+    if (currentSearchView(view) && view.suspendedScroll !== undefined) {
+      inChatResults.scrollTop = view.suspendedScroll;
+      delete view.suspendedScroll;
+      (view.selected || inChatQuery).focus({preventScroll: true});
+      return;
+    }
     inChatQuery.focus();
     return searchCurrentConversation();
-  });
-  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+  }
+  inChatOpen?.addEventListener('click', openInChatSearch);
+  inChatReturnButton?.addEventListener('click', openInChatSearch);
+  function closeInChatSearch({restoreScroll = true, focus = true, preserveResults = false} = {}) {
     const target = restoreScroll && searchJumpTarget?.isConnected ? searchJumpTarget : null;
     const targetTop = target?.getBoundingClientRect().top;
+    const view = inChatView;
+    const preserve = preserveResults && currentSearchView(view) && view.seen.size;
+    if (preserve) {
+      view.suspendedScroll = inChatResults.scrollTop;
+      view.controller?.abort();
+      view.jump?.controller.abort();
+      view.controller = view.jump = null;
+      if (view.loading) {
+        view.loading = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+        inChatMore.disabled = false;
+        inChatMore.hidden = !view.cursor;
+      }
+      inChatStatus.textContent = view.status ?? '';
+      if (inChatReturn) inChatReturn.hidden = !view.selected;
+      if (view.selected && inChatReturnButton) {
+        const messages = view.scope === 'messages';
+        inChatReturnButton.setAttribute('data-ui-text', messages ? 'chat.search.back_to_messages' : 'chat.search.back_to_attachments');
+        inChatReturnButton.textContent = messages ? uiLabel('返回消息结果', 'Back to message results')
+          : uiLabel('返回附件结果', 'Back to attachment results');
+      }
+    } else {
+      clearConversationSearch();
+    }
     inChatPanel.hidden = true;
     inChatOpen?.setAttribute('aria-expanded', 'false');
-    clearConversationSearch();
     const scroller = document.getElementById('message-scroller');
     if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) scroller.scrollTop = searchScrollSnapshot.top;
     else if (target) scroller.scrollTop += target.getBoundingClientRect().top - targetTop;
@@ -7464,9 +8569,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       opener?.focus();
     }
   }
-  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
+  const closeSearch = () => closeInChatSearch({preserveResults: true});
+  document.getElementById('conversation-search-close')?.addEventListener('click', closeSearch);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeSearch();
   });
   document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
     event.preventDefault();
@@ -7479,9 +8585,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   inChatMore.addEventListener('click', () => searchCurrentConversation(true));
   inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
-    if (message && scope === sendScope() && !socialHistory?.readingHistory) {
-      const without = lastSocialItems.filter(item => item.id !== message.id);
-      renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
+    if (message && scope === sendScope()) {
+      // Only append to a history window when the receipt cannot skip a message.
+      const tail = lastSocialItems.at(-1)?.seq;
+      const nextInView = Number.isSafeInteger(tail) && message.seq === tail + 1;
+      if (socialHistory?.readingHistory && !nextInView) liveBanner.hidden = false;
+      else {
+        const without = lastSocialItems.filter(item => item.id !== message.id);
+        renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq), {refresh:true});
+      }
     }
     void loadSessions();
   }
@@ -7493,11 +8605,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
       const wid = workspaceId(), cid = currentConversation.id;
       const scope = sendScope();
-      return {scope, owner:currentUser.id, reply:replyDrafts.get(scope), path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+      return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
+        blocked:quoteBlocksSend(scope),
+        path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
     ownerId: () => currentUser?.id,
     csrfToken: () => csrfCookie(document.cookie),
     createKey: () => idempotencyKey('chat-file-'),
+    onDraftChange: renderGroupComposerRouting,
+    confirmDelivery: (target, key, current) =>
+      socialSendReceipt(target, key, current, message => message.attachment || message.retracted),
     sent(destination, message) {
       consumeReplyDraft(destination.scope, destination.reply);
       if (message) renderDeliveredSocialMessage(destination.scope, message);
@@ -7544,7 +8661,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
     if (markingConversationsRead) return;
     const wid = workspaceId();
-    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    const unread = sessions.filter(item => item.source === 'social' && visibleSessionUnread(item) > 0);
     if (!wid || !unread.length) return;
     markingConversationsRead = true;
     renderSessions();
@@ -7577,31 +8694,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (muteButton) {
       muteButton.hidden = !conversation || (conversation.kind === 'group' && !conversation.public_agent);
       muteButton.setAttribute('aria-pressed', String(muted));
-      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+      muteButton.textContent = muted ? uiLabel('取消免打扰', 'Unmute') : uiLabel('免打扰', 'Mute');
     }
     groupMute?.setAttribute('aria-checked', String(muted));
   }
   async function toggleMute() {
     if (currentSource !== 'social' || !currentConversation || savingMute) return;
     const conversation = currentConversation;
-    const wid = workspaceId();
+    const scope = notificationScope();
     savingMute = true;
     if (muteButton) muteButton.disabled = true;
     if (groupMute) groupMute.disabled = true;
     try {
       const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
       if (result.status !== 200) throw new Error('Mute preference unavailable');
-      if (workspaceId() !== wid) return;
+      if (!currentNotificationScope(scope)) return;
       const muted = Boolean(result.body.muted);
       const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
       if (row) row.muted = muted;
+      const listed = socialConversations.find(item => item.id === conversation.id);
+      if (listed) listed.muted = muted;
       if (currentSource === 'social' && currentConversation?.id === conversation.id) {
         currentConversation.muted = muted;
         syncMuteButton(currentConversation);
       }
       renderSessions();
+      notificationEpoch += 1;
+      if (notificationSnapshot) {
+        notificationSnapshot = {...notificationSnapshot, scope:notificationScope(),
+          body:{...notificationSnapshot.body, items:[]}};
+      }
+      void loadNotifications({interactive: !document.getElementById('notifications-panel')?.hidden});
     } catch {
-      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+      if (currentNotificationScope(scope)) show('error', '免打扰设置保存失败，请重试。');
     } finally {
       savingMute = false;
       if (muteButton) muteButton.disabled = false;
@@ -7613,6 +8738,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   pinButton?.addEventListener('click', toggleConversationPin);
   document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
+    rememberReadingPosition();
     cancelStartupLink();
     stopReplyProgress();
     stopGroupReplyProgress();
@@ -7665,7 +8791,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const {source, agent, conversation: cid} = button.dataset;
     const session = sessions.find(item => item.id === cid && item.source === source);
     const title = session?.title || uiLabel('会话', 'conversation');
-    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
+    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0}, {resume:true});
   });
 
   for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
@@ -7870,11 +8996,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('compose-new-group').addEventListener('click', event => openComposeDialog('group', {keyboard: event.detail === 0}));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
-  document.getElementById('compose-dialog-cancel').addEventListener('click', () => closeComposeDialog({focus: true}));
-  document.getElementById('compose-mode-switch').addEventListener('click', event => {
+  document.getElementById('compose-dialog-cancel').addEventListener('click', () => {
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
+  document.getElementById('compose-dialog').addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
+  const groupModeSwitch = document.getElementById('compose-mode-switch');
+  groupModeSwitch.addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
-    if (!button || composeMode !== 'group') return;
+    if (!button || composeMode !== 'group' || composePhase || composeReceipt) return;
     setGroupMode(button.dataset.groupMode);
+  });
+  groupModeSwitch.addEventListener('keydown', event => {
+    if (composePhase || composeReceipt || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const mode = event.key === 'Home' ? 'custom' : event.key === 'End' ? 'team' : groupMode === 'team' ? 'custom' : 'team';
+    setGroupMode(mode);
+    document.getElementById('compose-mode-' + mode).focus({preventScroll:true});
+  });
+  document.getElementById('team-templates-retry').addEventListener('click', () => {
+    document.getElementById('compose-mode-team').focus({preventScroll:true});
+    void loadTeamTemplates();
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('compose-title').addEventListener('input', () => setComposeError());
@@ -7891,50 +9035,64 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
     const submit = document.getElementById('compose-dialog-submit');
-    if (composing || submit.disabled) return;
+    if (composePhase || submit.disabled) return;
     const wid = workspaceId();
     const owner = currentUser;
     const view = composeView;
     const current = () => wid === workspaceId() && owner === currentUser && view === composeView &&
       !document.getElementById('compose-dialog').hidden;
-    const template = composeMode === 'group' && groupMode === 'team';
-    const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
-    const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
-    const title = document.getElementById('compose-title').value.trim();
-    const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
-    if (template && !picked) return;
-    const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
-    const body = template ? {} : composeMode === 'contact'
-      ? {kind:'dm', member_ids:memberIds}
-      : composeGroupPayload(memberIds, title, agentIds);
-    const fingerprint = JSON.stringify([owner?.id, path, body]);
-    if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
-    const cancel = document.getElementById('compose-dialog-cancel');
+    const template = composeReceipt?.template ?? (composeMode === 'group' && groupMode === 'team');
     setComposeError();
-    composing = true;
-    cancel.disabled = true;
-    submit.textContent = uiLabel('创建中…', 'Creating…');
-    syncComposeCreate();
     try {
-      const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key});
+      let initialRead;
+      if (!composeReceipt) {
+        const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
+        const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
+        const title = document.getElementById('compose-title').value.trim();
+        const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
+        if (template && !picked) return;
+        const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
+        const body = template ? {} : composeMode === 'contact'
+          ? {kind:'dm', member_ids:memberIds} : composeGroupPayload(memberIds, title, agentIds);
+        const fingerprint = JSON.stringify([owner?.id, path, body]);
+        if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
+        composePhase = 'creating';
+        syncComposeCreate();
+        const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key},
+          AbortSignal.timeout(template ? 60000 : 20000));
+        if (!current()) return;
+        const conversation = result.body.conversation;
+        if (![200,201].includes(result.status) || !conversation?.id) {
+          setComposeError(composeCreateError(result.status, template, result.body.error));
+          return;
+        }
+        composeAttempt = null;
+        composeReceipt = {id:conversation.id, template};
+        if (!template && result.status === 201 && conversation.kind === 'group' && conversation.last_seq === 0 &&
+            conversation.workspace_id === wid && Array.isArray(conversation.members) && Array.isArray(conversation.agent_members)) {
+          initialRead = {status:200, body:{conversation, items:[]}};
+        }
+      }
+      composePhase = 'opening';
+      syncComposeCreate();
+      const opened = await openSocialConversation(composeReceipt.id,
+        {quiet:true, initialRead, signal:AbortSignal.timeout(12000)}).catch(() => false);
       if (!current()) return;
-      if (![200,201].includes(result.status) || !result.body.conversation?.id) {
-        setComposeError(composeCreateError(result.status, template, result.body.error));
+      if (!opened) {
+        setComposeError(uiLabel('会话已创建。暂时无法打开，请重试。', 'The conversation is saved. Try opening it again.'));
         return;
       }
-      composeAttempt = null;
       closeComposeDialog();
-      if (await openSocialConversation(result.body.conversation.id)) {
-        void loadSessions();
-        show('ok', template ? '智能体团队已创建。' : '会话已创建。');
-      }
+      document.getElementById('chat-title').focus({preventScroll:true});
+      void loadSessions();
+      show('ok', template ? '智能体团队已创建。' : '会话已创建。');
     } catch {
       if (current()) setComposeError(composeCreateError(0, template));
     } finally {
-      composing = false;
-      cancel.disabled = false;
-      submit.textContent = uiLabel('创建', 'Create');
-      syncComposeCreate();
+      if (current()) {
+        composePhase = '';
+        syncComposeCreate();
+      }
     }
   });
 
@@ -7943,9 +9101,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const field = document.getElementById('chat-body');
     const social = currentSource === 'social';
     const scope = sendScope();
-    const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
+    const files = attachmentSender?.draftFiles?.(scope) || [];
     if (!field.value.trim() && !files.length) return;
-    if (sendClosed() || memoryWrites.has(scope)) return;
+    if (sendClosed() || memoryWrites.has(scope) || quoteBlocksSend(scope)) return;
     if (social ? !currentConversation : !currentAgent) {
       show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
@@ -7957,7 +9115,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
-    if (social && !validMessage(message.body)) {
+    const groupFiles = social && currentConversation.kind === 'group' && !currentConversation.public_agent;
+    if (groupFiles && files.length && message.agent_mentions?.length && !message.body.trim()) {
+      show('error', uiLabel('先写附言，再请求智能体回复。', 'Add a caption before asking agents to reply.'));
+      return;
+    }
+    if (social && !groupFiles && files.length && (message.agent_mentions?.length ||
+        (hasGroupAllMention(message.body) && !hasEveryoneMention(message.body)))) {
+      show('error', uiLabel('请先移除附件，再请求智能体回复。', 'Remove the files before requesting agent replies.'));
+      return;
+    }
+    if (social && !validMessage(message.body) && (!files.length || message.body.trim())) {
       show('error', '请输入 1–4000 字符的消息。');
       return;
     }
@@ -7966,7 +9134,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function sendSticker(sticker, target) {
     const active = stickerContext();
-    if (!active || target?.scope !== active.scope || target.owner !== active.owner ||
+    if (!active || quoteBlocksSend(active.scope) || target?.scope !== active.scope || target.owner !== active.owner ||
         !PRIVATE_THREAD_ID.test(sticker?.id ?? '') || sticker.path !== `/v1/stickers/${sticker.id}/file`) return false;
     const social = currentSource === 'social';
     const reply = social ? replyDrafts.get(active.scope) : undefined;
@@ -7977,9 +9145,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function queueChatMessage(message, files, reply, sticker) {
+    const queue = currentChatSendQueue();
+    const {social,scope} = queue;
+    if (social && files.length) {
+      // The social message store accepts one attachment per message. A
+      // multi-file draft is sent in order, with its caption on the first file.
+      files.forEach((file, index) => {
+        const payload = index ? {reply_to:message.reply_to} : message;
+        queue.jobs.push(makeSendJob(queue, payload, [file], reply));
+      });
+    } else {
+      const job = makeSendJob(queue, message, files, reply, sticker);
+      if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
+      if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+        // A reload can interrupt the request after the composer clears.
+        job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+      }
+      queue.jobs.push(job);
+    }
     const field = document.getElementById('chat-body');
-    const social = currentSource === 'social';
-    const scope = sendScope();
+    if (!sticker) {
+      field.value = '';
+      publicDraft.persist({now: false});
+      field.focus({preventScroll: true});
+      if (social && (message.agent_mentions?.length || (currentConversation?.kind === 'group' && hasGroupAllMention(message.body)))) {
+        agentMentions.forget(scope);
+      }
+      renderGroupComposerRouting();
+    }
+    consumeReplyDraft(scope, reply);
+    if (files.length) attachmentSender.clearDraft(scope, files);
+    show('', '');
+    renderPendingSend();
+    const scroller = document.getElementById('message-scroller');
+    scroller.scrollTop = scroller.scrollHeight;
+    if (!social) resumePrivateSending();
+    void drainSends(queue);
+  }
+
+  function currentChatSendQueue() {
+    const social = currentSource === 'social', scope = sendScope();
     let queue = pendingSends.get(scope);
     if (!queue) {
       queue = {
@@ -7991,23 +9196,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       };
       pendingSends.set(scope, queue);
     }
-    const job = makeSendJob(queue, message, files, reply, sticker);
-    if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-    queue.jobs.push(job);
-    if (!sticker) {
-      field.value = '';
-      publicDraft.persist({now: false});
-      field.focus({preventScroll: true});
-      if (social && message.agent_mentions?.length) agentMentions.forget(scope);
+    return queue;
+  }
+
+  function restorePendingPrivateText(items) {
+    if (!currentPrivateThread()) return;
+    const scope = sendScope();
+    const stored = readPendingPrivateText(document.defaultView, scope);
+    if (!stored.length) return;
+    const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
+    for (const {key,message} of stored) {
+      if (delivered.has(key)) {
+        savePendingPrivateText(document.defaultView, scope, key);
+        continue;
+      }
+      const queue = currentChatSendQueue();
+      if (queue.jobs.some(job => job.key === key)) continue;
+      const job = makeSendJob(queue, message, [], null, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      const checking = () => pendingSends.get(scope) === queue && queue.jobs.includes(job) && job.failed && currentUser?.id === queue.owner;
+      void privateSendReceipt(queue, key, checking, () => true, [0]).then(pair => {
+        if (!pair || !checking()) return;
+        removeSendJob(queue, job);
+        if (scope !== sendScope()) return;
+        renderPendingSend();
+        if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
+      });
     }
-    consumeReplyDraft(scope, reply);
-    if (files.length) attachmentSender.clearDraft(scope, files);
-    show('', '');
-    renderPendingSend();
-    const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
-    if (!social) resumePrivateSending();
-    void drainSends(queue);
   }
 
   async function drainSends(queue) {
@@ -8041,23 +9259,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
         };
         try {
+          const nativePrivate = servedByDsbot && !queue.social;
+          let initialResult;
           if (job.preferences) {
             feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
+            if (job.storedText) savePendingPrivateText(document.defaultView, queue.scope, job.key, job.message);
             job.preferences = null;
           }
           if (!queue.conversationId) {
             feedback('正在创建对话…');
             const body = {title: '新对话'};
             if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
-            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
-            const conversation = created.body.conversation;
-            if (![200, 201].includes(created.status) || !conversation?.id) {
-              throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
+            const firstText = nativePrivate && job.key === queue.createKey && !job.files.length && !job.reply && !job.sticker;
+            if (firstText) body.first_message = messagePayload(job.message.body, job.message.chat_language);
+            const create = () => request('POST', queue.base, body, {'Idempotency-Key': queue.createKey},
+              firstText ? AbortSignal.timeout(15000) : undefined);
+            const post = () => create().catch(() => ({status: 0, body: {}}));
+            let created = firstText ? await post() : await create();
+            const active = () => pendingSends.get(queue.scope) === queue && queue.owner === currentUser?.id;
+            if (!active()) return;
+            if (firstText && (!created.status || created.status === 408 || created.status >= 500)) {
+              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+              // The same create key also identifies the first message.
+              created = await post();
+              if (!active()) return;
             }
-            if (pendingSends.get(queue.scope) !== queue) return;
+            const conversation = created.body.conversation;
+            const firstPair = conversation?.id && privateReplyPair(created.body, {...queue,conversationId:conversation.id}, job.key);
+            if (![200, 201, 202].includes(created.status) || !conversation?.id ||
+                (firstText && (!firstPair || conversation.workspace_id !== queue.wid || conversation.agent_id !== queue.agentId))) {
+              throw new Error(messageFor(created.body.error, firstText ? '未能确认发送结果，请重试。' : '创建对话失败，请重试。'));
+            }
+            if (firstText) initialResult = created;
             const previous = queue.scope;
             const visible = isCurrent();
             queue.conversationId = conversation.id;
@@ -8086,51 +9322,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             progress.removeAttribute('value');
           }
           feedback(progress ? uiLabel('正在上传附件…', 'Uploading attachments…') : queue.social ? '正在发送…' : '正在等待智能体回复…');
-          let result;
+          let result = initialResult;
           let anchor;
-          const nativePrivate = servedByDsbot && !queue.social;
-          const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
-          const receipt = nativePrivate ? Promise.withResolvers() : null;
-          job.acceptReceipt = receipt?.resolve;
-          try {
-            const response = progress
-              ? sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                  if (percent < 100) {
-                    progress.value = percent;
-                  } else {
-                    progress.hidden = true;
-                    feedback(uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
-                    beginReply();
-                  }
-                }) : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000) : undefined);
-            if (!progress) beginReply();
-            result = receipt
-              ? await Promise.race([response.catch(() => ({status: 0, body: {}})), receipt.promise])
-              : await response;
-            if (nativePrivate && uncertainPrivateWrite(result)) {
-              if (progress) progress.hidden = true;
-              feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
-              const pair = await confirmPostedSend(queue, job);
-              if (pair) result = {status: 200, body: pair};
-            }
-          } finally {
-            if (progress) progress.hidden = true;
-            job.acceptReceipt = null;
-            if (queue.replying === job) {
-              if (isCurrent()) {
-                const scroller = document.getElementById('message-scroller');
-                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
-                if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+          if (!result) {
+            const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
+            const receipt = nativePrivate ? Promise.withResolvers() : null;
+            job.acceptReceipt = receipt?.resolve;
+            const nativeSocial = servedByDsbot && queue.social;
+            const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
+            try {
+              const onProgress = percent => {
+                if (percent < 100) {
+                  progress.value = percent;
+                } else {
+                  progress.hidden = true;
+                  feedback(queue.social
+                    ? uiLabel('附件已上传，正在确认发送…', 'File uploaded. Checking delivery…')
+                    : uiLabel('附件已上传，正在等待智能体回复…', 'Attachments uploaded. Waiting for the agent…'));
+                  beginReply();
+                }
+              };
+              const upload = queue.social ? sendSocialAttachmentMessage : sendPrivateAttachmentMessage;
+              const response = progress ? upload(document.defaultView, path, job.message,
+                queue.social ? job.files[0] : job.files, {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, onProgress)
+                : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
+                  : nativeSocial ? AbortSignal.timeout(15000) : undefined);
+              if (!progress) beginReply();
+              const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;
+              result = await (receipt ? Promise.race([posted, receipt.promise]) : posted);
+              if (nativeSocial && !currentJob()) continue;
+              if (nativeSocial && !result.body?.message?.id && unclearSocialDelivery(result.status)) {
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const confirmed = await socialSendReceipt(queue, job.key, currentJob);
+                if (!currentJob()) continue;
+                if (confirmed) result = {status:200, body:{message:confirmed}};
               }
-              queue.replying = null;
-              job.replyView?.bubble.remove();
-              job.replyView = null;
+              if (nativePrivate && uncertainPrivateWrite(result)) {
+                if (progress) progress.hidden = true;
+                feedback(uiLabel('正在核对发送结果…', 'Checking delivery…'));
+                const pair = await confirmPostedSend(queue, job);
+                if (pair) result = {status: 200, body: pair};
+              }
+            } finally {
+              if (progress) progress.hidden = true;
+              job.acceptReceipt = null;
+              if (queue.replying === job) {
+                if (isCurrent()) {
+                  const scroller = document.getElementById('message-scroller');
+                  anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
+                  if (replyWatch?.key === job.key && (!result?.body?.reply || !waitingAgentReply(result.body.reply))) stopReplyProgress();
+                }
+                queue.replying = null;
+                job.replyView?.bubble.remove();
+                job.replyView = null;
+              }
             }
           }
           const accepted = [200, 201].includes(result.status) || (nativePrivate && result.status === 202);
           if (!accepted || !result.body.message?.id) {
             const code = result.body.error?.code;
+            if (queue.social && result.status === 409 && code === 'reply_unavailable' && job.reply && !job.sticker) {
+              if (isCurrent() && restoreUnavailableQuote(queue, job)) continue;
+              job.quoteUnavailable = true;
+              throw new Error(uiLabel('原消息已不可用。恢复草稿并取消引用后即可发送。',
+                'The original message is unavailable. Restore this draft and remove the quote to send.'));
+            }
             if (isCurrent() && job.message.direct_agent_request && code === 'direct_agent_unavailable') {
               const refreshed = await openSocialConversation(queue.conversationId, {acknowledge:false});
               const input = document.getElementById('chat-body');
@@ -8138,8 +9394,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                   agentMentions.restoreDirect(job.message.agent_mentions)) {
                 input.value = job.message.body;
                 publicDraft.persist();
-                if (job.reply) replyDrafts.set(queue.scope, job.reply);
-                renderReplyDraft();
+                if (job.reply) setReplyDraft(queue.scope, job.reply);
                 removeSendJob(queue, job);
                 show('error', uiLabel('部分智能体已不可用。消息已恢复到输入框。',
                   'Some agents are unavailable. Your message is back in the composer.'));
@@ -8158,14 +9413,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
           }
+          if (nativePrivate) job.delivery = privateReplyPair(result.body, queue, job.key);
+          if (job.delivery && isCurrent() && currentConversation?.deferred) {
+            // The first message and reply are committed with the discussion.
+            delete currentConversation.deferred;
+          }
           const finish = (restored = false) => {
             if (!queue.jobs.includes(job)) return;
             removeSendJob(queue, job);
             if (!isCurrent()) return;
             const append = (items, ...added) => [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
             if (queue.social) {
-              if (socialHistory?.readingHistory) void openSocialConversation(queue.conversationId);
-              else renderSocialMessages(append(lastSocialItems, result.body.message).sort((a,b) => a.seq - b.seq), {refresh:true});
+              renderDeliveredSocialMessage(queue.scope, result.body.message);
               if (currentConversation.public_agent?.open) {
                 showPublicChatState({open: true, pending: true});
                 schedulePoll(servedByDsbot ? 8000 : 2000);
@@ -8196,7 +9455,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback(uiLabel('已发送。', 'Sent.'));
             void restoring.then(finish, () => finish());
           } else finish();
-          if (queue.owner === currentUser?.id) void loadSessions();
+          if ((!queue.social || !isCurrent()) && queue.owner === currentUser?.id) void loadSessions();
         } catch (error) {
           job.failed = true;
           feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);
@@ -8209,6 +9468,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (isCurrent()) renderPendingSend();
       if (queue.jobs.some(job => !job.failed && !job.accepted)) void drainSends(queue);
     }
+  }
+
+  const templateButton = document.getElementById('chat-prompt-templates');
+  if (servedByDsbot && templateButton && document.getElementById('chat-prompt-dialog')?.showModal) {
+    const composer = document.getElementById('chat-body');
+    const scope = () => currentUser && !sendClosed() && !composer.disabled &&
+      (currentSource === 'agent' ? currentAgent : currentConversation) ? sendScope() : null;
+    const loadTemplates = deferModule('./prompt-templates.mjs');
+    let templates;
+    const label = uiLabel('提示词模板', 'Prompt templates');
+    templateButton.title = label;
+    templateButton.setAttribute('aria-label', label);
+    templateButton.hidden = false;
+    templateButton.addEventListener('click', async () => {
+      const opening = scope();
+      if (!opening) {
+        show('error', uiLabel('请先打开可发送消息的对话。', 'Open a conversation you can send to first.'));
+        return;
+      }
+      try {
+        const {mountPromptTemplates} = await loadTemplates();
+        if (scope() !== opening) return;
+        templates ||= mountPromptTemplates(document, {request, composer, scope, uiLabel});
+        templates.open();
+      } catch {
+        if (scope() === opening) show('error', uiLabel('无法打开提示词模板。请重试。', 'Could not open prompt templates. Try again.'));
+      }
+    });
   }
 
   const formatButton = document.getElementById('chat-format');
@@ -8273,7 +9560,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       chatMore.focus();
       return;
     }
-    if (!document.getElementById('compose-dialog').hidden && !composing) {
+    if (!document.getElementById('compose-dialog').hidden && !composePhase) {
       event.preventDefault();
       closeComposeDialog({focus: true});
       return;
@@ -8389,7 +9676,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
     }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && (shareable || agent);
+    const available = servedByDsbot && (shareable || agent) && !quoteBlocksSend(sendScope());
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;

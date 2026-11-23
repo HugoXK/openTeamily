@@ -25,7 +25,7 @@ const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
-const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:''}
+const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:'',reply_policy:'mode'}
 const DISCOVER_MEDIA_KINDS = new Map([
   ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
   ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
@@ -127,6 +127,7 @@ function conversationItem(row, me, env, workspaceId) {
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
     ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
+    ...(row.group_agent_routing ? {group_agent_routing: row.group_agent_routing} : {}),
     ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
     agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
       mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
@@ -249,8 +250,11 @@ function rethrow(error) {
     call_full: 'call_full',
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
+    call_recording_busy: 'call_recording_busy',
+    call_recording_changed: 'call_recording_changed',
     meeting_ended: 'meeting_ended',
     group_management_conflict: 'group_management_conflict',
+    group_reply_lead_unavailable: 'group_reply_lead_unavailable',
     group_owner_transfer_required: 'group_owner_transfer_required',
     ownership_changed: 'ownership_changed',
     member_suspended: 'member_suspended',
@@ -258,6 +262,7 @@ function rethrow(error) {
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
     listing_changed: 'listing_changed',
+    artifact_changed: 'artifact_changed',
     title_conflict: 'title_conflict',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
@@ -438,11 +443,16 @@ function invitesRoutes(host) {
             throw new Fault(400, 'invalid_invite', '邀请链接格式不正确。')
           }
           const data = await client(host).post('/v1/ot/invites/preview', { code: token })
-          if (!data.usable) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
+          if (data.membership === 'suspended') throw new Fault(403, 'forbidden', '此工作区已暂停你的访问。')
+          const joined = data.membership === 'member' && HEX.test(data.workspace_id || '')
+          const pending = data.membership === 'pending'
+          if (!data.usable && !joined && !pending) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
           return [200, { invitation: {
             team_name: String(data.team?.name || '').slice(0, 80),
             role: data.role === 'admin' ? 'admin' : 'member',
             requires_approval: data.requires_approval === true,
+            ...(joined ? {membership: 'member', workspace_id: data.workspace_id}
+              : pending ? {membership: 'pending'} : {}),
           } }]
         })
       },
@@ -557,6 +567,17 @@ function teamsRoutes(host) {
               }
               return [200, result]
             }
+            if (include === 'personal-agent') {
+              Object.assign(result, platformViewer(call))
+              const workspace = q.getAll('workspace')
+              if (personal && (personal.owner_id || result.viewer_username) && q.getAll('include').length === 1
+                  && (!workspace.length || (workspace.length === 1 && workspace[0] === personal.id))) {
+                result.personal_agent_id = localBinding.agent_id
+                const settings = await host.call('settings/look', {}).catch(() => null)
+                result.personal_look = settings?.look ?? null
+              }
+              return [200, result]
+            }
             if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username)) {
@@ -661,15 +682,17 @@ function teamsRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const q = parseQuery(query)
-          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
+          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit'), cursor: q.get('cursor') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
               name: t.name,
               summary: t.summary || '',
               member_count: t.member_count ?? 0,
+              team_id: t.id,
               workspace_id: t.workspace_id || t.id,
               membership: t.membership || null,
             })),
+            cursor: data.cursor || null,
           }]
         })
       },
@@ -839,17 +862,29 @@ function messengerRoutes(host, wakeReplies) {
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const q = parseQuery(query)
+          const around = q.get('around') ?? undefined
+          const startUnread = q.get('start') === 'unread'
+          const unread = startUnread && !conv.public_agent
+          if (around !== undefined && (startUnread || q.getAll('around').length !== 1)) {
+            throw new Fault(400, 'invalid', 'Choose one message cursor')
+          }
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
-            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
-            workspace_id: !scope.personal && (unread || conv.kind === 'dm') ? match[1] : undefined,
-          }))
+            limit: unread || around !== undefined ? 50 : 100, pins: 1, unread: unread ? 1 : undefined, around,
+            workspace_id: !scope.personal && (unread || around !== undefined || conv.kind === 'dm') ? match[1] : undefined,
+          })).catch(error => {
+            if (around !== undefined && error?.code === 'social/message_not_found') {
+              throw new Fault(404, 'history_anchor_missing', '找不到原来的阅读位置。')
+            }
+            throw error
+          })
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(around !== undefined ? {has_newer:page.has_newer === true} : {}),
             ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
               has_newer:page.has_newer === true}} : {}),
           }]
@@ -872,19 +907,27 @@ function messengerRoutes(host, wakeReplies) {
       async handle({match,body}) {
         return wrap(async () => {
           const [ , workspace, id ] = match
-          const {action, revision, title, member_id:memberId} = body || {}
+          const {action, revision, title, member_id:memberId, mode, lead} = body || {}
           const field = typeof action === 'string' && Object.hasOwn(GROUP_MANAGEMENT_FIELDS,action) ? GROUP_MANAGEMENT_FIELDS[action] : null
+          const policy = action === 'reply_policy'
           if (field === null || !Number.isSafeInteger(revision) || revision < 0 ||
-              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field) ||
+              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field && !(policy && key === 'lead')) ||
               (field === 'title' && (typeof title !== 'string' || !title.trim() || title.length > 80)) ||
               (field === 'member_id' && (typeof memberId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(memberId)))) {
             throw new Fault(400, 'invalid', '群聊管理请求无效。')
+          }
+          if (policy) {
+            if (!['default','everyone','lead'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
+              throw new Fault(400, 'invalid', '请选择有效的智能体回复策略。')
+            }
+            if (mode === 'lead') sharedAgentTargets([lead])
           }
           const bs = client(host)
           const binding = await host.call('agents/personal-binding', {})
           const direct = binding?.workspace_id === workspace
           const result = await bs.post(`/v1/ot/conversations/${seg(id,'conversation_id')}/management`, {
-            action, revision, ...(field ? {[field]:body[field]} : {}), ...(direct ? {direct:true} : {workspace}),
+            action, revision, ...(field ? {[field]:body[field]} : {}), ...(policy && mode === 'lead' ? {lead} : {}),
+            ...(direct ? {direct:true} : {workspace}),
           })
           if (action === 'leave') {
             if (result.left === true && result.conversation_id === id) return [200,{left:true,conversation_id:id}]
@@ -1090,10 +1133,22 @@ function messengerExtraRoutes(host, wakeReplies) {
     if (scope.personal && !accountConversation(scope.conversation)) throw new Fault(404, 'not_found', '该会话没有通话功能。')
     return scope.team?.id
   }
+  const recordingInput = body => {
+    const action = body?.action
+    const fields = ['call_id', 'peer_id', 'action', ...(action === 'request' ? [] : ['recording_id'])]
+    const valid = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(value)
+    if (!['request', 'allow', 'decline', 'stop'].includes(action) ||
+        Object.keys(body).length !== fields.length || !fields.every(field => Object.hasOwn(body, field)) ||
+        fields.some(field => field !== 'action' && !valid(body[field]))) {
+      throw new Fault(400, 'invalid', '录制同意请求无效。')
+    }
+    return body
+  }
   return [
     {
-      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
-      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end|recording)$/,
+      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1],
+        match[1] === 'recording' ? recordingInput(body) : body)]),
     },
     ...['GET', 'POST', 'DELETE'].map(method => ({
       method, path: re('\\/group-invite'),
@@ -1163,11 +1218,12 @@ function messengerExtraRoutes(host, wakeReplies) {
       }),
     },
     {
-      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
+      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave|recording)'),
       handle: async ({ match, body }) => wrap(async () => {
+        const input = match[3] === 'recording' ? recordingInput(body) : body
         const bs = client(host)
         const teamId = await callTeam(bs, match[1], match[2])
-        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: teamId})]
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...input, team_id: teamId})]
       }),
     },
     ...['GET','POST'].map(method=>({method,path:re('\\/(translation|translations)'),
@@ -1487,6 +1543,7 @@ function discoverRoutes(host) {
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(Number.isSafeInteger(row.source_revision) && row.source_revision > 0 ? {published_revision:row.source_revision} : {}),
     ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
@@ -1585,6 +1642,7 @@ function discoverRoutes(host) {
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
+            ...(Number.isSafeInteger(artifact.revision) && artifact.revision > 0 ? {source_revision:artifact.revision} : {}),
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
             ...file,

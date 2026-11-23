@@ -1,10 +1,11 @@
-export function mountStudioHistory(document, {context, send, restoreVersion}) {
+export function mountStudioHistory(document, {context, send, restoreVersion, savePersonal}) {
   const get = name => document.getElementById('studio-history' + (name ? '-' + name : ''));
   const dialog = get();
   const open = get('open');
   if (!dialog || !open) return {sync() {}, dismiss() {}, showVersion() {}};
   const list = get('list'), preview = get('preview'), restore = get('restore'), status = get('status');
   const refresh = get('refresh'), close = get('close');
+  const personal = get('save-personal');
   const view = document.defaultView;
   let active, pending;
   let restoring = false;
@@ -21,6 +22,7 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
     open.hidden = !current || current.unavailable;
     open.disabled = Boolean(current?.busy);
     restore.disabled = restoring || !canRestore();
+    if (personal) personal.hidden = !current?.personalCopy || current.unavailable || !active?.selected || !savePersonal;
     refresh.disabled = close.disabled = restoring;
   }
 
@@ -109,6 +111,7 @@ export function mountStudioHistory(document, {context, send, restoreVersion}) {
   }
 
   open.addEventListener('click', () => showVersion());
+  personal?.addEventListener('click',()=>{ if (active?.selected) savePersonal?.(active.selected); });
   refresh.addEventListener('click', () => { if (active && !restoring) void load(); });
   close.addEventListener('click', () => { if (!restoring) dismiss(); });
   dialog.addEventListener('cancel', event => {

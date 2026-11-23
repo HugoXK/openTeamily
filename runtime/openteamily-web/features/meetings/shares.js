@@ -1,4 +1,4 @@
-import { idempotencyKey, pagination, refuse, requireBodyKeys } from '../../featurekit/http.js'
+import { HEX32, idempotencyKey, pagination, refuse, requireBodyKeys } from '../../featurekit/http.js'
 import { qs, sharedBotSocial } from '../../lib/c/bot-social.js'
 import { CALL_ID } from './call-source.js'
 
@@ -57,7 +57,31 @@ async function receipt(req, workspace, shareId, subpath) {
     return {body:await social(req, workspace, 'POST', '/meeting-shares/' + shareId + '/revoke', {})}
   }
   if (subpath === 'action' && req.method === 'POST') return copyAction(req, workspace, shareId)
+  if (subpath === 'discussion' && req.method === 'POST') return prepareDiscussion(req, workspace, shareId)
   refuse(405, 'method', 'Method not supported')
+}
+
+export async function receivedDiscussionSource(req, {workspace_id:workspace, share_id:shareId, revision} = {}) {
+  if (![workspace,shareId].every(id => typeof id === 'string' && HEX32.test(id)) ||
+      !Number.isSafeInteger(revision) || revision < 1) {
+    refuse(400, 'invalid', '请选择共享纪要的已保存版本。')
+  }
+  const {meeting, received} = await social(req, workspace, 'GET', '/meeting-shares/' + shareId)
+  if (received !== true || meeting?.id !== shareId || meeting.shared !== true) {
+    refuse(404, 'not_found', '这份共享纪要已撤回或你没有查看权限。')
+  }
+  if (meeting.revision !== revision) refuse(409, 'conflict', '纪要版本不匹配，请重新打开。')
+  const title = ('会议讨论 · ' + meeting.title.trim().replace(/[\u0000-\u001f\u007f]/g, ' ')).slice(0, 120).toWellFormed()
+  return {title}
+}
+
+async function prepareDiscussion(req, workspace, shareId) {
+  const {revision} = requireBodyKeys(await req.json(), ['revision'])
+  const source = {workspace_id:workspace, share_id:shareId, revision}
+  const key = idempotencyKey(req.headers)
+  await receivedDiscussionSource(req, source)
+  const discussion = await req.host.call('agents/prepareMeetingDiscussion', {source, idempotency_key:key})
+  return {body:{discussion, viewer_username:req.ownerUsername}}
 }
 
 async function copyAction(req, workspace, shareId) {
@@ -112,6 +136,6 @@ async function outgoing(req, workspace, meetingId) {
 export const shareRoutes = [
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/share-recipients$/, handle:recipients},
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared$/, handle:shared},
-  {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared\/([0-9a-f]{32})(?:\/(revoke|action))?$/, handle:receipt},
+  {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/shared\/([0-9a-f]{32})(?:\/(revoke|action|discussion))?$/, handle:receipt},
   {pattern:/^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/shares$/, handle:outgoing},
 ]

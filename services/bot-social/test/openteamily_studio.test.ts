@@ -5,6 +5,32 @@ import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 import { STUDIO_SCHEMA } from "../src/openteamily/studio.js";
 
+test("copying a named workspace snapshot requires active membership in both workspaces", async t => {
+  const {base, stop} = await startServer(bulkAuth);
+  t.after(stop);
+  const owner = await home(base, "studio-copy-owner");
+  const editor = await home(base, "studio-copy-editor");
+  const team = (name: string, slug: string) => owner.ok("POST", "/v1/ot/workspaces", {
+    name, slug, idempotency_key:"fixture-" + slug,
+  });
+  const [source, target] = await Promise.all([team("Source team", "copy-source-test"), team("Target team", "copy-target-test")]);
+  const targetPath = `/v1/ot/teams/${target.workspace_id}/studio/documents`;
+  const one = (id: string) => `/v1/ot/teams/${id}/members/${editor.handle}`;
+  const add = (id: string) => owner.ok("POST", `/v1/ot/teams/${id}/members`, {handle:editor.handle,role:"member"});
+  const draft = {title:"Reviewed text",body:"Saved snapshot",client_key:"scoped-source-copy-fixture",source_workspace_id:source.workspace_id};
+  await add(target.id);
+  assert.equal((await editor.call("POST",targetPath,draft)).status,404);
+  assert.deepEqual((await editor.ok("GET",targetPath)).items,[]);
+  await add(source.id);
+  const first = await editor.ok("POST",targetPath,draft);
+  assert.equal((await editor.ok("POST",targetPath,draft)).document.id,first.document.id);
+  assert.equal((await editor.call("POST",targetPath,{...draft,source_workspace_id:target.workspace_id})).status,409);
+  await owner.ok("PATCH",one(source.id),{suspended:true});
+  assert.equal((await editor.call("POST",targetPath, {...draft,client_key:"scoped-source-new-fixture"})).status,404);
+  assert.equal((await editor.call("POST",targetPath,draft)).status,404);
+  assert.equal((await editor.ok("GET",targetPath)).items.length,1);
+});
+
 test("team Studio coordinates edits between actual account homes and enforces the current roster", async t => {
   const {base, stop, platform} = await startServer(bulkAuth);
   t.after(stop);

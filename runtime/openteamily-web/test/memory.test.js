@@ -42,7 +42,7 @@ test('a reviewed team message produces one private action with scoped provenance
   assert.equal(action.workspace_id,WS)
   assert.equal(action.notes,'我审阅过的私人备注')
   const exact = base('/actions/'+action.id)
-  assert.deepEqual((await call('GET',exact)).body.action,action)
+  assert.deepEqual((await call('GET',exact)).body.action,{...action, automation_followups:[]})
   assert.equal((await call('GET',base('/actions/'+action.id,team))).status,404)
   assert.equal((await call('GET',base('/actions'))).body.items[0].source_chat,undefined)
   accessible = false

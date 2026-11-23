@@ -1,7 +1,9 @@
 import {mountCandidates, sourceHref} from './candidates.mjs';
-import {actionSaveAttempt, encodeActionReview, decodeActionReview} from './action-review.mjs';
+import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
+  actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -16,12 +18,15 @@ export function memoryDirectoryQuery({needle, topic, updatedAfter, cursor} = {})
   return '?' + params.toString();
 }
 
-export function actionQuery(needle, status, cursor, limit) {
+const ACTION_DUE_CURSOR = /^[012]:-?\d{1,11}:[0-9a-f]{32}$/;
+
+export function actionQuery(needle, status, cursor, limit, order) {
   const params = new URLSearchParams();
   if (needle) params.set('q', needle);
   if (status) params.set('status', status);
-  if (cursor) params.set('cursor', cursor);
+  if (cursor) params.set(order === 'due' ? 'after' : 'cursor', cursor);
   if (limit) params.set('limit', String(limit));
+  if (order) params.set('order', order);
   const query = params.toString();
   return query ? `?${query}` : '';
 }
@@ -397,9 +402,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionEditor = document.getElementById('action-editor-form');
   const actionSearch = document.getElementById('action-search');
   const actionFilter = document.getElementById('action-filter');
+  const actionQuickStatus = document.getElementById('action-quick-status');
   const actionMore = document.getElementById('action-list-more');
   const actionRetry = document.getElementById('action-list-retry');
   const actionFollowup = document.getElementById('action-follow-up');
+  const actionFollowupHistory = document.getElementById('action-follow-up-history');
+  const actionFollowupList = document.getElementById('action-follow-up-list');
+  const newActionForm = document.getElementById('new-action-form');
+  const newActionButton = document.getElementById('new-action');
+  const newActionStatus = document.getElementById('new-action-status');
+  const newActionFields = Object.fromEntries(['title', 'notes', 'due', 'page'].map(name => [name, document.getElementById('new-action-' + name)]));
   let personalWorkspaces = new Set();
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
@@ -420,6 +432,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
+  let actionFollowupRequest = 0;
   let pageChoices = [];
   let browseDirectory = null;
   let activeDirectory = null;
@@ -1193,8 +1206,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // An action may reference a page past the first directory page while the
     // graph is still loading. Keep the stored link selected in the meantime.
-    if (selected && !pages.has(selected) && currentAction?.memory_page_id === selected) {
-      pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+    if (selected && !pages.has(selected)) {
+      if (currentAction?.memory_page_id === selected) pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+      else if (select === newActionFields.page && newActionAttempt()?.payload.memory_page_id === selected) pages.set(selected, '已选择的记忆页');
+      else if (select === actionEditor.elements.memory_page_id && MEMORY_ID.test(selected)) pages.set(selected, '已选择的记忆页');
     }
     select.replaceChildren();
     const empty = document.createElement('option');
@@ -1212,35 +1227,124 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderActions(items) {
     const list = document.getElementById('action-list');
-    const focused = list.contains?.(document.activeElement) ? document.activeElement.dataset.id : undefined;
+    const focus = list.contains?.(document.activeElement) ? document.activeElement.dataset || {} : {};
+    const scope = actionDraftScope();
+    const now = new Date();
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     list.replaceChildren();
     for (const item of items) {
       const li = document.createElement('li');
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'action-row-toggle';
+      toggle.dataset.actionToggle = item.id;
+      toggle.dataset.status = item.status;
+      toggle.setAttribute('aria-label', `${item.status === 'done' ? '重新打开' : '标记完成'}：${item.title}`);
+      const busy = pendingQuickActions.has(quickActionKey(scope, item.id));
+      toggle.setAttribute('aria-busy', String(busy));
+      toggle.setAttribute('aria-disabled', String(busy));
+      toggle.addEventListener('click', () => changeActionStatus(item));
       const button = document.createElement('button');
       button.type = 'button';
+      button.className = 'action-row-detail';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const meta = document.createElement('span');
+      meta.className = 'action-row-meta';
       const due = dueDateValue(item.due_at);
-      const linked = item.memory_page_title ? ` · ${item.memory_page_title}` : '';
-      button.textContent = `${item.status === 'done' ? '已完成' : '未完成'} · ${item.title}${due ? ` · ${due}` : ''}${linked}`;
+      meta.textContent = [item.status === 'done' ? '已完成' : '未完成',
+        due && `截止 ${due}`, item.memory_page_title].filter(Boolean).join(' · ');
+      if (item.status === 'open' && due && due < today) {
+        const overdue = document.createElement('span');
+        overdue.className = 'action-row-overdue';
+        overdue.textContent = '已逾期';
+        meta.append(document.createTextNode(' · '), overdue);
+      }
+      const copy = document.createElement('span');
+      copy.className = 'action-row-copy';
+      copy.append(title, meta);
+      const arrow = document.createElement('span');
+      arrow.className = 'action-row-arrow';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '›';
+      button.append(copy, arrow);
+      button.dataset.status = item.status;
       button.dataset.id = item.id;
       button.addEventListener('click', () => openAction(item.id));
-      li.appendChild(button);
+      li.append(toggle, button);
       list.appendChild(li);
-      if (focused === item.id) button.focus({preventScroll: true});
+      if (focus.id === item.id) button.focus({preventScroll: true});
+      if (focus.actionToggle === item.id) toggle.focus({preventScroll: true});
     }
-    syncActionComposer(items.length > 0);
+    syncActionComposer();
   }
 
-  function syncActionComposer(hasItems) {
+  function syncActionComposer() {
     const form = document.getElementById('new-action-form');
     const opener = document.getElementById('new-action-open');
     if (!form) return;
-    const keep = form.dataset.open === 'true';
-    form.hidden = !(hasItems || keep);
-    if (opener) opener.hidden = hasItems || keep;
+    form.hidden = form.dataset.open !== 'true';
+    if (opener) {
+      opener.setAttribute('aria-expanded', String(!form.hidden));
+      opener.textContent = form.hidden ? '新建行动' : '收起表单';
+    }
   }
 
   let actionListing;
   let actionSearchTimer;
+  const pendingQuickActions = new Set();
+  const quickActionKey = (scope, id) => JSON.stringify([scope, id]);
+
+  async function changeActionStatus(item) {
+    const state = actionListing;
+    const scope = actionDraftScope();
+    const key = quickActionKey(scope, item.id);
+    if (!state || !scope || pendingQuickActions.has(key) || !state.items.includes(item)) return;
+    const status = item.status === 'done' ? 'open' : 'done';
+    const path = `/v1/workspaces/${state.workspace}/memory/actions/${item.id}`;
+    pendingQuickActions.add(key);
+    actionQuickStatus.textContent = '正在更新行动…';
+    renderActions(state.items);
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    const result = await request('POST', path, {revision: item.revision, changes: {status}}, undefined, timeout())
+      .catch(() => ({status:0, body:{}}));
+    let updated = result.status === 200 ? result.body.action : result.body.error?.current;
+    if (!updated && actionDraftScope() === scope &&
+      (result.status === 0 || result.status === 408 || result.status >= 500)) {
+      const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      if (checked.status === 200) updated = checked.body.action;
+    }
+    pendingQuickActions.delete(key);
+    if (actionDraftScope() !== scope) return;
+    const active = actionListing;
+    if (!active) return;
+    const index = active.items.findIndex(row => row.id === item.id);
+    const keepFocus = document.activeElement?.dataset.actionToggle === item.id;
+    const valid = updated?.id === item.id && updated.workspace_id === state.workspace && updated.revision >= item.revision;
+    const confirmed = valid && updated.status === status && updated.revision > item.revision;
+    const current = valid && index >= 0 && updated.revision >= active.items[index].revision;
+    const removed = current && active.status && active.status !== updated.status;
+    if (removed) active.items.splice(index, 1);
+    else if (current) active.items[index] = updated;
+    renderActions(active.items);
+    renderActionListing(active);
+    if (keepFocus && removed) {
+      const toggles = document.querySelectorAll('#action-list .action-row-toggle');
+      (toggles[Math.min(index, toggles.length - 1)] || actionSearch).focus({preventScroll:true});
+    }
+    actionQuickStatus.textContent = confirmed ? (status === 'done' ? '行动已完成。' : '行动已重新打开。')
+      : valid && updated.revision > item.revision ? '行动已在别处更新。请核对最新状态。'
+        : '无法确认更新，请重试。';
+    if (current && updated.revision > item.revision && !removed) {
+      const limit = Math.max(20, active.items.length);
+      const refresh = loadActions({limit: Math.min(100, limit)});
+      const refreshed = actionListing;
+      await refresh;
+      if (limit > 100 && ownsActionListing(refreshed) && refreshed.cursor) {
+        await readActionPage(refreshed, refreshed.cursor, false, limit - 100);
+      }
+    }
+  }
 
   function renderActionListing(state) {
     const list = document.getElementById('action-list');
@@ -1267,13 +1371,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const ownsActionListing = state => actionListing === state && state.owner === currentUser && state.workspace === workspaceId();
 
-  async function readActionPage(state, cursor, focusResults = false) {
+  async function readActionPage(state, cursor, focusResults = false, limit) {
     if (!ownsActionListing(state) || state.controller) return;
     const controller = state.controller = new AbortController();
     state.busy = true;
     state.error = false;
     renderActionListing(state);
-    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor)}`;
+    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor, limit, 'due')}`;
     const listed = await request('GET', path, undefined, undefined, controller.signal).catch(() => ({status:0, body:{}}));
     if (!ownsActionListing(state)) return;
     state.controller = null;
@@ -1292,7 +1396,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     state.items = cursor ? [...state.items, ...items] : items;
     const next = listed.body.cursor;
-    state.cursor = next !== cursor && /^[0-9a-f]{32}$/.test(next || '') ? next : '';
+    state.cursor = next !== cursor && ACTION_DUE_CURSOR.test(next || '') ? next : '';
     renderActions(state.items);
     renderActionListing(state);
     if (focusResults) {
@@ -1302,20 +1406,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function loadActions({delay = 0} = {}) {
+  function loadActions({delay = 0, limit} = {}) {
     stopActionListing();
     const workspace = workspaceId();
     const owner = currentUser;
     const previous = actionListing;
     const sameScope = previous && previous.workspace === workspace && previous.owner === owner;
-    if (!sameScope) actionSearch.value = '';
+    if (!sameScope) {
+      actionSearch.value = '';
+      if (actionQuickStatus) actionQuickStatus.textContent = '';
+    }
     const needle = actionSearch.value.trim(), status = actionFilter.value;
     const keep = sameScope && previous.needle === needle && previous.status === status;
     const state = actionListing = workspace ? {workspace, owner, needle, status, items:keep ? previous.items : [], busy:true} : null;
     if (!keep) renderActions([]);
     renderActionListing(state);
     if (!state) return;
-    if (!delay) return readActionPage(state, '');
+    if (!delay) return readActionPage(state, '', false, limit);
     actionSearchTimer = setTimeout(() => {
       actionSearchTimer = undefined;
       void readActionPage(state, '');
@@ -1550,6 +1657,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentUser = null;
       currentPage = null;
       currentAction = null;
+      syncNewActionWorkspace();
       stopActionListing();
       actionListing = null;
       setCitation(null);
@@ -1571,7 +1679,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentUser?.id !== session.body.user.id) {
       persistPageDraft();
       currentPage = null;
+      currentAction = null;
       editor.hidden = true;
+      actionEditor.hidden = true;
       actionDrafts.clear();
       actionDraftPageScope = '';
     }
@@ -1665,7 +1775,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pageChoices = [];
     renderRecent([]);
-    fillPageSelect(document.getElementById('new-action-page'), '');
+    syncNewActionWorkspace();
+    fillPageSelect(newActionFields.page, newActionFields.page.value);
     actionDraftPageScope = '';
     renderActionDrafts();
     newPageButton.disabled = true;
@@ -1761,6 +1872,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const draftDetails = document.getElementById('memory-page-draft-details');
   const draftCopy = document.getElementById('memory-page-draft-copy');
   const draftDiscard = document.getElementById('memory-page-draft-discard');
+  const savePageButton = document.getElementById('save-page');
+  const savingPages = new Set();
   let draftTimer;
 
   function pageDraftKey(page = currentPage, owner = currentUser) {
@@ -1783,6 +1896,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try { document.defaultView.sessionStorage.removeItem(key); } catch {}
   }
 
+  function writePageDraft(key, {title, body, topics}, revision) {
+    try { document.defaultView.sessionStorage.setItem(key, JSON.stringify({title, body, topics, revision})); } catch {}
+  }
+
+  function syncPageSaveButton() {
+    if (!savePageButton) return;
+    const saving = savingPages.has(pageDraftKey());
+    savePageButton.disabled = saving;
+    savePageButton.textContent = saving ? '正在保存…' : '保存';
+  }
+
   function editorFields() {
     syncBodyFromRich();
     const {title, body, topics} = editor.elements;
@@ -1794,8 +1918,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function pageMatchesDraft(page, draft) {
+    const savedTopics = new Set(page.topics || []);
+    const topics = parseTopics(draft.topics);
     return page.title === draft.title.trim() && (page.body || '') === draft.body &&
-      formatTopics(page.topics) === formatTopics(parseTopics(draft.topics));
+      savedTopics.size === topics.length && topics.every(topic => savedTopics.has(topic));
   }
 
   function fillEditorFields(fields) {
@@ -1845,11 +1971,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (entry && entry.revision !== currentPage.revision) return;
     if (pageMatchesDraft(currentPage, fields)) {
       clearPageDraft(key);
-    } else {
-      try {
-        document.defaultView.sessionStorage.setItem(key, JSON.stringify({...fields, revision: currentPage.revision}));
-      } catch {}
-    }
+    } else writePageDraft(key, fields, currentPage.revision);
     // Leave an expanded revision-conflict preview alone while the user copies it.
     if (!draftDetails?.open) showPageDraft();
   }
@@ -2274,6 +2396,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyPageToEditor(page) {
     currentPage = page;
+    syncPageSaveButton();
     fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
       `修订 ${page.revision} · 作者 ${page.created_by} · 最近更新 ${page.updated_by}`;
@@ -2394,18 +2517,78 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
 
+  function savedActionFollowups() {
+    const workspace = workspaceId();
+    if (!personalWorkspaces.has(workspace) || currentAction?.workspace_id !== workspace ||
+        !Array.isArray(currentAction?.automation_followups)) return [];
+    return currentAction.automation_followups.filter(item => /^[0-9a-f]{32}$/.test(item?.id || '') &&
+      Number.isSafeInteger(item.revision) && item.revision > 0 && typeof item.title === 'string');
+  }
+
+  function renderActionFollowups() {
+    if (!actionFollowupHistory || !actionFollowupList) return;
+    const rows = savedActionFollowups();
+    actionFollowupList.replaceChildren(...rows.map(row => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations?' + new URLSearchParams({workspace: workspaceId(), automation: row.id});
+      link.target = '_blank';
+      link.rel = 'noopener';
+      const title = document.createElement('strong');
+      title.textContent = row.title;
+      const meta = document.createElement('small');
+      meta.className = 'note';
+      meta.textContent = `行动项修订 ${row.revision} · ${row.enabled ? '已启用' : '已暂停'}`;
+      link.append(title, meta);
+      item.append(link);
+      return item;
+    }));
+    actionFollowupHistory.hidden = !rows.length;
+  }
+
+  async function refreshActionFollowups() {
+    const action = currentAction;
+    const workspace = workspaceId();
+    if (!action || actionEditor.hidden || action.workspace_id !== workspace ||
+        !personalWorkspaces.has(workspace)) return;
+    const owner = currentUser;
+    const token = ++actionFollowupRequest;
+    try {
+      const response = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}`);
+      if (token !== actionFollowupRequest || owner !== currentUser || workspace !== workspaceId() || currentAction !== action) return;
+      const fresh = response.body?.action;
+      if (response.status !== 200 || fresh?.id !== action.id || fresh.workspace_id !== workspace ||
+          !Array.isArray(fresh.automation_followups) ||
+          JSON.stringify(fresh.automation_followups) === JSON.stringify(action.automation_followups)) return;
+      action.automation_followups = fresh.automation_followups;
+      renderActionFollowups();
+      syncActionFollowup();
+    } catch { /* Reopening the action also refreshes the list. */ }
+  }
+
+  document.defaultView?.addEventListener?.('focus', refreshActionFollowups);
+  const actionFollowupEvents = actionFollowupChannel(document.defaultView);
+  actionFollowupEvents?.addEventListener('message', ({data}) => {
+    if (data?.workspace === workspaceId() && data?.action === currentAction?.id) void refreshActionFollowups();
+  });
+
   function syncActionFollowup() {
     const workspace = workspaceId();
-    const href = personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
+    const linked = savedActionFollowups();
+    const hasCurrentFollowup = linked.some(item => item.revision === currentAction?.revision);
+    const href = !hasCurrentFollowup && personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
     actionFollowup.hidden = !href;
+    actionFollowup.textContent = linked.length ? '跟进当前修订' : '跟进自动化';
     const note = document.getElementById('action-follow-up-status');
     if (!href) {
       actionFollowup.removeAttribute('href');
+      actionFollowup.removeAttribute('aria-disabled');
       note.textContent = '';
       return;
     }
     const fields = actionEditor.elements;
-    const dirty = fields.title.value.trim() !== currentAction.title || fields.notes.value !== (currentAction.notes || '') ||
+    const dirty = actionEditConflict || actionEditsSaving.has(actionEditKey()) ||
+      fields.title.value.trim() !== currentAction.title || fields.notes.value !== (currentAction.notes || '') ||
       fields.status.value !== currentAction.status || fields.due.value !== dueDateValue(currentAction.due_at) ||
       (fields.memory_page_id.value || null) !== (currentAction.memory_page_id || null);
     if (dirty) {
@@ -2419,22 +2602,153 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  const actionSave = document.getElementById('save-action');
+  const actionEditHint = document.getElementById('action-edit-hint');
+  const actionConflictPanel = document.getElementById('action-edit-conflict');
+  const actionConflictPreview = document.getElementById('action-edit-conflict-preview');
+  const actionEditsSaving = new Set();
+  let actionEditConflict = null;
+
+  function actionEditKey(action = currentAction, user = currentUser) {
+    if (![user?.id, action?.workspace_id, action?.id].every(value => MEMORY_ID.test(value || ''))) return '';
+    return 'openteamily.memory-action-edit:' + JSON.stringify([user.id, action.workspace_id, action.id]);
+  }
+
+  function readActionEdit(key) {
+    try { return decodeActionEdit(key && document.defaultView.sessionStorage.getItem(key)); }
+    catch { return null; }
+  }
+
+  function writeActionEdit(key, {base, fields, pending}) {
+    if (!key) return;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      if (pending || ACTION_EDIT_FIELDS.some(name => fields[name] !== base[name])) {
+        storage.setItem(key, JSON.stringify({base, fields, pending}));
+      } else storage.removeItem(key);
+    } catch {}
+  }
+
+  function actionFields(action) {
+    if (!action) return Object.fromEntries(ACTION_EDIT_FIELDS.map(name => [name, actionEditor.elements[name].value]));
+    return {title:action.title, notes:action.notes || '', status:action.status, due:dueDateValue(action.due_at),
+      memory_page_id:action.memory_page_id || ''};
+  }
+
+  function showActionEdit() {
+    const draft = actionFields();
+    const saved = actionFields(currentAction);
+    const dirty = ACTION_EDIT_FIELDS.some(name => draft[name] !== saved[name]);
+    const pending = actionEditsSaving.has(actionEditKey());
+    actionSave.disabled = Boolean(actionEditConflict || pending);
+    for (const name of ACTION_EDIT_FIELDS) actionEditor.elements[name].disabled = Boolean(actionEditConflict);
+    actionConflictPanel.hidden = !actionEditConflict;
+    actionEditHint.textContent = pending ? '正在确认保存…' : dirty && !actionEditConflict ? '有未保存的行动草稿。' : '';
+    syncActionFollowup();
+  }
+
+  function storeActionEdit() {
+    if (!currentAction || actionEditor.hidden || actionEditConflict) return;
+    const key = actionEditKey();
+    writeActionEdit(key, {base:actionFields(currentAction), fields:actionFields(), pending:readActionEdit(key)?.pending});
+    showActionEdit();
+  }
+
+  function fillActionEdit(fields) {
+    for (const name of ACTION_EDIT_FIELDS) {
+      if (name === 'memory_page_id') fillPageSelect(actionEditor.elements[name], fields[name]);
+      else actionEditor.elements[name].value = fields[name];
+    }
+  }
+
+  function restoreActionEdit(draft) {
+    const saved = actionFields(currentAction);
+    const active = draft && advanceActionEdit(draft, saved, currentAction.revision);
+    const result = active && reconcileActionEdit(active.base, active.fields, saved);
+    actionEditConflict = result?.conflicts.length ? {...result, local:active.fields} : null;
+    actionConflictPreview.textContent = '';
+    if (actionEditConflict) {
+      const names = {title:'标题', notes:'备注', status:'状态', due:'截止日期', memory_page_id:'关联记忆页'};
+      const display = (field, value) => !value ? '空' : field === 'status' ? (value === 'done' ? '已完成' : '未完成')
+        : field === 'memory_page_id' ? (pageChoices.find(page => page.id === value)?.title || value) : value;
+      actionConflictPreview.textContent = result.conflicts.map(name =>
+        `${names[name]}\n我的草稿：${display(name,active.fields[name])}\n已保存：${display(name,saved[name])}`).join('\n\n');
+    }
+    fillActionEdit(result?.fields || saved);
+    if (!actionEditConflict) {
+      writeActionEdit(actionEditKey(), {base:saved, fields:actionFields(), pending:active?.pending});
+    } else writeActionEdit(actionEditKey(), active);
+    showActionEdit();
+  }
+
+  function resolveActionEdit(keepLocal) {
+    if (!actionEditConflict) return;
+    const {fields, conflicts, local} = actionEditConflict;
+    if (keepLocal) for (const name of conflicts) fields[name] = local[name];
+    actionEditConflict = null;
+    actionConflictPreview.textContent = '';
+    fillActionEdit(fields);
+    storeActionEdit();
+    actionEditor.elements.title.focus();
+  }
+
+  document.getElementById('action-edit-keep')?.addEventListener('click', () => resolveActionEdit(true));
+  document.getElementById('action-edit-use-saved')?.addEventListener('click', () => resolveActionEdit(false));
+
+  async function resolveActionMeetingSource(action, meeting, status) {
+    const workspace = workspaceId();
+    const user = currentUser;
+    status.textContent = '正在核对来源行动项…';
+    const result = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}/meeting-source`)
+      .catch(() => ({status:0}));
+    if (currentUser !== user || workspaceId() !== workspace || currentAction !== action || actionEditor.hidden) return;
+    if ([403, 404].includes(result.status)) {
+      status.textContent = '原会议已删除或无法访问。';
+      return;
+    }
+    const original = action.source;
+    const source = result.body?.source;
+    const link = new URLSearchParams({workspace:original.workspace_id, meeting:original.meeting_id});
+    const resolved = result.status === 200 && source?.workspace_id === original.workspace_id &&
+      source.meeting_id === original.meeting_id && Number.isSafeInteger(source.revision) &&
+      source.revision >= original.revision;
+    const hasAction = resolved && Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
+    if (hasAction) {
+      link.set('action', source.action_index);
+      link.set('revision', source.revision);
+    }
+    meeting.href = '/meetings#' + link;
+    meeting.textContent = hasAction ? '查看来源行动项' : '查看原会议';
+    meeting.hidden = false;
+    status.textContent = hasAction ? '' : resolved
+      ? '来源行动项已变更，可在最新纪要中核对。' : '暂时无法定位行动项，可直接打开会议。';
+  }
+
   function renderActionDetail() {
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     const source = currentAction.source;
     const meeting = document.getElementById('action-source-meeting');
+    const meetingStatus = document.getElementById('action-source-meeting-status');
+    const ownedMeeting = source?.kind === 'meeting' && /^[0-9a-f]{32}$/.test(source.workspace_id || '') &&
+      /^[0-9a-f]{32}$/.test(source.meeting_id || '') && Number.isSafeInteger(source.revision) && source.revision > 0 &&
+      Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
     meeting.hidden = source?.kind !== 'shared_meeting';
-    if (!meeting.hidden) {
+    meeting.removeAttribute('href');
+    meetingStatus.textContent = '';
+    if (ownedMeeting) {
+      void resolveActionMeetingSource(currentAction, meeting, meetingStatus);
+    } else if (!meeting.hidden) {
       meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
       meeting.textContent = `查看来源纪要 · 版本 ${source.revision}`;
-    } else meeting.removeAttribute('href');
+    }
     const chat = document.getElementById('action-source-chat');
     const chatLink = actionChatHref(currentAction.source_chat);
     chat.hidden = !chatLink;
     if (chatLink) chat.href = chatLink;
     else chat.removeAttribute('href');
-    document.getElementById('action-editor-source').hidden = meeting.hidden && chat.hidden;
+    document.getElementById('action-editor-source').hidden = !ownedMeeting && meeting.hidden && chat.hidden;
+    renderActionFollowups();
     syncActionFollowup();
   }
 
@@ -2442,7 +2756,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
-    const hadCitation = Boolean(activeCitation);
     const citation = citationFor('todos', actionId);
     if (citation !== activeCitation) setCitation(citation);
     hideCitationPreview();
@@ -2463,13 +2776,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
-    actionEditor.elements.title.value = currentAction.title;
-    actionEditor.elements.notes.value = currentAction.notes || '';
-    actionEditor.elements.status.value = currentAction.status;
-    actionEditor.elements.due.value = dueDateValue(currentAction.due_at);
-    fillPageSelect(actionEditor.elements.memory_page_id, currentAction.memory_page_id || '');
+    currentView = 'actions';
+    restoreActionEdit(readActionEdit(actionEditKey()));
     renderActionDetail();
-    if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
+    if ([id, actionId].every(value => MEMORY_ID.test(value))) {
+      syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
+    }
     syncDirectorySelection();
     focusDetailBack('close-action-editor');
   }
@@ -2852,43 +3164,75 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const id = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!id || !editing) return;
     const key = pageDraftKey(editing, owner);
+    if (!id || !editing || !key || editor.hidden || savingPages.has(key)) return;
     const submitted = editorFields();
     persistPageDraft();
-    const saved = await request('POST', `/v1/workspaces/${id}/memory/${editing.id}`, {
-      revision: editing.revision,
-      changes: {
-        ...submitted,
-        topics: parseTopics(submitted.topics),
-      },
-    }).catch(() => ({status:0, body:{}}));
-    const page = saved.body.page;
-    if (saved.status === 200 && page) {
-      const entry = pageDraft(key);
-      if (entry && (pageMatchesDraft(page, entry) || (entry.revision === editing.revision && sameFields(entry, submitted)))) {
-        clearPageDraft(key);
+    if (pageMatchesDraft(editing, submitted)) { show('ok', '已保存。'); return; }
+
+    const path = `/v1/workspaces/${id}/memory/${editing.id}`;
+    const sameOwner = () => currentUser?.id === owner.id;
+    const visiblePage = () => sameOwner() && workspaceId() === id && !editor.hidden &&
+      currentPage?.id === editing.id && currentPage.revision === editing.revision;
+    const exactPage = page => page?.id === editing.id && page.workspace_id === id &&
+      Number.isSafeInteger(page.revision) && page.revision >= editing.revision;
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    savingPages.add(key);
+    syncPageSaveButton();
+    let saved, page, confirmed, uncertain;
+    try {
+      saved = await request('POST', path, {
+        revision: editing.revision, changes:{...submitted, topics:parseTopics(submitted.topics)},
+      }, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      page = saved.body?.page;
+      confirmed = saved.status === 200 && exactPage(page) && pageMatchesDraft(page, submitted);
+      uncertain = saved.status === 0 || saved.status === 408 || saved.status >= 500 || (saved.status === 200 && !confirmed);
+      if (!confirmed && sameOwner() && (uncertain || saved.status === 409)) {
+        const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+        page = checked.status === 200 && exactPage(checked.body?.page) ? checked.body.page : null;
+        confirmed = Boolean(page && page.revision > editing.revision && pageMatchesDraft(page, submitted));
       }
+    } finally {
+      savingPages.delete(key);
+      syncPageSaveButton();
     }
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (saved.status !== 200 || !page) {
-      if (currentPage === editing) show('error', messageFor(saved.body.error, '无法保存记忆页。'));
+
+    if (!sameOwner()) return;
+    const visible = visiblePage();
+    if (confirmed && !visible) {
+      const entry = pageDraft(key);
+      if (entry?.revision === editing.revision) {
+        if (pageMatchesDraft(page, entry)) clearPageDraft(key);
+        else writePageDraft(key, entry, page.revision);
+      }
+      if (workspaceId() === id) {
+        rememberPage(page);
+        void loadGraph();
+      }
       return;
     }
-    if (currentPage !== editing) {
-      rememberPage(saved.body.page);
-      void loadGraph();
+    if (!visible) return;
+    if (!confirmed) {
+      if (page && exactPage(page) && page.revision > editing.revision && (uncertain || saved.status === 409)) {
+        persistPageDraft();
+        applyPageToEditor(page);
+        showPageDraft();
+        syncPageUrl();
+        closeDeleteConfirm({restoreFocus: false});
+        closePageHistory({restoreFocus: false});
+        rememberPage(page);
+        void loadGraph();
+        show('note', '此页已在别处更新，旧草稿已保留。');
+      } else if (uncertain) show('note', '尚未确认保存，草稿已保留。');
+      else show('error', messageFor(saved.body?.error, '无法保存记忆页。'));
       return;
     }
+
     closeDeleteConfirm({restoreFocus: false});
     const fields = editorFields();
+    if (pageDraft(key)?.revision === editing.revision) clearPageDraft(key);
     currentPage = page;
-    if (sameFields(fields, submitted)) {
-      fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
-    } else {
-      const entry = pageDraft(key);
-      if (entry?.revision === editing.revision && sameFields(entry, fields)) clearPageDraft(key);
-    }
+    if (sameFields(fields, submitted)) fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     persistPageDraft();
     updatePageSaveHint(page, !pageMatchesDraft(page, editorFields()));
     if (!historySelection) syncPageUrl();
@@ -2898,10 +3242,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
 
-    await loadGraph();
-    if (workspaceId() !== id || currentUser !== owner || currentPage !== saved.body.page) return;
-    if (historyPanel && !historyPanel.hidden) await loadPageHistory();
     show('ok', '已保存。');
+    void loadGraph();
+    if (historyPanel && !historyPanel.hidden) void loadPageHistory();
   });
 
   const deleteParts = {
@@ -2973,6 +3316,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       clearTimeout(draftTimer);
       if (currentPage?.id === pending.id) editor.hidden = true;
       clearPageDraft(pageDraftKey({workspace_id: pending.workspace, id: pending.id}, owner));
+    } else {
+      const key = actionEditKey({workspace_id:pending.workspace, id:pending.id}, owner);
+      try { if (key) document.defaultView.sessionStorage.removeItem(key); } catch {}
     }
     show('ok', '已删除。');
     const restoreCitation = citation && activeCitation === citation;
@@ -3052,85 +3398,177 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('close-editor').addEventListener('click', returnToList);
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
+  const newActionAttempts = new Map();
+  let newActionScope = '';
+
+  function newActionAttempt(scope = actionDraftScope()) {
+    if (!scope) return null;
+    if (!newActionAttempts.has(scope)) {
+      let attempt;
+      try { attempt = decodeNewActionAttempt(document.defaultView.sessionStorage.getItem('openteamily.memory-action-create:' + scope)); } catch {}
+      newActionAttempts.set(scope, attempt || null);
+    }
+    return newActionAttempts.get(scope);
+  }
+
+  function saveNewActionAttempt(scope, attempt) {
+    newActionAttempts.set(scope, attempt);
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const name = 'openteamily.memory-action-create:' + scope;
+      if (attempt) storage.setItem(name, JSON.stringify({key:attempt.key, payload:attempt.payload}));
+      else storage.removeItem(name);
+    } catch {}
+  }
+
+  function newActionPayload() {
+    return {title:newActionFields.title.value.trim(), notes:newActionFields.notes.value,
+      due_at:dueAtFromDate(newActionFields.due.value), memory_page_id:newActionFields.page.value || null};
+  }
+
+  function renderNewActionAttempt(attempt = newActionAttempt()) {
+    const busy = attempt?.busy === true;
+    const retry = attempt && JSON.stringify(attempt.payload) === JSON.stringify(newActionPayload());
+    for (const field of Object.values(newActionFields)) field.disabled = busy;
+    newActionButton.disabled = busy || !actionDraftScope();
+    newActionButton.textContent = busy ? '正在保存…' : retry ? '重试保存' : '新建行动';
+    newActionStatus.textContent = busy ? '正在保存行动。' : retry ? '上次保存尚未确认。重试会核对同一次请求。'
+      : attempt ? '上次保存尚未确认。修改内容后将发起新的保存请求。' : '';
+  }
+
+  function applyNewActionDraft(payload) {
+    newActionFields.title.value = payload?.title ?? '';
+    newActionFields.notes.value = payload?.notes ?? '';
+    newActionFields.due.value = dueDateValue(payload?.due_at);
+    fillPageSelect(newActionFields.page, payload?.memory_page_id ?? '');
+  }
+
+  function syncNewActionWorkspace() {
+    const scope = actionDraftScope();
+    if (scope === newActionScope) return;
+    newActionScope = scope;
+    const attempt = newActionAttempt(scope);
+    applyNewActionDraft(attempt?.payload);
+    newActionForm.dataset.open = String(Boolean(attempt));
+    renderNewActionAttempt(attempt);
+    syncActionComposer();
+  }
+
   const newActionOpen = document.getElementById('new-action-open');
-  document.getElementById('new-action-form').addEventListener('input', event => {
-    event.currentTarget.dataset.open = 'true';
+  newActionForm.addEventListener('input', () => {
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt();
   });
+  newActionForm.addEventListener('change', () => renderNewActionAttempt());
   if (newActionOpen) {
     newActionOpen.addEventListener('click', () => {
-      const form = document.getElementById('new-action-form');
-      if (form) form.dataset.open = 'true';
-      syncActionComposer(false);
+      newActionForm.dataset.open = String(newActionForm.hidden);
+      syncActionComposer();
+      if (!newActionForm.hidden) newActionForm.elements.title.focus();
     });
   }
-  document.getElementById('new-action-form').addEventListener('submit', async (event) => {
+  newActionForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const id = workspaceId();
-    const owner = currentUser;
-    if (!id) return;
-    const title = document.getElementById('new-action-title').value.trim();
-    const notes = document.getElementById('new-action-notes').value;
-    const dueAt = dueAtFromDate(document.getElementById('new-action-due').value);
-    const pageId = document.getElementById('new-action-page').value || null;
-    const payload = {title, notes};
-    if (dueAt != null) payload.due_at = dueAt;
-    if (pageId) payload.memory_page_id = pageId;
-    const created = await fetcher(`/v1/workspaces/${id}/memory/actions`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfCookie(document.cookie),
-        'Idempotency-Key': randomKey(),
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    });
-    let parsed = {};
-    try { parsed = await created.json(); } catch { parsed = {}; }
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (created.status !== 201 && created.status !== 200) {
-      show('error', messageFor(parsed.error, '无法创建下一步行动。'));
+    const workspace = workspaceId(), scope = actionDraftScope(), visible = pageRequest;
+    const previous = newActionAttempt(scope);
+    const payload = newActionPayload();
+    if (!scope || previous?.busy || !payload.title) return;
+    const key = previous && JSON.stringify(previous.payload) === JSON.stringify(payload) ? previous.key : randomKey();
+    const attempt = {key, payload, busy:true};
+    saveNewActionAttempt(scope, attempt);
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt(attempt);
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions`, payload, {'Idempotency-Key':key})
+      .catch(() => ({status:0, body:{}}));
+    attempt.busy = false;
+    const row = result.body?.action;
+    const saved = [200,201].includes(result.status) && row?.workspace_id === workspace && MEMORY_ID.test(row.id || '');
+    const definitiveFailure = result.status >= 400 && result.status < 500 && result.status !== 408;
+    if (saved || definitiveFailure) saveNewActionAttempt(scope, null);
+    if (actionDraftScope() !== scope) return;
+    if (!saved) {
+      renderNewActionAttempt();
+      if (definitiveFailure) show('error', messageFor(result.body.error, '无法创建下一步行动。'));
       return;
     }
-    document.getElementById('new-action-title').value = '';
-    document.getElementById('new-action-notes').value = '';
-    document.getElementById('new-action-due').value = '';
-    document.getElementById('new-action-page').value = '';
+    applyNewActionDraft();
+    newActionForm.dataset.open = 'false';
+    renderNewActionAttempt();
+    syncActionComposer();
+    if (pageRequest !== visible || currentView !== 'actions') return;
     show('ok', '已创建下一步行动。');
     void loadActions();
-    await openAction(parsed.action.id);
+    await openAction(row.id);
   });
 
-  actionEditor.addEventListener('input', syncActionFollowup);
-  actionEditor.addEventListener('change', syncActionFollowup);
+  actionEditor.addEventListener('input', storeActionEdit);
+  actionEditor.addEventListener('change', storeActionEdit);
   actionEditor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
     const owner = currentUser;
     const editing = currentAction;
-    if (!id || !editing) return;
-    const saved = await request('POST', `/v1/workspaces/${id}/memory/actions/${editing.id}`, {
-      revision: editing.revision,
-      changes: {
-        title: actionEditor.elements.title.value,
-        notes: actionEditor.elements.notes.value,
-        status: actionEditor.elements.status.value,
-        due_at: dueAtFromDate(actionEditor.elements.due.value),
-        memory_page_id: actionEditor.elements.memory_page_id.value || null,
-      },
-    }).catch(() => ({status:0, body:{}}));
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (saved.status === 200) void loadActions();
-    if (currentAction !== editing) return;
-    if (saved.status !== 200 || !saved.body.action) {
+    const key = actionEditKey(editing, owner);
+    if (!id || !editing || !key || actionEditor.hidden || actionEditConflict || actionEditsSaving.has(key)) return;
+    const base = actionFields(editing), submitted = actionFields();
+    submitted.title = submitted.title.trim();
+    const changes = {};
+    for (const name of ACTION_EDIT_FIELDS) {
+      if (base[name] === submitted[name]) continue;
+      if (name === 'due') changes.due_at = dueAtFromDate(submitted.due);
+      else changes[name] = name === 'memory_page_id' ? (submitted[name] || null) : submitted[name];
+    }
+    if (!Object.keys(changes).length) {
+      fillActionEdit(base);
+      storeActionEdit();
+      return;
+    }
+    const path = `/v1/workspaces/${id}/memory/actions/${editing.id}`;
+    const pending = {revision:editing.revision, submitted};
+    const isCurrent = () => workspaceId() === id && currentUser?.id === owner.id && actionEditKey() === key && !actionEditor.hidden;
+    actionEditsSaving.add(key);
+    writeActionEdit(key, {base, fields:actionFields(), pending});
+    showActionEdit();
+    const signal = () => globalThis.AbortSignal?.timeout?.(8000);
+    const saved = await request('POST', path, {revision: editing.revision, changes}, undefined, signal())
+      .catch(() => ({status:0, body:{}}));
+    const uncertain = saved.status === 0 || saved.status === 408 || saved.status >= 500;
+    let latest = saved.status === 200 ? saved.body.action : null;
+    if (currentUser?.id === owner.id && (uncertain || saved.status === 409 || (saved.status === 200 && !latest))) {
+      const checked = await request('GET', path, undefined, undefined, signal()).catch(() => ({status:0, body:{}}));
+      latest = checked.status === 200 ? checked.body.action : null;
+    }
+    actionEditsSaving.delete(key);
+    if (currentUser?.id !== owner.id) return;
+    const valid = latest?.id === editing.id && latest.workspace_id === id &&
+      Number.isSafeInteger(latest.revision) && latest.revision >= editing.revision;
+    const confirmed = valid && actionEditCommitted(base, pending, actionFields(latest), latest.revision);
+    const draft = readActionEdit(key);
+    if (valid && workspaceId() === id) void loadActions();
+    if (!isCurrent() || (valid && latest.revision < currentAction.revision)) {
+      if (valid && draft?.pending?.revision === pending.revision) {
+        writeActionEdit(key, advanceActionEdit(draft, actionFields(latest), latest.revision));
+      }
+      if (isCurrent()) showActionEdit();
+      return;
+    }
+    if (!valid) {
+      if (draft && !uncertain && saved.status !== 200 && saved.status !== 409) {
+        writeActionEdit(key, {base:draft.base, fields:draft.fields});
+      }
+      showActionEdit();
       show('error', messageFor(saved.body.error, '无法保存下一步行动。'));
       return;
     }
+    const fields = actionFields();
+    fields.title = fields.title.trim();
     closeDeleteConfirm({restoreFocus: false});
-    currentAction = saved.body.action;
+    currentAction = latest;
+    restoreActionEdit(draft?.pending ? {...draft, fields} : {base:confirmed ? submitted : base, fields});
     renderActionDetail();
-    show('ok', '已保存。');
+    if (confirmed) show('ok', '已保存。');
+    else if (latest.revision === editing.revision) show('note', '尚未确认保存，草稿已保留。');
+    else show('note', actionEditConflict ? '此行动已在别处更新，请选择要保留的内容。' : '已载入最新版本，草稿仍可保存。');
   });
 
   document.getElementById('delete-action').addEventListener('click', () => {

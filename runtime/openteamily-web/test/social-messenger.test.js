@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import { createAgentReplier, replyPrompt } from '../lib/c/agent-replies.js'
+import { createLegacyDispatch } from '../src/dispatch.js'
 import messenger from '../features/messenger/index.js'
 
 const SERVER = 'https://social.example.test'
@@ -48,6 +49,38 @@ test('messenger endpoints map to the shared conversation routes', async () => {
     'GET /v1/ot/conversations/otc_1/messages?before=10', 'POST /v1/ot/messages/otm_1/reactions', 'PUT /v1/ot/conversations/otc_1/agents/helper',
   ])
   assert.deepEqual(f.calls[0].body, { kind: 'dm', peer: 'bea.home' })
+})
+
+test('call consent forwards only the exact lease fields through either signed native call route', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const call_id = 'otcav_' + 'B'.repeat(26)
+  const peer_id = 'another-tab-fixture'
+  const recording_id = 'otrec_' + 'A'.repeat(26)
+  const pending = {id: recording_id, initiator_peer_id: peer_id, state: 'pending', participants: [{peer_id, allowed: true}]}
+  const sharedRoute = '/v1/ot/conversations/otc_room'
+  const f = fake({
+    ['GET ' + sharedRoute]: () => ({id: 'otc_room', kind: 'group', account_group: true}),
+    ['POST ' + sharedRoute + '/call/recording']: () => ({recording: pending}),
+    'POST /v1/ot/meeting-calls/recording': () => ({recording: pending}),
+  })
+  setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch }))
+  const {v1} = messenger({dataDir: dir, async call(name) {
+    assert.equal(name, 'agents/personal-binding')
+    return {workspace_id: workspace}
+  }}).endpoints
+  const recordingBody = {call_id, peer_id, action: 'request'}
+  const group = `/v1/workspaces/${workspace}/social/conversations/otc_room/call/recording`
+  const meeting = '/v1/meeting-calls/recording'
+  assert.equal((await v1({method: 'POST', path: group, body: {...recordingBody, audio: 'invalid data'}})).status, 400)
+  assert.equal((await v1({method: 'POST', path: meeting, body: {...recordingBody, action: 'allow'}})).status, 400)
+  assert.equal(f.calls.length, 0)
+  assert.deepEqual(await v1({method: 'POST', path: group, body: recordingBody}), {status: 200, body: {recording: pending}})
+  const stop = {...recordingBody, action: 'stop', recording_id}
+  assert.deepEqual(await v1({method: 'POST', path: meeting, body: stop}), {status: 200, body: {recording: pending}})
+  assert.deepEqual(f.calls.filter(call => call.method === 'POST').map(({path, body}) => ({path, body})), [
+    {path: sharedRoute + '/call/recording', body: recordingBody}, {path: '/v1/ot/meeting-calls/recording', body: stop},
+  ])
 })
 
 test('the reply prompt fences other members\' text and keeps the owner\'s private data out', () => {
@@ -276,10 +309,10 @@ test('a managed reply retries transient delivery once with the same payload and 
   const scenarios = [
     {name:'connection drops after commit', outcomes:['lost','ok'], replied:1},
     {name:'server recovers from 503', outcomes:[503,'ok'], replied:1},
-    {name:'repeated 503 runs out of retries', outcomes:[503,503], replied:0},
+    {name:'repeated 503 keeps the final reply pending', outcomes:[503,503], replied:0, pending:true},
     {name:'conflict is not retried', outcomes:[409], replied:0},
   ]
-  for (const {name,outcomes,replied} of scenarios) {
+  for (const {name,outcomes,replied,pending} of scenarios) {
     await t.test(name, async () => {
       const dir = fixture()
       const deliveries = []
@@ -327,8 +360,11 @@ test('a managed reply retries transient delivery once with the same payload and 
       })
       assert.deepEqual(actions,[
         {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true},
-        ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
+        ...(replied || pending ? [] : [{action:'fail',attempt:2,claim_id}]),
       ])
+      const saved = JSON.parse(readFileSync(join(dir,'inbox.json'), 'utf8')).completions
+      assert.deepEqual(Object.values(saved).map(completion => completion.payload),
+        pending ? [JSON.parse(deliveries[0])] : [])
     })
   }
 })
@@ -422,6 +458,27 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
   const result = await e.v1({method:'POST',path,body:{body:'Question',agent_mentions:targets}})
   assert.equal(result.status, 201)
   assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
+
+  const dispatch = createLegacyDispatch({endpoints:{'messenger/v1':e.v1}})
+  const url = new URL('http://dsbot/api/openteamily/legacy')
+  url.search = new URLSearchParams({feature:'messenger',path})
+  const file = new Blob(['the attachment'], {type:'text/plain'})
+  const form = new FormData()
+  form.set('file',file,'plan.txt')
+  form.set('body','Caption question')
+  form.set('agent_mentions',JSON.stringify(targets))
+  const send = () => dispatch(new Request(url,{method:'POST',body:form,headers:{'Idempotency-Key':'caption-group-fixture'}}))
+  assert.equal((await send()).status,201)
+  assert.deepEqual(f.calls.at(-1).body.agent_mentions,targets)
+  assert.equal(f.calls.at(-1).body.body,'Caption question')
+  assert.equal(f.calls.at(-1).body.attachment.title,'plan.txt')
+
+  const forwarded = f.calls.length
+  form.append('agent_mentions',JSON.stringify(targets))
+  assert.equal((await send()).status,400)
+  form.set('agent_mentions','invalid JSON')
+  assert.equal((await send()).status,400)
+  assert.equal(f.calls.length,forwarded)
 })
 
 test('only exported saved works add version metadata to group attachments and resource results', async () => {
@@ -503,6 +560,35 @@ test('member history forwards older, around and search cursors to Bot Social', a
     const sent=new URL(f.calls.at(-1).path,SERVER)
     for (const [key,value] of new URL(path+query,SERVER).searchParams) assert.equal(sent.searchParams.get(key),value)
   }
+})
+
+test('opening a saved reading position returns one workspace-scoped history window with pins', async () => {
+  const dir = fixture()
+  const personal = 'a'.repeat(32)
+  const team = 'b'.repeat(32)
+  const upstream = '/v1/ot/conversations/otc_1/messages'
+  const f = fake({
+    [`GET /v1/ot/teams/by-workspace/${team}`]: () => ({id:'ott_1'}),
+    'GET /v1/ot/conversations/otc_1': () => ({id:'otc_1',kind:'group',team_id:'ott_1'}),
+    [`GET ${upstream}`]: () => ({messages:[{id:'otm_old',seq:9,body:'Previous reading position'}],
+      pinned_messages:[{id:'otm_pin'}],next_before:9,has_newer:true}),
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call() {return {workspace_id:personal}}}).endpoints
+  const path = `/v1/workspaces/${team}/social/conversations/otc_1`
+  const page = await feature.v1({method:'GET',path:path+'?around=otm_old'})
+  assert.equal(page.status,200)
+  assert.equal(page.body.items[0].id,'otm_old')
+  assert.deepEqual(page.body.pinned_messages,[{id:'otm_pin'}])
+  assert.equal(page.body.cursor,9)
+  assert.equal(page.body.has_newer,true)
+  const requests = f.calls.filter(call => call.path.startsWith(upstream))
+  assert.equal(requests.length,1)
+  assert.deepEqual(Object.fromEntries(new URL(requests[0].path,SERVER).searchParams),
+    {limit:'50',pins:'1',around:'otm_old',workspace_id:team})
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&start=unread'})).status,400)
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&around=other'})).status,400)
+  assert.ok(f.calls.every(call => call.method === 'GET'))
 })
 
 test('attachment search uses the owner binding and existing chat download metadata', async () => {

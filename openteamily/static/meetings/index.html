@@ -77,10 +77,16 @@
     </header>
     <section id="meeting-inbox" class="meeting-list-pane" aria-labelledby="meeting-inbox-heading" hidden>
       <header class="meeting-list-head">
-        <h2 id="meeting-inbox-heading" tabindex="-1">待办行动项</h2>
+        <h2 id="meeting-inbox-heading" tabindex="-1">会议行动项</h2>
         <button type="button" id="meeting-inbox-close" class="secondary">返回会议</button>
       </header>
       <div class="meeting-inbox-filters">
+        <label>状态
+          <select id="meeting-inbox-state">
+            <option value="open">待完成</option>
+            <option value="completed">已完成</option>
+          </select>
+        </label>
         <label><input type="checkbox" id="meeting-inbox-mine"> 分配给我</label>
         <button type="button" id="meeting-inbox-refresh" class="secondary">刷新</button>
       </div>
@@ -92,7 +98,7 @@
     <div class="meeting-layout" id="meeting-layout" data-view="catalogue">
       <header class="meeting-mobile-toolbar">
         <button type="button" id="meeting-back-to-list" class="secondary">‹ 会议列表</button>
-        <button type="button" id="meeting-inbox-return" class="secondary" hidden>‹ 待办行动项</button>
+        <button type="button" id="meeting-inbox-return" class="secondary" hidden>‹ 会议行动项</button>
         <button type="submit" id="save-meeting-mobile" form="meeting-form">保存</button>
       </header>
       <section class="meeting-list-pane" id="meeting-list-pane" aria-label="会议列表">
@@ -132,6 +138,9 @@
             <ul id="shared-meeting-actions"></ul>
             <p id="shared-meeting-no-actions" class="note" hidden>没有行动项。</p>
           </section>
+          <div class="meeting-actions" id="shared-meeting-discussion-entry" hidden>
+            <button type="button" id="shared-meeting-discussion" class="secondary" aria-haspopup="dialog">与个人智能体讨论</button>
+          </div>
         </article>
         <form id="meeting-form" hidden>
           <p id="meeting-call-source" class="note" tabindex="-1" hidden>来自通话</p>
@@ -199,6 +208,7 @@
           <p id="meeting-save-status" class="note" role="status"></p>
           <div class="meeting-actions">
             <button type="submit" id="save-meeting">保存</button>
+            <button type="button" id="review-meeting-conflict" class="secondary" aria-haspopup="dialog" hidden>核对最新版本</button>
             <button type="button" id="cancel-meeting" class="secondary">取消</button>
             <button type="button" id="share-meeting" class="secondary" aria-haspopup="dialog" hidden>分享纪要</button>
             <button type="button" id="save-meeting-artifact" class="secondary" aria-describedby="meeting-artifact-description" title="按已保存的摘要和行动项生成纪要" hidden>保存到资料空间</button>
@@ -217,6 +227,15 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-conflict-dialog" aria-labelledby="meeting-conflict-title" aria-describedby="meeting-conflict-description">
+    <h2 id="meeting-conflict-title">核对纪要修改</h2>
+    <p id="meeting-conflict-description" class="note"></p>
+    <div id="meeting-conflict-fields"></div>
+    <div class="meeting-actions">
+      <button type="button" id="cancel-meeting-conflict" class="secondary">返回编辑</button>
+      <button type="button" id="apply-meeting-conflict">载入并继续编辑</button>
+    </div>
+  </dialog>
   <dialog id="meeting-unsaved-dialog" aria-labelledby="meeting-unsaved-title" aria-describedby="meeting-unsaved-message">
     <h2 id="meeting-unsaved-title">离开会议编辑？</h2>
     <p id="meeting-unsaved-message"></p>
@@ -232,6 +251,21 @@
       <button type="button" class="secondary" id="cancel-remove-meeting" autofocus>取消</button>
       <button type="button" id="confirm-remove-meeting">确认删除</button>
     </div>
+  </dialog>
+  <dialog id="meeting-action-copy-dialog" aria-labelledby="meeting-action-copy-heading">
+    <h2 id="meeting-action-copy-heading">存入我的待办</h2>
+    <p id="meeting-action-copy-source" class="note"></p>
+    <form id="meeting-action-copy-form">
+      <label>待办标题 <input id="meeting-action-copy-title" maxlength="80" required autofocus></label>
+      <label>备注 <textarea id="meeting-action-copy-notes" maxlength="2000" rows="3"></textarea></label>
+      <label>截止日期 <input id="meeting-action-copy-date" type="date" min="1970-01-01" max="2038-01-19"></label>
+      <p id="meeting-action-copy-status" class="note" role="status"></p>
+      <div class="meeting-actions">
+        <button type="button" class="secondary" id="meeting-action-copy-close">取消</button>
+        <button type="submit" id="meeting-action-copy-submit">保存到个人空间</button>
+        <a id="meeting-action-copy-link" class="secondary" target="_blank" rel="noopener" hidden>打开我的待办</a>
+      </div>
+    </form>
   </dialog>
   <dialog id="meeting-share-dialog" aria-labelledby="meeting-share-title">
     <header class="meeting-share-head">
@@ -264,7 +298,7 @@
     <form id="meeting-discussion-form">
       <label for="meeting-discussion-question">想讨论的问题</label>
       <textarea id="meeting-discussion-question" rows="2" maxlength="1000" required autofocus></textarea>
-      <label class="meeting-discussion-option"><input type="checkbox" id="meeting-discussion-transcript"> 包含已保存的转写 / 正文</label>
+      <label id="meeting-discussion-transcript-option" class="meeting-discussion-option"><input type="checkbox" id="meeting-discussion-transcript"> 包含已保存的转写 / 正文</label>
       <label for="meeting-discussion-preview">会议内容预览</label>
       <textarea id="meeting-discussion-preview" rows="7" readonly></textarea>
       <p id="meeting-discussion-notice" class="note"></p>
