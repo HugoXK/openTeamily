@@ -489,7 +489,7 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function writeHash(values) {
+function writeHash(values, {push = false} = {}) {
   const params = new URLSearchParams();
   if (values.workspace) params.set('workspace', values.workspace);
   if (values.agent) params.set('agent', values.agent);
@@ -498,7 +498,10 @@ function writeHash(values) {
   if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
-  if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
+  if (location.hash === hash) return;
+  const path = location.pathname + hash;
+  if (push) history.pushState(null, '', path);
+  else history.replaceState(null, '', path);
 }
 
 function formatTime(value) {
@@ -8000,7 +8003,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', async () => {
     clearChatScope();
-    writeHash({workspace: workspaceId()});
+    // The selected conversation updates this workspace entry as usual.
+    writeHash({workspace: workspaceId()}, {push: true});
     await loadSessions();
   });
 

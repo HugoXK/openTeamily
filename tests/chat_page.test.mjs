@@ -496,7 +496,7 @@ function installChatGlobals({narrow = false} = {}) {
     matchMedia: globalThis.matchMedia,
   };
   globalThis.location = {hash: '', pathname: '/chat'};
-  globalThis.history = {replaceState() {}};
+  globalThis.history = {pushState() {}, replaceState() {}};
   globalThis.addEventListener = () => {};
   globalThis.matchMedia = (query) => ({matches: narrow && query === '(max-width: 900px)'});
   return () => {
@@ -4013,6 +4013,42 @@ test('an interrupted group send checks for its exact receipt and retries the ori
     assert.equal(el('chat-body').value,newer);
     assert.equal(fixture.messages().filter(id => id === saved.id).length,1);
   } finally {
+    restore();
+  }
+});
+
+test('switching workspaces records the original thread and updates the new history entry when a conversation opens', async () => {
+  const original = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`;
+  const fixture = linkedChatFixture(original, {narrow:true});
+  const {doc, el, selected, restore} = fixture;
+  const entries = [original];
+  const hashFrom = url => new URL(url, 'https://fixture.invalid').hash;
+  globalThis.history.pushState = (_state, _title, url) => {
+    globalThis.location.hash = hashFrom(url);
+    entries.push(globalThis.location.hash);
+  };
+  globalThis.history.replaceState = (_state, _title, url) => {
+    globalThis.location.hash = hashFrom(url);
+    entries[entries.length - 1] = globalThis.location.hash;
+  };
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    await settle();
+    assert.equal(selected(), linkThread);
+    el('workspace').value = linkTeam;
+    await fire(el('workspace'), 'change');
+    assert.deepEqual(entries, [original, `#workspace=${linkTeam}`]);
+    const group = sessionRows(el).find(row => row.dataset.conversation === linkSocial);
+    await fire(el('conversation-list'), 'click', {target:group});
+    assert.equal(selected(), linkSocial);
+    assert.deepEqual(entries, [original, `#workspace=${linkTeam}&social=${linkSocial}`]);
+
+    await fixture.navigate(original);
+    await settle();
+    assert.equal(el('workspace').value, linkWork);
+    assert.equal(selected(), linkThread);
+  } finally {
+    await settle();
     restore();
   }
 });

@@ -112,6 +112,32 @@ test('a failed step blocks dependants; retry resets them and finishes the run', 
   await assert.rejects(e.retry({ workspace_id: W, id: run.id, position: 1 }), (err) => err.status === 409)
 })
 
+test('reused tasks keep only local lineage and remove links to deleted tasks', async () => {
+  const {feature, e, a, b, agents} = await fixture(null, {runWorkspace:TEAM})
+  const plan = body(a, b, {workspace_id:TEAM})
+  const original = (await e.create(plan)).run
+  await settle(feature)
+  const first = {...plan, title:'第一次复用', idempotency_key:'r1'.repeat(12), reused_from:original.id}
+  const second = {...plan, title:'第二次复用', idempotency_key:'r2'.repeat(12), reused_from:original.id}
+  const one = (await e.create(first)).run
+  const two = (await e.create(second)).run
+  await settle(feature)
+  assert.equal(one.reused_from, original.id)
+  assert.equal(two.reused_from, original.id)
+  const read = id => e.get({workspace_id:TEAM, id}).then(result => result.run)
+  assert.equal((await read(original.id)).latest_reuse, two.id)
+  const own = (await agents.create({workspace_id:W, name:'个人复核员', idempotency_key:'private-agent-1xx'})).agent
+  await assert.rejects(e.create(body(own, own, {reused_from:original.id})), error =>
+    error.status === 404 && error.code === 'team-runs/reuse_unavailable')
+  await e.remove({workspace_id:TEAM, id:two.id})
+  assert.equal((await read(original.id)).latest_reuse, one.id)
+  await e.remove({workspace_id:TEAM, id:original.id})
+  assert.equal((await read(one.id)).reused_from, undefined)
+  const replay = await e.create(first)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.run.id, one.id)
+})
+
 test('automation follow-up projects an authorized result and rechecks it before execution', async () => {
   const {feature, e, a, b, table, turns, state} = await fixture(null, {runWorkspace:TEAM})
   const automation_id = 'd'.repeat(32), run_id = 'e'.repeat(32)

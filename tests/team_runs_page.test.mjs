@@ -68,6 +68,7 @@ test('terminal run reuse carries definition and dependency identities without co
   assert.ok(draft.title.length <= 80 && draft.title.endsWith('（副本）') && draft.title.isWellFormed());
   assert.deepEqual(draft.steps, [step(41,AGENT,'搜集'),step(42,OTHER_AGENT,'复核',[41])]);
   assert.equal(draft.sourceRun,RUN);
+  assert.equal(teamRunPayload(draft, AGENTS).reused_from,RUN);
   assert.equal(draft.goal,source.goal);
   assert.ok(!JSON.stringify(draft).includes('private result'));
   assert.equal(teamRunDraftFromHistory({...source,status:'running'}, () => ++serial),null);
@@ -180,6 +181,29 @@ test('native history overlaps sign-in and uses only the exact read for the verif
   assert.equal(node('team-runs-workspace').value, OTHER_WS);
   assert.equal(node('team-run-heading').textContent, exact.title);
   assert.equal(node('team-run-results').children.length, 2);
+});
+
+test('a pending reused draft sends exactly the tracked version of the create body after reload', async () => {
+  const sourceRun = '9'.repeat(32);
+  const createKey = 'team-run-' + '1'.repeat(32);
+  for (const createSourceRun of [undefined, sourceRun]) {
+    const storage = new Map([['ot-team-run-draft:' + user.id + ':' + WS, JSON.stringify({
+      title:'复用草稿', goal:'确认跟进', sourceRun, createKey, createSourceRun,
+      steps:AGENTS.map(agent => ({agent:agent.id, instruction:'执行检查', dependsOn:[]})),
+    })]]);
+    const {document, node} = fixture(`#workspace=${WS}&draft=1`, storage);
+    const requests = [];
+    await mountTeamRuns(document, async (path, options) => {
+      if (path === BASE && options.method === 'POST') {
+        requests.push({key:options.headers['Idempotency-Key'], from:JSON.parse(options.body).reused_from});
+        return ok({run});
+      }
+      if (path.endsWith('/agents?limit=100')) return ok({items:AGENTS});
+      return baseRead(path);
+    });
+    await node('team-run-form').events.submit({preventDefault() {}});
+    assert.deepEqual(requests, [{key:createKey, from:createSourceRun}]);
+  }
 });
 
 test('a lost create response survives reload and only its owner can retry the exact request', async () => {

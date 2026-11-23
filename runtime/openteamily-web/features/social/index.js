@@ -96,9 +96,11 @@ export default function social(host) {
     endpoints: {
       v1: compatHandler([
         { method: 'GET', path: /^\/v1\/contacts$/,
-          handle: () => wrap(async () => {
+          handle: (_request, call) => wrap(async () => {
             const [data, binding] = await Promise.all([bs().get('/v1/ot/contacts'), host.call('agents/personal-binding', {})])
-            return [200, {...data, workspace_id: binding?.workspace_id ?? null}]
+            const viewer = call?.request?.headers?.get('x-ot-owner-username') ?? process.env.OPENTEAMILY_OWNER_USERNAME ?? ''
+            return [200, {...data, workspace_id: binding?.workspace_id ?? null,
+              ...(/^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(viewer) ? {viewer_username:viewer} : {})}]
           }) },
         { method: 'GET', path: /^\/v1\/contacts\/lookup$/,
           handle: ({query}) => wrap(async () => {

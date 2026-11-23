@@ -78,7 +78,8 @@ export function teamRunPayload(draft, agents) {
   }
   const source = draft.source && readSource(draft.source);
   if (draft.source && !source) return null;
-  return {title, goal, steps, ...(source && {source})};
+  if (draft.sourceRun && !ID.test(draft.sourceRun)) return null;
+  return {title, goal, steps, ...(source && {source}), ...(draft.sourceRun && {reused_from:draft.sourceRun})};
 }
 
 export function teamRunDraftFromHistory(run, nextKey) {
@@ -122,12 +123,13 @@ function readDraft(view, storageKey, nextKey) {
   try {
     const raw = view.sessionStorage.getItem(storageKey);
     if (!raw || raw.length > 65536) return null;
-    const {title, goal, steps, sourceRun, source: rawSource, createKey} = JSON.parse(raw);
+    const {title, goal, steps, sourceRun, source: rawSource, createKey, createSourceRun} = JSON.parse(raw);
     const source = readSource(rawSource);
     if (typeof title !== 'string' || title.length > LIMITS.title || typeof goal !== 'string' ||
         goal.length > LIMITS.goal || !Array.isArray(steps) || steps.length < LIMITS.minimum ||
         steps.length > LIMITS.maximum || (sourceRun && !ID.test(sourceRun)) ||
-        (rawSource !== undefined && !source) || (createKey && !CREATE_KEY.test(createKey))) return null;
+        (rawSource !== undefined && !source) || (createKey && !CREATE_KEY.test(createKey)) ||
+        (createSourceRun !== undefined && (createSourceRun !== sourceRun || !createKey))) return null;
     const draft = {title, goal, steps: [], ...(sourceRun && {sourceRun}), ...(source && {source})};
     for (const [position, step] of steps.entries()) {
       if (!step || typeof step.agent !== 'string' || (step.agent && !ID.test(step.agent)) ||
@@ -140,6 +142,8 @@ function readDraft(view, storageKey, nextKey) {
     }
     if (!createKey) return {draft};
     const payload = teamRunPayload(draft, draft.steps.map(step => ({id: step.agent})));
+    // Older pending copies were sent without lineage. Continue to replay the same body.
+    if (payload && !createSourceRun) delete payload.reused_from;
     return payload ? {draft, attempt: {key: createKey, payload, draft}} : null;
   } catch {
     return null;
@@ -156,7 +160,7 @@ function writeDraft(view, storageKey, draft, attempt) {
       const steps = draft.steps.map(step => ({agent: step.agent, instruction: step.instruction,
         dependsOn: [...step.dependencies].map(key => positions.get(key))}));
       view.sessionStorage.setItem(storageKey, JSON.stringify({title: draft.title, goal: draft.goal, steps,
-        sourceRun: draft.sourceRun, source: draft.source, createKey: attempt?.key}));
+        sourceRun: draft.sourceRun, source: draft.source, createKey: attempt?.key, createSourceRun:attempt?.payload.reused_from}));
     }
     return true;
   } catch {
@@ -169,6 +173,8 @@ function errorMessage(result, fallback) {
   if (result.body?.error?.code === 'source_unavailable') return result.status === 503
     ? '暂时无法读取共享结果，请稍后重试。' : '共享结果已不可用。可以移除引用后继续。';
   if (result.body?.error?.code === 'source_invalid') return '请选择有输出的已完成步骤。';
+  if (result.body?.error?.code === 'reuse_unavailable') return '原任务已不可用。可以在草稿中移除原任务引用后继续。';
+  if (result.body?.error?.code === 'reuse_active') return '原任务仍在运行。完成后可以复用。';
   if (result.status === 401) return '登录已失效，请重新登录。';
   if (result.status === 403) return '你没有权限操作此工作区的任务。';
   if (result.status === 404) return '找不到这条团队任务。';
@@ -392,6 +398,13 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     });
   }
 
+  function syncRunLink(id, runId) {
+    const link = node(id);
+    link.hidden = !ID.test(runId || '') || !ID.test(workspace || '');
+    if (link.hidden) link.removeAttribute('href');
+    else link.href = '/team-runs#' + new URLSearchParams({workspace, run:runId});
+  }
+
   function clearInaccessibleRunData() {
     current = null;
     tasks = [];
@@ -408,6 +421,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
     syncAutomationSourceLink('team-run-detail-source');
+    syncRunLink('team-run-original');
+    syncRunLink('team-run-latest-reuse');
     show('team-run-progress', '');
     showSharedList = false;
     linkedShare = undefined;
@@ -593,6 +608,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (source) show('team-run-source-status', source.kind === 'automation_run'
       ? '已引用原自动化运行的结果摘要。开始运行后，由你选择的智能体处理。'
       : `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
+    node('team-run-reuse-source').hidden = !currentDraft.sourceRun;
+    syncRunLink('team-run-draft-original', currentDraft.sourceRun);
     node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : source ? '发起后续任务' : '新建任务';
   }
 
@@ -868,6 +885,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const source = readSource(run.source);
     node('team-run-open-source').hidden = !source || source.kind === 'automation_run';
     syncAutomationSourceLink('team-run-detail-source', source);
+    syncRunLink('team-run-original', run.reused_from);
+    syncRunLink('team-run-latest-reuse', run.latest_reuse);
     cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
     if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
       const refocus = confirm.contains(document.activeElement);
@@ -915,6 +934,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
+    syncRunLink('team-run-original');
+    syncRunLink('team-run-latest-reuse');
     cancel.hidden = remove.hidden = reuse.hidden = true;
     syncExport();
     show('status', '');
@@ -1169,6 +1190,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   node('team-run-remove-source').addEventListener('click', () => {
     if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.source) return;
     delete currentDraft.source;
+    renderDraftSource();
+    persistDraft();
+    show('team-run-start-status', '');
+    node('team-run-form-heading').focus();
+  });
+  node('team-run-unlink-reuse').addEventListener('click', () => {
+    if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.sourceRun) return;
+    delete currentDraft.sourceRun;
     renderDraftSource();
     persistDraft();
     show('team-run-start-status', '');
