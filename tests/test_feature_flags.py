@@ -8,7 +8,7 @@ import unittest
 from openteamily import feature_flags
 from openteamily.app import App, Config
 from openteamily.store import Store
-from tests.test_management import Client, ORIGIN
+from tests.test_management import Client, ORIGIN, seed_legacy_workspace
 
 
 class FeatureFlagTests(unittest.TestCase):
@@ -24,8 +24,8 @@ class FeatureFlagTests(unittest.TestCase):
         self.bob_id = self.bob.register('bob')['body']['user']['id']
         self.carol = Client(self.app, peer='127.0.0.3')
         self.carol_id = self.carol.register('carol')['body']['user']['id']
-        self.wid = self.alice.workspace()['body']['workspace']['id']
-        self.wid2 = self.alice.workspace(name='Other', key='request_example_0002')['body']['workspace']['id']
+        self.wid = seed_legacy_workspace(self.alice)['id']
+        self.wid2 = seed_legacy_workspace(self.alice, name='Other')['id']
         with self.app.store.connect() as db:
             feature_flags.ensure_schema(db)
 
