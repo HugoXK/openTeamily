@@ -9,6 +9,10 @@ export default function messenger(host) {
   const bs = () => sharedBotSocial(host)
   const conv = (p) => `/v1/ot/conversations/${seg(p?.conversation_id, 'conversation_id')}`
   const msg = (p) => `/v1/ot/messages/${seg(p?.message_id, 'message_id')}`
+  const threadBase = (p) => p?.workspace_id
+    ? `/v1/ot/workspaces/${seg(p.workspace_id, 'workspace_id')}/conversations/${seg(p?.conversation_id, 'conversation_id')}/threads`
+    : `/v1/ot/conversations/${seg(p?.conversation_id, 'conversation_id')}/threads`
+  const threadPath = (p) => `${threadBase(p)}/${seg(p?.thread_id, 'thread_id')}`
   let replier
   const agentReplier = () => (replier ??= createAgentReplier({ bs: bs(), host, stateFile: defaultStateFile(host), log: host.log ?? (() => {}) }))
   const automaticReplies = typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0'
@@ -53,6 +57,16 @@ export default function messenger(host) {
           mentions:p?.mentions,agent_mentions:p?.agent_mentions,reply_to:p?.reply_to,client_key:p?.client_key})
       },
       read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
+      createThread: async (p) => bs().post(threadBase(p), { root_message_id: p?.root_message_id, title: p?.title }),
+      listThreads: async (p) => bs().get(threadBase(p) + qs({
+        include_resolved: p?.include_resolved, limit: p?.limit, cursor: p?.cursor,
+      })),
+      threadView: async (p) => bs().get(threadPath(p) + qs({ limit: p?.limit, cursor: p?.cursor })),
+      addReply: async (p) => bs().post(`${threadPath(p)}/replies`, { body: p?.body }),
+      markRead: async (p) => bs().post(`${threadPath(p)}/read`,
+        p?.last_read === undefined ? {} : { last_read: p.last_read }),
+      resolveThread: async (p) => bs().post(`${threadPath(p)}/resolve`, { resolved: p?.resolved !== false }),
+      deleteReply: async (p) => bs().del(`${threadPath(p)}/replies/${seg(p?.reply_id, 'reply_id')}`),
       edit: async (p) => bs().patch(msg(p), { body: p?.body }),
       retract: async (p) => bs().del(msg(p)),
       react: async (p) => bs().post(`${msg(p)}/reactions`, { emoji: p?.emoji, on: p?.on !== false }),
