@@ -306,13 +306,15 @@ const COMPOSIO_ERRORS = {
   composio_not_configured: '未配置 Composio：先填入你自己的 Composio API key。',
   composio_key_rejected: 'Composio 拒绝了这个 API key，请检查后重新保存。',
   composio_unreachable: '暂时连不上 Composio，请稍后再试。',
-  composio_rate_limited: 'Composio 请求太频繁，请稍后再试。',
+  composio_conflict: 'Composio 报告连接冲突。请刷新页面查看当前连接，再重试。',
+  composio_rate_limited: 'Composio 暂时限制了请求次数。请稍后重试。',
+  composio_upstream: 'Composio 服务暂时异常，请稍后重试。',
   composio_not_found: 'Composio 里找不到这个连接。',
   composio_failed: 'Composio 请求失败。',
 };
 
 export function composioMessage(error, fallback) {
-  return (error && COMPOSIO_ERRORS[error.code]) || fallback;
+  return error && Object.hasOwn(COMPOSIO_ERRORS, error.code) ? COMPOSIO_ERRORS[error.code] : fallback;
 }
 
 export function syncAppearanceExtras(document, values) {

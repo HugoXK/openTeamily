@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioMessage, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -786,6 +786,17 @@ test('re-rendering the list retires a pending delete question', async () => {
   doc.fire('keydown', {key: 'Escape'});
   await settleSettings();
   assert.equal(doc.activeElement, null, 'Escape finds no stale question left over from the old rows');
+});
+
+test('connector errors distinguish a conflict, rate limit and upstream service failure', () => {
+  const conflict = composioMessage({code: 'composio_conflict'}, '');
+  const limited = composioMessage({code: 'composio_rate_limited'}, '');
+  const upstream = composioMessage({code: 'composio_upstream'}, '');
+  assert.match(conflict, /连接冲突.*刷新页面查看当前连接/);
+  assert.doesNotMatch(conflict, /已经有|断开/);
+  assert.match(limited, /限制了请求次数.*稍后重试/);
+  assert.match(upstream, /服务暂时异常.*稍后重试/);
+  assert.equal(composioMessage({code: 'constructor'}, '无法开始连接。'), '无法开始连接。');
 });
 
 test('composioRowState never shows success without a real connected state', () => {

@@ -111,8 +111,8 @@
     <section id="list-panel">
       <div class="directory-list-heading">
         <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
-        <label for="agent-status">状态
-          <select id="agent-status">
+        <label id="agent-status-control" for="agent-status" hidden>状态
+          <select id="agent-status" disabled>
             <option value="active">可用</option>
             <option value="archived">已归档</option>
           </select>

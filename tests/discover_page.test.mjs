@@ -638,6 +638,34 @@ test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('', '', '', 'latest', 'vera.home'), 'limit=12&creator=vera.home');
 });
 
+test('an empty author feed uses the canonical handle and can be cleared', async () => {
+  const {mount, feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const requests = [];
+  const mixedCase = '?creator=Writer.Home';
+  assert.equal(feedSearchText(feedStateFromSearch(mixedCase)), '?creator=writer.home');
+  assert.equal(feedSearchText(feedStateFromSearch('?kind=image&q=sample&creator=Writer.Home')),
+    '?kind=image&q=sample&creator=writer.home');
+  assert.equal(feedStateFromSearch('?creator=writer%2Fhome').creator, undefined);
+  await mount(doc, {
+    location: {search: mixedCase},
+    async fetcher(path) {
+      requests.push(path);
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [], cursor: null});
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const clear = doc.getElementById('feed-creator-filter');
+  assert.match(clear.textContent, /writer\.home/);
+  assert.equal(doc.getElementById('feed-note').textContent, '该作者还没有公开作品。');
+  assert.ok(requests.includes('/v1/discover/works?limit=12&creator=writer.home'));
+  await clear.handlers.click();
+  assert.equal(clear.hidden, true);
+  assert.equal(doc.getElementById('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
+  assert.ok(requests.includes('/v1/discover/works?limit=12'));
+});
+
 test('the activity feed renders opted-in work cards from the public API', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();

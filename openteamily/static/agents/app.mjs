@@ -156,6 +156,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const nativeSharing = servedByDsBot(document);
   let sharing;
   const directoryStatus = document.getElementById('agent-status');
+  const directoryStatusControl = document.getElementById('agent-status-control');
   let archivedOnly = false;
   let loadedArchived = false;
   const archiveWrites = new Set();
@@ -360,6 +361,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else history.replaceState?.(null, '', url);
   }
 
+  function syncDirectoryStatus() {
+    const available = canManage(actor);
+    if (directoryStatusControl) directoryStatusControl.hidden = !available;
+    if (directoryStatus) {
+      directoryStatus.disabled = !available;
+      directoryStatus.value = available && archivedOnly ? 'archived' : 'active';
+    }
+  }
+
   async function restoreDirectory() {
     const hash = globalThis.location?.hash;
     const target = directoryTarget(hash);
@@ -373,7 +383,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loadedWorkspace = '';
       hideDrawer();
       if (openCreate) openCreate.hidden = true;
-      if (directoryStatus) directoryStatus.disabled = true;
+      syncDirectoryStatus();
       fillCreatorOptions(creatorFilter, [], memberNames, document);
       selectedCreator = '';
       syncTeamRunLink();
@@ -388,10 +398,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     workspaceSelect.value = workspace;
     archivedOnly = target.archived;
-    if (directoryStatus) {
-      directoryStatus.disabled = false;
-      directoryStatus.value = archivedOnly ? 'archived' : 'active';
-    }
     syncTeamRunLink();
     if (!directoryLoaded || loadedWorkspace !== workspace || loadedArchived !== archivedOnly) {
       if (!await loadWorkspace({directoryOnly: true}) || globalThis.location?.hash !== hash) return;
@@ -430,6 +436,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     personalIdentity = null;
+    actor = null;
+    syncDirectoryStatus();
     directoryLoaded = false;
     loadedWorkspace = '';
     directoryAgents = [];
@@ -480,7 +488,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.textContent = '这个工作区还没有智能体。';
       const count = document.getElementById('agents-count');
       if (count) count.textContent = '显示 0 个智能体';
-      if (directoryStatus) directoryStatus.disabled = true;
+      syncDirectoryStatus();
       show(listed.status === 200 ? '' : 'error', listed.status === 200 ? '' : '无法加载工作区。请刷新后重试。');
       return;
     }
@@ -543,18 +551,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
         chat.textContent = '聊天';
         li.append(chat);
-      } else if (canManage(actor) && !item.native_deleted) {
-        const restore = document.createElement('button');
-        restore.type = 'button';
-        restore.className = 'chat-cta';
-        restore.textContent = '恢复';
-        restore.addEventListener('click', () => changeArchive(item, false, restore));
-        li.append(restore);
       } else {
         const label = document.createElement('span');
         label.className = 'archive-label';
         label.textContent = item.native_deleted ? '已删除' : '已归档';
-        li.append(label);
+        copy.append(label);
+        if (canManage(actor) && !item.native_deleted) {
+          const restore = document.createElement('button');
+          restore.type = 'button';
+          restore.className = 'chat-cta';
+          restore.textContent = '恢复';
+          restore.addEventListener('click', () => changeArchive(item, false, restore));
+          li.append(restore);
+        }
       }
       list.append(li);
     }
@@ -605,11 +614,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) return false;
     const seq = ++workspaceLoad;
     const user = currentUser?.id;
-    const archived = archivedOnly;
+    let archived = archivedOnly;
     const includeWorkspace = !directoryOnly || id !== loadedWorkspace;
     hideDrawer();
     if (includeWorkspace) {
       actor = null;
+      syncDirectoryStatus();
       if (openCreate) openCreate.hidden = true;
       if (teamTemplatesLoaded) renderTeamTemplates();
     }
@@ -624,16 +634,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const unavailable = {status: 0, body: {}};
     const base = `/v1/workspaces/${id}`;
     const nativeWorkspace = nativeSharing ? workspaces.find(space => space.id === id) : null;
-    const [detail, members, listed] = await Promise.all([
+    const readList = status => listAgents(base, status).catch(() => unavailable);
+    const stillCurrent = () => seq === workspaceLoad && id === workspaceId() && user === currentUser?.id;
+    const [detail, members, active] = await Promise.all([
       includeWorkspace && !nativeSharing ? request('GET', base).catch(() => unavailable) : null,
       includeWorkspace ? request('GET', base + '/members').catch(() => unavailable) : null,
-      listAgents(base, archived).catch(() => unavailable),
+      archived ? null : readList(false),
     ]);
-    if (seq !== workspaceLoad || id !== workspaceId() || user !== currentUser?.id) return false;
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
-      return false;
-    }
+    if (!stillCurrent()) return false;
     if (includeWorkspace) {
       const workspace = nativeSharing ? nativeWorkspace : detail?.status === 200 ? detail.body.workspace : null;
       if (!workspace) {
@@ -647,12 +655,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const self = members.status === 200
         ? (members.body.items || []).find(row => row.user_id === currentUser.id)
         : null;
-      actor = self?.role || (nativeSharing ? workspace.role || 'member'
+      actor = self?.suspended ? 'member' : self?.role || (nativeSharing ? workspace.role || 'member'
         : workspace.owner_id === currentUser.id ? 'owner' : 'member');
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
       if (teamTemplatesLoaded) renderTeamTemplates();
+    }
+    if (archived && !canManage(actor)) {
+      archived = archivedOnly = false;
+      writeDirectoryTarget(null);
+    }
+    syncDirectoryStatus();
+    const listed = active ?? await readList(archived);
+    if (!stillCurrent()) return false;
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      return false;
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
     directoryAgents = listed.body.items || [];
@@ -837,7 +856,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     syncTeamRunLink();
-    if (directoryStatus) directoryStatus.disabled = false;
     writeDirectoryTarget(null, {push: true});
     return loadWorkspace();
   });
@@ -1022,6 +1040,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     createForm.elements.name.focus?.();
   });
   directoryStatus?.addEventListener('change', () => {
+    if (!canManage(actor)) return;
     archivedOnly = directoryStatus.value === 'archived';
     writeDirectoryTarget(null, {push: true});
     return loadWorkspace({directoryOnly: true});

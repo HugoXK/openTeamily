@@ -395,6 +395,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.messages.submit_assist": ["提交处理任务", "Submit request"],
   "chat.group.announcement_body": ["公告内容", "Announcement text"],
   "chat.group.save_announcement": ["保存公告", "Save announcement"],
+  "chat.group.clear_announcement": ["清空公告", "Clear announcement"],
   "chat.resources.retrieve_title": ["调取资料", "Retrieve resources"],
   "chat.resources.review_before_sending": ["把文档或记忆正文、团队文档链接放入输入框，检查后再发送。", "Add document or memory text, or a team document link, and review it before sending."],
   "chat.resources.studio": ["团队文档", "Team documents"],

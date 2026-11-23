@@ -8,6 +8,7 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
+import {mountMessageUtilities} from '../openteamily/static/chat/utilities.mjs';
 import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/shell/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
@@ -3143,6 +3144,50 @@ function attachmentMessage(attachment) {
     body: '附件：' + attachment.title, created: '2026-01-01T00:00:00Z', attachment,
   };
 }
+
+test('group announcements display the publisher and can be cleared only by an editor', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const dialog = el('announcement-dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
+  const calls = [];
+  let canEdit = false;
+  const entry = {body:'Planning update', author_name:'<Ada>', updated_at:1800000000000, revision:4};
+  const {refreshAnnouncement} = mountMessageUtilities(doc, {
+    context: () => ({wid:'team', cid:'group', kind:'group'}),
+    formatAnnouncementTime: timestamp => { assert.equal(timestamp, entry.updated_at); return '16:20'; },
+    notify: () => {},
+    async request(method, path, body) {
+      const announcement = method === 'POST' ? {body:'',revision:5} : entry;
+      calls.push({method,path,body});
+      return {status:200,body:{announcement,can_edit:canEdit}};
+    },
+  });
+  await refreshAnnouncement();
+  assert.equal(el('group-announcement-preview').textContent, entry.body);
+  assert.equal(el('group-announcement-meta').textContent, '<Ada> · 16:20');
+  assert.equal(el('group-announcement-meta').hidden, false);
+
+  const open = el('group-announcement-open').handlers.click[0];
+  const clear = el('announcement-clear');
+  await open();
+  assert.equal(el('announcement-save').disabled, true);
+  assert.equal(clear.hidden, true);
+  await clear.handlers.click[0]();
+  assert.equal(calls.some(call => call.method === 'POST'), false);
+  dialog.close();
+
+  canEdit = true;
+  await open();
+  assert.equal(clear.hidden, false);
+  await clear.handlers.click[0]();
+  assert.deepEqual(calls.at(-1), {
+    method:'POST',path:'/v1/workspaces/team/social/conversations/group/announcement',body:{body:'',revision:4},
+  });
+  assert.equal(dialog.open, false);
+  assert.equal(el('group-announcement-preview').textContent, '还没有群公告。');
+  assert.equal(el('group-announcement-meta').hidden, true);
+});
 
 test('a picture shared in a chat renders as an image, not a document card', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());

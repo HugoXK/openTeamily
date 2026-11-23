@@ -302,6 +302,7 @@
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading" data-ui-text="chat.group.announcement">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open" data-ui-text="chat.group.view_edit">查看 / 编辑</button></div>
         <p class="group-info-sub" id="group-announcement-preview"><span data-ui-text="chat.group.loading_announcement">正在读取公告…</span></p>
+        <p class="group-info-sub" id="group-announcement-meta" hidden></p>
       </section>
       <section class="group-info-card" aria-label="成员" data-ui-label="chat.group.members">
         <div class="group-info-tabs" role="tablist">
@@ -1045,7 +1046,7 @@
  <p id="message-assist-status" role="status"></p><ul id="message-assist-history"></ul><button id="message-assist-close" type="button" data-ui-text="chat.close">关闭</button>
 </dialog>
 <dialog id="announcement-dialog" aria-labelledby="announcement-heading"><h2 id="announcement-heading" data-ui-text="chat.group.announcement">群公告</h2>
- <form id="announcement-form"><label><span data-ui-text="chat.group.announcement_body">公告内容</span><textarea id="announcement-body" maxlength="2000" rows="8"></textarea></label><button id="announcement-save" type="submit" data-ui-text="chat.group.save_announcement">保存公告</button></form>
+ <form id="announcement-form"><label><span data-ui-text="chat.group.announcement_body">公告内容</span><textarea id="announcement-body" maxlength="2000" rows="8"></textarea></label><button id="announcement-save" type="submit" data-ui-text="chat.group.save_announcement">保存公告</button><button id="announcement-clear" type="button" data-ui-text="chat.group.clear_announcement" hidden>清空公告</button></form>
  <p id="announcement-status" role="status"></p><button id="announcement-close" type="button" data-ui-text="chat.close">关闭</button>
 </dialog>
 

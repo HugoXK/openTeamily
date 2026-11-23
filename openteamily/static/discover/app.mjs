@@ -106,7 +106,7 @@ export function feedStateFromSearch(search) {
   const requestedKind = params.get('kind');
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
-  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator : '';
+  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
   return {
     tab,
     kind,
@@ -123,7 +123,7 @@ export function feedSearchText(state) {
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
-  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator);
+  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -1529,6 +1529,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+      note.textContent = '该作者还没有公开作品。';
     else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';

@@ -16,6 +16,7 @@ function fixture(options) {
   const runtime = nativeAgentFixture({reply: (_turn, count) => `DS-Bot reply ${count}`, ...options})
   const host = { runtime: async () => runtime.services, call: async (name) => {
     if (name === 'skills/materialForScope') return {items: []}
+    if (name === 'agents/personal-binding') return {workspace_id: W}
     throw new Error('Unexpected endpoint: ' + name)
   } }
   const created = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
@@ -68,7 +69,9 @@ test('concurrent settings changes share one native roster revision', async () =>
     },
     save: async () => {},
   }
-  const host = {runtime: async () => ({rt, mainBot: async () => 'main'})}
+  const host = {runtime: async () => ({rt, mainBot: async () => 'main'}), call: async name => {
+    if (name === 'agents/personal-binding') return {workspace_id: W}
+  }}
   const {endpoints:e} = createAgents({db:new DatabaseSync(':memory:'), host})
   const created = await e.create({workspace_id:W, name:'原始名称', summary:'原始简介',
     instructions:'原始说明', idempotency_key:'settings-race-001'})

@@ -958,7 +958,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let stickerPicker;
   const stickerSaves = new Map();
   const messageUtilities = mountMessageUtilities(document, {
-    request, notify: show,
+    request, notify: show, formatAnnouncementTime: value => formatTime(value / 1000),
     composerContext: () => {
       if (!currentConversation && !(currentSource === 'agent' && currentAgent)) return null;
       const wid = workspaceId();
