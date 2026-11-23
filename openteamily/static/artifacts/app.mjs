@@ -359,39 +359,46 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
-function bindMobileCatalogToolbar(document, closePopovers) {
+function bindCatalogToolbar(document, closePopovers) {
   const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
   const panel = document.getElementById('main-panel');
   const toolbar = document.getElementById('catalog-quick-actions');
   const title = document.getElementById('space-title');
   const directory = document.getElementById('artifact-dir');
   const catalog = document.getElementById('list-panel');
-  const controls = [
-    document.getElementById('new-menu-button')?.parentElement,
-    document.getElementById('artifact-notify'),
-    document.getElementById('search')?.parentElement,
-    document.getElementById('filter-button')?.parentElement,
-  ];
+  const newMenu = document.getElementById('new-menu-button')?.parentElement;
+  const notify = document.getElementById('artifact-notify');
+  const search = document.getElementById('search')?.parentElement;
+  const filter = document.getElementById('filter-button')?.parentElement;
+  const layout = document.getElementById('layout-toggle');
+  const controls = [layout, newMenu, notify, search, filter];
   if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
     return () => {};
   }
   // Move the original controls so focus order follows their visual order and
   // there is still only one search, workspace context, and set of popovers.
-  const original = controls.map(node => ({node, parent: node.parentElement, next: node.nextElementSibling}));
+  const original = [newMenu, search, filter, layout, notify].map(node => ({
+    node, parent: node.parentElement, next: node.nextElementSibling,
+  }));
   let catalogView = false;
   let compact = false;
+  let active = false;
 
   function sync() {
     const next = catalogView && viewport.matches;
-    if (next === compact) return;
+    if (next === compact && active === catalogView) return;
     compact = next;
+    active = catalogView;
     closePopovers();
     const focus = document.activeElement;
     const restoreFocus = controls.some(node => node.contains(focus));
     if (compact) toolbar.append(...controls);
-    else for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+    else {
+      for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+      if (active) toolbar.append(search);
+    }
     panel.classList.toggle('is-compact-catalog', compact);
-    title.classList.toggle('visually-hidden', !compact);
+    title.classList.toggle('visually-hidden', !active);
     directory.hidden = !compact && catalog.classList.contains('dir-collapsed');
     if (restoreFocus && !focus.closest('[hidden]')) focus.focus({preventScroll: true});
   }
@@ -557,7 +564,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
-  const compactToolbar = bindMobileCatalogToolbar(document, () => {
+  const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
   });
@@ -1335,7 +1342,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
-    compactToolbar(catalogKind !== 'meetings');
+    catalogToolbar(catalogKind !== 'meetings');
     const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
     search.placeholder = searchLabel;
     search.setAttribute('aria-label', searchLabel);
@@ -1644,8 +1651,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const meetingsChrome = document.getElementById('meetings-chrome');
     if (mainPanel) mainPanel.classList.toggle('is-meetings', catalogKind === 'meetings');
     if (meetingsChrome) meetingsChrome.hidden = catalogKind !== 'meetings';
-    const layoutNote = document.getElementById('layout-note');
-    if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
     const isEmpty = items.length === 0 && searchTimer === null &&
       (!catalog || (sameSelection(catalog) && catalog.state === 'ready' && !catalog.cursor));

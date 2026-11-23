@@ -584,6 +584,14 @@ test('rich memory editor round-trips stored markdown through the DOM', () => {
   }
 });
 
+test('malformed Markdown fence remains literal and does not block subsequent headings', () => {
+  assert.deepEqual(markdownToBlocks('开头\n```invalid language !\n正文\n\n### 下一步'), [
+    {type:'p', text:'开头'},
+    {type:'p', text:'```invalid language !\n正文'},
+    {type:'h3', text:'下一步'},
+  ]);
+});
+
 test('rich memory editor drops unsafe links and keeps a list nested in a paragraph', () => {
   assert.equal(safeHref('javascript:alert(1)'), '');
   assert.equal(safeHref('https://example.com/a'), 'https://example.com/a');

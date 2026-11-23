@@ -280,6 +280,13 @@ class FakeElement {
     this.scrollTop = 0;
     this.scrollHeight = 0;
   }
+  get textContent() {
+    return this.text + this.children.map(child => child.textContent).join('');
+  }
+  set textContent(value) {
+    this.replaceChildren();
+    this.text = String(value);
+  }
   get classList() {
     const element = this;
     const names = () => element.className.split(/\s+/).filter(Boolean);
@@ -319,6 +326,7 @@ class FakeElement {
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
+    this.text = '';
     this.append(...nodes);
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
@@ -4090,6 +4098,72 @@ test('a meeting discussion draft unlocks thread controls only after its exact fi
     restore();
   }
 });
+
+for (const includesReceipt of [false, true]) {
+  test(`returning to a private chat shows its confirmed background send once when history ${includesReceipt ? 'already includes it' : 'arrives stale'}`, async () => {
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+    const {doc, el, routes, agent, nativeThread, nativeRows, messages, restore} = fixture;
+    const scope = linkBase(linkWork);
+    const returning = Promise.withResolvers();
+    const sent = Promise.withResolvers();
+    const readPath = scope + linkNativeLatest;
+    const writePath = scope + linkNativePath + '/messages';
+    const chat = items => json(200, {agent, conversation:nativeThread, items, cursor:null});
+    let reads = 0;
+    let sendKey;
+    routes.set(readPath, () => ++reads === 1 ? chat(nativeRows) : returning.promise);
+    const fetcher = (path, options = {}) => {
+      if (path === writePath && options.method === 'POST') {
+        sendKey = options.headers['Idempotency-Key'];
+        return sent.promise;
+      }
+      return fixture.fetcher(path, options);
+    };
+    const click = id => fire(el('conversation-list'), 'click', {
+      target: sessionRows(el).find(row => row.dataset.conversation === id),
+    });
+    let returningView;
+    try {
+      await mount(doc, {fetcher});
+      await settle();
+      el('chat-body').value = 'This message was sent while switching chats';
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      assert.equal(el('chat-body').value, '');
+      assert.ok(sendKey);
+      await click(linkSocial);
+      assert.deepEqual(messages(), [linkSocialLatest]);
+      el('chat-body').value = 'The other conversation has its own draft';
+      await fire(el('chat-body'), 'input');
+      returningView = click(linkThread);
+      await settle();
+      assert.equal(reads, 2);
+      const saved = {workspace_id:linkWork, agent_id:linkAgent, conversation_id:linkThread, client_key:sendKey, status:'succeeded', created:20};
+      const message = {...saved, id:'c'.repeat(32), role:'user', body:'This message was sent while switching chats'};
+      const reply = {...saved, id:'d'.repeat(32), role:'assistant', body:'Confirmed reply'};
+      sent.resolve(json(200, {message, reply}));
+      await settle();
+      assert.deepEqual(messages(), [linkSocialLatest]);
+      const latestReply = {...reply, body:'Newer saved reply'};
+      returning.resolve(chat(includesReceipt ? [...nativeRows,message,latestReply] : nativeRows));
+      await returningView;
+      await settle();
+      assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest, message.id, reply.id]);
+      assert.equal(el('chat-body').value, '');
+      assert.equal(reads, 2);
+      assert.match(el('message-list').children.at(-1).children[1].textContent,
+        includesReceipt ? /Newer saved reply/ : /Confirmed reply/);
+      await click(linkSocial);
+      assert.equal(el('chat-body').value, 'The other conversation has its own draft');
+      assert.deepEqual(messages(), [linkSocialLatest]);
+    } finally {
+      sent.resolve(json(403, {}));
+      returning.resolve(chat(nativeRows));
+      await returningView;
+      await settle();
+      restore();
+    }
+  });
+}
 
 test('returning to a private chat fetches once and keeps the older scroll position until the user loads the update', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);

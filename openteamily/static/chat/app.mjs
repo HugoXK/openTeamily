@@ -9,6 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import { renderMarkdown } from '../memory/rich.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
@@ -341,10 +342,17 @@ export function meetingCallHrefInMessage(text, origin) {
   return '';
 }
 
-function renderMessageBody(doc, node, text, prefs) {
+function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
   const source = String(text || '');
-  // Bold markers are ours; everything else keeps the shared folding and link preview path.
-  if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
+  if (assistantReply && source.trim()) {
+    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews, (parent, value) => {
+      const markdown = doc.createElement('div');
+      markdown.className = 'chat-markdown';
+      renderMarkdown(doc, markdown, value);
+      parent.append(markdown);
+      return markdown;
+    });
+  } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
   const references = [
@@ -1646,6 +1654,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (!item.conversation_id || item.conversation_id === target.conversationId);
     return message?.role === 'user' && reply?.role === 'assistant' && scoped(message) && scoped(reply) && message.id !== reply.id
       ? {message, reply} : null;
+  }
+
+  function privateHistoryAfterSends(items, sends) {
+    if (!sends?.length) return items;
+    const delivered = new Map();
+    for (const {delivery} of sends) {
+      if (!delivery) continue;
+      delivered.set(delivery.message.id, delivery.message);
+      delivered.set(delivery.reply.id, delivery.reply);
+    }
+    if (!delivered.size) return items;
+    const reconciled = items.map(item => {
+      const receipt = delivered.get(item.id);
+      delivered.delete(item.id);
+      return receipt && waitingAgentReply(item) && !waitingAgentReply(receipt) ? receipt : item;
+    });
+    return [...reconciled, ...delivered.values()];
   }
 
   async function privateSendReceipt(target, key, current, accept = () => true, delays = [0, 350, 800]) {
@@ -3043,7 +3068,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
         : uiLabel('回复未完成。', 'The reply didn’t finish.');
     } else {
-      renderMessageBody(document, body, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item), chatPreferences);
+      renderMessageBody(document, body, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item), chatPreferences,
+        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded');
       if ((cancelled || item.attachments?.length) && !item.body) body.hidden = true;
     }
     if (waiting || failed || cancelled) bubble.dataset.state = item.status;
@@ -4744,7 +4770,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const body = document.createElement('div');
       body.className = 'body';
       if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
-      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
+      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences,
+        servedByDsbot && item.role === 'agent' && !item.retracted);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
@@ -6091,6 +6118,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readThreadReceipt = startupSnapshot ? 0 : privateThreadReceipt;
     const wid = workspaceId();
     const owner = currentUser;
+    // A send can finish after the returning read was taken and before it reaches this view.
+    const sends = servedByDsbot && !refresh
+      ? pendingSends.get(JSON.stringify([owner?.id, wid, 'agent', agentId, conversationId]))?.jobs.slice() : null;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
       && (!foreground || (foreground === foregroundPrivateRead && canRefreshForegroundPrivate()))
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
@@ -6166,18 +6196,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = conversation;
     renderStudioDiscussionSource(conversation.studio_source);
+    let items = privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
         readingHistory: !acknowledge};
       state.cursor = result.body.cursor ?? null;
+      if (sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+        items = items.slice(-Number(HISTORY_PAGE_SIZE));
+        state.cursor = items[0].id;
+      }
       setPrivateHistory(state);
     } else setPrivateHistory(null);
     publicDraft.enter(sendScope());
     renderAgentQuickStarts(detailAgent);
     if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
-    const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
+    const pending = renderAgentMessages(items, {followLatest: !refresh});
+    const finished = items.filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const read = request('POST', `${path}/read`,
         {message_id: finished[finished.length - 1].id}).then(acknowledged => {
@@ -9155,7 +9190,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
           }
-          if (nativePrivate && isCurrent() && currentConversation?.deferred && privateReplyPair(result.body, queue, job.key)) {
+          if (nativePrivate) job.delivery = privateReplyPair(result.body, queue, job.key);
+          if (job.delivery && isCurrent() && currentConversation?.deferred) {
             // The first message and reply are committed with the discussion.
             delete currentConversation.deferred;
           }
