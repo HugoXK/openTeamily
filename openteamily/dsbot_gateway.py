@@ -62,6 +62,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs/automation-results/[0-9a-f]{32}/[0-9a-f]{32}$'), 'team-runs'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/(?:team-runs/[0-9a-f]{32}/share|shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?)$'), 'shares'),
     (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
@@ -127,6 +128,7 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-templates { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs/automation-results/[0-9a-f]{32}/[0-9a-f]{32}$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?$ { return 418; }',
     'location = /v1/invites/accept { return 418; }',
     'location = /v1/invites/preview { return 418; }',
@@ -757,7 +759,7 @@ __DSBOT_LOCATIONS__
   error_page 401 = @ot_login;
   location @ot_login {
     if ($uri = /discover/) { rewrite ^ /_ot_discover_guest/discover last; }
-    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/comments[.]mjs)?$") {
+    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/(?:comments|document-reader)[.]mjs)?$") {
       rewrite ^ /_ot_discover_guest$uri last;
     }
 __GUEST_DISCOVER_FEEDS__

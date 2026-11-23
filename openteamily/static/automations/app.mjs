@@ -1118,6 +1118,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             nextFocus = [...exports.children].find(control => control.dataset.runControl === focusedControl) || nextFocus;
           }
           detail.appendChild(exports);
+          const follow = document.createElement('a');
+          follow.className = 'run-work-link';
+          follow.dataset.runControl = 'followup';
+          follow.href = '/team-runs#' + new URLSearchParams({
+            workspace:target.workspace, draft:'1', automation:target.automation, result:item.id,
+          });
+          follow.textContent = '发起后续任务';
+          if (restore && focusRow.dataset.runId === item.id && focusedControl === 'followup') nextFocus = follow;
+          detail.appendChild(follow);
         }
         const artifact = savedRunWork(item, target);
         const action = document.createElement(artifact ? 'a' : 'button');

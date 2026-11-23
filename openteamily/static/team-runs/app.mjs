@@ -22,7 +22,7 @@ const STEP_ERROR = {
   runtime_failed: '运行时未能完成此步骤。',
   workspace_unavailable: '运行时已失去对该工作区的访问权限。',
   source_changed: '共享结果已更新。请打开最新版并发起后续任务。',
-  source_unavailable: '无法读取引用的共享结果。',
+  source_unavailable: '无法读取引用的结果。',
 };
 const MUTATION_STATUS = {artifact: '已保存到作品库。', retry: '已提交重试。', cancel: '任务已取消。'};
 
@@ -31,22 +31,35 @@ export function teamRunTarget(hash = '') {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   const workspace = params.get('workspace'), run = params.get('run'), shared = params.get('shared'), draft = params.get('draft');
   const step = params.get('step');
+  const automation = params.get('automation'), result = params.get('result');
+  const handoff = automation !== null || result !== null;
   const selections = [run, shared, draft].filter(value => value !== null).length;
-  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections + Number(step !== null) ||
+  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections + Number(step !== null) + (handoff ? 2 : 0) ||
       (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared)) ||
       (step !== null && (!run || !/^[0-7]$/.test(step))) ||
-      (draft !== null && draft !== '1')) return {invalid: true};
+      (draft !== null && draft !== '1') ||
+      (handoff && (draft !== '1' || !ID.test(automation || '') || !ID.test(result || '')))) return {invalid: true};
   return {workspace, ...(run ? {run} : {}), ...(step !== null ? {step:Number(step)} : {}),
-    ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
+    ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {}),
+    ...(handoff ? {automationSource:{kind:'automation_run', automation_id:automation, run_id:result}} : {})};
 }
 
 function readSource(value) {
+  if (value?.kind === 'automation_run') {
+    if (typeof value.automation_id !== 'string' || !ID.test(value.automation_id) ||
+        typeof value.run_id !== 'string' || !ID.test(value.run_id)) return null;
+    return {kind:value.kind, automation_id:value.automation_id, run_id:value.run_id};
+  }
   if (!value || typeof value.id !== 'string' || !SHARED_ID.test(value.id) ||
       typeof value.version !== 'string' || !/^[a-f0-9]{64}$/.test(value.version) ||
       !Array.isArray(value.positions) || value.positions.length < 1 || value.positions.length > 3 ||
       value.positions.some(position => !Number.isInteger(position) || position < 0 || position > 7) ||
       new Set(value.positions).size !== value.positions.length) return null;
   return {id: value.id, version: value.version, positions: [...value.positions].sort((a, b) => a - b)};
+}
+
+function sameAutomationSource(left, right) {
+  return left?.kind === 'automation_run' && left.automation_id === right.automation_id && left.run_id === right.run_id;
 }
 
 export function teamRunPayload(draft, agents) {
@@ -201,6 +214,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const previewNodes = new Map();
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
   let linkedStep, focusLinkedStep = false;
+  let automationHandoff;
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
   let current, currentDraft, tasks = [], agents = [];
@@ -250,10 +264,13 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
 
-  function updateLocation(extra = {}) {
+  function updateLocation(extra = {}, {replace = false} = {}) {
     if (!workspace || !view?.history) return;
     const hash = '#' + new URLSearchParams({workspace, ...extra});
-    if (view.location.hash !== hash) view.history.pushState(null, '', hash);
+    if (view.location.hash !== hash) {
+      if (replace) view.history.replaceState(null, '', hash);
+      else view.history.pushState(null, '', hash);
+    }
   }
 
   function hydrateDraft() {
@@ -294,6 +311,15 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     else exportRun.href = pathFor() + '/' + run.id + '/export';
   }
 
+  function syncAutomationSourceLink(id, source) {
+    const link = node(id);
+    link.hidden = source?.kind !== 'automation_run';
+    if (link.hidden) link.removeAttribute('href');
+    else link.href = '/automations?' + new URLSearchParams({
+      workspace, automation:source.automation_id, run:source.run_id,
+    });
+  }
+
   function clearInaccessibleRunData() {
     current = null;
     tasks = [];
@@ -309,6 +335,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
+    syncAutomationSourceLink('team-run-detail-source');
     show('team-run-progress', '');
     shares.selectRun(null);
     shares.selectWorkspace(null);
@@ -319,6 +346,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     clearTimeout(timer);
     doing = '';
     detailId = id;
+    automationHandoff = null;
+    node('team-run-handoff').hidden = true;
     linkedStep = undefined;
     focusLinkedStep = false;
     current = null;
@@ -434,11 +463,57 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return 'opened';
   }
 
+  function adoptAutomationDraft(source, name) {
+    const draft = blankDraft();
+    draft.title = ('跟进 · ' + name).slice(0, LIMITS.title).toWellFormed();
+    draft.goal = '根据这次自动化运行的结果制定下一步行动计划。';
+    draft.steps[0].instruction = '核对运行结果，梳理待解决的问题和优先事项。';
+    draft.steps[1].instruction = '根据核对结果制定下一步行动计划，明确建议负责人和优先级。';
+    draft.steps[1].dependencies.add(draft.steps[0].key);
+    draft.source = source;
+    drafts.set(workspace, draft);
+    return showEditor({replaceAddress:true});
+  }
+
+  async function openAutomationDraft(source) {
+    void showList({address:false});
+    const target = scope();
+    automationHandoff = {source};
+    node('team-run-handoff').hidden = false;
+    node('team-run-handoff-continue').hidden = true;
+    node('team-run-handoff-replace').hidden = true;
+    node('team-run-handoff-retry').hidden = true;
+    show('team-run-handoff-status', '正在读取自动化运行…');
+    const path = pathFor() + '/automation-results/' + source.automation_id + '/' + source.run_id;
+    const result = await request('GET', path);
+    if (!active(target)) return;
+    if (result.status !== 200 || !sameAutomationSource(readSource(result.body.source), source) ||
+        typeof result.body.title !== 'string' || !result.body.title.trim()) {
+      const unavailable = [401, 403, 404, 409].includes(result.status);
+      show('team-run-handoff-status', unavailable ? '原运行已不可访问或没有可跟进的结果。' : '暂时无法读取原运行。', 'error');
+      node('team-run-handoff-retry').hidden = unavailable;
+      return;
+    }
+    const existing = drafts.get(workspace);
+    if (sameAutomationSource(existing?.source, source)) return showEditor({replaceAddress:true});
+    if (!hasDraftContent(existing) && !creates.has(workspace)) return adoptAutomationDraft(source, result.body.title);
+    automationHandoff = {source, title:result.body.title};
+    const pending = creates.has(workspace);
+    node('team-run-handoff-continue').hidden = false;
+    node('team-run-handoff-replace').hidden = pending;
+    show('team-run-handoff-status', pending ? '请先确认现有草稿的启动结果，再创建后续任务。'
+      : '这个工作区已有草稿。可以继续原草稿，或用此运行结果新建并替换草稿。');
+  }
+
   function renderDraftSource() {
-    const source = currentDraft.source;
+    const source = readSource(currentDraft.source);
     const container = node('team-run-source');
     container.hidden = !source;
-    if (source) show('team-run-source-status', `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
+    node('team-run-review-source').hidden = !source || source.kind === 'automation_run';
+    syncAutomationSourceLink('team-run-source-link', source);
+    if (source) show('team-run-source-status', source.kind === 'automation_run'
+      ? '已引用原自动化运行的结果摘要。开始运行后，由你选择的智能体处理。'
+      : `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
     node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : source ? '发起后续任务' : '新建任务';
   }
 
@@ -554,11 +629,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     renderDraft();
   }
 
-  function showEditor({address = true} = {}) {
+  function showEditor({address = true, replaceAddress = false} = {}) {
     if (!workspace) return;
     hydrateDraft();
     changeScreen('editor');
-    if (address) updateLocation({draft: '1'});
+    if (address) updateLocation({draft: '1'}, {replace:replaceAddress});
     if (!drafts.has(workspace)) drafts.set(workspace, blankDraft());
     currentDraft = drafts.get(workspace);
     title.value = currentDraft.title;
@@ -711,7 +786,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     remove.hidden = run.status === 'running';
     reuse.hidden = !REUSABLE.has(run.status);
     syncExport(run);
-    node('team-run-open-source').hidden = !readSource(run.source);
+    const source = readSource(run.source);
+    node('team-run-open-source').hidden = !source || source.kind === 'automation_run';
+    syncAutomationSourceLink('team-run-detail-source', source);
     cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
     if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
       const refocus = confirm.contains(document.activeElement);
@@ -889,6 +966,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       return;
     }
     hydrateDraft();
+    if (target.automationSource) return openAutomationDraft(target.automationSource);
     if (target.draft) return showEditor({address});
     if (target.run) return openDetail(target.run, null, {address, step:target.step});
     return showList({address: address && !target.shared, shared: target.shared});
@@ -979,7 +1057,18 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     persistDraft();
   });
   node('team-run-review-source').addEventListener('click', () => {
-    if (currentDraft?.source) showList({shared: currentDraft.source.id});
+    if (currentDraft?.source?.id) showList({shared: currentDraft.source.id});
+  });
+  node('team-run-handoff-continue').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.title) return showEditor({replaceAddress:true});
+  });
+  node('team-run-handoff-replace').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.title && !creates.has(workspace)) {
+      return adoptAutomationDraft(automationHandoff.source, automationHandoff.title);
+    }
+  });
+  node('team-run-handoff-retry').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.source) return openAutomationDraft(automationHandoff.source);
   });
   node('team-run-remove-source').addEventListener('click', () => {
     if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.source) return;
@@ -1013,7 +1102,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   reuse.addEventListener('click', () => reuseRun());
   node('team-run-open-source').addEventListener('click', () => {
     const source = readSource(current?.source);
-    if (source) showList({shared: source.id});
+    if (source?.id) showList({shared: source.id});
   });
   node('team-run-keep').addEventListener('click', () => hideQuestion(true));
   node('team-run-confirm-action').addEventListener('click', () => {
