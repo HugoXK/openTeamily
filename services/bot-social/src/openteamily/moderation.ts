@@ -134,6 +134,20 @@ function reviewerTeam(ot: OtContext, raw: unknown, ownerId: string) {
   return { workspaceId, teamId: team.id as string, role };
 }
 
+// Who a report's target belongs to, when this deployment stores the target itself. A report
+// may name a person (owner id, handle, handle.home or platform user id) or a piece of content;
+// either way its author never reviews it. Targets this deployment does not hold (imported or
+// opaque ids) get null and keep the pre-existing behaviour instead of being blocked here.
+function reportAuthor(ot: OtContext, targetType: string, targetId: string): string | null {
+  if (targetType === "user") {
+    try { return ot.ownerByHandle(targetId); } catch { return null; }
+  }
+  if (targetType === "message") return ot.get<any>("SELECT author_id FROM ot_messages WHERE id = ?", targetId)?.author_id ?? null;
+  if (targetType === "comment") return ot.get<any>("SELECT owner_id FROM ot_work_comments WHERE id = ?", targetId)?.owner_id ?? null;
+  if (targetType === "work") return ot.get<any>("SELECT owner_id FROM ot_listings WHERE id = ?", targetId)?.owner_id ?? null;
+  return null;
+}
+
 export function registerModeration(app: FastifyInstance, ot: OtContext) {
   // ---- blocks: directional and owner-global, so a block holds across every workspace
   app.get("/v1/ot/blocks", async (req) => {
@@ -242,10 +256,13 @@ export function registerModeration(app: FastifyInstance, ot: OtContext) {
     return ot.tx(() => {
       const row = ot.get<any>("SELECT * FROM content_reports WHERE workspace_id = ? AND id = ?", workspaceId, reportId);
       assert(row, 404, "not_found", "report not found");
-      // A reviewer never settles a complaint about themselves. The owner is the workspace's
-      // accountable reviewer, so only an admin is barred from clearing a report they filed;
-      // the owner's own filings still need the owner, or the queue would never drain.
-      assert(row.target_type !== "user" || row.target_id !== me.ownerId, 403, "forbidden", "you cannot resolve a report about yourself");
+      // A reviewer never settles a complaint about themselves or about content they wrote —
+      // no owner exemption there, because such a row's reporter is someone else and the
+      // self-review would be invisible to the reporter = reviewer check below. The owner is
+      // the workspace's accountable reviewer, so only an admin is barred from clearing a
+      // report they filed; the owner's own filings still need the owner, or the queue would
+      // never drain.
+      assert(reportAuthor(ot, row.target_type, row.target_id) !== me.ownerId, 403, "forbidden", "you cannot resolve a report about yourself");
       assert(row.reporter_id !== me.ownerId || role === "owner", 403, "forbidden", "you cannot resolve a report you filed");
       if (row.status !== "pending") {
         assert(row.status === status, 409, "conflict", "report is already resolved");

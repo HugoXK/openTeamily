@@ -292,3 +292,62 @@ test("no reviewer settles a complaint they filed, and a reported user cannot cle
   const finalWord = await A.ok("POST", `${url}/${aboutB.id}/resolve`, { status: "actioned", resolution: "Removed the message.", action: "remove" });
   assert.equal(finalWord.reviewer_id, await me(A));
 });
+
+test("no reviewer settles a report about content they wrote, and normal cases still clear", async () => {
+  const A = await home(S.base, "modautha");
+  const B = await home(S.base, "modauthb");
+  const C = await home(S.base, "modauthc");
+  const ws = await workspace(A, "modauth");
+  const url = wsBase(ws);
+  await join(A, ws, B);
+  await join(A, ws, C);
+  await A.ok("PATCH", `/v1/ot/teams/${ws.id}/members/${B.handle}`, { role: "admin" });
+  const room = await A.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Moderation room", team_id: ws.id, members: [B.handle, C.handle],
+  });
+  const post = async (who: Home, body: string) =>
+    (await who.ok("POST", `/v1/ot/conversations/${room.id}/messages`, { body })).id as string;
+  const bMsg = await post(B, "B's message");
+  const aMsg = await post(A, "A's message");
+  const cMsg = await post(C, "C's message");
+  const platform = "b".repeat(32);
+  S.platform.db.prepare("UPDATE ot_profiles SET platform_user_id = ? WHERE owner_id = ?").run(platform, await me(B));
+
+  const aboutB = await C.ok("POST", url, { target_type: "message", target_id: bMsg, reason: "spam" });
+  const aboutA = await C.ok("POST", url, { target_type: "message", target_id: aMsg, reason: "spam" });
+  const byHandle = await C.ok("POST", url, { target_type: "user", target_id: B.handle, reason: "harassment" });
+  const byPlatform = await C.ok("POST", url, { target_type: "user", target_id: platform, reason: "harassment" });
+  const aboutC = await C.ok("POST", url, { target_type: "message", target_id: cMsg, reason: "spam" });
+
+  assert.deepEqual({
+    admin_own_message: (await B.call("POST", `${url}/${aboutB.id}/resolve`, { status: "dismissed" })).status,
+    owner_own_message: (await A.call("POST", `${url}/${aboutA.id}/resolve`, { status: "dismissed" })).status,
+    handle_target: (await B.call("POST", `${url}/${byHandle.id}/resolve`, { status: "dismissed" })).status,
+    platform_target: (await B.call("POST", `${url}/${byPlatform.id}/resolve`, { status: "dismissed" })).status,
+  }, { admin_own_message: 403, owner_own_message: 403, handle_target: 403, platform_target: 403 },
+  "a reviewer never settles a report about themselves or about content they wrote, whether the target is a message id, a handle or a platform user id");
+  for (const report of [aboutB, aboutA, byHandle, byPlatform]) {
+    assert.equal((await A.ok("GET", `${url}/${report.id}`)).status, "pending");
+  }
+
+  const cleared = await A.ok("POST", `${url}/${aboutC.id}/resolve`, { status: "actioned", resolution: "Removed.", action: "remove" });
+  assert.equal(cleared.status, "actioned", "an unrelated author's message still clears");
+  assert.equal((await B.ok("POST", `${url}/${aboutC.id}/resolve`, { status: "actioned", resolution: "Removed.", action: "remove" })).status, "actioned",
+    "resolving the same report with the same status is idempotent");
+  assert.equal((await B.call("POST", `${url}/${aboutC.id}/resolve`, { status: "dismissed" })).status, 409,
+    "a different status on a settled report conflicts");
+});
+
+test("the owner exemption is pinned: own filing clears, author self-review does not", async () => {
+  const A = await home(S.base, "modpina");
+  const B = await home(S.base, "modpinb");
+  const ws = await workspace(A, "modpin");
+  const url = wsBase(ws);
+  await join(A, ws, B);
+  const own = await A.ok("POST", url, { target_type: "message", target_id: "message-9999", reason: "spam" });
+  assert.equal((await A.ok("POST", `${url}/${own.id}/resolve`, { status: "dismissed" })).reviewer_id, await me(A),
+    "the owner may clear a report they filed");
+  const other = await A.ok("POST", url, { target_type: "message", target_id: "message-9998", reason: "spam" });
+  assert.equal((await B.call("POST", `${url}/${other.id}/resolve`, { status: "dismissed" })).status, 403,
+    "a plain member is not a reviewer");
+});

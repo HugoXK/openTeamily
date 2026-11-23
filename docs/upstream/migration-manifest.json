@@ -2256,16 +2256,16 @@
       "path": "src/openteamily/moderation.ts",
       "reason": "OpenTeamily-authored addition (MIT): blocks, reports and the moderation queue, stored in Bot Social (#587).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "dd1c08214bd971ce514891778592e467b8710ae8aeb2f19c906aecf3f89777c3",
-      "bytes": 14498
+      "new_sha256": "c31c357e6cab7538081206785f8ce9b2fa7e5b09e2453ab2f564793acfaed3ae",
+      "bytes": 15692
     },
     "services/bot-social/test/ot_moderation.test.ts": {
       "destination": "services/bot-social",
       "path": "test/ot_moderation.test.ts",
       "reason": "OpenTeamily-authored addition (MIT): blocks, reports and the moderation queue, stored in Bot Social (#587).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "f176df8094d1be13cca80b382b97259e21bf7fc38535d8e43684650fded1828d",
-      "bytes": 16529
+      "new_sha256": "ed77bde9a41cc0ee6aec30d6b38f6dd1d20ac8c1d6921d50a68c302e443bc0a8",
+      "bytes": 20395
     }
   },
   "core_fork_removed": {
