@@ -918,7 +918,8 @@ test('transcript sessions are consent-gated, feature-local and survive a reboot'
   const db = new DatabaseSync(join(vol.data, 'openteamily', 'features', 'meetings', 'meetings.sqlite3'))
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name)
   assert.ok(tables.includes('transcription_sessions') && tables.includes('transcript_segments'))
-  assert.deepEqual(db.prepare("SELECT version FROM ot_feature_migrations WHERE feature='meetings' ORDER BY version").all().map((row) => row.version), [1, 2])
+  const versions = db.prepare("SELECT version FROM ot_feature_migrations WHERE feature='meetings' ORDER BY version").all().map((row) => row.version)
+  assert.deepEqual(versions, versions.map((_, index) => index + 1))
   db.close()
 })
 

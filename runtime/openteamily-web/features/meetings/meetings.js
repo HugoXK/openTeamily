@@ -551,7 +551,7 @@ export function search(store, needle, limit) {
 export const spec = {
   name: 'meetings',
   pages: ['meetings'],
-  migrations: [...transcriptionMigrations, `CREATE TABLE IF NOT EXISTS meetings (
+  migrations: [`CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, title_hash TEXT NOT NULL,
     started_at INTEGER NOT NULL, attendees TEXT NOT NULL, transcript TEXT NOT NULL, summary TEXT NOT NULL,
     action_items TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1), created INTEGER NOT NULL,
@@ -568,7 +568,8 @@ export const spec = {
     CREATE INDEX IF NOT EXISTS meeting_draft_queue ON meeting_draft_jobs(state, created, id);
     CREATE TRIGGER IF NOT EXISTS meeting_draft_revision_changed AFTER UPDATE OF revision ON meetings
       WHEN OLD.revision <> NEW.revision BEGIN DELETE FROM meeting_draft_jobs WHERE meeting_id=OLD.id; END;`,
-    "UPDATE meetings SET title_hash='call:' || source_call_id WHERE source_call_id IS NOT NULL"],
+    "UPDATE meetings SET title_hash='call:' || source_call_id WHERE source_call_id IS NOT NULL",
+    ...transcriptionMigrations],
   endpoints({store, host}) {
     store.run(`UPDATE meeting_draft_jobs SET state='failed',error='DS-Bot 已重启。请重新生成纪要。'
       WHERE state IN ('queued','running')`)
