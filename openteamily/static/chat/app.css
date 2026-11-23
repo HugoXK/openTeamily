@@ -1679,7 +1679,7 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
   color: var(--ot-ink);
 }
 .attachment-search-jump.search-hit:hover,
-.attachment-search-jump.search-hit[aria-current="true"] { background: var(--ot-surface-2); }
+#conversation-search-results .search-hit[aria-current="true"] { background: var(--ot-surface-2); }
 .chat-file[data-attachment-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
 .attachment-search-jump .search-hit-avatar { align-self: center; border-radius: .45rem; }
 .attachment-search-jump .search-hit-head,
@@ -2783,6 +2783,28 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: .5rem;
+  min-height: 0;
+  padding: .375rem .625rem;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+  box-shadow: none;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .role {
+  grid-area: 1 / 1;
+  margin: 0;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .group-reply-state {
+  grid-area: 2 / 1;
+}
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] > .group-reply-retry {
+  grid-area: 1 / 2 / span 2;
+  margin: 0;
 }
 #message-list > .group-reply-job[hidden],
 #message-list > .group-reply-thinking > :not(.group-reply-state) { display: none; }

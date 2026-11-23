@@ -291,13 +291,15 @@ test('late graph and action responses cannot replace the new workspace panels', 
   checkNew();
 });
 
-test('a late page save keeps the newly opened editor and its draft', async () => {
+test('a page save with a lost receipt reconciles without changing a newly opened editor or its draft', async () => {
   const {doc, el} = fakeDocument();
   const save = Promise.withResolvers();
-  const first = {id:'pg-1', title:'项目简报', body:'第一份约定', topics:[], revision:1, updated:20};
-  const second = {id:'pg-2', title:'运维手册', body:'第二份约定', topics:[], revision:1, updated:10};
+  const first = {id:'pg-1', workspace_id:'ws-1', title:'项目简报', body:'第一份约定', topics:[], revision:1, updated:20};
+  const second = {id:'pg-2', workspace_id:'ws-1', title:'运维手册', body:'第二份约定', topics:[], revision:1, updated:10};
   const fallback = graphFetcher(twoNodes);
   const requests = [];
+  let firstServerPage = first;
+  let firstReads = 0;
   mount(doc,{fetcher:async (path, options={}) => {
     const plain = path.split('?')[0];
     if (plain.endsWith('/memory')) return json(200,{items:[first,second],cursor:null,total:2});
@@ -305,7 +307,10 @@ test('a late page save keeps the newly opened editor and its draft', async () =>
       requests.push(JSON.parse(options.body));
       return save.promise;
     }
-    if (plain.endsWith('/memory/pg-1')) return json(200,{page:first});
+    if (plain.endsWith('/memory/pg-1')) {
+      firstReads += 1;
+      return json(200,{page:firstServerPage});
+    }
     if (plain.endsWith('/memory/pg-2')) return json(200,{page:second});
     return fallback(path,options);
   }});
@@ -318,8 +323,10 @@ test('a late page save keeps the newly opened editor and its draft', async () =>
   assert.equal(requests[0].changes.body,'已提交的改动');
   await openRecent(1);
   form.elements.body.value = '另一页的新草稿';
-  save.resolve(json(200,{page:{...first,body:'已提交的改动',revision:2}}));
+  firstServerPage = {...first,body:'已提交的改动',revision:2};
+  save.resolve(json(503,{}));
   await saving;
+  assert.equal(firstReads,2);
   assert.equal(form.elements.title.value,second.title);
   assert.equal(form.elements.body.value,'另一页的新草稿');
   assert.match(el('editor-meta').textContent,/修订 1/);

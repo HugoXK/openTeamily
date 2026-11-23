@@ -88,6 +88,7 @@ export function apply(ctx, config = {}) {
       bridge.requireModel(botId)
       return runTurn(rt, ctx, botId, text, requestId, undefined, parts, {
         sessionId, onProgress: options.onProgress, onPhase: options.onPhase, signal: options.signal,
+        managedGroup: options.managedGroup,
       })
     }, botId)
     const readNativeAttachment = async file => {

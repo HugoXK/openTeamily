@@ -11,7 +11,15 @@ import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
-import {directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
+import {agentDirectoryHref, directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
+
+test('Agent directory links preserve the native workspace and optional exact agent', () => {
+  const workspace = 'a'.repeat(32);
+  const agent = 'b'.repeat(32);
+  assert.equal(agentDirectoryHref(workspace, agent), `/agents#workspace=${workspace}&agent=${agent}`);
+  assert.equal(agentDirectoryHref(workspace, 'invalid'), `/agents#workspace=${workspace}`);
+  assert.equal(agentDirectoryHref('invalid', agent), '/agents');
+});
 
 test('group mention feedback counts only eligible human members addressed outside literal text', () => {
   const members = [
@@ -3291,14 +3299,20 @@ test('social history pages both ways from a searched window without acknowledgin
 
 test('in-chat search keeps an unavailable result open and clears the phone drawer for a real jump', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
+  const back = doc.createElement('button');
+  el('conversation-search-return').append(back);
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow:true});
+  let searchReads = 0;
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/messages?q=')) return json(200, {items:[
-        {id:'jump-loaded', body:'Find me', user_id:alice, created:1767225600},
-        {id:'not-loaded', body:'Earlier message', user_id:bob, created:1767225200},
-      ],cursor:null});
+      if (path.includes('/messages?q=')) {
+        searchReads += 1;
+        return json(200, {items:[
+          {id:'jump-loaded', body:'Find me', user_id:alice, created:1767225600},
+          {id:'not-loaded', body:'Earlier message', user_id:bob, created:1767225200},
+        ],cursor:null});
+      }
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
@@ -3322,11 +3336,20 @@ test('in-chat search keeps an unavailable result open and clears the phone drawe
     await fire(el('conversation-search-close'), 'click');
     assert.equal(el('message-scroller').scrollTop, 41);
     await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-results').scrollTop = 36;
     await fire(el('conversation-search-results').children[0].children[0], 'click');
     assert.equal(sheetWasClosedOnScroll, true);
     assert.equal(target.dataset.searchJump, 'true');
     assert.equal(target.focused, true);
     assert.equal(el('conversation-search-open').getAttribute('aria-expanded'), 'false');
+    assert.equal(el('conversation-search-return').hidden, false);
+    assert.equal(back.textContent, '返回消息结果');
+    await fire(back, 'click');
+    assert.equal(el('conversation-search-results').children[0].children[0], hits[0]);
+    assert.equal(el('conversation-search-results').scrollTop, 36);
+    assert.equal(hits[0].getAttribute('aria-current'), 'true');
+    assert.equal(hits[0].focused, true);
+    assert.equal(searchReads, 1);
   } finally {restore();}
 });
 

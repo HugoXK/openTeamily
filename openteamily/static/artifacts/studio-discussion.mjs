@@ -123,12 +123,23 @@ export function mountStudioDiscussion(document, {request, source, openChat}) {
         return;
       }
       const scope = [owner, workspace, saved.id, saved.revision, personal.id, agent].join('/');
+      const source = {workspace_id:workspace, document_id:saved.id, revision:saved.revision};
       const opened = await request('POST', `/v1/workspaces/${personal.id}/agents/${agent}/conversations`,
-        {title:'团队文档讨论', memory_recall:false}, {headers:{'Idempotency-Key':retryKey(scope)},signal});
+        {title:'团队文档讨论', memory_recall:false, studio_source:source}, {headers:{'Idempotency-Key':retryKey(scope)},signal});
       if (target !== operation) return;
       const thread = opened.body.conversation;
+      if (opened.status === 409 && opened.body.error?.code === 'studio_revision_changed') {
+        status.textContent = versionChanged;
+        return;
+      }
+      if (opened.status === 404) {
+        status.textContent = '无法读取团队文档，请确认访问权限后重试。';
+        return;
+      }
       if (![200, 201].includes(opened.status) || !ID.test(thread?.id || '') ||
-          thread.workspace_id !== personal.id || thread.agent_id !== agent) {
+          thread.workspace_id !== personal.id || thread.agent_id !== agent ||
+          thread.studio_source?.workspace_id !== workspace || thread.studio_source.document_id !== saved.id ||
+          thread.studio_source.revision !== saved.revision) {
         status.textContent = '未能确认私人对话已创建，请重试。';
         return;
       }

@@ -1776,6 +1776,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const draftDetails = document.getElementById('memory-page-draft-details');
   const draftCopy = document.getElementById('memory-page-draft-copy');
   const draftDiscard = document.getElementById('memory-page-draft-discard');
+  const savePageButton = document.getElementById('save-page');
+  const savingPages = new Set();
   let draftTimer;
 
   function pageDraftKey(page = currentPage, owner = currentUser) {
@@ -1798,6 +1800,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try { document.defaultView.sessionStorage.removeItem(key); } catch {}
   }
 
+  function writePageDraft(key, {title, body, topics}, revision) {
+    try { document.defaultView.sessionStorage.setItem(key, JSON.stringify({title, body, topics, revision})); } catch {}
+  }
+
+  function syncPageSaveButton() {
+    if (!savePageButton) return;
+    const saving = savingPages.has(pageDraftKey());
+    savePageButton.disabled = saving;
+    savePageButton.textContent = saving ? '正在保存…' : '保存';
+  }
+
   function editorFields() {
     syncBodyFromRich();
     const {title, body, topics} = editor.elements;
@@ -1809,8 +1822,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function pageMatchesDraft(page, draft) {
+    const savedTopics = new Set(page.topics || []);
+    const topics = parseTopics(draft.topics);
     return page.title === draft.title.trim() && (page.body || '') === draft.body &&
-      formatTopics(page.topics) === formatTopics(parseTopics(draft.topics));
+      savedTopics.size === topics.length && topics.every(topic => savedTopics.has(topic));
   }
 
   function fillEditorFields(fields) {
@@ -1860,11 +1875,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (entry && entry.revision !== currentPage.revision) return;
     if (pageMatchesDraft(currentPage, fields)) {
       clearPageDraft(key);
-    } else {
-      try {
-        document.defaultView.sessionStorage.setItem(key, JSON.stringify({...fields, revision: currentPage.revision}));
-      } catch {}
-    }
+    } else writePageDraft(key, fields, currentPage.revision);
     // Leave an expanded revision-conflict preview alone while the user copies it.
     if (!draftDetails?.open) showPageDraft();
   }
@@ -2289,6 +2300,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyPageToEditor(page) {
     currentPage = page;
+    syncPageSaveButton();
     fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
       `修订 ${page.revision} · 作者 ${page.created_by} · 最近更新 ${page.updated_by}`;
@@ -3026,43 +3038,75 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const id = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!id || !editing) return;
     const key = pageDraftKey(editing, owner);
+    if (!id || !editing || !key || editor.hidden || savingPages.has(key)) return;
     const submitted = editorFields();
     persistPageDraft();
-    const saved = await request('POST', `/v1/workspaces/${id}/memory/${editing.id}`, {
-      revision: editing.revision,
-      changes: {
-        ...submitted,
-        topics: parseTopics(submitted.topics),
-      },
-    }).catch(() => ({status:0, body:{}}));
-    const page = saved.body.page;
-    if (saved.status === 200 && page) {
-      const entry = pageDraft(key);
-      if (entry && (pageMatchesDraft(page, entry) || (entry.revision === editing.revision && sameFields(entry, submitted)))) {
-        clearPageDraft(key);
+    if (pageMatchesDraft(editing, submitted)) { show('ok', '已保存。'); return; }
+
+    const path = `/v1/workspaces/${id}/memory/${editing.id}`;
+    const sameOwner = () => currentUser?.id === owner.id;
+    const visiblePage = () => sameOwner() && workspaceId() === id && !editor.hidden &&
+      currentPage?.id === editing.id && currentPage.revision === editing.revision;
+    const exactPage = page => page?.id === editing.id && page.workspace_id === id &&
+      Number.isSafeInteger(page.revision) && page.revision >= editing.revision;
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    savingPages.add(key);
+    syncPageSaveButton();
+    let saved, page, confirmed, uncertain;
+    try {
+      saved = await request('POST', path, {
+        revision: editing.revision, changes:{...submitted, topics:parseTopics(submitted.topics)},
+      }, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      page = saved.body?.page;
+      confirmed = saved.status === 200 && exactPage(page) && pageMatchesDraft(page, submitted);
+      uncertain = saved.status === 0 || saved.status === 408 || saved.status >= 500 || (saved.status === 200 && !confirmed);
+      if (!confirmed && sameOwner() && (uncertain || saved.status === 409)) {
+        const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+        page = checked.status === 200 && exactPage(checked.body?.page) ? checked.body.page : null;
+        confirmed = Boolean(page && page.revision > editing.revision && pageMatchesDraft(page, submitted));
       }
+    } finally {
+      savingPages.delete(key);
+      syncPageSaveButton();
     }
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (saved.status !== 200 || !page) {
-      if (currentPage === editing) show('error', messageFor(saved.body.error, '无法保存记忆页。'));
+
+    if (!sameOwner()) return;
+    const visible = visiblePage();
+    if (confirmed && !visible) {
+      const entry = pageDraft(key);
+      if (entry?.revision === editing.revision) {
+        if (pageMatchesDraft(page, entry)) clearPageDraft(key);
+        else writePageDraft(key, entry, page.revision);
+      }
+      if (workspaceId() === id) {
+        rememberPage(page);
+        void loadGraph();
+      }
       return;
     }
-    if (currentPage !== editing) {
-      rememberPage(saved.body.page);
-      void loadGraph();
+    if (!visible) return;
+    if (!confirmed) {
+      if (page && exactPage(page) && page.revision > editing.revision && (uncertain || saved.status === 409)) {
+        persistPageDraft();
+        applyPageToEditor(page);
+        showPageDraft();
+        syncPageUrl();
+        closeDeleteConfirm({restoreFocus: false});
+        closePageHistory({restoreFocus: false});
+        rememberPage(page);
+        void loadGraph();
+        show('note', '此页已在别处更新，旧草稿已保留。');
+      } else if (uncertain) show('note', '尚未确认保存，草稿已保留。');
+      else show('error', messageFor(saved.body?.error, '无法保存记忆页。'));
       return;
     }
+
     closeDeleteConfirm({restoreFocus: false});
     const fields = editorFields();
+    if (pageDraft(key)?.revision === editing.revision) clearPageDraft(key);
     currentPage = page;
-    if (sameFields(fields, submitted)) {
-      fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
-    } else {
-      const entry = pageDraft(key);
-      if (entry?.revision === editing.revision && sameFields(entry, fields)) clearPageDraft(key);
-    }
+    if (sameFields(fields, submitted)) fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     persistPageDraft();
     updatePageSaveHint(page, !pageMatchesDraft(page, editorFields()));
     if (!historySelection) syncPageUrl();
@@ -3072,10 +3116,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
 
-    await loadGraph();
-    if (workspaceId() !== id || currentUser !== owner || currentPage !== saved.body.page) return;
-    if (historyPanel && !historyPanel.hidden) await loadPageHistory();
     show('ok', '已保存。');
+    void loadGraph();
+    if (historyPanel && !historyPanel.hidden) void loadPageHistory();
   });
 
   const deleteParts = {

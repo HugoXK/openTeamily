@@ -302,6 +302,12 @@ export function artifactOrigin(item, workspace) {
       ? '/automations?' + new URLSearchParams({workspace, automation: source.automation_id, run: source.id}) : '';
     return {kind: '自动化运行', title: source.automation_title || '', label: '查看原运行', href};
   }
+  if (source.kind === 'team_run_step') {
+    const step = source.position;
+    const href = scoped && CATALOG_CURSOR.test(source.id || '') && Number.isInteger(step) && step >= 0 && step < 8
+      ? '/team-runs#' + new URLSearchParams({workspace,run:source.id,step}) : '';
+    return {kind:'团队任务', title:source.run_title || '', label:'查看来源步骤', href};
+  }
   if (source.kind === 'agent_message') {
     const {conversation_id: id, agent_id, id: message_id} = source;
     const href = scoped && chatPathId(id) && chatPathId(message_id) && (!agent_id || CATALOG_CURSOR.test(agent_id))

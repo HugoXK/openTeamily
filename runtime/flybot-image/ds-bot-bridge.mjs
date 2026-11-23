@@ -252,7 +252,7 @@ export async function prepareNativeChat(rt, botId, sessionId) {
 
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId, signal } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId, signal, managedGroup = false } = {}) {
   if (signal?.aborted) return Promise.reject(signal.reason)
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
   if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
@@ -288,6 +288,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
       else complete()
     }
     const timer = setTimeout(() => finish(new Error('DS-Bot turn timed out')), timeoutMs)
+    const emptyReply = () => Object.assign(new Error('DS-Bot turn ended without a reply'), {code:'agents/empty-reply'})
     function cancelNative() {
       if (settled || stopping || !boundSession || boundTurn === undefined) return
       const session = boundSession, turn = boundTurn
@@ -352,9 +353,13 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
         }
         if (event.type === 'turn/end') {
           if (signal?.aborted) { finish(signal.reason); return }
+          const reason = event.data?.reason
+          const disposed = reason?.kind === 'aborted' && reason.reason?.kind === 'disposed'
+          if (managedGroup && disposed) { finish(emptyReply()); return }
           const reply = parts.join('\n\n').trim()
           if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
-          else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
+          else if (event.data?.error || (managedGroup && reason && reason.kind !== 'completed')) finish(new Error('DS-Bot turn failed'))
+          else finish(emptyReply())
         }
       }))
       if (progress || typeof onPhase === 'function') {
@@ -383,7 +388,9 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           }
         }, { global: true }))
         listeners.push(ctx.on('agent/disposed', ({ agent }) => {
-          if (agent === lastAgent && !settled) {
+          if (managedGroup && boundSession && agent?.id === sessionId && agent.session === boundSession && !settled) {
+            finish(signal?.aborted ? signal.reason : emptyReply())
+          } else if (agent === lastAgent && !settled) {
             resetTurn()
             observedTurn = undefined
             observedSession = undefined

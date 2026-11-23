@@ -349,6 +349,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.voice.send": ["发送语音", "Send voice message"],
   "chat.files.pending": ["待发送附件", "Pending attachments"],
   "chat.search.back_to_attachments": ["返回附件结果", "Back to attachment results"],
+  "chat.search.back_to_messages": ["返回消息结果", "Back to message results"],
   "chat.compose.tools_label": ["输入工具", "Composer tools"],
   "chat.memory.select_attach": ["选择真实记忆内容，检查后附加到输入框", "Review saved memory and add it to the composer"],
   "chat.format.help": ["格式：把选中的字加粗", "Format selected text in bold"],

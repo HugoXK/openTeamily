@@ -5,11 +5,11 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, remixPublicWork, search, uniqueTitle, view } from './library.js'
+import { attachTeamRunSource, createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, remixPublicWork, search, uniqueTitle, view } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, TITLE_MAX, validBody, validTitle } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, sourceView, TITLE_MAX, validBody, validTitle } from './model.js'
 import { sniffMime } from './render.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
@@ -131,16 +131,46 @@ export default defineFeature({
     },
     async savedTeamRunWorks(input, call) {
       if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
-      const {workspace_id: workspace, run_id: run, positions} = input ?? {}
+      const {workspace_id: workspace, run_id: run, positions, run_title, output_hashes} = input ?? {}
       if (![workspace, run].every(id => typeof id === 'string' && HEX32.test(id)) ||
           !Array.isArray(positions) || !positions.length || positions.length > 8 ||
           positions.some(position => !Number.isInteger(position) || position < 0 || position >= 8)) {
         refuse(400, 'invalid', 'Invalid team run work request')
       }
       const keys = new Map(positions.map(position => [digest('artifact:' + teamRunWorkKey(run, position)), position]))
-      const rows = ctx.store.all(`SELECT id, key_hash FROM artifacts WHERE workspace_id=? AND kind='document'
-        AND key_hash IN (${[...keys].map(() => '?').join(',')})`, workspace, ...keys.keys())
+      const rows = ctx.store.all(`SELECT a.id, a.key_hash, s.artifact_id AS linked FROM artifacts a
+        LEFT JOIN artifact_team_run_sources s ON s.artifact_id=a.id AND s.workspace_id=a.workspace_id
+        WHERE a.workspace_id=? AND a.kind='document' AND a.key_hash IN (${[...keys].map(() => '?').join(',')})`, workspace, ...keys.keys())
+      if (validTitle(run_title) && Array.isArray(output_hashes) && output_hashes.length === positions.length) {
+        const hashes = new Map(positions.map((position, index) => [position, output_hashes[index]]))
+        // Older saves already have the receipt key. Only restore provenance if
+        // the original saved version also matches the owning run's output.
+        for (const row of rows) {
+          const position = keys.get(row.key_hash)
+          if (row.linked || !/^[0-9a-f]{64}$/.test(hashes.get(position) || '')) continue
+          const saved = load(ctx.store, workspace, row.id)
+          if (!saved || sourceView(saved) || publicKind(saved) !== 'document') continue
+          const initial = ctx.store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)
+          if (typeof initial?.body === 'string' && digest(initial.body) === hashes.get(position)) {
+            attachTeamRunSource(ctx.store, row.id, workspace, {id:run,position,run_title})
+          }
+        }
+      }
       return {items: rows.map(row => ({position: keys.get(row.key_hash), id: row.id}))}
+    },
+    async saveTeamRunWork(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, run_id, run_title, position, body} = input ?? {}
+      if (![workspace, run_id].every(id => typeof id === 'string' && HEX32.test(id)) || !validTitle(run_title) ||
+          !Number.isInteger(position) || position < 0 || position >= 8 || !validBody(body) || !body.trim()) {
+        refuse(400, 'invalid', 'Invalid team run result')
+      }
+      const key = teamRunWorkKey(run_id, position)
+      const base = `${run_title} · 第 ${position + 1} 步`.slice(0, TITLE_MAX).toWellFormed()
+      const title = uniqueTitle(ctx.store, workspace, base, key)
+      const source = {kind:'team_run_step', id:run_id, position, run_title}
+      const result = createArtifact(ctx, workspace, {kind:'document', title, body, source}, key, {reuseSource:true})
+      return {status:result.status, artifact:result.body.artifact}
     },
     async savedAutomationWorks(input, call) {
       if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')

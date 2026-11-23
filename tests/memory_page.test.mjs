@@ -775,7 +775,7 @@ function citationFixture({versionStatus = 200, pageStatus = 200} = {}) {
   const {doc, el} = fakeMemoryDocument(memoryHtml);
   const calls = [];
   const path = `/v1/workspaces/${citedWorkspace}/memory/${citedPage}`;
-  const page = {...memoryPage(citedPage, '当前标题'), revision: 2};
+  const page = {...memoryPage(citedPage, '当前标题'), workspace_id: citedWorkspace, revision: 2};
   const version = {title: '原始标题', revision: 1, body: '<img src=evil> 原始内容'};
   const location = {pathname: '/memory', search: citationQuery};
   doc.defaultView = {location, history: {replaceState(_state, _title, url) {location.search = new URL(url, 'https://fixture.invalid').search;}}};
@@ -790,7 +790,9 @@ function citationFixture({versionStatus = 200, pageStatus = 200} = {}) {
     if (url === '/v1/settings') return jsonResponse(200, {settings: {values: {}}});
     if (url.startsWith('/v1/workspaces') && !url.startsWith('/v1/workspaces/')) return jsonResponse(200, {items: [{id: citedWorkspace, name: '来源空间'}]});
     if (url === path + '/versions/1') return jsonResponse(versionStatus, versionStatus === 200 ? {version, current: 2} : {});
-    if (url === path && options.method === 'POST') return jsonResponse(200, {page: {...page, revision: 3}});
+    if (url === path && options.method === 'POST') {
+      return jsonResponse(200, {page: {...page, ...JSON.parse(options.body).changes, revision: 3}});
+    }
     if (url === path) return jsonResponse(pageStatus, pageStatus === 200 ? {page} : {});
     if (url.endsWith('/graph')) return jsonResponse(200, {nodes: [], edges: [], topics: [], counts: {}});
     return jsonResponse(200, {items: [], total: 0});
@@ -820,6 +822,7 @@ test('the cited revision is read-only and editing fetches the latest page while 
     assert.equal(el('editor-form').elements.title.value, '当前标题');
     assert.equal(el('editor-form').elements.title.focused, true);
     assert.equal(new URLSearchParams(location.search).has('revision'), false);
+    el('editor-form').elements.title.value = '修改后的当前标题';
     await el('editor-form').dispatch('submit');
     const save = calls.find(([method, url]) => method === 'POST' && url === path);
     assert.equal(JSON.parse(save[2]).revision, 2);

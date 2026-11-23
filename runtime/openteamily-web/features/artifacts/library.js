@@ -273,6 +273,10 @@ function attachKind(store, id, kind, { board, slides, dashboard } = {}) {
 
 function attachSource(store, id, workspaceId, now, source) {
   if (!source) return
+  if (source.kind === 'team_run_step') {
+    attachTeamRunSource(store, id, workspaceId, source)
+    return
+  }
   if (source.kind === 'agent_message') {
     store.run('INSERT INTO artifact_chat_sources(artifact_id, workspace_id, conversation_id, message_id, agent_id, created, conversation_title) VALUES(?,?,?,?,?,?,?)',
       id, workspaceId, source.conversation_id, source.id ?? source.message_id, source.agent_id ?? null, now, source.conversation_title ?? null)
@@ -284,8 +288,17 @@ function attachSource(store, id, workspaceId, now, source) {
   }
 }
 
+export function attachTeamRunSource(store, artifactId, workspaceId, source) {
+  store.run('INSERT INTO artifact_team_run_sources VALUES(?,?,?,?,?)', artifactId, workspaceId, source.id, source.position, source.run_title)
+}
+
 function existingSource(store, workspaceId, source) {
   if (!source) return null
+  if (source.kind === 'team_run_step') {
+    const row = store.get('SELECT artifact_id FROM artifact_team_run_sources WHERE workspace_id=? AND run_id=? AND position=?',
+      workspaceId, source.id, source.position)
+    return row ? load(store, workspaceId, row.artifact_id) : null
+  }
   if (source.kind === 'agent_message') {
     const row = store.get('SELECT artifact_id FROM artifact_chat_sources WHERE workspace_id=? AND message_id=?', workspaceId, source.id ?? source.message_id)
     return row ? load(store, workspaceId, row.artifact_id) : null
@@ -307,6 +320,7 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   if (source?.kind === 'agent_message' && source.agent_id && !reuseChatSource) {
     refuse(403, 'forbidden', 'Save private replies from their conversation')
   }
+  if (source?.kind === 'team_run_step' && !reuseSource) refuse(403, 'forbidden', 'Save results from their team run')
   let board, slides, dashboard, spreadsheet
   if (kind === 'media') refuse(400, 'invalid', 'Upload media as multipart form data')
   if (kind === 'whiteboard') {
@@ -341,6 +355,11 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
       const row = load(store, workspaceId, prior.id)
+      if (source?.kind === 'team_run_step' && !sourceView(row) && publicKind(row) === 'document' &&
+          store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)?.body === bodyText) {
+        attachTeamRunSource(store, row.id, workspaceId, source)
+        return {status:200, body:{artifact:view(load(store, workspaceId, row.id))}}
+      }
       // Older Bot Social saves used the same key without recording the source.
       if (reuseChatSource && !source.agent_id && !row.chat_message_id && !row.source_kind && publicKind(row) === 'document') {
         const first = store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)

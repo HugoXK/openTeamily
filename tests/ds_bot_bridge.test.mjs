@@ -377,6 +377,28 @@ test('an owned historical segment can still be opened using the native runtime',
   assert.equal(bot.sessionId,'previous')
 })
 
+test('the managed group turn hands off promptly when its exact native agent is disposed', async t => {
+  for (const terminal of ['disposed event', 'aborted end']) {
+    await t.test(terminal, async () => {
+      const {rt, ctx} = fakeRuntime()
+      const session = {id:'chat1'}
+      rt.sendUser = async () => {}
+      const result = runTurn(rt, ctx, 'bot1', 'group reply', 'group-request', 1000, [],
+        {managedGroup:true, onProgress:() => {}})
+      const completion = assert.rejects(result, {code:'agents/empty-reply'})
+      const event = (type, data) => ctx.emit('session/event', session, {type,data})
+      event('turn/start', {turn:7})
+      event('user/message', {turn:7, source:{rpcId:'group-request'}})
+      ctx.emit('agent/disposed', {agent:{id:session.id, session:{id:session.id}}})
+      assert.equal(ctx.listenerCount('session/event'), 1)
+      if (terminal === 'disposed event') ctx.emit('agent/disposed', {agent:{id:session.id, session}})
+      else event('turn/end', {turn:7, reason:{kind:'aborted',reason:{kind:'disposed'}}})
+      assert.equal(ctx.listenerCount('session/event'), 0)
+      await completion
+    })
+  }
+})
+
 test('native reply progress matches the admitted request, session, turn and attempt', async () => {
   const {rt, ctx, log} = fakeRuntime()
   const session = {id:'chat1'}

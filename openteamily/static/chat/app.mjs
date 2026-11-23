@@ -17,7 +17,7 @@ import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
-  chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
+  agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -4408,6 +4408,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
       return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
     }
+    if (state === 'failed' && job?.error_code === 'reply_timeout') {
+      return uiLabel('回复超时', 'The reply timed out');
+    }
     if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
       return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
     }
@@ -4938,7 +4941,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = personal ? '/contacts' : membersHref;
       link.textContent = personal ? uiLabel('联系人', 'Contacts') : uiLabel('成员', 'Members');
     } else {
-      link.href = '/agents';
+      const workspace = workspaceId();
+      const agent = currentAgent?.workspace_id && currentAgent.workspace_id !== workspace ? null : currentAgent?.id;
+      link.href = agentDirectoryHref(workspace, agent);
       link.textContent = uiLabel('资料', 'Resources');
     }
   }
@@ -5536,6 +5541,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupInfoAddRetry.hidden = !state.reload;
     groupInfoAddRetry.disabled = state.loading || state.view.busy;
     groupInfoAddDirectory.hidden = !empty;
+    if (empty) groupInfoAddDirectory.href = agentDirectoryHref(state.workspace);
     groupInfoAddCancel.disabled = Boolean(state.view.busy);
   }
 
@@ -5902,7 +5908,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-send').disabled = state?.open === false || directClosed;
   }
 
+  function renderStudioDiscussionSource(source) {
+    const panel = document.getElementById('chat-studio-discussion-source');
+    const link = document.getElementById('chat-studio-discussion-link');
+    if (!panel || !link) return;
+    const href = source && Number.isSafeInteger(source.revision)
+      ? studioDocumentHref(source.workspace_id, source.document_id, source.revision) : '';
+    panel.hidden = !href;
+    if (!href) {
+      link.removeAttribute('href');
+      link.textContent = '';
+      return;
+    }
+    link.href = href;
+    link.textContent = uiLabel(`查看来源团队文档 · 版本 ${source.revision}`, `View source team document · Version ${source.revision}`);
+  }
+
   function setSocialHeaderTools(social) {
+    renderStudioDiscussionSource(null);
     if (social && captureButton) captureButton.hidden = true;
     const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
@@ -6096,13 +6119,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
     syncPlusState();
-    applyChatIdentity(document, agent.name);
+    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
     if (currentConversation?.id !== conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
       closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = conversation;
+    renderStudioDiscussionSource(conversation.studio_source);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
         readingHistory: !acknowledge};
@@ -7182,7 +7206,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (settings.look && personalAgentId) {
           personalLook = settings.look;
           renderSessions();
-          if (currentSource === 'agent' && currentAgent?.id === personalAgentId && !currentConversation) {
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
             applyChatIdentity(document, currentAgent.name, null, personalLook);
           }
         }
@@ -7318,7 +7342,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         setPersonalChat(personal);
         if (workspaceId() === personalWorkspaceId) {
           renderSessions();
-          if (currentSource === 'agent' && currentAgent?.id === personalAgentId && !currentConversation) {
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
             applyChatIdentity(document, currentAgent.name, null, personalLook);
           }
         }
@@ -7811,7 +7835,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!isSearchOpen()) openSearchPanel();
     else renderSearch();
   });
-  const inChatSearch = createMessageSearch(async (query, conversationId, cursor, signal) => {
+  async function readConversationMessageMatches(query, conversationId, cursor, signal) {
     if (currentSource === 'social') {
       const params = new URLSearchParams({q: query, limit: '20'});
       if (cursor) params.set('before', cursor);
@@ -7838,7 +7862,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`, undefined, undefined, signal);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
-  });
+  }
   async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
     isCurrent = () => true, {signal, onLocated, attachmentPath} = {}) {
     if (!isCurrent()) return false;
@@ -7934,13 +7958,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           attachmentPath,
           onLocated(target) {
             searchScrollSnapshot = null;
-            if (attachmentPath) {
-              view.selected?.removeAttribute('aria-current');
-              view.selected = button;
-              button.setAttribute('aria-current', 'true');
-            }
+            view.selected?.removeAttribute('aria-current');
+            view.selected = button;
+            button.setAttribute('aria-current', 'true');
             if (globalThis.matchMedia?.('(max-width: 900px)').matches) {
-              closeInChatSearch({restoreScroll: false, focus: false, preserveAttachments: Boolean(attachmentPath)});
+              closeInChatSearch({restoreScroll: false, focus: false, preserveResults: true});
             } else {
               searchJumpTarget = target;
             }
@@ -8001,6 +8023,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const inChatMore = document.getElementById('conversation-search-more');
   const inChatRetry = document.getElementById('conversation-search-retry');
   const inChatReturn = document.getElementById('conversation-search-return');
+  const inChatReturnButton = inChatReturn?.querySelector('button');
   let conversationScope = 'messages';
   let searchedChat = '';
   let inChatView;
@@ -8014,7 +8037,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inChatView?.controller?.abort();
     inChatView?.jump?.controller.abort();
     inChatView = null;
-    void inChatSearch.load('');
     inChatResults.replaceChildren();
     inChatResults.scrollTop = 0;
     inChatResults.setAttribute('aria-busy', 'false');
@@ -8127,12 +8149,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (scope.kind) {
         await searchAttachmentPage(view, scope, controller);
       } else {
-        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: controller.signal});
+        const page = await readConversationMessageMatches(view.query, currentConversation.id, view.cursor, controller.signal);
         if (!current()) return;
-        if (state.error) throw new Error(state.error);
-        inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
-        view.cursor = state.cursor;
-        inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
+        for (const item of page.items || []) {
+          const hit = searchHitFromItem(item);
+          if (!hit.messageId || view.seen.has(hit.messageId)) continue;
+          view.seen.add(hit.messageId);
+          inChatResults.append(searchHitRow(hit, view));
+        }
+        view.cursor = page.cursor && page.cursor !== view.cursor ? page.cursor : '';
+        view.status = inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} 条消息` : '没有找到匹配的消息。试试其他关键词。';
       }
       if (current()) inChatMore.hidden = !view.cursor;
     } catch {
@@ -8215,12 +8241,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return searchCurrentConversation();
   }
   inChatOpen?.addEventListener('click', openInChatSearch);
-  inChatReturn?.querySelector('button')?.addEventListener('click', openInChatSearch);
-  function closeInChatSearch({restoreScroll = true, focus = true, preserveAttachments = false} = {}) {
+  inChatReturnButton?.addEventListener('click', openInChatSearch);
+  function closeInChatSearch({restoreScroll = true, focus = true, preserveResults = false} = {}) {
     const target = restoreScroll && searchJumpTarget?.isConnected ? searchJumpTarget : null;
     const targetTop = target?.getBoundingClientRect().top;
     const view = inChatView;
-    const preserve = preserveAttachments && currentSearchView(view) && CONVERSATION_SCOPES[view.scope].kind && view.seen.size;
+    const preserve = preserveResults && currentSearchView(view) && view.seen.size;
     if (preserve) {
       view.suspendedScroll = inChatResults.scrollTop;
       view.controller?.abort();
@@ -8234,6 +8260,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       inChatStatus.textContent = view.status ?? '';
       if (inChatReturn) inChatReturn.hidden = !view.selected;
+      if (view.selected && inChatReturnButton) {
+        const messages = view.scope === 'messages';
+        inChatReturnButton.setAttribute('data-ui-text', messages ? 'chat.search.back_to_messages' : 'chat.search.back_to_attachments');
+        inChatReturnButton.textContent = messages ? uiLabel('返回消息结果', 'Back to message results')
+          : uiLabel('返回附件结果', 'Back to attachment results');
+      }
     } else {
       clearConversationSearch();
     }
@@ -8249,7 +8281,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       opener?.focus();
     }
   }
-  const closeSearch = () => closeInChatSearch({preserveAttachments: true});
+  const closeSearch = () => closeInChatSearch({preserveResults: true});
   document.getElementById('conversation-search-close')?.addEventListener('click', closeSearch);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !inChatPanel.hidden) closeSearch();

@@ -364,6 +364,12 @@ test('Space opens only the saved source coordinates from the selected workspace'
   });
   assert.equal(artifactOrigin(result, 'd'.repeat(32)).href, '');
   assert.equal(artifactOrigin({...result, source:{...result.source, id:'../../other'}}, workspace).href, '');
+  const step = {workspace_id:workspace,source:{kind:'team_run_step',id:run,position:1,run_title:'整理日报'}};
+  assert.deepEqual(artifactOrigin(step,workspace),{kind:'团队任务',title:'整理日报',label:'查看来源步骤',
+    href:`/team-runs#workspace=${workspace}&run=${run}&step=1`});
+  assert.equal(artifactOrigin(step,'d'.repeat(32)).href,'');
+  assert.equal(artifactOrigin({...step,source:{...step.source,position:8}},workspace).href,'');
+  assert.equal(artifactOrigin({...step,source:{...step.source,position:'1'}},workspace).href,'');
   const chat = {workspace_id:workspace, source:{
     kind:'agent_message', id:'message_01', conversation_id:'otc_example', conversation_title:'工作群',
   }};
