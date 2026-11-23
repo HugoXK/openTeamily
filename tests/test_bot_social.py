@@ -9,7 +9,7 @@ from pathlib import Path
 
 from openteamily import bot_social
 from openteamily.app import App, Config
-from openteamily.fake_runtime import FakeRuntimeBackend
+from fake_runtime import FakeRuntimeBackend
 from openteamily.operator_config import OperatorAdmin
 from openteamily.security import digest
 from openteamily.store import Store

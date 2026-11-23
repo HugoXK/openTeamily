@@ -16,7 +16,7 @@ When a slot is due, the scheduler creates an allowlisted `infer` task on an onli
 
 If no agent is online, the run stays `queued` with `error_code=no_agent` and is retried on the next tick. Cancel uses `POST .../automations/{id}/runs/{run_id}/cancel`. Timeouts follow the runtime task deadline. `GET .../runs` reconciles in-flight rows so the result is visible without a second manual tick.
 
-The default backend is `AgentAutomationBackend`. A caller may still inject a container dispatch hook such as `FakeRuntimeBackend`; that hook records instance ids and is not agent execution.
+The default backend is `AgentAutomationBackend`. A caller may still inject a container dispatch hook such as `FakeRuntimeBackend` from `tests/fake_runtime.py`; that hook records instance ids and is not agent execution.
 
 ## Scheduler
 
