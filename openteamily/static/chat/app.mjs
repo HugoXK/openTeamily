@@ -11,8 +11,9 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
-import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
+import { chatStartFromHash, historyPageSize as HISTORY_PAGE_SIZE, ownedChatStartup,
+  startChatReads, startupTranscriptAge, takeChatReads } from './startup.mjs';
+import { confirmSignupSession, personalDraftScope, readPendingChatText, savePendingChatText,
   signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -551,14 +552,20 @@ function writeHash(values, {push = false} = {}) {
   else history.replaceState(null, '', path);
 }
 
+let messageTimeFormatter;
+let sessionTodayFormatter;
+let sessionWeekdayFormatter;
+let sessionDateFormatter;
+
 function formatTime(value) {
   if (!value) return '';
   const date = new Date(Number(value) * 1000);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
+  messageTimeFormatter ??= new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(date);
+  });
+  return messageTimeFormatter.format(date);
 }
 
 export function sessionDisplayGroup(item) {
@@ -576,10 +583,21 @@ export function formatSessionTime(value, now = Date.now()) {
   if (Number.isNaN(date.getTime())) return '';
   const day = ms => Math.floor((ms + 8 * 3600000) / 86400000);
   const days = day(now) - day(timestamp);
-  if (days === 0) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).format(date);
+  if (days === 0) {
+    sessionTodayFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    return sessionTodayFormatter.format(date);
+  }
   if (days === 1) return '昨天';
-  if (days > 1 && days < 7) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'}).format(date);
-  return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
+  if (days > 1 && days < 7) {
+    sessionWeekdayFormatter ??= new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'});
+    return sessionWeekdayFormatter.format(date);
+  }
+  sessionDateFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric',
+  });
+  return sessionDateFormatter.format(date);
 }
 
 // Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
@@ -964,6 +982,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
+  let groupInfoOpener;
   const groupManagementReceipts = new Map();
   const loadStickers = deferModule('./stickers.mjs');
   let stickerPicker;
@@ -1265,6 +1284,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       text = agents.length
         ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
         : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
+    } else if (policy?.mode === 'mentions' && agents.length) {
+      text = uiLabel('仅在被 @ 时回复 · 可用 @所有人', 'Agents reply only when mentioned · Use @all to ask them all');
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
@@ -1399,7 +1420,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const element = document.createElement(canJump ? 'button' : 'div');
     element.className = 'message-quote';
     if (!reply.available) {
-      element.textContent = '原消息不可查看';
+      element.textContent = reply.state === 'checking' ? uiLabel('回复引用', 'Reply quote') : '原消息不可查看';
       return element;
     }
     const name = document.createElement('strong');
@@ -1701,7 +1722,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function removeSendJob(queue, job, {keepStored = false} = {}) {
     queue.jobs = queue.jobs.filter(item => item !== job);
-    if (job.storedText && !keepStored) savePendingPrivateText(document.defaultView, queue.scope, job.key);
+    if (job.storedText && !keepStored) savePendingChatText(document.defaultView, queue.scope, job.key);
     job.bubble.remove();
     job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
@@ -2655,6 +2676,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function resumeOpenSession(target) {
     if (target.source !== currentSource || target.cid !== currentConversation?.id ||
         (target.source === 'agent' && target.agent !== currentAgent?.id)) return false;
+    const returningFromList = narrowScreen() && document.body.classList.contains('sessions-open');
     if (sessionTransition?.pending) socialOpen += 1;
     clearSessionTransition();
     setSessionsOpen(false);
@@ -2664,6 +2686,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!pollTimer && !socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
     } else if (!syncReplyProgress() && lastAgentItems.some(waitingAgentReply) && !pollTimer) schedulePoll();
     if (narrowScreen()) document.getElementById('chat-title').focus({preventScroll:true});
+    if (returningFromList && currentSource === 'agent') refreshForegroundPrivate();
     return true;
   }
 
@@ -2786,6 +2809,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const items = [];
     let lastGroup = '';
+    const now = Date.now();
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
       const button = document.createElement('button');
@@ -2820,7 +2844,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
-      time.textContent = formatSessionTime(session.updated);
+      time.textContent = formatSessionTime(session.updated, now);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
@@ -3241,7 +3265,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const heading = document.createElement('p');
       heading.className = 'reply-state';
       heading.setAttribute('role', 'status');
-      heading.textContent = item.status === 'running' && !partial ? uiLabel('正在生成回复', 'Writing a reply')
+      heading.textContent = partial ? privateReplyLabel(item.status, 'preparing', '')
+        : item.status === 'running' ? uiLabel('正在生成回复', 'Writing a reply')
         : uiLabel('正在准备回复', 'Preparing a reply');
       bubble.append(heading);
       if (partial) replyView = {bubble, heading, body};
@@ -3323,6 +3348,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     replyWatch = null;
     globalThis.clearTimeout(watch.timer);
     globalThis.clearTimeout(watch.timeout);
+    globalThis.clearTimeout(watch.receiptTimer);
     watch.controller?.abort();
     closeReplyStream(watch);
   }
@@ -3336,19 +3362,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && !(narrowScreen() && document.body.classList.contains('sessions-open'));
   }
 
-  function paintReplyProgress(view, snapshot) {
+  function privateReplyLabel(state, phase, text, reconnecting = false) {
+    if (reconnecting) return uiLabel('正在重新连接回复…', 'Reconnecting to the reply…');
+    const thinking = phase === 'thinking' || (state === 'running' && phase !== 'preparing' && !text);
+    if (text) return thinking ? uiLabel('正在思考', 'Thinking') : uiLabel('正在生成回复', 'Writing a reply');
+    const name = currentAgent?.name || uiLabel('智能体', 'Agent');
+    return thinking ? uiLabel(`${name} 正在思考…`, `${name} is thinking…`)
+      : uiLabel(`${name} 正在准备回复…`, `${name} is preparing a reply…`);
+  }
+
+  function paintReplyProgress(view, snapshot, reconnecting) {
     const state = snapshot.state === 'running' ? 'running' : 'queued';
     if (view.bubble.dataset.state !== state) view.bubble.dataset.state = state;
-    const label = snapshot.phase === 'thinking' ? uiLabel('正在思考', 'Thinking')
-      : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
-      : uiLabel('正在生成回复', 'Writing a reply');
+    const previous = streamingReplySource(view.body);
+    const text = typeof snapshot.text === 'string' ? snapshot.text : previous;
+    const label = privateReplyLabel(state, snapshot.phase, text.trim(), reconnecting);
     if (view.heading.textContent !== label) view.heading.textContent = label;
-    if (typeof snapshot.text !== 'string' || streamingReplySource(view.body) === snapshot.text) return;
+    if (previous === text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
-    paintStreamingReply(document, view.body, snapshot.text);
+    paintStreamingReply(document, view.body, text);
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     else updateLatestMessageControl();
+  }
+
+  function paintReplyWatch(watch) {
+    const reconnecting = watch.failures >= 2 && Boolean(watch.snapshot || !watch.posting);
+    if (!watch.snapshot && !reconnecting) return;
+    const snapshot = watch.snapshot || {state:watch.view.bubble.dataset.state};
+    paintReplyProgress(watch.view, snapshot, reconnecting);
   }
 
   function scheduleReplyProgress(watch, delay = 400) {
@@ -3356,15 +3398,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
   }
 
-  async function settleReplyProgress(watch) {
+  async function acceptPostingReply(watch) {
+    const queue = pendingSends.get(watch.scope);
+    const job = queue?.replying;
+    if (job?.key !== watch.key || !job.acceptReceipt) return false;
+    const pair = await confirmPostedSend(queue, job);
+    if (!pair || !job.acceptReceipt || (watch.terminal && waitingAgentReply(pair.reply))) return false;
+    job.acceptReceipt({status: 200, body: pair});
+    return true;
+  }
+
+  function observeReplyProgress(watch, snapshot) {
+    watch.snapshot = snapshot;
+    paintReplyProgress(watch.view, snapshot);
+    if (!watch.posting || snapshot.state !== 'running' || watch.receiptTimer !== undefined) return;
+    // A running stream can arrive before the send response. Once the ordinary
+    // receipt has had a chance to arrive, reconcile the one saved message pair
+    // so Stop uses the server's reply ID and attempt while the stream stays live.
+    watch.receiptTimer = globalThis.setTimeout(() => {
+      if (isCurrentReply(watch) && watch.posting && !watch.terminal) void acceptPostingReply(watch);
+    }, 250);
+  }
+
+  async function settleReplyProgress(watch, {terminal = true} = {}) {
+    watch.terminal ||= terminal;
+    globalThis.clearTimeout(watch.receiptTimer);
     if (watch.posting) {
-      const queue = pendingSends.get(watch.scope);
-      const job = queue?.replying;
-      if (job?.key === watch.key && job.acceptReceipt) {
-        const pair = await confirmPostedSend(queue, job);
-        if (pair) job.acceptReceipt?.({status: 200, body: pair});
-        else scheduleReplyProgress(watch, 1200);
-      }
+      if (!await acceptPostingReply(watch)) scheduleReplyProgress(watch, 1200);
       return;
     }
     await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
@@ -3382,8 +3442,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const snapshot = result?.status === 200 ? result.body : null;
     if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
       watch.failures = 0;
-      watch.snapshot = snapshot;
-      paintReplyProgress(watch.view, snapshot);
+      observeReplyProgress(watch, snapshot);
       const changed = Number.isSafeInteger(snapshot.revision) && snapshot.revision !== watch.revision;
       if (changed) watch.revision = snapshot.revision;
       const unchangedDelay = Number.isSafeInteger(snapshot.revision) ? 100 : 400;
@@ -3392,7 +3451,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (['succeeded','failed','cancelled'].includes(snapshot?.state)) return settleReplyProgress(watch);
     watch.failures += 1;
-    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch);
+    paintReplyWatch(watch);
+    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch, {terminal: false});
     scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
   }
 
@@ -3440,8 +3500,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const text = typeof data.text === 'string' ? data.text : (watch.snapshot?.text || '') + data.append;
       if (text.length > 20000) return fallback();
       if (Number.isSafeInteger(data.revision)) watch.revision = data.revision;
-      watch.snapshot = {state:data.state,phase:data.phase,text};
-      paintReplyProgress(watch.view, watch.snapshot);
+      observeReplyProgress(watch, {state:data.state,phase:data.phase,text});
     });
     timeout(6000);
     return true;
@@ -3462,7 +3521,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (replyWatch?.scope === scope && replyWatch.key === key) {
       replyWatch.view = view;
       replyWatch.posting = posting;
-      if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
+      paintReplyWatch(replyWatch);
       return true;
     }
     stopReplyProgress();
@@ -4042,7 +4101,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  const HISTORY_PAGE_SIZE = '50';
   let socialHistory = null;
   let privateHistory = null;
   let privateRefresh = 0;
@@ -4898,7 +4956,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const queue = pendingSends.get(scope);
     if (servedByDsbot && queue?.social) {
       for (const job of queue.jobs) {
-        if (lastSocialItems.some(item => ownSocialReceipt(item, queue, job.key))) removeSendJob(queue, job);
+        const receipt = lastSocialItems.find(item => ownSocialReceipt(item, queue, job.key));
+        if (receipt) {
+          job.acceptReceipt?.({status:200, body:{message:receipt}});
+          removeSendJob(queue, job);
+        }
       }
     }
     if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
@@ -5403,8 +5465,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!allowed && currentSource !== 'social') return;
     }
     if (next && viewingSocialMessages() && socialHistory?.cid === cid
-      && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
-      if (readingSocialContext()) {
+      && next.activity_version !== currentConversation.activity_version) {
+      const scope = sendScope();
+      const queue = pendingSends.get(scope);
+      if (queue?.active) {
+        // An active send keeps the history view stable. A newly stored message
+        // can still confirm the exact send and release the next queued message.
+        const sending = queue.jobs.find(job => job.acceptReceipt);
+        if (sending && Number.isSafeInteger(next.last_seq) && next.last_seq > (lastSocialItems.at(-1)?.seq ?? 0) &&
+            next.last_seq > (sending.activityReceiptSeq ?? 0)) {
+          sending.activityReceiptSeq = next.last_seq;
+          const current = () => sendScope() === scope && pendingSends.get(scope) === queue &&
+            queue.jobs.includes(sending) && Boolean(sending.acceptReceipt);
+          const message = await socialSendReceipt(queue, sending.key, current);
+          if (message) sending.acceptReceipt?.({status:200, body:{message}});
+        }
+      } else if (readingSocialContext()) {
         if (liveBanner) liveBanner.hidden = false;
       } else {
         await openSocialConversation(cid, {refresh: true});
@@ -5680,43 +5756,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
-  async function initializeGroupManagement() {
-    if (groupManagement) return;
+  async function initializeGroupManagement({fromShortcut = false} = {}) {
+    if (groupManagement) return groupManagement;
     const target = groupManagementContext();
-    if (!target) return;
+    if (!target) return null;
     const {mountGroupManagement} = await loadGroupManagement();
-    if (groupManagement || !groupMatches({...target,conversationId:target.conversation.id}) ||
-        document.getElementById('group-info-panel').hidden) return;
-    groupManagement = mountGroupManagement(document, {
-      request, context:groupManagementContext, notify:show,
-      onChanged:reportGroupChange, onLeft:forgetGroup,
-      onRefresh:refreshGroupManagement,
-    });
-    setGroupInfo(currentConversation);
+    if (!groupMatches({...target,conversationId:target.conversation.id}) ||
+        (!fromShortcut && document.getElementById('group-info-panel').hidden)) return null;
+    if (!groupManagement) {
+      groupManagement = mountGroupManagement(document, {
+        request, context:groupManagementContext, notify:show,
+        onChanged:reportGroupChange, onLeft:forgetGroup,
+        onRefresh:refreshGroupManagement,
+      });
+      setGroupInfo(currentConversation);
+    }
+    return groupManagement;
   }
 
   function renderGroupReplyPolicy(conversation) {
     const section = document.getElementById('group-reply-policy');
     const summary = document.getElementById('group-reply-policy-summary');
+    const shortcut = document.getElementById('group-reply-shortcut');
     const routing = conversation?.group_agent_routing;
     const policy = routing?.policy;
-    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
-      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent);
+    if (shortcut) shortcut.hidden = section.hidden || !servedByDsbot || !routing;
     if (section.hidden) return;
-    if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
+    if (policy?.mode === 'mentions') summary.textContent = uiLabel('仅在被 @ 时回复', 'Only when mentioned');
+    else if (!conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
     else if (policy?.mode === 'lead') {
       const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
       if (lead) {
         const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
         summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
-      } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      } else {
         summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
           'The preferred agent is unavailable. Other group agents decide whether to reply.');
-      } else summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+      }
     } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
       summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
         'Group default · Agents with auto-reply enabled decide');
     } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
+    if (shortcut && !shortcut.hidden) {
+      const canEdit = routing.can_edit === true;
+      shortcut.title = summary.textContent;
+      shortcut.setAttribute('aria-description', summary.textContent);
+      shortcut.setAttribute('aria-controls', canEdit ? 'group-management-dialog' : 'group-info-panel');
+      if (canEdit) shortcut.setAttribute('aria-haspopup', 'dialog');
+      else shortcut.removeAttribute('aria-haspopup');
+    }
   }
 
   function setGroupInfoTab(which) {
@@ -5731,7 +5822,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
-    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -6140,13 +6230,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  function setGroupInfoOpen(open) {
+  function setGroupInfoOpen(open, opener) {
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     panel.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
     if (open) {
+      groupInfoOpener = opener || toggle;
       const group = groupManagementContext()?.conversation;
       if (group && group.id !== lastGroupInfo) {
         lastGroupInfo = group.id;
@@ -6270,15 +6361,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return () => ({status: 200, body});
   }
 
-  function readStartupSnapshot(wid, aid, cid) {
+  function readStartupSnapshot(wid, aid, cid, desktopTranscript) {
     if (![wid, aid, cid].every(id => /^[a-f0-9]{32}$/.test(id))) return null;
-    const maxAge = 1800;
-    const expires = performance.now() + maxAge;
+    const owner = currentUser?.id;
+    let expires = performance.now() + startupTranscriptAge;
     const path = agentConversationPath(wid, aid, cid);
-    const pending = request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
-      undefined, undefined, AbortSignal.timeout(maxAge)).then(result => {
-        return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
-      }).catch(() => null);
+    const pending = Promise.resolve(desktopTranscript).then(prepared => {
+      if (prepared?.owner === owner && prepared.workspace === wid && prepared.agent === aid &&
+          prepared.conversation === cid && performance.now() < prepared.expires) {
+        expires = prepared.expires;
+        return prepared.result;
+      }
+      return request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
+        undefined, undefined, AbortSignal.timeout(startupTranscriptAge));
+    }).then(result => {
+      return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
+    }).catch(() => null);
     return async () => {
       if (performance.now() >= expires) return null;
       const result = await pending;
@@ -6540,7 +6638,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
+    if (!refresh) restorePendingSocialText(shown);
+    renderSocialMessages(shown, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -7442,19 +7541,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let loadRequest = 0;
 
-  function ownedChatStartup(result, user) {
-    const body = result?.body;
-    const space = body?.items?.length === 1 ? body.items[0] : null;
-    if (result?.status !== 200 || space?.kind !== 'personal'
-      || !/^[0-9a-f]{32}$/.test(space.id) || !/^[0-9a-f]{32}$/.test(body.personal_agent_id)) return null;
-    const viewer = body.viewer_username;
-    if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
-      || (viewer && viewer !== user.username)) return null;
-    const directory = body.chat;
-    return {space, agentId: body.personal_agent_id, entry: body.entry,
-      directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
-  }
-
   function fillChatWorkspaces(items, preferred, personal) {
     workspaces = items;
     workspaceSelect.replaceChildren();
@@ -7521,7 +7607,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
-    const {sessionRequest, localRequest} = takeChatReads(document)
+    const {sessionRequest, localRequest, sharedRequest: preparedDirectory, desktopTranscript} = takeChatReads(document)
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
@@ -7599,7 +7685,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('whoami').textContent = currentUser.username;
     if (!sessions.length) setSessionsStatus('正在加载对话…');
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
-    const sharedRequest = servedByDsbot ? listWorkspaces() : null;
+    const sharedRequest = servedByDsbot
+      ? preparedDirectory?.then(result => result.status === 200 && Array.isArray(result.body?.items)
+        ? result : listWorkspaces()) || listWorkspaces()
+      : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
     let personalRequest;
     const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
@@ -7764,7 +7853,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (start.agent) {
           openingAgent = openStartingAgent();
         } else if (recent && (!socialReady || sessions[0] === recent)) {
-          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
+          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id, desktopTranscript)};
         }
       } : null,
     });
@@ -8479,7 +8568,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
-    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-close').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      (groupInfoOpener || groupInfoToggle).focus();
+    });
+    const replyShortcut = document.getElementById('group-reply-shortcut');
+    replyShortcut?.addEventListener('click', async () => {
+      if (replyShortcut.hidden) return;
+      if (currentConversation?.group_agent_routing?.can_edit !== true) {
+        closeInChatSearch({restoreScroll:false, focus:false});
+        setGroupInfoOpen(true, replyShortcut);
+        document.getElementById('group-reply-policy').focus();
+        return;
+      }
+      const target = groupManagementContext();
+      if (!target) return;
+      const scope = {...target, conversationId:target.conversation.id};
+      try {
+        const controls = await initializeGroupManagement({fromShortcut:true});
+        if (groupMatches(scope)) controls?.openReplyPolicy();
+      } catch {
+        if (groupMatches(scope)) show('error', uiLabel('无法打开群回复规则，请重试。', 'Could not open the group reply policy. Try again.'));
+      }
+    });
     document.getElementById('group-agent-manage').addEventListener('click', () => {
       if (!agentRosterCurrent(agentRosterView) || agentRosterView.direct) return;
       agentRosterSheet.open = false;
@@ -8497,8 +8608,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !groupInfoAddDialog.open && !document.getElementById('group-management-dialog')?.open &&
-          !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+      const panel = document.getElementById('group-info-panel');
+      if (event.key !== 'Escape' || panel.hidden || groupInfoAddDialog.open || document.getElementById('group-management-dialog')?.open) return;
+      const returnFocus = panel.contains(document.activeElement);
+      setGroupInfoOpen(false);
+      if (returnFocus) (groupInfoOpener || groupInfoToggle).focus();
     });
   }
   let searchScrollSnapshot = null;
@@ -9157,9 +9271,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       const job = makeSendJob(queue, message, files, reply, sticker);
       if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-      if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+      if (!files.length && !sticker && (social ? currentSharedTextConversation() : !reply && currentPrivateThread())) {
         // A reload can interrupt the request after the composer clears.
-        job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+        job.storedText = savePendingChatText(document.defaultView, scope, job.key, message);
       }
       queue.jobs.push(job);
     }
@@ -9202,12 +9316,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function restorePendingPrivateText(items) {
     if (!currentPrivateThread()) return;
     const scope = sendScope();
-    const stored = readPendingPrivateText(document.defaultView, scope);
+    const stored = readPendingChatText(document.defaultView, scope);
     if (!stored.length) return;
     const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
     for (const {key,message} of stored) {
       if (delivered.has(key)) {
-        savePendingPrivateText(document.defaultView, scope, key);
+        savePendingChatText(document.defaultView, scope, key);
         continue;
       }
       const queue = currentChatSendQueue();
@@ -9224,6 +9338,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (scope !== sendScope()) return;
         renderPendingSend();
         if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
+      });
+    }
+  }
+
+  function currentSharedTextConversation() {
+    return servedByDsbot && currentSource === 'social' && currentUser?.id &&
+      currentConversation && currentConversation.workspace_id === workspaceId() && !currentConversation.public_agent;
+  }
+
+  function restorePendingSocialText(items) {
+    if (!currentSharedTextConversation()) return;
+    const scope = sendScope();
+    const stored = readPendingChatText(document.defaultView, scope);
+    if (!stored.length) return;
+    const destination = {owner:currentUser.id, wid:workspaceId(), conversationId:currentConversation.id};
+    for (const {key,message} of stored) {
+      if (items.some(item => ownSocialReceipt(item, destination, key))) {
+        savePendingChatText(document.defaultView, scope, key);
+        continue;
+      }
+      const queue = currentChatSendQueue();
+      if (queue.jobs.some(job => job.key === key)) continue;
+      let reply = null;
+      if (message.reply_to) {
+        // Preview text must come from the current conversation read.
+        const quoted = items.find(item => item.id === message.reply_to &&
+          (!item.conversation_id || item.conversation_id === queue.conversationId) &&
+          (!item.workspace_id || item.workspace_id === queue.wid));
+        reply = quoted && !quoted.retracted ? composerReply(quoted, socialMessageAuthor(quoted))
+          : {message_id:message.reply_to, available:false, state:quoted ? 'missing' : 'checking'};
+      }
+      const job = makeSendJob(queue, message, [], reply, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      const checking = () => pendingSends.get(scope) === queue && queue.jobs.includes(job) && job.failed &&
+        currentUser?.id === queue.owner;
+      void socialSendReceipt(queue, key, checking).then(receipt => {
+        if (!receipt || !checking()) return;
+        removeSendJob(queue, job);
+        if (scope === sendScope()) renderDeliveredSocialMessage(scope, receipt);
       });
     }
   }
@@ -9266,7 +9422,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
-            if (job.storedText) savePendingPrivateText(document.defaultView, queue.scope, job.key, job.message);
+            if (job.storedText) savePendingChatText(document.defaultView, queue.scope, job.key, job.message);
             job.preferences = null;
           }
           if (!queue.conversationId) {
@@ -9326,9 +9482,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           let anchor;
           if (!result) {
             const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
-            const receipt = nativePrivate ? Promise.withResolvers() : null;
-            job.acceptReceipt = receipt?.resolve;
             const nativeSocial = servedByDsbot && queue.social;
+            const receipt = nativePrivate || nativeSocial ? Promise.withResolvers() : null;
+            job.acceptReceipt = receipt?.resolve;
             const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
             try {
               const onProgress = percent => {
@@ -9348,7 +9504,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                 : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
                   : nativeSocial ? AbortSignal.timeout(15000) : undefined);
               if (!progress) beginReply();
-              const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;
+              const posted = receipt ? response.catch(() => ({status: 0, body: {}})) : response;
               result = await (receipt ? Promise.race([posted, receipt.promise]) : posted);
               if (nativeSocial && !currentJob()) continue;
               if (nativeSocial && !result.body?.message?.id && unclearSocialDelivery(result.status)) {
@@ -9394,7 +9550,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                   agentMentions.restoreDirect(job.message.agent_mentions)) {
                 input.value = job.message.body;
                 publicDraft.persist();
-                if (job.reply) setReplyDraft(queue.scope, job.reply);
+                if (job.reply) {
+                  setReplyDraft(queue.scope, job.reply);
+                  if (job.reply.state === 'checking') void restoreReplyDraft(lastSocialItems);
+                }
                 removeSendJob(queue, job);
                 show('error', uiLabel('部分智能体已不可用。消息已恢复到输入框。',
                   'Some agents are unavailable. Your message is back in the composer.'));
@@ -9707,7 +9866,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load();
 }
 
+function mountSessionResize(document) {
+  const handle = document.getElementById('session-resize');
+  const pane = document.getElementById('session-pane');
+  const view = document.defaultView;
+  if (!handle || !pane || !view?.matchMedia) return;
+  const desktop = view.matchMedia('(min-width: 901px)');
+  const key = 'openteamily.chat.session-width';
+  const width = () => Math.round(pane.getBoundingClientRect().width);
+  const min = 256;
+  const max = () => Math.min(540, Math.floor(view.innerWidth * 0.38));
+  let preferred = 0;
+  try { preferred = Number(view.localStorage.getItem(key)) || 0; } catch {}
+  let drag;
+
+  function render(value) {
+    const clamped = Math.max(min, Math.min(max(), value));
+    if (value) document.body.style.setProperty('--ot-session-width', clamped + 'px');
+    else document.body.style.removeProperty('--ot-session-width');
+    handle.setAttribute('aria-valuemin', min);
+    handle.setAttribute('aria-valuemax', max());
+    handle.setAttribute('aria-valuenow', value ? clamped : width());
+  }
+  function remember(value) {
+    preferred = value;
+    try {
+      if (value) view.localStorage.setItem(key, value);
+      else view.localStorage.removeItem(key);
+    } catch {}
+    render(value);
+  }
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    handle.focus();
+    handle.setPointerCapture(event.pointerId);
+    const initial = width();
+    drag = {id: event.pointerId, start: event.clientX, width: initial, value: initial};
+    handle.setAttribute('data-dragging', '');
+    document.body.setAttribute('data-chat-resizing', '');
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.id !== event.pointerId) return;
+    drag.value = Math.max(min, Math.min(max(), drag.width + event.clientX - drag.start));
+    render(drag.value);
+  });
+  function finish(event) {
+    if (drag?.id !== event.pointerId) return;
+    const {value, width: initial} = drag;
+    drag = null;
+    handle.removeAttribute('data-dragging');
+    document.body.removeAttribute('data-chat-resizing');
+    if (event.type === 'pointerup' && value !== initial) remember(value);
+    else render(preferred);
+  }
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(name, finish);
+  handle.addEventListener('keydown', event => {
+    const widths = {ArrowLeft:width() - 16, ArrowRight:width() + 16, Home:min, End:max(), Enter:0};
+    if (!Object.hasOwn(widths, event.key) || drag) return;
+    event.preventDefault();
+    const next = widths[event.key];
+    remember(next ? Math.max(min, Math.min(max(), next)) : 0);
+  });
+  handle.addEventListener('dblclick', () => remember(0));
+  // The saved preference stays intact while the viewport limits its rendered width.
+  view.addEventListener('resize', () => { if (desktop.matches && !drag) render(preferred); });
+  handle.hidden = false;
+  if (desktop.matches) render(preferred);
+}
+
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
+  mountSessionResize(globalThis.document);
   mount(globalThis.document);
 }
 

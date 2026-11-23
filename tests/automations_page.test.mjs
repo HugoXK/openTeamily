@@ -283,6 +283,33 @@ const projectedAutomation = 'c'.repeat(32);
 const projectedPath = '/v1/workspaces?scope=personal&include=automations';
 const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
 
+test('a catalogue history entry restores its search only for the signed-in account and selected workspace', async () => {
+  const privateQuery = '本人工作区搜索';
+  const other = 'e'.repeat(32);
+  for (const [viewer, workspace, expected] of [
+    [projectedOwner, projectedWorkspace, privateQuery],
+    ['d'.repeat(32), projectedWorkspace, ''],
+    [projectedOwner, other, ''],
+  ]) {
+    const {doc, elements} = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {
+      location: {pathname:'/automations', search:'', hash:'#workspace=' + workspace},
+      history: {state:{automationCatalogue:{owner:projectedOwner, workspace:projectedWorkspace,
+        category:'mine', query:privateQuery, automation:projectedAutomation}}},
+    };
+    const queries = [];
+    await mount(doc, {fetcher:async path => {
+      if (path === '/v1/auth/session') return respond({user:{id:viewer, username:'alice'}});
+      if (path.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace, name:'工作区'}]});
+      queries.push(path);
+      return respond({items:[]});
+    }});
+    assert.equal(elements.get('search').value, expected);
+    assert.deepEqual(queries, [`/v1/workspaces/${workspace}/automations${listQuery('mine', expected)}`]);
+  }
+});
+
 test('a new automation restores the same account and workspace draft without a write', async () => {
   const storage = new Map();
   const location = {pathname:'/automations', search:'', hash:'#workspace=' + projectedWorkspace};
@@ -521,7 +548,11 @@ test('a native result link reads the item early and opens only once its workspac
   }});
   try {
     await flush();
-    assert.deepEqual(calls, [['GET','/v1/auth/session']]);
+    assert.deepEqual(calls, [
+      ['GET','/v1/auth/session'],
+      ['GET','/v1/workspaces?limit=100'],
+      ['GET','/v1/workspaces?scope=personal'],
+    ]);
     session.resolve(respond({user:{id:projectedOwner, username:'alice'}}));
     await flush();
     assert.ok(calls.some(([,path]) => path === exactPath));
@@ -786,6 +817,80 @@ for (const [outcome, committed, receiptWorkspace, expectedStatus] of [
     } else {
       assert.equal(control().textContent,'保存到作品库');
       assert.equal(control().disabled,false);
+    }
+  });
+}
+
+for (const outcome of ['confirmed', 'different schedule', 'wrong workspace']) {
+  test(`a lost settings acknowledgment handles ${outcome} and keeps newer typing`, async t => {
+    const {doc, elements} = fakeDocument();
+    const workspace = 'a'.repeat(32), automation = 'b'.repeat(32), owner = 'c'.repeat(32);
+    const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+    const scheduled = {kind:'weekly', weekday:2, time:'09:00', time_zone:'Asia/Shanghai'};
+    const initial = {id:automation, workspace_id:workspace, title:'发布检查', revision:4,
+      template_id:'custom', prompt:'保存前', schedule:scheduled, participants:[{username:'alice'}], agents:[],
+      intent:'', scope:'once', enabled:false, notification_policy:'scheduled'};
+    const response = Promise.withResolvers();
+    const stored = new Map();
+    const requests = [];
+    let latest = initial;
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {location:{search:`?workspace=${workspace}&automation=${automation}`,pathname:'/automations'},
+      sessionStorage:{getItem:key => stored.get(key), setItem:(key,value) => stored.set(key,value),
+        removeItem:key => stored.delete(key)}};
+    const originalFormData = globalThis.FormData;
+    globalThis.FormData = class {
+      constructor(form) { this.elements = form.elements; }
+      get(name) { return this.elements[name]?.value || ''; }
+      has(name) { return Boolean(this.elements[name]?.checked); }
+    };
+    t.after(() => { globalThis.FormData = originalFormData; });
+    await mount(doc, {fetcher:async (target, options = {}) => {
+      if (target === '/v1/auth/session') return respond({user:{id:owner,username:'alice'}});
+      if (target.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace,name:'空间'}]});
+      if (target.startsWith(path + '/runs?')) return respond({items:[]});
+      if (target === path && options.method === 'GET') {
+        requests.push('GET');
+        return respond({automation:latest});
+      }
+      if (target === path && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        requests.push(body.revision);
+        const {participants, ...settings} = body.changes;
+        latest = {...initial, ...settings, revision:body.revision+1, participants:participants.map(username => ({username}))};
+        if (requests.length === 2) {
+          if (outcome === 'wrong workspace') latest.workspace_id = 'd'.repeat(32);
+          if (outcome === 'different schedule') latest.schedule = {...scheduled, weekday:3};
+          await response.promise;
+          throw new TypeError('response lost after commit');
+        }
+        return respond({automation:latest});
+      }
+      assert.fail('Unexpected request '+target);
+    }});
+    const form = elements.get('editor-form');
+    const submit = () => form.handlers.submit[0]({preventDefault() {}});
+    form.elements.prompt.value = '提交的指令';
+    form.handlers.input[0]();
+    const saving = submit();
+    form.elements.prompt.value = '等待期间输入的指令';
+    form.handlers.input[0]();
+    response.resolve();
+    await saving;
+    assert.deepEqual(requests, ['GET', 4, 'GET']);
+    assert.equal(form.elements.prompt.value, '等待期间输入的指令');
+    if (outcome === 'confirmed') {
+      assert.equal(elements.get('status').textContent, '已保存提交的设置。仍有未保存的修改。');
+      const draft = JSON.parse([...stored.values()][0]);
+      assert.equal(draft.revision, 5);
+      assert.deepEqual(draft.values,{prompt:'等待期间输入的指令'});
+      await submit();
+      assert.deepEqual(requests, ['GET', 4, 'GET', 5]);
+      assert.equal(latest.prompt, '等待期间输入的指令');
+      assert.equal(stored.size,0);
+    } else {
+      assert.equal(elements.get('status').textContent, '暂时无法确认保存结果。草稿已保留，请重试。');
+      assert.equal(JSON.parse([...stored.values()][0]).revision,4);
     }
   });
 }

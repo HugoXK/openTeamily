@@ -268,6 +268,15 @@ class Lifecycle:
         if db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0] >= self.policy.max_jobs:
             fail(429, 'quota', 'Runtime job capacity reached; operator archival required')
 
+    def check_create_capacity(self, db, wid=None):
+        self.capacity(db)
+        workspace_full = wid is not None and db.execute(
+            'SELECT COUNT(*) FROM instances WHERE workspace_id=? AND retired_at IS NULL',
+            (wid,),
+        ).fetchone()[0] >= self.policy.max_instances_per_workspace
+        if workspace_full or db.execute('SELECT COUNT(*) FROM instances WHERE retired_at IS NULL').fetchone()[0] >= self.policy.max_instances:
+            fail(429, 'quota', 'Instance capacity reached')
+
     def create(self, owner, wid, key, *, per_user=False):
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
@@ -289,10 +298,7 @@ class Lifecycle:
             old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=? AND retired_at IS NULL', (wid, digest(key))).fetchone()
             if old:
                 return False, self.result(db, old['id'])
-        self.capacity(db)
-        if (db.execute('SELECT COUNT(*) FROM instances WHERE workspace_id=? AND retired_at IS NULL', (wid,)).fetchone()[0] >= self.policy.max_instances_per_workspace
-                or db.execute('SELECT COUNT(*) FROM instances WHERE retired_at IS NULL').fetchone()[0] >= self.policy.max_instances):
-            fail(429, 'quota', 'Instance capacity reached')
+        self.check_create_capacity(db, wid)
         iid, op, jid = uuid4().hex, uuid4().hex, uuid4().hex
         create_key = digest('owner:' + owner + ':' + key) if owner_scoped else digest(key)
         desired, action = ('running', 'start') if start_immediately else ('stopped', 'create')
@@ -334,6 +340,8 @@ class Lifecycle:
                         fail(409, 'conflict', 'operation_id is bound to another action')
                     return False, self.result(db, iid, operation_id)
             target = 'stopped' if action == 'stop' else 'running'
+            if target == 'running' and runtime_autoprovision.is_parked(db, iid):
+                fail(409, runtime_autoprovision.PARKED, runtime_autoprovision.PARKED_MESSAGE)
             if action != 'restart' and row['desired'] == target:
                 return False, self.result(db, iid)
             if expected_revision is not None and row['revision'] != expected_revision:
@@ -440,6 +448,14 @@ class Lifecycle:
             fail(409, 'stale_observation', 'Stale or invalid manager lease/revision')
         return row, job
 
+    @staticmethod
+    def runtime_model_workspace(db, instance):
+        if instance['backend_mode'] == 'compose' and runtime_autoprovision.is_auto(db, instance['id']):
+            # The account's DS-Bot applies its own override. Its manager mount
+            # supplies only the operator default, including after a key is cleared.
+            return None
+        return instance['workspace_id']
+
     def runtime_secret(self, manager, iid, jid, revision, lease, *, http_policy=None, capability=None):
         """Lease-gated resolved model API for container start. The key is not stored on the job."""
         self.expire()
@@ -447,7 +463,10 @@ class Lifecycle:
             row, job = self.leased(db, manager, iid, jid, revision, lease)
             if job['operation_type'] not in ('create', 'start', 'restart'):
                 fail(409, 'secret_not_applicable', 'Model API secret is only issued for create, start or restart')
-            public, key, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'], user_id=row['owner_id'])
+            workspace_id = self.runtime_model_workspace(db, row)
+            public, key, source = model_api.resolve(
+                db, self.store, workspace_id=workspace_id, user_id=row['owner_id'] if workspace_id else None,
+            )
             try:
                 payload = model_api.container_payload(public, key, source, http_policy=http_policy, capability=capability)
             except model_api.ModelEndpointError as error:

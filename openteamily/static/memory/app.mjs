@@ -219,9 +219,9 @@ export function bindGraphNodeGestures(target, node, options = {}) {
   target.addEventListener('click', open);
   target.addEventListener('dblclick', open);
   target.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       if (event.preventDefault) event.preventDefault();
-      open();
+      if (!event.repeat) open();
       return;
     }
     if (event.key === 'Escape') hide();
@@ -332,6 +332,11 @@ export function memoryPageFromSearch(search) {
 
 const MEMORY_ID = /^[0-9a-f]{32}$/;
 
+function memoryRevisionFromSearch(params) {
+  const revision = params.get('revision');
+  return /^[1-9][0-9]{0,7}$/.test(revision || '') ? Number(revision) : undefined;
+}
+
 export function memoryCitationFromSearch(search) {
   const params = new URLSearchParams(search || '');
   const [from] = params.getAll('from');
@@ -395,6 +400,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const emptyEl = document.getElementById('list-empty');
   const searchInput = document.getElementById('search');
   const clearSearch = document.getElementById('memory-search-clear');
+  const resetFilters = document.getElementById('memory-directory-reset');
   const directoryStatus = document.getElementById('memory-directory-status');
   const directoryMore = document.getElementById('memory-load-more');
   const directoryRetry = document.getElementById('memory-directory-retry');
@@ -469,6 +475,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  function directoryAddress() {
+    const saved = document.defaultView?.history?.state?.memoryDirectory;
+    return currentUser?.id && workspaceId() && saved?.owner === currentUser.id && saved.workspace === workspaceId()
+      ? saved : null;
+  }
+
+  function writeDirectoryAddress(url, {push = false, result = directoryAddress()?.result === true} = {}) {
+    const view = document.defaultView;
+    const history = view?.history;
+    if (!history?.replaceState || !view.location) return;
+    const method = push && history.pushState ? 'pushState' : 'replaceState';
+    const memoryDirectory = currentUser?.id && workspaceId() ? {
+      owner: currentUser.id, workspace: workspaceId(), query: searchInput.value,
+      filter: listFilter, topic: topicFilter, result: result && (!push || method === 'pushState'),
+    } : null;
+    if (!url) {
+      const previous = history.state?.memoryDirectory;
+      if (!memoryDirectory || (previous && Object.keys(memoryDirectory).every(key => previous[key] === memoryDirectory[key]))) return;
+      const {pathname, search, hash} = view.location;
+      url = (pathname || '/memory') + (search || '') + (hash || '');
+    }
+    history[method]({...history.state, memoryDirectory}, '', url);
+  }
+
+  function restoreDirectoryAddress() {
+    const saved = directoryAddress();
+    searchInput.value = typeof saved?.query === 'string' ? saved.query.slice(0, 80) : '';
+    topicFilter = saved?.filter === 'topics' && typeof saved.topic === 'string' ? saved.topic : '';
+    setDirectoryFilter(['updated', 'topics'].includes(saved?.filter) ? saved.filter : 'all');
+  }
+
   function setCitationStatus(message) {
     if (citationStatus) citationStatus.textContent = message;
   }
@@ -496,9 +533,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? activeCitation : null;
   }
 
-  function syncCitationUrl(params, citation = activeCitation) {
+  function syncCitationUrl(params, citation = activeCitation, address = {result: false}) {
     if (citation) params.set('from', citation.from);
-    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params);
+    writeDirectoryAddress('/memory?' + params, address);
   }
 
   function randomKey() {
@@ -786,7 +823,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meta.textContent = memoryPageMeta(item);
     if (meta.textContent) text.appendChild(meta);
     button.appendChild(text);
-    button.addEventListener('click', () => openPage(item.id));
+    button.addEventListener('click', () => openPage(item.id, undefined, undefined, {fromDirectory: true}));
     return button;
   }
 
@@ -827,6 +864,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     emptyEl.textContent = state?.needle ? MEMORY_EMPTY_NO_MATCH : state?.topic
       ? '这个标签下还没有记忆页。'
       : state?.updatedAfter != null ? '最近 7 天没有更新过的记忆页。' : MEMORY_EMPTY_WORKSPACE;
+    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && state?.updatedAfter == null);
     if (clearSearch) clearSearch.hidden = !searchInput.value;
     if (directoryStatus) {
       directoryStatus.textContent = state?.error || (busy ? (state.needle ? '正在搜索…' : '正在加载记忆…')
@@ -922,6 +960,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function searchDirectory({delay = 0, force = false} = {}) {
     if (!browseDirectory?.workspace || browseDirectory.owner !== currentUser) return;
+    writeDirectoryAddress();
     const needle = searchInput.value.trim();
     const topic = listFilter === 'topics' ? topicFilter : '';
     const recent = listFilter === 'updated';
@@ -996,7 +1035,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
     const query = params.toString();
-    view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
+    writeDirectoryAddress((view?.location?.pathname || '/memory') + (query ? '?' + query : ''), {result: false});
   }
 
   let profileRevision = null;
@@ -1509,7 +1548,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const stage = canvas.parentElement;
         const card = document.getElementById('graph-hover-card');
         bindGraphNodeGestures(group, node, {
-          openPage,
+          openPage: id => openPage(id, undefined, id),
           card,
           pointerCoarse: currentPointerIsCoarse(),
           viewportWidth: currentViewportWidth(),
@@ -1698,8 +1737,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
     const actionId = linked.get('action');
     const deepAction = scopedLink && pageId === 'todos' && /^[0-9a-f]{32}$/.test(actionId || '');
-    const linkedRevision = linked.get('revision');
-    const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
+    const revision = memoryRevisionFromSearch(linked);
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
     if (scopedLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
       const shared = await supplemental;
@@ -1766,9 +1804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     browseDirectory = id ? directoryWindow() : null;
     activeDirectory = browseDirectory;
     if (switched) {
-      searchInput.value = '';
-      topicFilter = '';
-      setDirectoryFilter('all');
+      restoreDirectoryAddress();
       currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
       renderGraph(currentGraph);
       renderActions([]);
@@ -1797,11 +1833,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
-  function showPageMode() {
-    if (listPanel.dataset.view !== 'page' && listPanel.dataset.mobileGraph !== 'true') {
+  function showPageMode(graphId) {
+    if (listPanel.dataset.view !== 'page') {
       const scrollers = [document.scrollingElement, document.getElementById('main'), listPanel,
         document.getElementById('memory-dir'), listEl].filter(Boolean);
-      directoryReturn = {state: activeDirectory, scroll: scrollers.map(node => [node, node.scrollTop])};
+      directoryReturn = {
+        state: activeDirectory,
+        scroll: scrollers.map(node => [node, node.scrollTop]),
+        graphId,
+        mobileGraph: listPanel.dataset.mobileGraph === 'true',
+      };
     }
     closeProfilePreview();
     candidates.show(false);
@@ -2272,7 +2313,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     citationTitle.focus?.();
   }
 
-  async function openPage(pageId, revision) {
+  async function openPage(pageId, revision, graphId, {fromDirectory = false} = {}) {
     if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
@@ -2295,17 +2336,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const page = seen.body.page;
     hideCitationPreview();
-    showPage(page, revision);
+    showPage(page, revision, graphId, fromDirectory && listPanel.dataset.view === 'overview');
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
+      const listing = openPageHistory({focus:false});
       const preview = historyPreviewToken;
-      await openPageHistory();
+      await listing;
       if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
           && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
     }
   }
 
-  function showPage(page, revision) {
+  function showPage(page, revision, graphId, push = false) {
     persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
@@ -2322,23 +2364,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
     resetDream();
-    showPageMode();
+    showPageMode(graphId);
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
     applyPageToEditor(page);
     showPageDraft({restore: true});
     syncExportButton();
-    syncPageUrl(revision);
+    syncPageUrl(revision, push);
     syncDirectorySelection();
     focusDetailBack('close-editor');
   }
 
-  function syncPageUrl(revision) {
+  function syncPageUrl(revision, push = false) {
     const id = workspaceId();
     if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
     const params = new URLSearchParams({workspace:id, page:currentPage.id});
     if (revision) params.set('revision', String(revision));
-    syncCitationUrl(params, citationFor(currentPage.id));
+    const citation = citationFor(currentPage.id);
+    syncCitationUrl(params, citation, {push, result: !citation && (push || directoryAddress()?.result === true)});
   }
 
   citationEdit?.addEventListener('click', async () => {
@@ -2378,15 +2421,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const historyPanel = document.getElementById('page-history');
   const historyOpen = document.getElementById('page-history-open');
+  const historyTitle = document.getElementById('page-history-title');
+  const historyBrowse = document.getElementById('page-history-browse');
+  const historyList = document.getElementById('page-history-list');
+  const historyMore = document.getElementById('page-history-more');
+  const historyRetry = document.getElementById('page-history-retry');
+  const historyEmpty = document.getElementById('page-history-empty');
+  const historyListStatus = document.getElementById('page-history-list-status');
+  const historyPreview = document.getElementById('page-history-preview');
+  const historyPreviewTitle = document.getElementById('page-history-preview-title');
+  const historyPreviewBody = document.getElementById('page-history-preview-body');
+  const historyPreviewBack = document.getElementById('page-history-preview-back');
+  const historyPreviewRetry = document.getElementById('page-history-preview-retry');
+  const historyRestore = document.getElementById('page-history-restore');
+  const historyRestoreNote = document.getElementById('page-history-restore-note');
+  const historyStatus = document.getElementById('page-history-status');
+  let historyCursor = null;
+  let historyTarget = 0;
   let historySelection = 0;
   let historyTokens = 0;
   let historyPreviewToken = 0;
+  let historyLoading = false;
+  let historyRestoring = null;
 
   function closePageHistory({restoreFocus = true} = {}) {
     if (!historyPanel || historyPanel.hidden) return;
     historyPanel.hidden = true;
+    historyOpen?.setAttribute('aria-expanded','false');
     historyTokens += 1;
     historyPreviewToken += 1;
+    historyLoading = false;
     historySelection = 0;
     if (restoreFocus) {
       syncPageUrl();
@@ -2404,85 +2468,134 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
   }
 
-  async function loadPageHistory() {
-    const wid = workspaceId();
-    if (!wid || !currentPage) return;
+  async function loadPageHistory({append = false} = {}) {
+    const wid = workspaceId(), id = currentPage?.id, owner = currentUser?.id;
+    if (!wid || !id || !historyList || (append && (!historyCursor || historyLoading))) return;
+    const cursor = append ? historyCursor : null;
+    const paging = append && document.activeElement === historyMore;
     const token = ++historyTokens;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions`);
-    if (token !== historyTokens || workspaceId() !== wid) return;
-    const list = document.getElementById('page-history-list');
-    const empty = document.getElementById('page-history-empty');
-    const status = document.getElementById('page-history-status');
-    if (!list) return;
-    list.replaceChildren();
-    if (result.status !== 200) {
-      if (status) status.textContent = '历史没有读取成功。';
+    historyLoading = true;
+    historyList.setAttribute('aria-busy','true');
+    historyMore.disabled = true;
+    historyRetry.hidden = true;
+    historyListStatus.textContent = '正在读取版本…';
+    if (!append) {
+      historyCursor = null;
+      historyList.replaceChildren();
+      historyMore.hidden = true;
+      historyEmpty.hidden = true;
+    }
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions${cursor ? '?cursor=' + cursor : ''}`)
+      .catch(() => ({status:0,body:{}}));
+    if (token !== historyTokens || workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner) return;
+    historyLoading = false;
+    historyList.setAttribute('aria-busy','false');
+    historyMore.disabled = false;
+    if (result.status !== 200 || !Array.isArray(result.body.items)) {
+      historyRetry.hidden = append;
+      historyListStatus.textContent = append ? '更早的版本没有读取成功，请重试。' : '历史没有读取成功，请重试。';
       return;
     }
-    const items = result.body.items || [];
-    if (empty) empty.hidden = items.length > 0;
-    if (status) status.textContent = '';
+    const boundary = cursor ?? result.body.current;
+    const items = result.body.items.filter(item => Number.isSafeInteger(item?.revision) &&
+      item.revision > 0 && item.revision < boundary && typeof item.summary === 'string');
+    const next = result.body.cursor;
+    historyCursor = Number.isSafeInteger(next) && next > 0 && next < boundary && next === items.at(-1)?.revision ? next : null;
+    const firstNew = historyList.children.length;
     for (const item of items) {
       const row = document.createElement('li');
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'page-history-item';
       open.dataset.revision = String(item.revision);
+      const title = document.createElement('strong');
       const when = memoryUpdatedLabel(item.created);
-      open.textContent = `修订 ${item.revision} · ${when || '时间未知'} · ${item.summary}`;
+      title.textContent = `修订 ${item.revision}${when ? ' · ' + when : ''}`;
+      const summary = document.createElement('span');
+      summary.textContent = item.summary;
+      open.append(title,summary);
       open.addEventListener('click', () => previewPageVersion(item.revision));
       row.appendChild(open);
-      list.appendChild(row);
+      historyList.appendChild(row);
+    }
+    const focusNew = paging && (document.activeElement === historyMore || document.activeElement === document.body);
+    historyMore.hidden = !historyCursor;
+    historyEmpty.hidden = historyList.children.length > 0;
+    historyListStatus.textContent = '';
+    if (focusNew) {
+      (historyList.children[firstNew]?.firstElementChild || historyList.lastElementChild?.firstElementChild || historyTitle).focus();
     }
   }
 
-  async function openPageHistory() {
+  function showHistoryList({focus = true} = {}) {
+    historyPreviewToken += 1;
+    historySelection = 0;
+    historyPreview.hidden = true;
+    historyBrowse.hidden = false;
+    if (focus) {
+      syncPageUrl();
+      (historyList.querySelector(`button[data-revision="${historyTarget}"]`) || historyTitle).focus();
+    }
+  }
+
+  async function openPageHistory({focus = true} = {}) {
     if (!currentPage || !historyPanel) return;
     historyPanel.hidden = false;
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    if (historyOpen) historyOpen.focus();
+    historyOpen.setAttribute('aria-expanded','true');
+    historyTarget = 0;
+    showHistoryList({focus});
     await loadPageHistory();
   }
 
   async function previewPageVersion(revision) {
     const wid = workspaceId();
     if (!wid || !currentPage) return;
-    const id = currentPage.id;
+    const id = currentPage.id, owner = currentUser?.id;
     const token = ++historyPreviewToken;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`);
-    if (workspaceId() !== wid || currentPage?.id !== id || token !== historyPreviewToken) return;
-    const status = document.getElementById('page-history-status');
-    if (result.status !== 200 || !result.body.version) {
-      if (status) status.textContent = '这一版没有读取成功。';
+    historyTarget = revision;
+    historySelection = 0;
+    historyBrowse.hidden = true;
+    historyPreview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${revision}`;
+    historyPreviewBody.textContent = '';
+    historyRestore.hidden = historyRestoreNote.hidden = historyPreviewRetry.hidden = true;
+    historyStatus.textContent = '正在读取此版本…';
+    historyPreviewTitle.focus();
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`)
+      .catch(() => ({status:0,body:{}}));
+    if (workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner || token !== historyPreviewToken) return;
+    const version = result.body.version;
+    if (result.status !== 200 || version?.revision !== revision || typeof version.body !== 'string' || typeof version.title !== 'string') {
+      historyPreviewRetry.hidden = result.status === 404;
+      historyStatus.textContent = result.status === 404 ? '此版本已不在保留范围内。' : '此版本没有读取成功，请重试。';
       return;
     }
-    const version = result.body.version;
     historySelection = version.revision;
-    document.getElementById('page-history-preview-title').textContent =
-      `修订 ${version.revision} · ${version.created_by}`;
-    document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${version.revision} · ${version.title}`;
+    historyPreviewBody.textContent = version.body || '（空白正文）';
+    historyRestore.hidden = historyRestoreNote.hidden = false;
+    historyRestore.disabled = historyRestoring?.id === id;
     syncPageUrl(revision);
-    if (status) status.textContent = '';
+    historyStatus.textContent = '';
   }
 
   async function restorePageVersion() {
     const wid = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!wid || !editing || !historySelection) return;
+    if (!wid || !editing || !historySelection || historyRestoring?.id === editing.id) return;
     const revision = historySelection;
-    const status = document.getElementById('page-history-status');
     if (!pageMatchesDraft(editing, editorFields())) {
-      if (status) status.textContent = '请先保存或清除当前草稿，再回滚历史版本。';
+      historyStatus.textContent = '请先保存或清除当前草稿，再恢复历史版本。';
       return;
     }
+    const pending = historyRestoring = {id:editing.id};
+    historyRestore.disabled = true;
+    historyStatus.textContent = '正在恢复版本…';
     const result = await request(
       'POST', `/v1/workspaces/${wid}/memory/${editing.id}/versions/${revision}/restore`,
       {revision: editing.revision}).catch(() => ({status:0, body:{}}));
+    if (historyRestoring === pending) historyRestoring = null;
     if (workspaceId() !== wid || currentUser !== owner) return;
     if (currentPage !== editing) {
       if (result.status === 200 && result.body.page) {
@@ -2492,9 +2605,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200 || !result.body.page) {
-      if (status) status.textContent = result.status === 409
-        ? '这一页已在别处更新，重新打开后再回滚。'
-        : '没有回滚成功。';
+      historyRestore.disabled = false;
+      if (!historyPreview.hidden) historyStatus.textContent = result.status === 409
+        ? '这一页已在别处更新，重新打开后再恢复。'
+        : '没有恢复成功，请重试。';
       return;
     }
     persistPageDraft();
@@ -2502,20 +2616,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageDraft();
     rememberPage(result.body.page);
     syncPageUrl();
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    await Promise.all([loadPageHistory(),loadGraph()]);
+    if (!historyPanel.hidden) {
+      historyTarget = 0;
+      showHistoryList();
+      await Promise.all([loadPageHistory(),loadGraph()]);
+    } else await loadGraph();
     if (currentPage === result.body.page && currentUser === owner && workspaceId() === wid) {
-      show('ok', `已回滚到修订 ${revision}，保存为新的修订 ${currentPage.revision}。`);
+      show('ok', `已恢复修订 ${revision}，保存为修订 ${currentPage.revision}。`);
     }
   }
 
   if (historyOpen) historyOpen.addEventListener('click', openPageHistory);
   const historyClose = document.getElementById('page-history-close');
   if (historyClose) historyClose.addEventListener('click', () => closePageHistory());
-  const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
+  historyMore?.addEventListener('click', () => loadPageHistory({append:true}));
+  historyRetry?.addEventListener('click', () => loadPageHistory());
+  historyPreviewBack?.addEventListener('click', () => showHistoryList());
+  historyPreviewRetry?.addEventListener('click', () => previewPageVersion(historyTarget));
 
   function savedActionFollowups() {
     const workspace = workspaceId();
@@ -2992,6 +3110,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
   clearSearch?.addEventListener('click', clearDirectorySearch);
+  resetFilters?.addEventListener('click', () => {
+    topicFilter = '';
+    setDirectoryFilter('all');
+    renderTopicFilters();
+    clearDirectorySearch();
+  });
   directoryMore?.addEventListener('click', () => {
     const state = activeDirectory;
     if (state?.cursor) return loadDirectoryPage(state, state.cursor, document.activeElement === directoryMore);
@@ -3026,14 +3150,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   const memoryWindow = document.defaultView;
+  let directoryBackPending = false;
   if (memoryWindow && memoryWindow.addEventListener) {
     memoryWindow.addEventListener('popstate', () => {
+      directoryBackPending = false;
       const search = memoryWindow.location.search;
       const view = memoryPageFromSearch(search);
-      if (memoryCitationFromSearch(search)) {
+      const params = new URLSearchParams(search);
+      const workspace = params.get('workspace');
+      if (memoryCitationFromSearch(search) || (MEMORY_ID.test(workspace || '') && workspace !== workspaceId())) {
         currentView = view;
         void loadSession();
-      } else showView(view, {sync: false});
+        return;
+      }
+      const saved = directoryAddress();
+      if (view !== 'overview' || !saved || workspace !== workspaceId()) {
+        showView(view, {sync: false});
+        return;
+      }
+      currentView = view;
+      restoreDirectoryAddress();
+      renderTopicFilters();
+      searchDirectory();
+      const page = params.get('page');
+      if (saved.result && MEMORY_ID.test(page || '')) void openPage(page, memoryRevisionFromSearch(params));
+      else returnToList({sync: false});
     });
   }
   function setDirectoryFilter(filter) {
@@ -3367,7 +3508,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function returnToList() {
+  function returnToList({sync = true} = {}) {
     persistPageDraft();
     const page = currentPage?.id;
     const action = currentAction?.id;
@@ -3378,24 +3519,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     if (groupShareDialog?.open) groupShareDialog.close();
-    setMobileGraph(false);
-    showView(currentView);
+    const returnToGraph = currentView === 'overview' && previous?.mobileGraph === true;
+    setMobileGraph(returnToGraph);
+    showView(currentView, {sync});
     syncExportButton();
     syncDirectorySelection();
     if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
       for (const [node, offset] of previous.scroll) node.scrollTop = offset;
     }
+    const graphNode = currentView === 'overview' && previous?.graphId
+      ? [...document.querySelectorAll('#graph-world [data-id]')].find(node => node.dataset.id === previous.graphId)
+      : null;
     const result = currentView === 'actions' && action
       ? [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
         .find(button => button.dataset.id === action)
-      : currentView === 'overview' ? directoryRow(page) : null;
-    const target = result || (currentView === 'overview' ? searchInput
+      : currentView === 'overview' && !returnToGraph ? directoryRow(page) : null;
+    const target = graphNode || result || (currentView === 'overview' ? (returnToGraph ? mobileGraph : searchInput)
       : document.querySelector('.memory-views [aria-current="page"]'));
     target?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
     target?.focus?.({preventScroll: true});
   }
 
-  document.getElementById('close-editor').addEventListener('click', returnToList);
+  document.getElementById('close-editor').addEventListener('click', () => {
+    if (directoryAddress()?.result && memoryWindow?.history?.back) {
+      if (directoryBackPending) return;
+      directoryBackPending = true;
+      memoryWindow.history.back();
+    } else returnToList();
+  });
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
   const newActionAttempts = new Map();

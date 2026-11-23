@@ -152,13 +152,28 @@ class Element {
   }
   get childElementCount() { return this.children.length; }
   get options() { return this.children; }
-  append(...nodes) { this.children.push(...nodes); }
-  prepend(...nodes) { this.children.unshift(...nodes); }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (node instanceof Element) Object.defineProperty(node, 'parent', {value:this, writable:true, configurable:true});
+    }
+    this.children.push(...nodes);
+  }
+  prepend(...nodes) {
+    for (const node of nodes) {
+      if (node instanceof Element) Object.defineProperty(node, 'parent', {value:this, writable:true, configurable:true});
+    }
+    this.children.unshift(...nodes);
+  }
+  contains(node) { return this === node || this.children.some(child => child.contains?.(node)); }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+    this.parent = null;
+  }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
   focus() {}
   select() {}
-  replaceChildren(...nodes) { this.children = nodes; }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(key, handler) { this.handlers[key] = handler; }
@@ -888,6 +903,81 @@ test('signed-in feed persists like/collect/follow and loads real private tabs', 
 });
 
 
+test('engaging with a later page keeps every card and a failed save can be retried in place', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const grid = doc.getElementById('feed-grid');
+  const pending = Promise.withResolvers();
+  const writes = [];
+  const reads = [];
+  const work = slug => ({slug, title: slug, author:'bob', path:'/w/' + slug, kind:'document'});
+  await mount(doc, {location:{search:''}, fetcher(path, options) {
+    if (path === '/v1/auth/session') return commentResponse({user:{username:'alice'}});
+    if (path.endsWith('/engagement')) {
+      writes.push(JSON.parse(options.body));
+      return writes.length === 1 ? pending.promise : commentResponse({liked:true,likes:3});
+    }
+    if (path.startsWith('/v1/discover/me/works?')) {
+      reads.push(path);
+      return path.includes('cursor=page-2') ? commentResponse({items:[work('second-page')]})
+        : commentResponse({items:[work('first-page')],cursor:'page-2'});
+    }
+    throw new Error(path);
+  }});
+  await doc.getElementById('feed-more').handlers.click();
+  const [first, second] = grid.children;
+  const like = second.children[1].children[0];
+  const write = like.handlers.click();
+  assert.equal(like.attributes['aria-busy'],'true');
+  await like.handlers.click();
+  assert.equal(writes.length,1);
+  pending.resolve({status:503,json:async()=>({})});
+  await write;
+  assert.equal(like.attributes['aria-pressed'],'false');
+  assert.equal(second.children[2].hidden,false);
+  assert.equal(first.children[2].hidden,true);
+  await like.handlers.click();
+  assert.equal(second.children[2].hidden,true);
+  assert.equal(like.attributes['aria-label'],'取消点赞 · 3');
+  assert.equal(like.attributes['aria-pressed'],'true');
+  assert.equal(like.attributes['aria-busy'],'false');
+  assert.equal(grid.children[0],first);
+  assert.equal(grid.children[1],second);
+  assert.equal(reads.length,2);
+});
+
+test('a stale following response cannot restore works from an author just unfollowed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const mutation = Promise.withResolvers();
+  const following = Promise.withResolvers();
+  const grid = doc.getElementById('feed-grid');
+  const work = (slug,author) => ({slug, title:slug, author, path:'/w/' + slug,kind:'document',following:true});
+  const items = [work('first-work','first'),work('second-work','first'),work('other-work','other')];
+  const reads = [];
+  await mount(doc, {location:{search:''}, fetcher(path) {
+    if (path === '/v1/auth/session') return commentResponse({user:{username:'alice'}});
+    if (path.endsWith('/engagement')) return mutation.promise;
+    if (path.startsWith('/v1/discover/me/works?')) {
+      reads.push(path);
+      return path.includes('tab=following') ? following.promise : commentResponse({items:items.map(item=>({...item}))});
+    }
+    throw new Error(path);
+  }});
+  const firstFollow = grid.children[0].children[1].children[2];
+  const secondFollow = grid.children[1].children[1].children[2];
+  const write = firstFollow.handlers.click();
+  assert.equal(secondFollow.attributes['aria-busy'],'true');
+  const load = doc.getElementById('feed-tab-following').handlers.click();
+  mutation.resolve(commentResponse({following:false}));
+  await write;
+  following.resolve(commentResponse({items}));
+  await load;
+  assert.deepEqual(grid.children.map(card=>card.dataset.slug),['other-work']);
+  assert.equal(grid.children[0].children[1].children[2].attributes['aria-pressed'],'true');
+  assert.equal(reads.length,2);
+});
+
 test('switching private feed tabs cannot be overwritten by an older in-flight response', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
@@ -1118,6 +1208,112 @@ test('following nobody from a shared URL shows the following empty note, not a b
   assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
   assert.match(doc.getElementById('feed-note').textContent, /你关注的作者已公开/);
   assert.match(calls.at(-1), /tab=following/);
+});
+
+test('feed arrow and boundary keys select real tabs immediately with one tab stop', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), visits = [], paths = [];
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  assert.match(html, /class="feed-tabs" role="tablist" aria-label="动态类型"/);
+  assert.match(html, /id="feed-results" role="tabpanel" aria-labelledby="feed-tab-activity"/);
+  const tabs = ['following', 'activity', 'collected'];
+  const el = name => doc.getElementById('feed-tab-' + name);
+  for (const name of tabs) {
+    assert.match(html, new RegExp('id="feed-tab-' + name + '"[^>]*role="tab" aria-controls="feed-results"'));
+    el(name).focus = () => { doc.activeElement = el(name); };
+  }
+  await mount(doc, {
+    location: {search: '', pathname: '/discover'},
+    history: {pushState(_state, _title, url) { visits.push(url); }},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      paths.push(path);
+      return commentResponse({items: []});
+    },
+  });
+  async function move(from, key, to) {
+    let prevented = false;
+    const pending = el(from).handlers.keydown({key, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.equal(doc.activeElement, el(to));
+    assert.deepEqual(tabs.map(name => el(name).attributes.tabindex), tabs.map(name => name === to ? '0' : '-1'));
+    assert.deepEqual(tabs.map(name => el(name).attributes['aria-selected']), tabs.map(name => String(name === to)));
+    assert.equal(doc.getElementById('feed-results').attributes['aria-labelledby'], 'feed-tab-' + to);
+    await pending;
+  }
+  await move('activity', 'ArrowLeft', 'following');
+  await move('following', 'ArrowLeft', 'collected');
+  await move('collected', 'Home', 'following');
+  await move('following', 'ArrowRight', 'activity');
+  await move('activity', 'End', 'collected');
+  assert.deepEqual(visits, ['/discover?feed=following', '/discover?feed=collected', '/discover?feed=following',
+    '/discover', '/discover?feed=collected']);
+  assert.match(paths.at(-1), /tab=collected/);
+  const before = paths.length;
+  await el('collected').handlers.keydown({key: 'ArrowRight', altKey: true});
+  assert.equal(paths.length, before);
+});
+
+test('empty filtered following offers a reset and keeps the selected feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), paths = [];
+  await mount(doc, {
+    location: {search: '?feed=following&kind=image', pathname: '/discover'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      paths.push(path);
+      return commentResponse({items: []});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-note').textContent, FEED_SEARCH_EMPTY_NOTE);
+  assert.equal(el('feed-empty-reset').hidden, false);
+  await el('feed-empty-reset').handlers.click();
+  assert.match(paths.at(-1), /tab=following/);
+  assert.doesNotMatch(paths.at(-1), /kind=/);
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-following-empty').hidden, false);
+  assert.equal(el('feed-empty-reset').hidden, true);
+});
+
+test('returning to a visited tab restores pages with a fresh cursor without pulling keyboard focus away', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument(), paths = [];
+  let activityReads = 0;
+  await mount(doc, {
+    location: {search: '?q=launch', pathname: '/discover'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      paths.push(params);
+      if (params.get('tab') === 'following') return commentResponse({items: []});
+      if (params.has('cursor')) return commentResponse({items: [detailFixture({slug: 'second-page'})]});
+      return commentResponse({items: [detailFixture({slug: 'first-page'})], cursor: 'fresh-' + ++activityReads});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  const activity = el('feed-tab-activity');
+  const following = el('feed-tab-following');
+  activity.id = 'feed-tab-activity';
+  following.id = 'feed-tab-following';
+  let focusCount = 0;
+  activity.focus = () => { doc.activeElement = activity; focusCount++; };
+  following.focus = () => { doc.activeElement = following; };
+  await el('feed-more').handlers.click();
+  const before = activityReads;
+  el('main').scrollTop = 570;
+  await activity.handlers.keydown({key: 'ArrowLeft', preventDefault() {}});
+  assert.equal(el('main').scrollTop, 0);
+  assert.equal(doc.activeElement, following);
+  await following.handlers.keydown({key: 'ArrowRight', preventDefault() {}});
+  assert.equal(paths.at(-1).get('cursor'), 'fresh-' + (before + 1));
+  assert.equal(paths.at(-1).get('q'), 'launch');
+  assert.equal(el('feed-grid').children.length, 2);
+  assert.equal(el('main').scrollTop, 570);
+  assert.equal(doc.activeElement, activity);
+  assert.equal(focusCount, 1, 'the key handler, not the async restore, moves focus');
 });
 
 
@@ -2142,6 +2338,59 @@ test('posting a comment clears the editor and exposes pending text before the re
   assert.equal(input.value, '');
   assert.equal(classHits(list, 'feed-comment-body').length, 1);
   assert.equal(toggle.textContent, '评论 · 1');
+});
+
+test('an unconfirmed comment survives a later successful send and can be retried after reload only by its original account', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const work = detailFixture({comment_count: 0});
+  const saved = new Map();
+  const storage = {getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value),
+    removeItem: key => saved.delete(key)};
+  const writes = [];
+  const draft = '尚未确认的评论';
+  const next = '之后发送成功的评论';
+  async function openComments(id) {
+    const doc = feedDocument();
+    doc.defaultView = {sessionStorage: storage};
+    await mount(doc, {location: {search: ''}, async fetcher(path, options) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id, username: 'same-display-name'}});
+      if (path.startsWith('/v1/discover/me/works?')) return commentResponse({items: [work]});
+      if (path.endsWith('/comments?limit=12')) return commentResponse({items: [], comment_count: 0});
+      if (path.endsWith('/comments') && options.method === 'POST') {
+        const {body} = JSON.parse(options.body);
+        writes.push({id, key: options.headers['Idempotency-Key'], body});
+        if (writes.length === 1) return commentResponse({}, 503);
+        return commentResponse({comment: {id: 'posted-' + body, body, parent_id: null}, comment_count: 2});
+      }
+      throw new Error('Unexpected ' + path);
+    }});
+    const [toggle] = classHits(doc.getElementById('feed-grid'), 'feed-comments-toggle');
+    await toggle.handlers.click();
+    return part => doc.getElementById('feed-comments-' + part);
+  }
+
+  const first = await openComments('account-one');
+  first('input').value = draft;
+  first('input').handlers.input();
+  await first('form').handlers.submit({preventDefault() {}});
+  first('input').value = next;
+  first('input').handlers.input();
+  await first('form').handlers.submit({preventDefault() {}});
+  assert.equal(writes[1].body, next);
+  assert.notEqual(writes[0].key, writes[1].key);
+  const otherAccount = await openComments('account-two');
+  assert.equal(otherAccount('input').value, '');
+  assert.equal(otherAccount('retry-post').hidden, true);
+
+  const recovered = await openComments('account-one');
+  assert.equal(recovered('input').value, draft);
+  assert.match(recovered('status').textContent, /未确认/);
+  assert.equal(recovered('submit').textContent, '重试发送');
+  assert.equal(writes.length, 2);
+  await recovered('form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length, 3);
+  assert.deepEqual(writes[2], writes[0]);
+  assert.equal(saved.size, 0);
 });
 
 test('comment permalinks open a published work missing from the feed without waiting for the feed', async () => {

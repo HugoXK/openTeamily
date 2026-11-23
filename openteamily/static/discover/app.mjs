@@ -82,6 +82,7 @@ export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显�
 export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
 export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
+const FEED_TABS = ['following', 'activity', 'collected'];
 export const FEED_KINDS = [
   '', 'website', 'document', 'image', 'audio', 'slides', 'video', 'model3d', 'whiteboard', 'dashboard', 'spreadsheet',
 ];
@@ -759,10 +760,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let composingQuery = false;
   const feedPositions = new Map();
   const feedActions = new Map();
+  const engagementPending = new Map();
   const commentButtons = new Map();
   const workTriggers = new Map();
   const searchInput = document.getElementById('feed-query');
   const clearSearch = document.getElementById('feed-clear');
+  const resetEmptyFeed = document.getElementById('feed-empty-reset');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
     'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
@@ -816,13 +819,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.preview.replaceChildren();
   }
 
-  function restoreFeedPosition(position) {
+  function restoreFeedPosition(position, {focus = true} = {}) {
     const control = position.focusId && document.getElementById(position.focusId);
     const card = workTriggers.get(position.slug);
     const workTrigger = position.detailButton ? card?.closest?.('.feed-entry')?.querySelector?.('.feed-detail-toggle') || card : card;
     const target = position.trigger?.isConnected ? position.trigger : workTrigger || (control && !control.hidden ? control : null);
     initialView.scrollTop = position.scroll;
-    (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
+    if (focus) (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
     if (target && Number.isFinite(position.offset)) {
       initialView.scrollTop += target.getBoundingClientRect().top - initialView.getBoundingClientRect().top - position.offset;
     }
@@ -1063,7 +1066,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
-      button.disabled = !canEngage || Boolean(entry.saving);
+      button.disabled = !canEngage || Boolean(entry.saving) ||
+        engagementPending.has(engagementKey(entry.item, action));
       if (canEngage) {
         button.textContent = engagementLabel(entry.item, action, flag, label);
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
@@ -1220,38 +1224,98 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
 
+  function engagementKey(item, action) {
+    const subject = action === 'follow' ? creatorHandle(item) || item.author || item.slug : item.slug;
+    return JSON.stringify([action, subject]);
+  }
+
+  function sameEngagementSubject(item, source, action) {
+    return item.slug === source.slug || (action === 'follow' && sameWorkCreator(source, item));
+  }
+
+  function applyEngagement(item, change) {
+    if (!sameEngagementSubject(item, change.source, change.action)) return true;
+    item[change.flag] = change.enabled;
+    if (change.action === 'like') item.likes = change.likes;
+    return change.enabled ||
+      !((change.action === 'collect' && feedState.tab === 'collected') ||
+        (change.action === 'follow' && feedState.tab === 'following'));
+  }
+
+  function updateFeedEngagement(change) {
+    if (feedReader) feedReader.changes.set(engagementKey(change.source, change.action), change);
+    if (!matchesFeedViewer(feedViewer)) return;
+    const remaining = feedState.items.filter(item => applyEngagement(item, change));
+    if (remaining.length !== feedState.items.length) {
+      const heldFocus = document.activeElement;
+      const keep = new Set(remaining);
+      let focusIndex = -1;
+      let passed = 0;
+      for (const item of feedState.items) {
+        if (keep.has(item)) {
+          passed += 1;
+          continue;
+        }
+        const controls = feedActions.get(item);
+        if (!controls) continue;
+        if (controls.row.contains(heldFocus)) focusIndex = passed;
+        if (controls.cover) {
+          coverObserver?.unobserve(controls.cover);
+          pendingCovers.delete(controls.cover);
+        }
+        controls.row.remove();
+        feedActions.delete(item);
+        commentButtons.delete(item.slug);
+        workTriggers.delete(item.slug);
+      }
+      feedState.items = remaining;
+      document.getElementById('feed-grid').dataset.empty = String(!remaining.length);
+      updateFeedStatus();
+      if (focusIndex >= 0) {
+        const next = remaining[Math.min(focusIndex, remaining.length - 1)];
+        const target = feedActions.get(next)?.buttons.get(change.action) || workTriggers.get(next?.slug) || searchInput;
+        target?.focus({preventScroll:true});
+      }
+    }
+  }
+
+  async function saveWorkEngagement(item, action, flag) {
+    const viewer = currentUser;
+    const key = engagementKey(item, action);
+    if (!viewer || engagementPending.has(key)) return null;
+    const operation = {};
+    const enabled = !item[flag];
+    engagementPending.set(key, operation);
+    syncPendingEngagement(item, action);
+    const result = await request('POST', '/v1/discover/works/' + item.slug + '/engagement', {action, enabled})
+      .catch(() => ({status: 0}));
+    if (engagementPending.get(key) !== operation) return null;
+    engagementPending.delete(key);
+    if (currentUser !== viewer) return null;
+    if (result.status === 200) {
+      const changes = result.body?.engagement || result.body || {};
+      const confirmed = changes[flag] ?? enabled;
+      const likes = changes.likes ?? Math.max(0, (item.likes || 0) + Number(confirmed) - Number(Boolean(item[flag])));
+      const change = {source:item, action, flag, enabled:confirmed, likes};
+      applyEngagement(item, change);
+      updateFeedEngagement(change);
+      if (activeWork?.item && activeWork.viewer === viewer) applyEngagement(activeWork.item, change);
+    }
+    syncPendingEngagement(item, action);
+    return result.status === 200;
+  }
+
   async function updateWorkEngagement(action, flag) {
     const entry = activeWork;
     if (!entry?.item || entry.saving || !entry.viewer || entry.viewer !== currentUser) return;
-    const me = currentUser;
-    const enabled = !entry.item[flag];
+    if (engagementPending.has(engagementKey(entry.item, action))) return;
     entry.saving = action;
     detail.status.textContent = '';
     setWorkEngagement(entry);
-    const result = await request('POST', '/v1/discover/works/' + entry.slug + '/engagement', {action, enabled})
-      .catch(() => ({status: 0}));
-    if (currentUser !== me) return;
+    const saved = await saveWorkEngagement(entry.item, action, flag);
     entry.saving = '';
-    if (result.status === 200) {
-      const changes = result.body?.engagement || result.body || {};
-      entry.item[flag] = changes[flag] ?? enabled;
-      if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
-      for (const item of feedState.items) {
-        if (item.slug === entry.slug || (action === 'follow' && sameWorkCreator(entry.item, item))) {
-          item[flag] = entry.item[flag];
-          if (action === 'like') item.likes = entry.item.likes;
-        }
-      }
-      if (action === 'collect' && !enabled && feedState.tab === 'collected') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
-      }
-      if (action === 'follow' && !enabled && feedState.tab === 'following') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && !sameWorkCreator(entry.item, item));
-      }
-      renderFeed();
-    }
-    if (activeWork !== entry) return;
-    if (result.status !== 200) detail.status.textContent = '操作未保存，请重试。';
+    if (activeWork !== entry || entry.viewer !== currentUser) return;
+    if (saved === false) detail.status.textContent = '操作未保存，请重试。';
     setWorkEngagement(entry);
   }
 
@@ -1328,10 +1392,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function applyFeedChrome({restoreQuery = false} = {}) {
-    for (const name of ['following', 'activity', 'collected']) {
+    for (const name of FEED_TABS) {
       const button = document.getElementById('feed-tab-' + name);
-      if (button) button.setAttribute('aria-selected', name === feedState.tab ? 'true' : 'false');
+      if (!button) continue;
+      const selected = name === feedState.tab;
+      button.setAttribute('aria-selected', String(selected));
+      button.setAttribute('tabindex', selected ? '0' : '-1');
     }
+    document.getElementById('feed-results')?.setAttribute('aria-labelledby', 'feed-tab-' + feedState.tab);
     const popular = feedState.tab === 'activity' && feedState.sort === 'popular';
     const popularButton = document.getElementById('feed-sort-popular');
     if (popularButton) {
@@ -1416,9 +1484,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  async function readFeedPosition(position, {reuseCurrent = false} = {}) {
+  async function readFeedPosition(position, {reuseCurrent = false, restoreFocus = true} = {}) {
     if (!position || sessionPending) return loadFeed();
-    const restoring = {position};
+    const restoring = {position, restoreFocus};
     feedRestore = restoring;
     let loaded = reuseCurrent && feedPages > 0 || await loadFeed();
     let remaining = position.pageCount;
@@ -1428,7 +1496,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedRestore !== restoring) return;
     feedRestore = null;
     updateFeedStatus();
-    if (!activeWork) restoreFeedPosition(position);
+    if (!activeWork) restoreFeedPosition(position, {focus: restoreFocus});
   }
 
   function restoreRecordedFeedPosition() {
@@ -1437,24 +1505,26 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (saved) return readFeedPosition(saved, {reuseCurrent: true});
   }
 
-  function applyFeedFilters(changes, {refresh = false} = {}) {
+  function applyFeedFilters(changes, {refresh = false, resume = false} = {}) {
     cancelSearch();
     const current = feedSearchText(feedState);
     const next = {...feedState, ...changes};
-    if (feedSearchText(next) === current) {
+    const nextKey = feedSearchText(next);
+    if (nextKey === current) {
       if (refresh && !feedState.loading && !feedRestore && (currentUser || feedState.tab === 'activity')) {
         return loadFeed({refresh: true});
       }
       return;
     }
-    rememberFeedPosition(undefined, {persist: !activeWork});
+    const priorTab = resume && document.getElementById('feed-tab-' + feedState.tab);
+    rememberFeedPosition(priorTab ? captureFeedPosition(priorTab) : undefined, {persist: !activeWork});
     feedRestore = null;
     Object.assign(feedState, changes);
     applyFeedChrome({restoreQuery: true});
     history?.pushState?.(null, '', feedUrl());
     syncLoginLink();
     initialView.scrollTop = 0;
-    return loadFeed();
+    return resume ? readFeedPosition(feedPositions.get(nextKey), {restoreFocus: false}) : loadFeed();
   }
 
   function searchText() {
@@ -1522,8 +1592,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' &&
-      !feedState.query && !feedState.items.length && !feedState.loading && !feedFailure);
+    const filtered = Boolean(feedState.query || feedState.kind || feedState.creator);
+    const empty = !feedState.items.length && !feedState.loading && !feedRestore && !feedFailure;
+    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !filtered && empty);
+    if (resetEmptyFeed) resetEmptyFeed.hidden = !(empty && filtered && (currentUser || feedState.tab === 'activity'));
     if (gridSection) gridSection.hidden = false;
     if (searchNote) searchNote.hidden = true;
     if (!note) return;
@@ -1534,11 +1606,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
     else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
       note.textContent = '该作者还没有公开作品。';
-    else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
+    else if (filtered && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
-    else note.textContent = (feedState.query || feedState.kind || feedState.creator) && !feedState.items.length
-      ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
+    else note.textContent = feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE;
   }
 
   const previewCache = new Map();
@@ -1739,37 +1810,48 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return nativeCatalog ? matchesNativeViewer(viewer) : Boolean(currentUser && viewer === currentUser);
   }
 
+  function syncFeedEngagementButton(item, controls, action) {
+    const button = controls.buttons.get(action);
+    if (!button) return;
+    const [, flag, label] = engagement.find(([kind]) => kind === action);
+    const pending = engagementPending.has(engagementKey(item, action));
+    if (action === 'like') button.textContent = '点赞 · ' + (item.likes || 0);
+    else if (action === 'follow') button.textContent = item[flag] ? '已关注' : '关注';
+    else button.textContent = item[flag] ? '已收录' : label;
+    button.setAttribute('aria-label', engagementLabel(item, action, flag, label));
+    button.setAttribute('aria-pressed', String(Boolean(item[flag])));
+    button.setAttribute('aria-disabled', String(pending));
+    button.setAttribute('aria-busy', String(pending));
+  }
+
+  function syncPendingEngagement(source, action) {
+    for (const [item, controls] of feedActions) {
+      if (sameEngagementSubject(item, source, action)) syncFeedEngagementButton(item, controls, action);
+    }
+    if (activeWork?.item && sameEngagementSubject(activeWork.item, source, action)) setWorkEngagement(activeWork);
+  }
+
   function addFeedEngagement(item, actions) {
     const viewer = currentUser;
     if (!matchesFeedViewer(feedViewer) || actions.viewer === viewer) return;
     actions.viewer = viewer;
-    const buttons = [];
-    for (const [action, flag, label] of engagement) {
+    for (const [action, flag] of engagement) {
       if (action === 'follow' && item.own_work) continue;
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = action === 'like' ? '点赞 · ' + (item.likes || 0) : action === 'follow' ? '关注' : label;
-      button.setAttribute('aria-label', engagementLabel(item, action, flag, label));
-      button.setAttribute('aria-pressed', String(Boolean(item[flag])));
+      actions.buttons.set(action, button);
+      syncFeedEngagementButton(item, actions, action);
       const isCurrent = () => viewer === currentUser && feedActions.get(item) === actions;
       button.addEventListener('click', async () => {
-        if (!isCurrent() || button.disabled) return;
-        button.disabled = true;
-        const result = await request('POST', `/v1/discover/works/${item.slug}/engagement`, {action, enabled: !item[flag]})
-          .catch(() => ({status: 0}));
-        if (!isCurrent()) return;
-        button.disabled = false;
-        if (result.status !== 200) {
-          const error = document.getElementById('feed-error');
-          error.hidden = false;
-          error.textContent = '操作未保存，请重试。';
-          return;
-        }
-        await loadFeed();
+        if (!isCurrent() || engagementPending.has(engagementKey(item, action))) return;
+        actions.feedback.hidden = true;
+        const saved = await saveWorkEngagement(item, action, flag);
+        if (saved !== false || !isCurrent()) return;
+        actions.feedback.textContent = '操作未保存，请重试。';
+        actions.feedback.hidden = false;
       });
-      buttons.push(button);
     }
-    actions.element.prepend(...buttons);
+    actions.element.prepend(...actions.buttons.values());
   }
 
   function renderFeed(start = 0) {
@@ -1807,11 +1889,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         });
         actions.append(button);
         commentButtons.set(item.slug, button);
-        const controls = {element: actions, viewer: null};
+        const feedback = document.createElement('p');
+        feedback.className = 'feed-card-feedback';
+        feedback.setAttribute('role', 'alert');
+        feedback.hidden = true;
+        const controls = {row:entry, cover, element:actions, feedback, buttons:new Map(), viewer:null};
         feedActions.set(item, controls);
         addFeedEngagement(item, controls);
         bindWorkDetail(actions, card, item);
-        entry.append(actions);
+        entry.append(actions, feedback);
       }
       grid.append(entry);
     }
@@ -1864,7 +1950,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     const scope = sessionRequest;
-    feedReader?.abort();
+    feedReader?.controller.abort();
     if (!append && !refresh) {
       if (!retainItems) feedState.items = [];
       feedState.cursor = '';
@@ -1886,10 +1972,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
-    const reader = new AbortController();
+    const reader = {controller:new AbortController(), changes:new Map()};
     feedReader = reader;
     let result;
-    try { result = await request('GET', path, undefined, undefined, reader.signal); }
+    try { result = await request('GET', path, undefined, undefined, reader.controller.signal); }
     catch { result = {status: 0, body: {}}; }
     if (seq !== feedRequest || scope !== sessionRequest) return;
     feedReader = null;
@@ -1900,8 +1986,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     if (result.status !== 200) {
       const message = result.body?.error?.message || '无法加载公开作品。';
-      const position = feedRestore?.position;
-      const retry = position ? () => readFeedPosition(position, {reuseCurrent: append}) : () => loadFeed({append, retainItems, refresh});
+      const restoring = feedRestore;
+      const retry = restoring
+        ? () => readFeedPosition(restoring.position, {reuseCurrent: append, restoreFocus: restoring.restoreFocus})
+        : () => loadFeed({append, retainItems, refresh});
       setFeedError(message, retry);
       updateFeedStatus();
       return;
@@ -1916,7 +2004,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     const start = append ? feedState.items.length : 0;
-    const incoming = catalogItems(result.body);
+    let incoming = catalogItems(result.body);
+    if (!mismatch && matchesFeedViewer(nativeCatalog ? nativeViewer : (privateFeed ? viewer : null))) {
+      for (const change of reader.changes.values()) incoming = incoming.filter(item => applyEngagement(item, change));
+    }
     if (append) {
       const seen = new Set(feedState.items.map(item => item.slug));
       for (const item of incoming) {
@@ -2651,6 +2742,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    engagementPending.clear();
     sessionState = 'pending';
     cancelSearch();
     composingQuery = false;
@@ -2681,7 +2773,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       currentUser = session.status === 200 ? session.body?.user || null : null;
       sessionState = currentUser ? 'signed-in' : session.status === 401 ? 'guest' : 'failed';
       whoami.textContent = currentUser?.username || '';
-      workComments.setActor(currentUser?.id || currentUser?.username || '');
+      workComments.setActor(currentUser?.id || currentUser?.username || '', currentUser?.id);
       applyCatalogChrome();
       syncCatalogActions();
     });
@@ -2849,6 +2941,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return clearFeedSearch();
   });
   clearSearch?.addEventListener('click', clearFeedSearch);
+  resetEmptyFeed?.addEventListener('click', () => {
+    searchInput?.focus?.({preventScroll: true});
+    return applyFeedFilters({query: '', kind: '', creator: '', sort: 'latest'});
+  });
   retryFeed?.addEventListener('click', () => {
     const retry = feedFailure;
     if (!retry) return;
@@ -2866,10 +2962,29 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (loaded && event?.detail === 0 && next) workTriggers.get(next.slug)?.focus?.();
     });
   }
-  for (const tab of ['following', 'activity', 'collected']) {
+  const selectFeedTab = tab => applyFeedFilters({
+    tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText(),
+  }, {resume: true});
+  for (const [index, tab] of FEED_TABS.entries()) {
     const button = document.getElementById('feed-tab-' + tab);
-    if (button) button.addEventListener('click', () =>
-      applyFeedFilters({tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText()}));
+    if (!button) continue;
+    button.addEventListener('click', () => selectFeedTab(tab));
+    button.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      let next;
+      switch (event.key) {
+        case 'ArrowLeft': next = (index + FEED_TABS.length - 1) % FEED_TABS.length; break;
+        case 'ArrowRight': next = (index + 1) % FEED_TABS.length; break;
+        case 'Home': next = 0; break;
+        case 'End': next = FEED_TABS.length - 1; break;
+        default: return;
+      }
+      event.preventDefault();
+      const selected = FEED_TABS[next];
+      const loading = selectFeedTab(selected);
+      document.getElementById('feed-tab-' + selected)?.focus?.({preventScroll: true});
+      return loading;
+    });
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

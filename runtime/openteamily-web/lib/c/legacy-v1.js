@@ -917,7 +917,7 @@ function messengerRoutes(host, wakeReplies) {
             throw new Fault(400, 'invalid', '群聊管理请求无效。')
           }
           if (policy) {
-            if (!['default','everyone','lead'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
+            if (!['default','everyone','lead','mentions'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
               throw new Fault(400, 'invalid', '请选择有效的智能体回复策略。')
             }
             if (mode === 'lead') sharedAgentTargets([lead])
@@ -1795,7 +1795,10 @@ function discoverRoutes(host) {
           const result = await client(host).post(`/v1/ot/discover/${match[1]}/comments`, {
             body: body?.body, parent_id: body?.parent_id, client_key: key,
           })
-          return [result.replayed === true ? 200 : 201, {comment: workCommentItem(result.comment), comment_count: result.comment_count}]
+          return [result.replayed === true ? 200 : 201, {
+            comment: workCommentItem(result.comment), comment_count: result.comment_count,
+            ...(Number.isSafeInteger(result.parent_reply_count) ? {parent_reply_count: result.parent_reply_count} : {}),
+          }]
         })
       },
     },

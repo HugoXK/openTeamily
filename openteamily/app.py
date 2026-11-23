@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
-from .lifecycle import RuntimeFault, UNSUPPORTED
+from .lifecycle import RuntimeFault, UNSUPPORTED, valid_key
 from . import agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
@@ -100,7 +100,7 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
         from .model_http_policy import ModelHttpPolicy
         if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
             raise ValueError("Invalid operator model HTTP policy")
@@ -572,7 +572,7 @@ class App:
                 session = self.authenticated(db, env, now)
             if method == 'POST':
                 self.csrf_check(env, session)
-            return self.runtime_dispatch(env, session['user_id'], method, path, query)
+            return self.runtime_dispatch(env, session, method, path, query)
         if path == '/v1/auth/runtime-readiness' and method == 'GET' and query in ('', 'include=personal-chat'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
@@ -668,17 +668,6 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
-
-
-
-
-    # Automations run on each user's DS-Bot (features/automations). The platform has no
-    # scheduler; these stay as no-ops for deployments whose wsgi.py still calls them.
-    def start_automation_worker(self):
-        return None
-
-    def stop_automation_worker(self):
-        return None
 
     def _media_upload(self, env, limit=None, mimes=None, unsupported=400):
         limit = artifacts.MAX_MEDIA_BYTES + 8192 if limit is None else limit
@@ -827,7 +816,19 @@ class App:
     def runtime_readiness(self, db, user_id):
         if not self.auto_provision.enabled:
             return 'unmanaged'
-        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id)
+        state = owner_runtime_readiness(db, user_id, self.auto_provision.manager_id, manager_auth=self.manager_auth)
+        if state != 'setup':
+            return state
+        if runtime_autoprovision.at_capacity(db, self.auto_provision):
+            return 'capacity'
+        personal_agent = personal.load(db, user_id)
+        try:
+            self.lifecycle.check_create_capacity(db, personal_agent['workspace_id'] if personal_agent is not None else None)
+        except RuntimeFault as error:
+            if error.status == 429:
+                return 'capacity'
+            raise
+        return state
 
     def start_personal_runtime(self, env, now):
         with self.store.connect() as db:
@@ -838,9 +839,13 @@ class App:
             state = self.runtime_readiness(db, owner)
             if state in ('starting', 'ready'):
                 return 200, {'state': state}, []
+            if state == 'parked':
+                refuse(409, runtime_autoprovision.PARKED, runtime_autoprovision.PARKED_MESSAGE)
             if state != 'stopped':
                 refuse(409, 'runtime_unavailable', 'The personal runtime cannot be started here')
-            instance = runtime_autoprovision.resumable_instance(db, owner, self.auto_provision.manager_id)
+            instance = runtime_autoprovision.resumable_instance(
+                db, owner, self.auto_provision.manager_id, manager_auth=self.manager_auth,
+            )
         if instance is None:
             refuse(409, 'runtime_unavailable', 'The personal runtime changed; check its current state')
         started, _ = self.lifecycle.start(owner, instance['id'], expected_revision=instance['revision'])
@@ -1049,23 +1054,16 @@ class App:
         stored = bot_social.load_platform(db) if scope == 'platform' else bot_social.load_workspace(db, workspace['id'])
         return 200, {'bot_social': bot_social.public_view(stored, scope)}, []
 
-    def with_model_api(self, workspace_id, payload):
+    def with_model_api(self, payload):
+        def attach(db, instance):
+            workspace_id = self.lifecycle.runtime_model_workspace(db, instance)
+            public, _key, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
+            return {**instance, 'model_api': model_api.effective_view(public, source)}
+
         with self.store.connect() as db:
-            public, _secret, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
-        public = model_api.effective_view(public, source)
-        if isinstance(payload, dict) and 'id' in payload and 'workspace_id' in payload:
-            return {**payload, 'model_api': public}
-        if not isinstance(payload, dict):
-            return payload
-        result = dict(payload)
-        if 'instance' in result and isinstance(result['instance'], dict):
-            result['instance'] = {**result['instance'], 'model_api': public}
-        if 'items' in result and isinstance(result['items'], list):
-            result['items'] = [
-                {**item, 'model_api': public} if isinstance(item, dict) and 'id' in item else item
-                for item in result['items']
-            ]
-        return result
+            if 'instance' in payload:
+                return {**payload, 'instance': attach(db, payload['instance'])}
+            return {**payload, 'items': [attach(db, instance) for instance in payload['items']]}
 
     @staticmethod
     def pagination(query, allowed=()):
@@ -1082,19 +1080,43 @@ class App:
         except ValueError:
             refuse(400, 'invalid', 'Invalid pagination parameters')
 
-    def runtime_dispatch(self, env, owner, method, path, query):
+    def create_account_instance(self, owner, username, workspace_id, key):
+        if not valid_key(key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         runtime = self.lifecycle
+        now = int(self.clock())
+        with self.store.transaction() as db:
+            runtime.workspace(db, owner, workspace_id, write=True)
+            existing = runtime_autoprovision.owned_instance(db, owner)
+            if existing is not None:
+                return False, runtime.result(db, existing)
+            try:
+                personal_row, _ = self.ensure_personal_agent(db, owner, username, now)
+            except personal.WorkspaceCapacity:
+                refuse(429, 'quota', 'Workspace capacity reached')
+            provision = self.ensure_personal_runtime(db, owner, personal_row, now)
+            if provision['state'] == 'capacity':
+                refuse(429, 'quota', 'Instance capacity reached')
+            if provision['instance_id'] is None:
+                refuse(409, 'runtime_unavailable', 'The account runtime could not be provisioned')
+            return provision['state'] == 'provisioned', runtime.result(db, provision['instance_id'])
+
+    def runtime_dispatch(self, env, session, method, path, query):
+        runtime = self.lifecycle
+        owner = session['user_id']
         match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/instances', path)
         if match:
             if method == 'POST':
                 self.body(env, [])
-                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
-                                                 per_user=self.auto_provision.enabled)
-                return 201 if created else 200, self.with_model_api(result['instance']['workspace_id'], result), []
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if self.auto_provision.enabled and runtime.policy.backend_mode == 'compose':
+                    created, result = self.create_account_instance(owner, session['username'], match[1], key)
+                else:
+                    created, result = runtime.create(owner, match[1], key, per_user=self.auto_provision.enabled)
+                return 201 if created else 200, self.with_model_api(result), []
             limit, cursor, _ = self.pagination(query)
             listed = runtime.listing(owner, match[1], limit, cursor)
-            runtime_workspace = listed['items'][0]['workspace_id'] if listed['items'] else match[1]
-            return 200, self.with_model_api(runtime_workspace, listed), []
+            return 200, self.with_model_api(listed), []
         match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
         if match and method == 'GET' and not query:
             return 200, {'job': runtime.get_job(owner, match[1])}, []
@@ -1104,14 +1126,14 @@ class App:
             # Authorization precedes even unsupported operation disclosure.
             instance = runtime.inspect(owner, iid)
             if method == 'GET' and action is None and not query:
-                return 200, {'instance': self.with_model_api(instance['workspace_id'], instance)}, []
+                return 200, self.with_model_api({'instance': instance}), []
             if method == 'POST' and action in UNSUPPORTED:
                 self.body(env, [])
                 refuse(501, 'unsupported', 'This runtime operation is not implemented')
             if method == 'POST' and action in ('start', 'stop', 'restart'):
                 body = self.body(env, ['expected_revision', 'operation_id'] if action == 'restart' else ['expected_revision'])
                 changed, result = getattr(runtime, action)(owner, iid, **body)
-                return 202 if changed else 200, self.with_model_api(instance['workspace_id'], result), []
+                return 202 if changed else 200, self.with_model_api(result), []
             if method == 'GET' and action == 'logs':
                 try:
                     args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}
