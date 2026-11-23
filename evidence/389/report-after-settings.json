@@ -1,0 +1,322 @@
+{
+  "slug": "ev389-after-set",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-23T01:41:27.305Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8911"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 64088
+      },
+      "sha256": "d15d420905ed9ca197335634a17923a238711234d03e940594e56ecc86f2b834",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 62193
+      },
+      "sha256": "f8109905ec930b4392992bea9e79225f1e3ef7369ebcb5ed6b36b9623d73c18e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 64088
+      },
+      "sha256": "d15d420905ed9ca197335634a17923a238711234d03e940594e56ecc86f2b834",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 62193
+      },
+      "sha256": "f8109905ec930b4392992bea9e79225f1e3ef7369ebcb5ed6b36b9623d73c18e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55514
+      },
+      "sha256": "17da04dedc77f8870596386b890e9bfa1404cdf444bb2d55db88f70318befa64",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55216
+      },
+      "sha256": "afe2f665d971ce0472bd7f7f661e92f9fdb3343dfbeff0e3f13e2cb4c4bdd698",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55514
+      },
+      "sha256": "17da04dedc77f8870596386b890e9bfa1404cdf444bb2d55db88f70318befa64",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__settings-channels__settings-channels-links.png",
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "settings-channels-links",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55216
+      },
+      "sha256": "06acd4bd4f69d6017fe3212fb06b50a605b179ee0ae50c5886aeb724a4a90c5d",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    }
+  ],
+  "failures": []
+}

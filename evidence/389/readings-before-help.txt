@@ -1,0 +1,8 @@
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=1440x900 theme=light lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=1440x900 theme=dark lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=1440x900 theme=light lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=1440x900 theme=dark lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=390x844 theme=light lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=390x844 theme=dark lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=390x844 theme=light lang=zh-CN
+state[after] help-plain sectionFound=false anchors=0 heading="" vp=390x844 theme=dark lang=zh-CN

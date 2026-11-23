@@ -1,0 +1,306 @@
+{
+  "slug": "ev389-after-help",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-23T01:41:53.111Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8912"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__help__help-channels.png",
+      "route": "/help",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "help-channels",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 182912
+      },
+      "sha256": "c59f28d666cfb6efb15fd9203c30540ebd5b6f5101b9231992a95ea9f735bd84",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__help__help-channels.png",
+      "route": "/help",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "help-channels",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 181265
+      },
+      "sha256": "8b25cbea174389badffc8e76a8320400bfcb41b71e34f8f5e8a7605c25a108a9",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__help__help-channels.png",
+      "route": "/help",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "help-channels",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 182911
+      },
+      "sha256": "c1deff8602b2e6c0d8aea31805d764206cf342f0539bd5216c9bdb55b54454ae",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__help__help-channels.png",
+      "route": "/help",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "help-channels",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 181258
+      },
+      "sha256": "11828ba665048a1911268e84a06a29528255264a5bf0b0cebf6a345e6e2ea57e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__help__help-channels.png",
+      "route": "/help",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "help-channels",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 109913
+      },
+      "sha256": "741b0204af62459280358d03ec76dd58fed25ef8e8281a2a4c65df4a1dd49b63",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__help__help-channels.png",
+      "route": "/help",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "help-channels",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 109470
+      },
+      "sha256": "24b95f598ebcf208ae57a2649588fe3ed44a882cdbffa797a2791a1f4e4792a3",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__help__help-channels.png",
+      "route": "/help",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "help-channels",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 109913
+      },
+      "sha256": "741b0204af62459280358d03ec76dd58fed25ef8e8281a2a4c65df4a1dd49b63",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__help__help-channels.png",
+      "route": "/help",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "help-channels",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 109470
+      },
+      "sha256": "24b95f598ebcf208ae57a2649588fe3ed44a882cdbffa797a2791a1f4e4792a3",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2556
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 下载 帮助中心 按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。 会话 智能体 作品库 自动化 会议 记忆 团队 运行时 会话 现在能做什么 单聊与群聊在同一个聊天页（/chat），左侧会话列表、右侧消息流，工作区用列表顶部的选择器",
+        "textLength": 2556,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}

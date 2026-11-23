@@ -1,0 +1,40 @@
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=1440x900 theme=light lang=zh-CN
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=1440x900 theme=dark lang=zh-CN
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=1440x900 theme=light lang=en
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=1440x900 theme=dark lang=en
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=390x844 theme=light lang=zh-CN
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=390x844 theme=dark lang=zh-CN
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=390x844 theme=light lang=en
+state[after] channel "wechat" name="WeChat Official Account" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "imessage" name="Apple iMessage" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "slack" name="Slack" link=null button={"text":"+ 连接","disabled":true}
+state[after] channel "whatsapp" name="WhatsApp" link=null button={"text":"+ 连接","disabled":true}
+state[after] settings-channels-plain links=0 connectButtons=4 disabledButtons=4 vp=390x844 theme=dark lang=en
