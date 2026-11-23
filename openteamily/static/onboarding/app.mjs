@@ -1,5 +1,5 @@
 import {servedByDsBot} from '../shell/dsbot-api.mjs';
-import {readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
+import {readChatDrafts, rememberColdDraftHandoff, writeChatDrafts} from '../home/runtime-readiness.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -641,14 +641,26 @@ export function mountOnboarding(document, {
     syncProfileReady();
   }
 
-  async function save(path, body, live) {
-    const result = await send('POST', path, body);
+  async function save(path, body, live, finishing = false) {
+    const result = await send('POST', path, body).catch(error => {
+      if (!finishing) throw error;
+      return null;
+    });
     if (!live()) return null;
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body?.error, '保存失败，请重试。'));
+    if (result?.status === 200 || result?.status === 201) return result.body;
+    if (finishing && (!result || result.status === 408 || result.status >= 500)) {
+      show('loading', '正在确认引导是否已保存…');
+      const checked = await read('/v1/onboarding');
+      if (!live()) return null;
+      const saved = checked?.body;
+      if (checked?.status === 200 && saved?.viewer_username === user.username &&
+          saved.progress?.completed === true && Object.entries(body.look ?? {}).every(([name, value]) =>
+            saved.steps?.look?.[name] === value)) return saved;
+      show('error', '暂时无法确认引导是否已保存。请重试。');
       return null;
     }
-    return result.body;
+    show('error', messageFor(result?.body?.error, '保存失败，请重试。'));
+    return null;
   }
 
   function showFirstTaskError(text) {
@@ -656,16 +668,23 @@ export function mountOnboarding(document, {
     taskStatus.textContent = text;
   }
 
-  async function openPersonal(live, firstMessage = '') {
+  async function openPersonal(live, binding, firstMessage = '') {
     show('loading', '正在打开你的私人聊天…');
-    let personal = (await read('/v1/personal-agent'))?.body?.personal_agent;
+    let personal = (await binding)?.body?.personal_agent;
     let href = personalChatPath(personal);
     if (!live()) return;
-    if (!href || personal.runtime_provisioning?.readiness === 'setup') {
+    const foreign = () => personal?.workspace?.owner_id && personal.workspace.owner_id !== user.id;
+    if (!foreign() && (!href || personal.runtime_provisioning?.readiness === 'setup')) {
       const result = await send('POST', '/v1/personal-agent', {});
       if (!live()) return;
       personal = [200, 201].includes(result.status) ? result.body?.personal_agent : null;
       href = personalChatPath(personal);
+    }
+    if (foreign()) {
+      const message = '暂时无法确认个人工作区，请重新打开引导后重试。';
+      if (firstMessage) showFirstTaskError(message);
+      else show('error', message);
+      return;
     }
     if (!href) {
       show('error', '引导已保存，暂时无法打开私人聊天。请重试。');
@@ -673,7 +692,7 @@ export function mountOnboarding(document, {
     }
     if (firstMessage) {
       const owner = user.id;
-      if (!NATIVE_ID.test(owner || '') || (personal.workspace.owner_id && personal.workspace.owner_id !== owner)) {
+      if (!NATIVE_ID.test(owner || '')) {
         showFirstTaskError('暂时无法确认个人工作区，请重新打开引导后重试。');
         return;
       }
@@ -687,7 +706,8 @@ export function mountOnboarding(document, {
         return;
       }
       drafts.set(scope, firstMessage);
-      if (!writeChatDrafts(view, owner, drafts)) {
+      // Chat resolves the latest owned conversation before applying the staged draft.
+      if (!writeChatDrafts(view, owner, drafts) || !rememberColdDraftHandoff(view, scope)) {
         showFirstTaskError('浏览器无法暂存任务。请复制草稿后，选择「直接打开聊天」。');
         taskPreview.focus();
         taskPreview.select();
@@ -737,10 +757,12 @@ export function mountOnboarding(document, {
     void perform('正在保存形象…', async live => {
       taskStatus.textContent = '';
       const look = chosenLook();
-      const result = await save('/v1/onboarding/look', finish ? {look, finish: true} : {look}, live);
+      const saving = save('/v1/onboarding/look', finish ? {look, finish: true} : {look}, live, finish);
+      const binding = finish ? read('/v1/personal-agent') : null;
+      const result = await saving;
       if (!result) return;
       applyState(result);
-      if (finish) await openPersonal(live, firstMessage);
+      if (finish) await openPersonal(live, binding, firstMessage);
       else show('ok', '已保存个人智能体形象。');
     });
   }
@@ -789,10 +811,12 @@ export function mountOnboarding(document, {
 
   document.getElementById('onboarding-skip').addEventListener('click', () => {
     void perform('正在保存进度…', async live => {
-      const result = await save('/v1/onboarding/progress', {completed: true}, live);
+      const saving = save('/v1/onboarding/progress', {completed: true}, live, true);
+      const binding = read('/v1/personal-agent');
+      const result = await saving;
       if (!result) return;
       applyState(result);
-      await openPersonal(live);
+      await openPersonal(live, binding);
     });
   });
 

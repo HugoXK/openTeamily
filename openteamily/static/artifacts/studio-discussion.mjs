@@ -1,5 +1,3 @@
-import {readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
-
 const ID = /^[a-f0-9]{32}$/;
 const ATTEMPT_KEY = 'openteamily.studio-discussion-attempt';
 const QUESTION_LIMIT = 1000;
@@ -96,10 +94,11 @@ export function mountStudioDiscussion(document, {request, source, openChat}) {
     status.textContent = '正在准备个人智能体草稿…';
     try {
       const signal = AbortSignal.any([operation.controller.signal, AbortSignal.timeout(15000)]);
-      const [version, session, binding] = await Promise.all([
+      const [version, session, binding, {readChatDrafts, writeChatDrafts}] = await Promise.all([
         request('GET', `/v1/workspaces/${workspace}/studio/documents/${saved.id}`, undefined, {signal}),
         request('GET', '/v1/auth/session', undefined, {signal}),
         request('GET', '/v1/workspaces?scope=personal&include=chat&directory=0', undefined, {signal}),
+        import('../home/runtime-readiness.mjs'),
       ]);
       if (target !== operation) return;
       const latest = version.body.document;
@@ -123,12 +122,23 @@ export function mountStudioDiscussion(document, {request, source, openChat}) {
         return;
       }
       const scope = [owner, workspace, saved.id, saved.revision, personal.id, agent].join('/');
+      const source = {workspace_id:workspace, document_id:saved.id, revision:saved.revision};
       const opened = await request('POST', `/v1/workspaces/${personal.id}/agents/${agent}/conversations`,
-        {title:'团队文档讨论', memory_recall:false}, {headers:{'Idempotency-Key':retryKey(scope)},signal});
+        {title:'团队文档讨论', memory_recall:false, studio_source:source}, {headers:{'Idempotency-Key':retryKey(scope)},signal});
       if (target !== operation) return;
       const thread = opened.body.conversation;
+      if (opened.status === 409 && opened.body.error?.code === 'studio_revision_changed') {
+        status.textContent = versionChanged;
+        return;
+      }
+      if (opened.status === 404) {
+        status.textContent = '无法读取团队文档，请确认访问权限后重试。';
+        return;
+      }
       if (![200, 201].includes(opened.status) || !ID.test(thread?.id || '') ||
-          thread.workspace_id !== personal.id || thread.agent_id !== agent) {
+          thread.workspace_id !== personal.id || thread.agent_id !== agent ||
+          thread.studio_source?.workspace_id !== workspace || thread.studio_source.document_id !== saved.id ||
+          thread.studio_source.revision !== saved.revision) {
         status.textContent = '未能确认私人对话已创建，请重试。';
         return;
       }

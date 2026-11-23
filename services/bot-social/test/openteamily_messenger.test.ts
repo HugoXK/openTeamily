@@ -133,6 +133,56 @@ test("groups: members, mentions notify, creator removes, members leave", async (
   assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).members.length, 1);
 });
 
+test("conversation mute hides scoped inbox rows without consuming read receipts or affecting other members", async () => {
+  const [sender, reader, colleague] = await Promise.all([
+    home(S.base, "muted-sender"), home(S.base, "muted-reader"), home(S.base, "muted-colleague"),
+  ]);
+  const team = await teamOf(sender, reader, colleague);
+  const workspace = (await sender.ok("GET", "/v1/ot/workspaces")).workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const options = {kind:"group", team_id:team.id, members:[reader.handle,colleague.handle]};
+  const muted = await sender.ok("POST", "/v1/ot/conversations", {...options, title:"Muted group"});
+  const active = await sender.ok("POST", "/v1/ot/conversations", {...options, title:"Active group"});
+  const mutedPath = "/v1/ot/conversations/" + muted.id;
+  const notifications = "/v1/ot/notifications";
+  const scoped = notifications + "?workspace_id=" + workspace + "&unread=1";
+  const mark = (account: typeof reader) => account.ok("POST", notifications + "/read", {workspace_id:workspace, all:true});
+  await Promise.all([mark(reader), mark(colleague)]);
+
+  const address = `@${reader.handle} @${colleague.handle}`;
+  await sender.ok("POST", mutedPath + "/messages", {body:address + " first mention"});
+  const before = await reader.ok("GET", scoped);
+  assert.equal(before.unread, 1);
+  const hiddenId = before.notifications[0].id;
+  const readSeq = (await reader.ok("GET", mutedPath)).read_seq;
+  assert.equal((await reader.ok("PATCH", mutedPath, {muted:true})).muted, true);
+  assert.equal((await reader.ok("GET", scoped)).unread, 0);
+  await sender.ok("POST", mutedPath + "/messages", {body:address + " second mention"});
+  await sender.ok("POST", mutedPath + "/messages", {workspace, attachment:{
+    title:"private-work.txt", mime:"text/plain", data:Buffer.from("Shared via chat").toString("base64"),
+    resource:{title:"Private work", kind:"document", revision:1},
+  }});
+  await sender.ok("POST", `/v1/ot/conversations/${active.id}/messages`, {body:address + " visible mention"});
+  await colleague.ok("POST", "/v1/ot/follows", {handle:reader.handle});
+
+  const inbox = await reader.ok("GET", scoped + "&limit=1&latest=1");
+  assert.equal(inbox.unread, 2);
+  assert.deepEqual(inbox.notifications.map((row: any) => row.kind), ["follow.new"]);
+  assert.deepEqual((await reader.ok("GET", scoped)).notifications.map((row: any) => row.kind), ["messenger.mention", "follow.new"]);
+  assert.equal((await reader.ok("GET", scoped + "&kind=work")).unread, 0);
+  assert.equal((await colleague.ok("GET", scoped)).unread, 4);
+  assert.equal((await colleague.ok("GET", scoped + "&kind=work")).unread, 1);
+  assert.equal((await reader.call("POST", notifications + "/read", {workspace_id:workspace, notification_id:hiddenId})).status, 404);
+  assert.deepEqual(await mark(reader), {marked:2, unread:0});
+  assert.equal((await reader.ok("GET", mutedPath)).read_seq, readSeq);
+
+  assert.equal((await reader.ok("PATCH", mutedPath, {muted:false})).muted, false);
+  const restored = await reader.ok("GET", scoped);
+  assert.equal(restored.unread, 3);
+  assert.deepEqual(restored.notifications.map((row: any) => row.kind), ["messenger.mention", "messenger.mention", "artifact.shared"]);
+  assert.ok(restored.notifications.every((row: any) => row.data.conversation_id === muted.id));
+  assert.equal((await reader.ok("GET", mutedPath)).read_seq, readSeq);
+});
+
 test("personal group ownership changes are revisioned and a replay cannot remove a renewed membership", async () => {
   const [owner,next,reader] = await Promise.all([
     home(S.base,"manage-personal-owner"), home(S.base,"manage-personal-successor"), home(S.base,"manage-personal-reader"),
@@ -440,13 +490,14 @@ test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto 
   const g = await B.ok("POST", "/v1/ot/conversations", { kind: "group", title: "Agents", members: [A.handle] });
   await A.ok("PUT", `/v1/ot/conversations/${g.id}/agents/helper`, { name: "Helper", auto_reply: false });
   assert.equal((await B.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: "spoof" })).status, 404, "only the agent's owner posts as it");
-  await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
+  const ordinary = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
   const request = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "@helper summarize please" });
   assert.deepEqual((await A.ok("GET", "/v1/ot/agent-inbox")).items, [], "a teammate mention never runs on a legacy worker");
   let inbox = await A.ok("GET", "/v1/ot/agent-inbox?managed=1");
-  assert.equal(inbox.jobs.length, 1);
-  assert.equal(inbox.jobs[0].mode, "mention");
-  assert.equal(inbox.jobs[0].context.length, 2);
+  assert.deepEqual(inbox.jobs.map((item: any) => [item.message.id, item.mode, item.discretionary === true, item.group_text_only]), [
+    [ordinary.id, "mention", true, true], [request.id, "mention", false, true],
+  ]);
+  assert.equal(inbox.jobs.find((item: any) => item.message.id === request.id).context.length, 2);
   assert.equal((await B.ok("GET", "/v1/ot/agent-inbox")).items.length, 0, "B owns no agent");
   const claim = teammateClaim(request.revision);
   const jobId = request.reply_jobs[0].id;
@@ -1000,11 +1051,12 @@ test("a group reply claim returns an older exact quote only while its agent owne
   const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
   await sender.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
   const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
-    title: "Read the quote", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+    title: "Read the quote", members: [sender.handle]});
   const room = `/v1/ot/conversations/${group.id}/messages`;
   const oldText = "Earlier exact decision: keep the launch on Friday.";
   const original = await sender.ok("POST", room, {body: oldText});
   for (let i = 0; i < 13; i++) await sender.ok("POST", room, {body: `Later message ${i}`});
+  await worker.ok("PUT", `/v1/ot/conversations/${group.id}/agents/helper`, {name: "Helper"});
   const request = async (id: string) => sender.ok("POST", room, {body: "@helper review", reply_to: id});
   const target = await request(original.id);
   const job = (await worker.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.find((row: any) => row.message.id === target.id);
@@ -1116,6 +1168,7 @@ test("explicit Studio references keep a reviewed version private to its selected
   const claim = await worker.ok("POST", jobPath(first), canRead);
   assert.deepEqual(claim, {ok: true, group_text_only:true, studio_reference: {...request.studio_reference, title, excerpt, truncated: true}});
   assert.deepEqual(await worker.ok("POST", jobPath(first), canRead), claim);
+  assert.equal((await worker.call("POST", jobPath(first), {action:"pass", attempt:1, claim_id:start.claim_id})).status, 409);
   const completed = await worker.ok("POST", room + "/agent-messages", finish(first));
   await worker.ok("POST", jobPath(running), canRead);
   const progress = {attempt: 1, claim_id: start.claim_id, revision: 1, text: "Temporary draft"};

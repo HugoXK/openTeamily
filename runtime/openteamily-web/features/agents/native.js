@@ -63,6 +63,7 @@ export function nativeAgents({ host, db }) {
   }
   async function ensure(row) {
     const s = await services(), { rt } = s
+    row = one('SELECT * FROM agents WHERE id=?', row.id)
     const mapping = one('SELECT * FROM native_agent_objects WHERE agent_id=?', row.id)
     // Recover a create whose roster save completed before the mapping commit.
     let bot = mapping ? rt.botOf(mapping.bot_id) : Object.values(rt.state.bots).find(b => b.openteamily?.agent_id === row.id)
@@ -84,23 +85,24 @@ export function nativeAgents({ host, db }) {
     if (!mapping) run('INSERT OR IGNORE INTO native_agent_objects VALUES(?,?,?)', row.id, bot.id, bot.name)
     const lastName = mapping?.last_name || bot.name
     const nextName = bot.name !== lastName ? bot.name : row.name
-    const changed = nextName !== row.name || bot.instructions !== row.instructions || Number(!!bot.hidden) !== row.archived
+    const instructions = bot.instructions || ''
+    const changed = nextName !== row.name || instructions !== row.instructions || Number(!!bot.hidden) !== row.archived
     if (changed) {
       const hash = createHash('sha256').update(nextName.toLowerCase()).digest('hex')
       const collision = one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=? AND id<>?', row.workspace_id, hash, row.id)
       if (collision) throw Object.assign(new Error('Native Bot rename conflicts with workspace agent name'), { status: 409, code: 'agents/conflict' })
       // name_hash updated by the caller with the shared hashing rule.
-      run('UPDATE agents SET name=?,name_hash=?,instructions=?,archived=?,revision=revision+1,updated=? WHERE id=?', nextName, hash, bot.instructions || '', Number(!!bot.hidden), Math.floor(Date.now()/1000), row.id)
+      run('UPDATE agents SET name=?,name_hash=?,instructions=?,archived=?,revision=revision+1,updated=? WHERE id=?', nextName, hash, instructions, Number(!!bot.hidden), Math.floor(Date.now()/1000), row.id)
     }
     run('UPDATE native_agent_objects SET last_name=? WHERE agent_id=?', bot.name, row.id)
     const current = one('SELECT * FROM agents WHERE id=?', row.id)
     return { ...current, native_bot_id: bot.id, native_name: bot.name }
   }
   async function update(row, patch) {
-    const mapped = await ensure(row)
-    if (mapped.native_deleted) throw Object.assign(new Error('Native Bot was deleted; it will not be silently recreated'), { status: 409, code: 'agents/native-deleted' })
     const { rt } = await services()
-    const bot = rt.botOf(mapped.native_bot_id)
+    const bot = rt.botOf(row.native_bot_id)
+    if (row.native_deleted || !bot) throw Object.assign(new Error('Native Bot was deleted; it will not be silently recreated'), { status: 409, code: 'agents/native-deleted' })
+    if (!Object.keys(patch).length) return { native_bot_id: bot.id, native_name: bot.name }
     const nativePatch = {}
     if (patch.name !== undefined) nativePatch.name = nativeName(rt, { ...row, name: patch.name })
     if (patch.instructions !== undefined) nativePatch.instructions = patch.instructions
@@ -131,15 +133,34 @@ export function nativeAgents({ host, db }) {
     if (!m) {
       const recovered = bot.openteamily.sessionKeys[key]
       const sessionId = recovered || adopted[0] || await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: bot.id }) })
-      if (!recovered && !adopted.length) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
+      const fresh = !recovered && !adopted.length
+      if (fresh) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
       bot.openteamily.sessionKeys[key] = sessionId
+      await prepareSession(sessionId, fresh)
       await rt.save()
       run('INSERT INTO native_agent_sessions VALUES(?,?,?)', key, row.id, sessionId)
       m = { session_id: sessionId }
-    } else if (adopted.length) await rt.save()
+    } else if (await prepareSession(m.session_id) || adopted.length) await rt.save()
     await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id, secondarySessionIds: adopted })
     void renameSession(row, key)
     return { native_bot_id: mapped.native_bot_id, native_session_id: m.session_id, native_name: mapped.native_name }
+
+    async function prepareSession(sessionId, fresh = false) {
+      const metadata = bot.openteamily
+      if (!s.prepareMappedChat || (!fresh && metadata.pendingSessionSetup?.[key] !== sessionId)) return false
+      try {
+        // The native composer uses the Session's route even before its first Web turn.
+        await s.prepareMappedChat(bot.id, sessionId)
+        delete metadata.pendingSessionSetup?.[key]
+        return true
+      } catch {
+        // Keep an empty chat available and retry this exact part on the next bind.
+        metadata.pendingSessionSetup ??= {}
+        metadata.pendingSessionSetup[key] = sessionId
+        host.log?.('The native chat configuration will be retried when the chat is next bound.')
+        return false
+      }
+    }
   }
   async function session(row, key, title) {
     const s = await services()
@@ -162,6 +183,8 @@ export function nativeAgents({ host, db }) {
   async function readSession(row, key, title) {
     return mappedSession(row, key) || session(row, key, title)
   }
-  return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)),
+  return { ensure: row => serial(() => ensure(row)),
+    // Check the revision, change the roster, and advance SQLite under the same lock.
+    write: fn => serial(() => fn({ensure,update})),
     session, readSession, mappedSession, markSessionTitle, renameSession }
 }

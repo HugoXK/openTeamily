@@ -106,9 +106,16 @@
         </div>
         <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
         <div id="editor-head-confirm"></div>
+        <div id="automation-draft-notice" class="editor-draft-notice" hidden>
+          <p id="automation-draft-text" class="note" role="status"></p>
+          <button id="restore-automation-draft" type="button" class="secondary" hidden>恢复草稿</button>
+          <button id="discard-automation-draft" type="button" class="secondary" hidden>放弃草稿</button>
+          <button id="retry-automation-save" type="button" class="secondary" hidden>恢复并确认上次保存</button>
+        </div>
         <div class="manual-run-feedback">
           <p id="manual-run-status" class="note" role="status"></p>
           <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
+          <button type="button" id="reload-automation-settings" class="secondary" hidden>载入最新设置</button>
         </div>
       </header>
       <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
@@ -117,6 +124,13 @@
         <p id="meeting-action-source-text"></p>
         <p id="meeting-action-source-owner" class="note" hidden></p>
         <a id="meeting-action-source-link">查看会议</a>
+      </section>
+      <section id="memory-action-source" aria-labelledby="memory-action-source-heading" hidden>
+        <h2 id="memory-action-source-heading">记忆行动项</h2>
+        <p id="memory-action-source-title"></p>
+        <p id="memory-action-source-notes" hidden></p>
+        <p id="memory-action-source-revision" class="note"></p>
+        <a id="memory-action-source-link">查看原行动项</a>
       </section>
       <fieldset class="task-details">
         <legend>任务</legend>
@@ -153,7 +167,16 @@
           <label data-schedule-kind="timed" hidden>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
-        <p id="automation-next-run" class="note" hidden></p>
+        <p id="automation-next-run" class="note" role="status" hidden></p>
+        <div id="automation-notification-settings" hidden>
+          <label for="automation-notification-policy">运行结果通知</label>
+          <select id="automation-notification-policy" name="notification_policy" aria-describedby="automation-notification-help">
+            <option value="scheduled" selected>仅计划运行</option>
+            <option value="all">所有运行（含手动）</option>
+            <option value="off">关闭通知</option>
+          </select>
+          <p id="automation-notification-help" class="note">运行通知显示在聊天的「通知」里。</p>
+        </div>
       </fieldset>
       <details id="automation-editor-options" class="editor-options">
         <summary>更多设置</summary>
@@ -183,6 +206,8 @@
       <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
+        <button type="submit" id="save-and-sample" class="secondary" hidden>保存并试运行</button>
+        <button type="button" id="copy-automation" class="secondary" hidden>复制为草稿</button>
         <button type="button" id="remove-automation" hidden>删除</button>
       </div>
     </form>
@@ -191,8 +216,10 @@
       <div class="run-history-tools">
         <nav class="run-filters" aria-label="运行状态">
           <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
+          <button type="button" id="run-filter-active" data-run-filter="active" aria-current="false">进行中</button>
           <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
           <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
+          <button type="button" id="run-filter-cancelled" data-run-filter="cancelled" aria-current="false">已取消</button>
         </nav>
         <nav class="run-pages" id="run-pages" aria-label="运行记录分页" hidden>
           <button type="button" id="run-newer">较新记录</button>
@@ -202,6 +229,10 @@
       <div id="run-history-error" hidden>
         <p class="note" role="status">无法更新运行记录。</p>
         <button type="button" id="run-history-retry" class="secondary">重新加载</button>
+      </div>
+      <div id="run-link-status" hidden>
+        <p id="run-link-note" class="note" role="status"></p>
+        <button type="button" id="run-link-retry" class="secondary" hidden>重试打开运行</button>
       </div>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>

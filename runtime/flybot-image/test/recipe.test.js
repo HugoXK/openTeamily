@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import {withSpeechOverlay} from '../speech-overlay.mjs'
 import { applyNativeOverlay, assertNativeConsentOverlay } from '../native-ds-bot-overlay.mjs'
@@ -126,14 +126,16 @@ test('recipe does not edit the vendored upstream tree', () => {
   assert.doesNotMatch(docker, /api_key\s*=/)
 })
 
-test('the image overlay checks pinned inputs before adding native group and skill integration', t => {
+test('the image overlay checks pinned inputs before adding native group and skill integration', async t => {
   const copy = mkdtempSync(join(tmpdir(), 'ot-native-overlay-'))
   t.after(() => rmSync(copy, {recursive:true, force:true}))
   const upstream = join(repo, 'runtime', 'ds-bot-upstream', 'ds-bot')
-  for (const path of ['client.js', 'src/client/group-settings.js', 'src/host/capabilities.js', 'src/host/channel.js']) {
+  for (const path of ['client.js', 'src/client/at-menu.js', 'src/client/group-settings.js', 'src/client/i18n.js', 'src/client/new-chat.js', 'src/client/team-actions.js', 'src/client/text.js', 'src/host/capabilities.js', 'src/host/channel.js', 'src/shared/mentions.js']) {
     mkdirSync(dirname(join(copy, path)), {recursive:true})
     copyFileSync(join(upstream, path), join(copy, path))
   }
+  cpSync(join(upstream, 'src/client/locales'), join(copy, 'src/client/locales'), {recursive:true})
+  writeFileSync(join(copy, 'package.json'), '{"type":"module"}')
   const clientPath = join(copy, 'client.js')
   const channelPath = join(copy, 'src/host/channel.js')
   const originalClient = readFileSync(clientPath)
@@ -146,9 +148,43 @@ test('the image overlay checks pinned inputs before adding native group and skil
   applyNativeOverlay(copy)
   assertNativeConsentOverlay(copy)
   assert.match(readFileSync(clientPath, 'utf8'), /Shared human participants/)
+  assert.match(readFileSync(clientPath, 'utf8'), /data-ot-shared-reply-save/)
+  assert.match(readFileSync(clientPath, 'utf8'), /function sharedMentionRows\(/)
+  assert.match(readFileSync(clientPath, 'utf8'), /function SharedGroupForm\(/)
   assert.match(readFileSync(channelPath, 'utf8'), /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)
+  assert.match(readFileSync(channelPath, 'utf8'), /openteamilyReplyPolicy: body\.openteamilyReplyPolicy/)
+  assert.match(readFileSync(channelPath, 'utf8'), /case 'openteamily-group-workspaces':\s+case 'openteamily-group-create':/)
+  assert.match(readFileSync(channelPath, 'utf8'), /case 'openteamily-group-directory':\s+case 'openteamily-group-open':/)
   applyNativeOverlay(copy)
   assert.deepEqual(readFileSync(join(upstream, 'client.js')), originalClient)
+
+  const {atSources} = await import(pathToFileURL(join(copy,'src/client/at-menu.js')))
+  const agent = {name:'Release [Review] \\ Tools', owner_id:'owner-a', agent_id:'same-agent-id', owner_name:'Lee', owner_handle:'lee-west'}
+  const peerAgent = {...agent, owner_id:'owner-b', owner_handle:'lee-east'}
+  const shared = (targets, people = 2) => ({
+    members:[], remoteParticipants:Array.from({length:people}, () => ({kind:'human'})),
+    openteamily:{conversation_id:'group-id', reply_policy:{targets}},
+  })
+  const localBot = {id:'local', name:'Local Bot'}
+  const view = {ready:true, roomsById:{both:shared([agent,peerAgent]), one:shared([peerAgent]), human:shared([]),
+    empty:shared([],1), local:{members:[localBot.id]}}, byId:{local:localBot}, bots:[localBot]}
+  const [picker] = atSources({roster:{getSnapshot:() => view}, iconFor:()=>null})
+  const candidates = (sessionId, query = '') => picker.candidates({sessionId}, {query})
+  const options = await candidates('both')
+  assert.deepEqual(options.map(row => [row.name,row.description]),
+    [[agent.name,'Lee · @lee-west'],[agent.name,'Lee · @lee-east'],['Everyone','4 members']])
+  const [choice] = await candidates('both','lee-east')
+  const picked = picker.onPick({candidate:choice}).insert
+  assert.equal(picked.label,'@Release [Review] \\ Tools · Lee · @lee-east')
+  assert.equal(picked.ref,'@[Release \\[Review\\] \\\\ Tools](ot-agent:owner-b/same-agent-id)')
+  assert.equal(await picker.codec.serialize(picked.ref),picked.ref+' ')
+  assert.equal(picker.codec.clipboardText(picked.ref),picked.ref+' ')
+  assert.deepEqual((await candidates('one')).map(row => row.name),[agent.name,'Everyone'])
+  const [everyone] = await candidates('human','全体')
+  assert.deepEqual(picker.onPick({candidate:everyone}),{text:'@Everyone '})
+  assert.deepEqual(await candidates('empty'),[])
+  const [local] = await candidates('local')
+  assert.deepEqual(picker.onPick({candidate:local}),{text:'@Local Bot '})
 })
 
 test('image recipe does not bake a model API key', () => {
