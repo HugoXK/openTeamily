@@ -2726,7 +2726,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return JSON.stringify([currentUser?.id, workspaceId(), session.source, session.agent_id, session.id]);
   }
 
+  const visibleSessionUnread = session => session.muted ? 0 : session.unread_count;
+
   function paintSessionPreview({button, preview, session}, value) {
+    const unread = visibleSessionUnread(session);
     const draft = value.trim().replace(/\s+/g, ' ').slice(0, 160);
     if (draft) {
       const mark = document.createElement('span');
@@ -2735,7 +2738,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       preview.replaceChildren(mark, document.createTextNode(draft));
     } else fillBold(document, preview, session.preview || '');
     button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
-      (session.unread_count ? uiLabel(`，${session.unread_count} 条未读消息`, `, ${session.unread_count} unread`) : '') +
+      (unread ? uiLabel(`，${unread} 条未读消息`, `, ${unread} unread`) : '') +
       (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
   }
 
@@ -2767,7 +2770,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'drafts' && Boolean(draftFor(item).trim()))
-      || (filter === 'unread' && item.unread_count > 0)
+      || (filter === 'unread' && visibleSessionUnread(item) > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     const heading = filter === 'drafts' ? uiLabel('草稿', 'Drafts') : uiLabel('对话', 'Conversations');
@@ -2778,7 +2781,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
     const readAll = document.getElementById('conversations-read-all');
     if (readAll) {
-      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.hidden = !sessions.some(item => item.source === 'social' && visibleSessionUnread(item) > 0);
       readAll.disabled = markingConversationsRead;
     }
     const items = [];
@@ -2821,11 +2824,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
-      if (session.unread_count > 0) {
+      const count = visibleSessionUnread(session);
+      if (count > 0) {
         button.classList.add('is-unread');
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
-        unread.textContent = String(session.unread_count);
+        unread.textContent = String(count);
         unread.setAttribute('aria-hidden', 'true');
         time.append(unread);
       }
@@ -8655,7 +8659,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
     if (markingConversationsRead) return;
     const wid = workspaceId();
-    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    const unread = sessions.filter(item => item.source === 'social' && visibleSessionUnread(item) > 0);
     if (!wid || !unread.length) return;
     markingConversationsRead = true;
     renderSessions();
@@ -8688,31 +8692,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (muteButton) {
       muteButton.hidden = !conversation || (conversation.kind === 'group' && !conversation.public_agent);
       muteButton.setAttribute('aria-pressed', String(muted));
-      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+      muteButton.textContent = muted ? uiLabel('取消免打扰', 'Unmute') : uiLabel('免打扰', 'Mute');
     }
     groupMute?.setAttribute('aria-checked', String(muted));
   }
   async function toggleMute() {
     if (currentSource !== 'social' || !currentConversation || savingMute) return;
     const conversation = currentConversation;
-    const wid = workspaceId();
+    const scope = notificationScope();
     savingMute = true;
     if (muteButton) muteButton.disabled = true;
     if (groupMute) groupMute.disabled = true;
     try {
       const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
       if (result.status !== 200) throw new Error('Mute preference unavailable');
-      if (workspaceId() !== wid) return;
+      if (!currentNotificationScope(scope)) return;
       const muted = Boolean(result.body.muted);
       const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
       if (row) row.muted = muted;
+      const listed = socialConversations.find(item => item.id === conversation.id);
+      if (listed) listed.muted = muted;
       if (currentSource === 'social' && currentConversation?.id === conversation.id) {
         currentConversation.muted = muted;
         syncMuteButton(currentConversation);
       }
       renderSessions();
+      notificationEpoch += 1;
+      if (notificationSnapshot) {
+        notificationSnapshot = {...notificationSnapshot, scope:notificationScope(),
+          body:{...notificationSnapshot.body, items:[]}};
+      }
+      void loadNotifications({interactive: !document.getElementById('notifications-panel')?.hidden});
     } catch {
-      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+      if (currentNotificationScope(scope)) show('error', '免打扰设置保存失败，请重试。');
     } finally {
       savingMute = false;
       if (muteButton) muteButton.disabled = false;

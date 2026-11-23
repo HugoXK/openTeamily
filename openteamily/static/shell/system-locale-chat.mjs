@@ -130,7 +130,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.translate.private": ["使用你配置的模型，译文仅自己可见。", "Uses your configured model. Translations are visible only to you."],
   "chat.translate.to": ["翻译为", "Translate to"],
   "chat.group.mute": ["消息免打扰", "Mute notifications"],
-  "chat.group.mute_help": ["保留未读消息，静音此会话。", "Mute this conversation and keep its unread messages."],
+  "chat.group.mute_help": ["静音后隐藏此会话的未读角标和通知，未读状态保留。", "Hide this conversation’s badges and notifications while keeping its unread status."],
   "chat.group.pin": ["置顶聊天", "Pin chat"],
   "chat.group.auto_reply_help": ["可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。", "Enable auto-replies for your agents. New group messages can trigger up to three automatic replies per group each hour."],
   "chat.group.add_members": ["添加成员", "Add members"],

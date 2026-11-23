@@ -2268,7 +2268,12 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
   const restore = installChatGlobals({narrow: true});
   const unread = new Set(['conv-1', 'conv-2']);
   const writes = [];
+  const noticeFetches = [];
+  const follow = {id:'follow-notice', kind:'follow.new', created:10, read:false, by:{display_name:'Follower'}};
+  const mention = {id:'mention-notice', kind:'messenger.mention', created:11, read:false, conversation_id:'conv-1',
+    by:{display_name:'Mention sender'}};
   let muted = false;
+  let pendingNotifications;
   try {
     await mount(doc, {fetcher: async (path, init) => {
       if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}, agent: {id: 'personal'}}});
@@ -2283,6 +2288,12 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
       if (path.endsWith('/conv-1/preferences')) {
         muted = JSON.parse(init.body).muted;
         return json(200, {muted});
+      }
+      if (path.endsWith('/notifications')) {
+        noticeFetches.push(muted);
+        const items = muted ? [follow] : [mention, follow];
+        if (pendingNotifications) await pendingNotifications.promise;
+        return json(200, {items, unread_count:items.length});
       }
       const response = await original(path);
       const data = await response.json();
@@ -2305,10 +2316,60 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
     assert.equal(el('conversations-read-all').hidden, true);
     const row = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
     await fire(el('conversation-list'), 'click', {target: row});
+    await fire(el('notifications-toggle'), 'click');
+    assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-count').textContent, '2');
+    const previousNotificationReads = noticeFetches.length;
+    pendingNotifications = Promise.withResolvers();
     await fire(el('mute-conversation'), 'click');
+    assert.equal(el('notification-list').children.length, 0, 'do not reactivate cached rows under the new visibility scope');
+    pendingNotifications.resolve();
+    pendingNotifications = null;
+    await settle(2);
     assert.equal(muted, true);
+    assert.deepEqual(noticeFetches.slice(previousNotificationReads), [true]);
+    assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    assert.deepEqual(el('notification-list').children.map(entry => entry.children[0].dataset.notification), [follow.id]);
     assert.equal(el('mute-conversation').getAttribute('aria-pressed'), 'true');
     assert.match(sessionRows(el).find(item => item.dataset.conversation === 'conv-1').getAttribute('aria-label'), /免打扰/);
+    await fire(el('mute-conversation'), 'click');
+    await settle(2);
+    assert.equal(muted, false);
+    assert.equal(el('notification-count').textContent, '2');
+    assert.deepEqual(el('notification-list').children.map(entry => entry.children[0].dataset.notification), [mention.id, follow.id]);
+  } finally { restore(); }
+});
+
+test('muted sessions have no sidebar unread badge and bulk-read leaves their cursor alone', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const writes = [];
+  try {
+    await mount(doc, {fetcher: async (path) => {
+      if (path.endsWith('/read')) {
+        writes.push(path);
+        return json(200, {unread_count: 0});
+      }
+      const response = await original(path);
+      const data = await response.json();
+      if (path.endsWith('/social/conversations?limit=100')) return json(200, {
+        items: data.items.map(item => ({...item, muted:item.id === 'conv-1', unread_count:3})),
+      });
+      return json(response.status, data);
+    }});
+    const muted = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
+    assert.ok(muted.classList.contains('is-muted'));
+    assert.equal(muted.classList.contains('is-unread'), false);
+    assert.doesNotMatch(muted.getAttribute('aria-label'), /未读消息/);
+    assert.equal(muted.querySelector('.unread-badge'), null);
+    const filter = el('session-filter-value');
+    filter.value = 'unread';
+    await fire(filter, 'change');
+    assert.deepEqual(sessionRows(el).map(item => item.dataset.conversation), ['conv-2']);
+    await fire(el('conversations-read-all'), 'click');
+    assert.deepEqual(writes, ['/v1/workspaces/ws-1/social/conversations/conv-2/read']);
   } finally { restore(); }
 });
 

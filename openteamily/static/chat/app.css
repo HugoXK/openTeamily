@@ -2320,10 +2320,6 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   gap: .25rem;
 }
 .inbox-notification-filters select { font-size: inherit; }
-#conversation-list .is-muted .unread-badge {
-  background: var(--ot-surface-2);
-  color: var(--ot-muted);
-}
 
 .chat-agent-mention-options, .chat-agent-mentions {
   display: flex;

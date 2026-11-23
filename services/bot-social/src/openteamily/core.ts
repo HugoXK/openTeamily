@@ -161,7 +161,11 @@ function notificationVisibility(workspace: string | null | undefined, otherEvent
       ${workspace === undefined ? "" : "AND s.workspace_id IS ?"} AND ${MEETING_RECIPIENT_VISIBLE})
       ELSE (${otherEvents}) AND (kind<>'discover.published' OR EXISTS (
         SELECT 1 ${ACTIVE_NOTIFICATION_LISTING}))
-        AND (kind<>'artifact.shared' OR EXISTS (${VISIBLE_ARTIFACT_NOTICE})) END`,
+        AND (kind<>'artifact.shared' OR EXISTS (${VISIBLE_ARTIFACT_NOTICE})) END
+      AND NOT EXISTS (
+        SELECT 1 FROM ot_conversation_members muted_member
+        WHERE muted_member.conversation_id=json_extract(ot_notifications.data,'$.conversation_id')
+          AND muted_member.owner_id=ot_notifications.owner_id AND muted_member.muted=1)`,
     args: workspace === undefined ? args : [workspace, ...args],
   };
 }

@@ -269,7 +269,7 @@
           <button type="button" id="chat-group-invite" hidden aria-haspopup="dialog" data-ui-text="chat.invite.members">邀请成员</button>
           <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发" data-ui-title="chat.messages.multi_select_help"><span data-ui-text="chat.messages.multi_select">多选</span></button>
           <button type="button" id="pin-conversation" hidden><span data-ui-text="chat.sessions.pin">置顶会话</span></button>
-          <button type="button" id="mute-conversation" aria-pressed="false" hidden><span data-ui-text="chat.sessions.mute">免打扰</span></button>
+          <button type="button" id="mute-conversation" aria-pressed="false" title="静音后隐藏此会话的未读角标和通知，未读状态保留。" data-ui-title="chat.group.mute_help" hidden><span data-ui-text="chat.sessions.mute">免打扰</span></button>
           <button type="button" id="private-thread-rename" aria-haspopup="dialog" hidden>重命名</button>
           <button type="button" id="private-thread-archive" hidden>归档</button>
           <button type="button" id="conversation-search-open" class="icon-action" aria-controls="conversation-search-panel" aria-expanded="false" title="搜索当前会话" aria-label="搜索当前会话" data-ui-title="chat.search.conversation" data-ui-label="chat.search.conversation"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z m-1 5 6 6"/></svg><span class="chat-action-label" data-ui-text="chat.search.conversation">搜索当前会话</span></button>
@@ -337,7 +337,7 @@
           <select id="group-translate-language"></select>
         </label>
         <p id="group-translate-status" class="group-translate-status" role="status"></p>
-        <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.mute">消息免打扰</strong><small data-ui-text="chat.group.mute_help">保留未读消息，静音此会话。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰" data-ui-label="chat.group.mute"></button></div>
+        <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.mute">消息免打扰</strong><small data-ui-text="chat.group.mute_help">静音后隐藏此会话的未读角标和通知，未读状态保留。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰" data-ui-label="chat.group.mute"></button></div>
         <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.pin">置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天" data-ui-label="chat.group.pin"></button></div>
       </section>
       <div id="group-management-footer" class="group-info-card" hidden>
