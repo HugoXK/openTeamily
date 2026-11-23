@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {parseFlowchart, renderFlowchart} from '../openteamily/static/chat/flowchart.mjs';
+import {parseFlowchart, renderFlowchart, renderMermaidDiagram} from '../openteamily/static/chat/flowchart.mjs';
+import {parseSequenceDiagram} from '../openteamily/static/chat/sequence-diagram.mjs';
 
 function createElement(tag) {
   return {
@@ -77,4 +78,68 @@ test('returns the original-code fallback sentinel for unsupported, malformed and
     '%%{init: {"securityLevel": "loose"}}%%\nflowchart LR\nA-->B',
     'flowchart TB\n' + Array.from({length:37}, (_, index) => `n${index}`).join('-->'),
   ]) assert.equal(renderFlowchart(document, source), null);
+});
+
+test('handles common process symbols and a grouped fan-out while preserving labels', () => {
+  const source = [
+    'flowchart LR',
+    'IN[/读入输入/] --> API[[数据规范化]]',
+    'API --> Route{{分流}}',
+    'Route --> Left & Right',
+    'Left & Right --> Store[(数据库)] & Mirror(((副本)))',
+    String.raw`Mirror --> Export[\导出\]`,
+  ].join('\n');
+  const graph = parseFlowchart(source);
+  assert.deepEqual(graph.nodes.map(node => node.shape), [
+    'slant', 'subroutine', 'hexagon', 'rect', 'rect', 'database', 'double-circle', 'slant-back',
+  ]);
+  assert.deepEqual(graph.edges.slice(4, 8).map(({from, to}) => [from, to]), [
+    ['Left', 'Store'], ['Left', 'Mirror'], ['Right', 'Store'], ['Right', 'Mirror'],
+  ]);
+  assert.equal(JSON.stringify(renderMermaidDiagram(document, source)), JSON.stringify(renderFlowchart(document, source)));
+});
+
+test('renders sequence requests, replies, notes, activation bars and branch controls', () => {
+  const source = [
+    '%% Checkout',
+    'sequenceDiagram',
+    'actor A as 买家',
+    'participant API as 订单服务',
+    'autonumber',
+    'A->>+API: 创建订单',
+    'Note over A,API: 审核<br/>订单',
+    'alt 库存充足',
+    'API->>API: 持久化',
+    'API-->>-A: 返回订单编号',
+    'else 库存不足',
+    'API--xA: <img src=https://example.invalid>',
+    'end',
+  ].join('\n');
+  const parsed = parseSequenceDiagram(source);
+  assert.deepEqual(parsed.participants, [
+    {id:'A', label:'买家', kind:'actor'}, {id:'API', label:'订单服务', kind:'participant'},
+  ]);
+  assert.equal(parsed.events.filter(event => event.type === 'message')[2].arrow, '-->>');
+  const frame = renderMermaidDiagram(document, source);
+  const [stage] = frame.children;
+  assert.equal(frame.attributes['aria-label'], '时序图');
+  assert.match(stage.attributes['aria-label'], /买家 到 订单服务 · 1\. 创建订单.*订单服务 到 买家 · 3\. 返回订单编号/s);
+  const matching = className => stage.children.filter(item => item.className === className);
+  assert.equal(matching('chat-sequence-note')[0].textContent, '审核\n订单');
+  assert.equal(matching('chat-sequence-message')[3].textContent, '4. <img src=https://example.invalid>');
+  assert.equal(matching('chat-sequence-activation').length, 1);
+  assert.equal(matching('chat-sequence-group').length, 1);
+  assert.deepEqual(matching('chat-sequence-line').map(item => [item.dataset.direction, item.dataset.style, item.dataset.tip]), [
+    ['right', 'solid', 'arrow'], ['self', 'solid', 'arrow'], ['left', 'dashed', 'arrow'], ['left', 'dashed', 'cross'],
+  ]);
+});
+
+test('preserves code fallback for malformed, oversized or executable-looking Mermaid syntax', () => {
+  for (const source of [
+    'sequenceDiagram\n%%{init: {}}%%\nA->>B: hi',
+    'sequenceDiagram\nA->>B: hi\nclick A javascript:alert(1)',
+    'sequenceDiagram\nA->>B: hi\nalt missing end',
+    'sequenceDiagram\nA->>B: hi\nand bad branch\nend',
+    'sequenceDiagram\n' + Array.from({length:13}, (_, i) => `participant p${i}`).join('\n'),
+  ]) assert.equal(renderMermaidDiagram(document, source), null);
 });

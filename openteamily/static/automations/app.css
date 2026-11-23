@@ -654,8 +654,20 @@ body.app-workspace #main-panel {
 }
 
 #editor-head-confirm,
-.editor-head .manual-run-feedback {
+.editor-head .manual-run-feedback,
+.editor-draft-notice {
   grid-column: 1 / -1;
+}
+
+.editor-draft-notice:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .5rem;
+}
+
+.editor-draft-notice p {
+  margin: 0;
 }
 
 #editor-head-confirm:empty {

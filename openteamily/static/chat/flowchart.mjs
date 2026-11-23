@@ -1,3 +1,5 @@
+import {renderSequenceDiagram} from './sequence-diagram.mjs';
+
 const MAX_SOURCE = 12000;
 const MAX_NODES = 36;
 const MAX_EDGES = 60;
@@ -6,7 +8,10 @@ const DIRECTIONS = new Set(['TB', 'TD', 'BT', 'LR', 'RL']);
 const NODE_ID = /^[\p{L}\p{N}_]+(?:-[\p{L}\p{N}_]+)*/u;
 const UNSUPPORTED = /^(?:subgraph|direction|click|style|classDef|class|linkStyle|accTitle|accDescr)(?:\s|:|$)/i;
 const SHAPES = [
-  ['([', '])', 'round'], ['((', '))', 'round'], ['[', ']', 'rect'], ['(', ')', 'round'], ['{', '}', 'diamond'],
+  ['(((', ')))', 'double-circle'], ['([', '])', 'round'], ['((', '))', 'round'],
+  ['[(', ')]', 'database'], ['[[', ']]', 'subroutine'], ['[/', '/]', 'slant'],
+  ['[\\', '\\]', 'slant-back'], ['[', ']', 'rect'], ['(', ')', 'round'],
+  ['{{', '}}', 'hexagon'], ['{', '}', 'diamond'],
 ];
 const CONNECTORS = [
   ['-.->', 'dashed', true], ['==>', 'thick', true], ['-->', 'solid', true], ['---', 'solid', false],
@@ -84,6 +89,19 @@ function readNode(text) {
   return {id, label, shape:shape[2], rest:remainder.slice(value.end).trimStart()};
 }
 
+function readNodeGroup(text) {
+  const nodes = [];
+  let rest = text;
+  while (nodes.length < MAX_NODES) {
+    const node = readNode(rest);
+    if (!node || nodes.some(({id}) => id === node.id)) return null;
+    nodes.push(node);
+    if (!node.rest.startsWith('&')) return {nodes, rest:node.rest};
+    rest = node.rest.slice(1).trimStart();
+  }
+  return null;
+}
+
 function readEdge(text) {
   const connector = CONNECTORS.find(([symbol]) => text.startsWith(symbol));
   if (!connector) {
@@ -123,15 +141,17 @@ export function parseFlowchart(source) {
   };
   for (const line of lines.slice(1)) {
     if (line === 'end' || UNSUPPORTED.test(line)) return null;
-    let before = readNode(line);
-    if (!before || !addNode(before)) return null;
+    let before = readNodeGroup(line);
+    if (!before || !before.nodes.every(addNode)) return null;
     while (before.rest) {
       const connector = readEdge(before.rest);
       if (!connector) return null;
-      const after = readNode(connector.rest);
-      if (!after || !addNode(after) || edges.length >= MAX_EDGES) return null;
+      const after = readNodeGroup(connector.rest);
+      if (!after || !after.nodes.every(addNode) || edges.length + before.nodes.length * after.nodes.length > MAX_EDGES) return null;
       const {line, directed, label} = connector;
-      edges.push({from:before.id, to:after.id, line, directed, label});
+      for (const from of before.nodes) {
+        for (const to of after.nodes) edges.push({from:from.id, to:to.id, line, directed, label});
+      }
       before = after;
     }
   }
@@ -314,7 +334,8 @@ export function renderFlowchart(document, source) {
   frame.className = 'chat-flowchart';
   frame.tabIndex = 0;
   frame.setAttribute('role', 'region');
-  frame.setAttribute('aria-label', '流程图');
+  const english = document.documentElement?.lang === 'en';
+  frame.setAttribute('aria-label', english ? 'Flowchart' : '流程图');
   const stage = document.createElement('div');
   stage.className = 'chat-flowchart-stage';
   stage.style.width = `${layout.width}px`;
@@ -322,8 +343,9 @@ export function renderFlowchart(document, source) {
   stage.setAttribute('role', 'img');
   const labels = new Map(graph.nodes.map(node => [node.id, node.label.replace(/\s+/g, ' ')]));
   const connected = new Set(graph.edges.flatMap(({from, to}) => [from, to]));
+  const arrowWords = english ? {directed:'to', plain:'connected to'} : {directed:'到', plain:'连接'};
   const summary = graph.edges.map(({from, to, label, directed}) =>
-    `${labels.get(from)} ${directed ? '到' : '连接'} ${labels.get(to)}${label ? `（${label}）` : ''}`);
+    `${labels.get(from)} ${directed ? arrowWords.directed : arrowWords.plain} ${labels.get(to)}${label ? `（${label}）` : ''}`);
   for (const [id, label] of labels) if (!connected.has(id)) summary.push(label);
   stage.setAttribute('aria-label', summary.join('；'));
   renderEdges(document, stage, layout.edges);
@@ -340,4 +362,10 @@ export function renderFlowchart(document, source) {
   }
   frame.append(stage);
   return frame;
+}
+
+export function renderMermaidDiagram(document, source) {
+  if (typeof source !== 'string' || source.length > MAX_SOURCE) return null;
+  const header = source.split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith('%%'));
+  return /^sequenceDiagram$/i.test(header || '') ? renderSequenceDiagram(document, source) : renderFlowchart(document, source);
 }

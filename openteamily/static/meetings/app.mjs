@@ -4,6 +4,7 @@ import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 import {previewCallAudio} from '../shell/call-audio-handoff.mjs';
+import {readMeetingEditor, writeMeetingEditor} from './editor-recovery.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -681,6 +682,9 @@ function mount() {
   let conflictRead = null;
   let savedDraft = null;
   let editingWorkspace = '';
+  let editorBaseRevision = 0;
+  let editorReady = false;
+  let chatDraftEditor = '';
   let continueNavigation = null;
   let watchingLeave = false;
   let deleting = null;
@@ -1695,11 +1699,13 @@ function mount() {
     callSource.hidden = !callDraft && !isMeetingCallId(current?.source_call_id);
     sharing.sync();
     renderList();
-    rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id} : {new: '1'},
+    rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id}
+      : {new:'1', ...(chatDraftEditor ? {from:'chat', draft:chatDraftEditor} : {})},
       callDraft?.linkWorkspace ?? workspaceId());
   }
 
-  function fill(meeting, source = null, draftJob = undefined) {
+  function fill(meeting, source = null, draftJob = undefined, {recover = false, chatEditor = ''} = {}) {
+    editorReady = false;
     if (inboxReturn) inboxReturn.hidden = true;
     if (mobileBack) mobileBack.hidden = false;
     selection += 1;
@@ -1710,6 +1716,7 @@ function mount() {
     const sameMeeting = meeting?.id === current?.id && meeting?.workspace_id === current?.workspace_id && Boolean(meeting?.id);
     current = meeting;
     callDraft = source;
+    chatDraftEditor = chatEditor;
     const draftContext = savedDraftContext();
     if (draftJob !== undefined || !sameDraftContext(draftContext, storedDraft)) {
       stopDraftPoll();
@@ -1734,6 +1741,9 @@ function mount() {
     actions = meeting ? (meeting.action_items || []).map((item, savedIndex) => ({...item, savedIndex})) : [];
     savedDraft = draftContents();
     editingWorkspace = workspaceId();
+    editorBaseRevision = meeting?.revision || 0;
+    if (recover) recoverEditor();
+    editorReady = true;
     renderActions();
     syncRecord();
   }
@@ -1819,7 +1829,7 @@ function mount() {
       return;
     }
     if (meetings.length && !current) await openMeeting(meetings[0].id);
-    else fill(null);
+    else fill(null, null, undefined, {recover:true});
   }
 
   async function openMeeting(id, read, transcriptQuery, actionReference) {
@@ -1849,7 +1859,7 @@ function mount() {
       show('error', messageFor(result.body.error, '无法打开会议。'));
       return;
     }
-    fill(result.body.meeting, null, result.body.draft_job || null);
+    fill(result.body.meeting, null, result.body.draft_job || null, {recover:true});
     if (globalThis.matchMedia?.('(max-width: 700px)').matches) {
       document.getElementById('main').scrollTop = 0;
       const focus = draftTop.hidden ? document.getElementById('meeting-editor-pane') : draftTop;
@@ -1965,7 +1975,7 @@ function mount() {
     if (meeting) {
       if (!await openMeeting(meeting.id, {status: 200, body: {meeting, viewer_username: owner}})) return;
     } else {
-      fill(null, {...source,linkWorkspace:linkedWorkspace});
+      fill(null, {...source,linkWorkspace:linkedWorkspace}, undefined, {recover:true});
       document.getElementById('main').scrollTop = 0;
       callSource.focus({preventScroll: true});
       show('ok', '已填入通话信息。上传录音或粘贴转写后，可生成纪要。');
@@ -2109,10 +2119,17 @@ function mount() {
       const transcriptQuery = catalogueTranscript && catalogueOrigin === meetingId ? search.value : '';
       await Promise.all([openMeeting(meetingId, viewerMatches && detail, transcriptQuery, actionReference), loadList({keepEditor: true})]);
     } else if (linked.get('new') === '1') {
-      fill(null);
+      let chatEditor = '', source = null;
       if (linked.get('from') === 'chat') {
-        let source;
-        try { source = takeMeetingFromChat(document.defaultView.sessionStorage, session.body.user.id, workspaceId()); } catch {}
+        const previous = linked.get('draft');
+        if (previous && /^(?:[a-f0-9]{32}|\d{13})$/.test(previous)) chatEditor = previous;
+        else if (!previous) {
+          source = takeMeetingFromChat(editorStorage(), viewerId, workspaceId());
+          if (source) chatEditor = meetingKey('');
+        }
+      }
+      fill(null, null, undefined, {recover:true, chatEditor});
+      if (linked.get('from') === 'chat') {
         if (source) {
           titleInput.value = source.title;
           transcript.value = source.transcript;
@@ -2120,7 +2137,7 @@ function mount() {
           syncDraft();
           syncLeaveProtection();
           show('ok', '已填入所选聊天消息。可编辑正文，再生成纪要。');
-        } else {
+        } else if (!hasUnsavedChanges()) {
           show('error', '无法读取聊天草稿。你可以粘贴会议正文。');
         }
       }
@@ -2135,6 +2152,71 @@ function mount() {
   function draftContents() {
     return JSON.stringify([titleInput.value, startedInput.value, attendeeInput.value, summary.value, transcript.value,
       actions.map(actionFields)]);
+  }
+
+  function editorKey() {
+    if (!native || !meetingIdPattern.test(viewerId) || !meetingIdPattern.test(editingWorkspace) ||
+        workspaceId() !== editingWorkspace) return '';
+    return 'openteamily.meeting-editor.' + [viewerId, editingWorkspace,
+      current?.id || callDraft?.id || (chatDraftEditor ? 'chat-' + chatDraftEditor : 'new')].join('.');
+  }
+
+  function editorStorage() {
+    try { return document.defaultView?.sessionStorage; } catch { return undefined; }
+  }
+
+  function persistEditor() {
+    const key = editorKey();
+    if (!key || !editorReady || savedDraft === null || form.hidden || form.inert) return false;
+    const submitted = writing?.kind === 'save' && active(writing) ? writing : saveRetry && active(saveRetry) ? saveRetry : null;
+    const pending = submitted?.key ? {key:submitted.key, startedAt:submitted.changes.started_at, fields:JSON.parse(submitted.draft)} : null;
+    const draft = draftContents();
+    if (draft === savedDraft && !pending) return writeMeetingEditor(editorStorage(), key, null);
+    return writeMeetingEditor(editorStorage(), key, {revision:editorBaseRevision,
+      baseline:JSON.parse(savedDraft), fields:JSON.parse(draft), pending});
+  }
+
+  function clearEditor() {
+    const key = editorKey();
+    if (key) writeMeetingEditor(editorStorage(), key, null);
+  }
+
+  function applyEditorFields(fields, savedActions) {
+    const [title, startedAt, attendees, notes, body, nextActions] = fields;
+    titleInput.value = title;
+    startedInput.value = startedAt;
+    attendeeInput.value = attendees;
+    summary.value = notes;
+    transcript.value = body;
+    actions = nextActions.map(([text, owner, done, due_date], index) => ({
+      text, owner, done, due_date, ...(sameMeetingField(nextActions[index], savedActions[index]) ? {savedIndex:index} : {}),
+    }));
+    transcriptSearch.refresh();
+    syncDraft();
+  }
+
+  function recoverEditor() {
+    const key = editorKey();
+    const recovered = key && readMeetingEditor(editorStorage(), key);
+    if (!recovered) return;
+    const remote = JSON.parse(savedDraft);
+    if (current && recovered.revision !== editorBaseRevision) {
+      const review = mergeMeetingFields(recovered.baseline, recovered.fields, remote);
+      if (sameMeetingField(review.fields, remote)) return;
+      editorBaseRevision = recovered.revision;
+      savedDraft = JSON.stringify(recovered.baseline);
+      saveConflict = true;
+      applyEditorFields(recovered.fields, remote[5]);
+      showSave('error', '已恢复未保存的修改。会议有更新，请先核对最新版本。');
+      return;
+    }
+    applyEditorFields(recovered.fields, remote[5]);
+    if (!current && recovered.pending) {
+      const {fields, key:retryKey, startedAt} = recovered.pending;
+      saveRetry = beginSave(fields, retryKey, startedAt);
+    }
+    if (saveRetry) showSave('error', '已恢复上次未确认的保存。点击「确认并重试保存」继续。');
+    else if (draftContents() !== savedDraft) showSave('ok', '已恢复此标签页中未保存的修改。');
   }
 
   function renderConflictReview(review, local, remote, revision) {
@@ -2199,18 +2281,8 @@ function mount() {
     showSave('', '');
     applyConflict.onclick = () => {
       if (!active(target) || current?.id !== target.id || !saveConflict || audio.hasPendingWork()) return;
-      const [title, startedAt, attendees, notes, body, nextActions] = review.fields;
       fill(latest, null, result.body.draft_job || null);
-      titleInput.value = title;
-      startedInput.value = startedAt;
-      attendeeInput.value = attendees;
-      summary.value = notes;
-      transcript.value = body;
-      actions = nextActions.map(([text, owner, done, due_date], index) => ({
-        text, owner, done, due_date, ...(sameMeetingField(nextActions[index], remote[5][index]) ? {savedIndex:index} : {}),
-      }));
-      transcriptSearch.refresh();
-      syncDraft();
+      applyEditorFields(review.fields, remote[5]);
       renderActions();
       showSave('ok', hasUnsavedChanges() ? '已载入最新版本并保留修改。请核对后保存。' : '已载入最新版本。');
       titleInput.focus({preventScroll:true});
@@ -2229,13 +2301,14 @@ function mount() {
   }
 
   function beforeLeaving(event) {
-    if (!hasUnsavedChanges()) return;
+    if (!hasUnsavedChanges() || (!audio.hasPendingWork() && persistEditor())) return;
     event.preventDefault();
     event.returnValue = '';
   }
 
   function syncLeaveProtection() {
-    const dirty = hasUnsavedChanges();
+    const stored = persistEditor();
+    const dirty = hasUnsavedChanges() && (audio.hasPendingWork() || !stored);
     if (dirty === watchingLeave) return;
     watchingLeave = dirty;
     if (dirty) globalThis.addEventListener?.('beforeunload', beforeLeaving);
@@ -2248,6 +2321,7 @@ function mount() {
     if (!snapshot[5][index]) return;
     snapshot[5][index][2] = done;
     savedDraft = JSON.stringify(snapshot);
+    editorBaseRevision = current.revision;
   }
 
   function confirmNavigation(leave) {
@@ -2257,8 +2331,8 @@ function mount() {
       : saveRetry && active(saveRetry)
         ? '上次保存结果尚未确认。离开后可重新打开原会议，核对保存结果。'
         : audio.hasPendingWork()
-          ? '本页的音频、转写进度和尚未保存的修改会丢失。'
-          : '尚未保存的会议内容会丢失。';
+          ? '放弃修改会清除本页的音频、转写进度和尚未保存的内容。'
+          : '选择「放弃修改」会清除这次未保存的会议内容。';
     continueNavigation = leave;
     unsavedDialog.showModal();
   }
@@ -2274,25 +2348,40 @@ function mount() {
     const leave = continueNavigation;
     continueNavigation = null;
     unsavedDialog.close();
-    return leave?.();
+    if (!leave) return;
+    clearEditor();
+    if (savedDraft !== null) {
+      const original = JSON.parse(savedDraft);
+      editorReady = false;
+      applyEditorFields(original, original[5]);
+      audio.reset();
+      editorReady = true;
+    }
+    return leave();
   });
 
-  function beginSave() {
-    const title = titleInput.value.trim();
-    const startedAt = callDraft && startedInput.value === inputTime(callDraft.started_at) ? callDraft.started_at
-      : Math.floor(new Date(startedInput.value).getTime() / 1000);
-    const attendees = callDraft && attendeeInput.value === callDraft.attendees.join(', ') ? callDraft.attendees
-      : parseAttendees(attendeeInput.value);
+  function beginSave(fields = JSON.parse(draftContents()), retryKey, originalStart) {
+    const [editedTitle, start, names, notes, body, editedActions] = fields;
+    const title = editedTitle.trim();
+    const startedAt = originalStart ?? (callDraft && start === inputTime(callDraft.started_at) ? callDraft.started_at
+      : Math.floor(new Date(start).getTime() / 1000));
+    const attendees = callDraft && names === callDraft.attendees.join(', ') ? callDraft.attendees : parseAttendees(names);
     if (!title) { showSave('error', '请填写标题。'); return null; }
     if (!Number.isFinite(startedAt)) { showSave('error', '请选择开始时间。'); return null; }
-    const submittedActions = actions.filter(action => (action.text || '').trim());
+    const payload = [], submittedActions = [];
+    editedActions.forEach(([text, owner, done, due_date], index) => {
+      if (!text.trim()) return;
+      payload.push(actionPayload({text, owner, done, due_date}));
+      const action = actions[index];
+      submittedActions.push(action && sameMeetingField(actionFields(action), editedActions[index]) ? action : null);
+    });
     return {
-      ...scope(), kind: 'save', id: current?.id, revision: current?.revision, draft: draftContents(), submittedActions,
-      key: current?.id ? null : meetingKey('meeting-'),
+      ...scope(), kind: 'save', id: current?.id, revision: current?.revision, draft: JSON.stringify(fields), submittedActions,
+      key: current?.id ? null : retryKey || meetingKey('meeting-'),
       changes: {
         title, started_at: startedAt, attendees,
-        summary: summary.value, transcript: transcript.value,
-        action_items: submittedActions.map(action => actionPayload(action)),
+        summary: notes, transcript: body,
+        action_items: payload,
         ...(!current?.id && callDraft ? {source_call_id: callDraft.id} : {}),
       },
     };
@@ -2355,6 +2444,7 @@ function mount() {
       else showSave('error', messageFor(result.body.error, '保存失败。草稿已保留，请重试。'));
       return;
     }
+    clearEditor();
     if (!native) meetings = [meeting, ...meetings.filter(item => item.id !== meeting.id)];
     else meetings = meetings.map(item => item.id === meeting.id ? meeting : item);
     if (!newerDraft && !audio.hasPendingWork() && layout?.dataset.view !== 'catalogue') fill(meeting);
@@ -2362,9 +2452,10 @@ function mount() {
       current = meeting;
       callDraft = null;
       savedDraft = operation.draft;
+      editorBaseRevision = saveConflict ? 1 : meeting.revision;
       clearNoteCopies();
       for (const action of actions) delete action.savedIndex;
-      if (!revisedCreate) operation.submittedActions.forEach((action, index) => { action.savedIndex = index; });
+      if (!revisedCreate) operation.submittedActions.forEach((action, index) => { if (action) action.savedIndex = index; });
       syncWriting();
       syncRecord();
     }
@@ -2397,7 +2488,7 @@ function mount() {
     if (!workspaceId()) return;
     return confirmNavigation(() => {
       selection += 1;
-      fill(null);
+      fill(null, null, undefined, {recover:true});
       show('', '');
       document.getElementById('main').scrollTop = 0;
       titleInput.focus?.();

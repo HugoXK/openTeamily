@@ -283,6 +283,59 @@ const projectedAutomation = 'c'.repeat(32);
 const projectedPath = '/v1/workspaces?scope=personal&include=automations';
 const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
 
+test('a new automation restores the same account and workspace draft without a write', async () => {
+  const storage = new Map();
+  const location = {pathname:'/automations', search:'', hash:'#workspace=' + projectedWorkspace};
+  const history = {
+    state:null,
+    replaceState(state, _, address) {
+      this.state = state;
+      const parsed = new URL(address, 'https://example.test');
+      Object.assign(location, {search:parsed.search, hash:parsed.hash});
+    },
+  };
+  const sessionStorage = {
+    getItem:key => storage.get(key),
+    setItem:(key,value) => storage.set(key,value),
+    removeItem:key => storage.delete(key),
+  };
+  const requests = [];
+  async function open(owner, workspace = projectedWorkspace) {
+    const {doc, elements} = fakeDocument();
+    doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]'
+      ? {content:'ds-bot', getAttribute:() => 'ds-bot'} : null;
+    doc.defaultView = {location, history, sessionStorage};
+    await mount(doc, {fetcher:async (path, {method} = {}) => {
+      requests.push(method);
+      let body;
+      if (path === '/v1/auth/session') body = {user:{id:owner,username:'alice'}};
+      else if (path.startsWith('/v1/workspaces?')) body = {items:[{id:workspace,name:'工作区'}]};
+      else body = {items:[]};
+      return {status:200,json:async () => body};
+    }});
+    return elements;
+  }
+  const first = await open(projectedOwner);
+  first.get('new-automation').handlers.click[0]();
+  const form = first.get('editor-form');
+  form.elements.prompt.value = '保存在本页的指令';
+  form.elements.kind.value = 'weekly';
+  form.elements.weekday.value = '4';
+  form.handlers.input[0]();
+  assert.equal(storage.size,1);
+  const reloaded = await open(projectedOwner);
+  assert.equal(reloaded.get('editor-form').hidden,false);
+  assert.equal(reloaded.get('editor-form').elements.prompt.value,'保存在本页的指令');
+  assert.equal(reloaded.get('editor-form').elements.weekday.value,'4');
+  const foreign = await open('d'.repeat(32));
+  assert.equal(foreign.get('editor-form').hidden,true);
+  const otherWorkspace = 'e'.repeat(32);
+  location.hash = '#workspace=' + otherWorkspace;
+  const changedWorkspace = await open(projectedOwner, otherWorkspace);
+  assert.equal(changedWorkspace.get('editor-form').hidden,true);
+  assert.ok(!requests.includes('POST'));
+});
+
 test('native startup overlaps authentication and the owned list, then requests templates on demand', async t => {
   const {doc, elements} = fakeDocument();
   const previousDocument = globalThis.document;

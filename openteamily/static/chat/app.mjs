@@ -345,7 +345,7 @@ export function meetingCallHrefInMessage(text, origin) {
 
 function mayContainChatMarkdown(text, assistantReply) {
   if (/^[ \t]*(?:```|~~~)/m.test(text) ||
-      (text.includes('|') && text.includes('\n') && /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\||$)/m.test(text))) return true;
+      (text.includes('|') && text.includes('\n') && /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\||$)/m.test(text))) return true;
   return assistantReply && (/[\\`*_~]/.test(text) || /\]\(|\n[ \t]*\n/.test(text) ||
     /^(?:#{1,6}\s|[ \t]*(?:>|[-+]\s|\d+[.)]\s|-{3,}$))/m.test(text));
 }
@@ -373,13 +373,59 @@ function appendMessageMarkdown(doc, parent, source, assistantReply, updatePrevie
   }
 }
 
-function renderMessageBody(doc, node, text, prefs, assistantReply = false) {
+const streamingReplies = new WeakMap();
+const streamingReplySource = node => streamingReplies.get(node)?.source || '';
+
+function paintStreamingReply(doc, node, source) {
+  const view = streamingReplies.get(node) || {};
+  view.source = source;
+  streamingReplies.set(node, view);
+  node.hidden = !source;
+  if (!source || (!view.markdown && !mayContainChatMarkdown(source, true))) {
+    view.markdown = null;
+    node.textContent = source;
+    return;
+  }
+
+  const format = module => {
+    if (!view.markdown) {
+      view.markdown = doc.createElement('div');
+      view.markdown.className = 'chat-markdown';
+      node.replaceChildren(view.markdown);
+    }
+    module.renderStreamingMarkdown(doc, view.markdown, view.source);
+  };
+  if (richContent) {
+    format(richContent);
+    return;
+  }
+
+  node.textContent = source;
+  view.loading ??= loadRichContent().then(module => {
+    richContent = module;
+    if (node.isConnected === false || !mayContainChatMarkdown(view.source, true)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    format(module);
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  }).catch(() => {}).finally(() => { view.loading = null; });
+}
+
+function renderMessageBody(doc, node, text, prefs, assistantReply = false, preview) {
   const source = String(text || '');
   const rich = mayContainChatMarkdown(source, assistantReply) &&
     (!richContent || assistantReply || richContent.hasExplicitRichContent(source));
   if (rich) {
-    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews,
-      (parent, value, updatePreview) => appendMessageMarkdown(doc, parent, value, assistantReply, updatePreview));
+    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews, (parent, value, updatePreview) => {
+      const streamed = assistantReply && streamingReplies.get(preview);
+      if (!streamed?.markdown || !value.startsWith(streamed.source.trimEnd())) {
+        appendMessageMarkdown(doc, parent, value, assistantReply, updatePreview);
+        return;
+      }
+      richContent.renderStreamingMarkdown(doc, streamed.markdown, value, {complete:true});
+      parent.append(streamed.markdown);
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    });
   } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
@@ -1098,6 +1144,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const readingPositions = new Map();
   const sessionRows = new Map();
   const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
@@ -2609,9 +2656,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  function readingPositionKey(source, wid, cid, aid) {
+    return JSON.stringify([currentUser?.id, wid, source, cid, aid || '']);
+  }
+
+  function rememberReadingPosition() {
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    if (!servedByDsbot || !state || state.owner !== currentUser?.id || state.cid !== currentConversation?.id ||
+        !historyScroller.clientHeight) return;
+    const key = readingPositionKey(currentSource, state.wid, state.cid, state.aid);
+    readingPositions.delete(key);
+    if (!state.readingHistory && messageScrollerAtBottom(historyScroller)) return;
+    const {id, offset} = chatHistoryAnchor();
+    if (!id || !Number.isFinite(offset)) return;
+    readingPositions.set(key, {key, id, offset:offset - historyScroller.getBoundingClientRect().top, top:0});
+    if (readingPositions.size > 50) readingPositions.delete(readingPositions.keys().next().value);
+  }
+
+  function readingPositionAnchor(position) {
+    return position && {...position, offset:position.offset + historyScroller.getBoundingClientRect().top};
+  }
+
   async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
     if (resume && resumeOpenSession(target)) return true;
+    rememberReadingPosition();
     sessionTransition?.controller.abort();
     const controller = new AbortController();
     const transition = {...target, pending: true, controller};
@@ -2619,7 +2688,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition,
+    const position = !target.message && readingPositions.get(readingPositionKey(target.source, workspaceId(), target.cid, target.agent));
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position,
       signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
@@ -3077,15 +3147,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function captureMessageBodies(list, scope) {
     const bodies = new Map();
+    const previews = new Map();
     const scroll = [];
     const focused = document.activeElement;
     let restoreFocus = false;
     if (list.dataset.messageBodyScope === scope) {
       for (const row of list.children) {
-        if (!row.dataset.messageId) continue;
-        const body = Array.from(row.children).find(child => interactiveMessageBodies.has(child));
+        const body = Array.from(row.children).find(child =>
+          interactiveMessageBodies.has(child) || streamingReplies.get(child)?.markdown);
         if (!body) continue;
-        bodies.set(row.dataset.messageId, body);
+        if (interactiveMessageBodies.has(body) && row.dataset.messageId) bodies.set(row.dataset.messageId, body);
+        else if (row.dataset.replyProgress) previews.set(row.dataset.replyProgress, body);
         restoreFocus ||= Boolean(focused && body.contains?.(focused));
         for (const node of body.querySelectorAll?.('.chat-markdown-table-scroll, .chat-flowchart, .chat-code-block pre') || []) {
           const left = node.scrollLeft;
@@ -3095,7 +3167,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     list.dataset.messageBodyScope = scope;
     return {
-      bodies,
+      bodies, previews,
       restoreView() {
         for (const [node, left] of scroll) if (node.isConnected) node.scrollLeft = left;
         if (restoreFocus && focused?.isConnected && document.activeElement === document.body) focused.focus({preventScroll:true});
@@ -3103,20 +3175,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     };
   }
 
-  function transcriptMessageBody(previous, text, assistantReply = false) {
+  function transcriptMessageBody(previous, text, assistantReply = false, preview) {
     const rendered = interactiveMessageBodies.get(previous);
     const language = document.documentElement?.lang;
     if (rendered && rendered.text === text && rendered.assistantReply === assistantReply &&
         rendered.prefs === chatPreferences && rendered.language === language) return previous;
 
     const body = document.createElement('div');
-    if (renderMessageBody(document, body, text, chatPreferences, assistantReply)) {
+    if (renderMessageBody(document, body, text, chatPreferences, assistantReply, preview)) {
       interactiveMessageBodies.set(body, {text, assistantReply, prefs:chatPreferences, language});
     }
     return body;
   }
 
-  function makeAgentMessage(item, previousBody) {
+  function makeAgentMessage(item, previousBody, preview) {
     const bubble = document.createElement('li');
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
@@ -3130,7 +3202,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const body = partial || (failed && item.error_code !== 'session/attachment-invalid')
       ? document.createElement('div')
       : transcriptMessageBody(previousBody, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item),
-        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded');
+        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded', preview);
     body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
     if (partial) {
       bubble.dataset.replyProgress = item.client_key;
@@ -3215,7 +3287,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         list.append(view.bubble);
         continue;
       }
-      const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id));
+      const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id), bodyViews.previews.get(item.client_key));
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
     }
@@ -3256,11 +3328,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
       : uiLabel('正在生成回复', 'Writing a reply');
     if (view.heading.textContent !== label) view.heading.textContent = label;
-    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
+    if (typeof snapshot.text !== 'string' || streamingReplySource(view.body) === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
-    view.body.textContent = snapshot.text;
-    view.body.hidden = !snapshot.text;
+    paintStreamingReply(document, view.body, snapshot.text);
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     else updateLatestMessageControl();
   }
@@ -4339,6 +4410,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
   }
 
+  function visibleGroupReply(id) {
+    const view = groupReplyViews.get(id);
+    if (!view || view.row.hidden || !streamingReplySource(view.preview)) return false;
+    const viewport = document.getElementById('message-scroller').getBoundingClientRect();
+    const reply = view.row.getBoundingClientRect();
+    return reply.bottom > viewport.top && reply.top < viewport.bottom;
+  }
+
   function withGroupReplyScroll(update) {
     const scroller = document.getElementById('message-scroller');
     const top = scroller.scrollTop;
@@ -4367,9 +4446,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         changes.push({id, view, passed:true});
         continue;
       }
+      const previousText = streamingReplySource(view.preview);
+      // The progress feed can drop a reply before the transcript receives it.
+      // Keep the same attempt readable until its durable result replaces it.
+      if (preserveMissing && previousText && !snapshot?.text && (!item || snapshot)) continue;
       const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
-      if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
+      if (previousText !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
     withGroupReplyScroll(() => {
@@ -4379,8 +4462,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           groupReplyViews.delete(id);
           continue;
         }
-        view.preview.textContent = text;
-        view.preview.hidden = !text;
+        if (streamingReplySource(view.preview) !== text) paintStreamingReply(document, view.preview, text);
         view.row.dataset.state = state;
         view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
       }
@@ -4437,6 +4519,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       // durable transcript even when this watch never saw an active snapshot.
       if (missing.length) {
         if (readingSocialContext()) {
+          // A long preview can put the reader above the bottom of the timeline.
+          // Reconcile that visible reply without interrupting history or a draft edit.
+          const finishing = new Set(missing.filter(([id]) => !items.has(id) && visibleGroupReply(id)).map(([id]) => id));
+          if (finishing.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+              !watch.reconciling && (transitioned || Date.now() >= watch.nextReconcileAt)) {
+            watch.nextReconcileAt = Date.now() + 8000;
+            watch.reconciling = true;
+            void openSocialConversation(currentConversation.id, {refresh:true, finishing})
+              .finally(() => { watch.reconciling = false; });
+          }
           if (liveBanner) liveBanner.hidden = false;
         } else if (!pollTimer && (transitioned || Date.now() >= watch.nextReconcileAt)) {
           // The progress feed is bounded. Throttle repeated reads for any
@@ -4491,7 +4583,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!row.classList.contains('group-reply-job')) continue;
       const state = row.dataset.state;
       const waiting = state === 'queued' || state === 'running';
-      const hasText = Boolean(groupReplyViews.get(row.dataset.replyJobId)?.preview.textContent.trim());
+      const preview = groupReplyViews.get(row.dataset.replyJobId)?.preview;
+      const hasText = Boolean(streamingReplySource(preview).trim());
       row.classList.toggle('group-reply-thinking', waiting && !hasText);
       if (waiting && !hasText) {
         pending.push(row);
@@ -4562,14 +4655,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
       const preview = previewBefore || document.createElement('div');
       preview.className = 'group-reply-preview body';
-      preview.hidden = !preview.textContent;
+      preview.hidden = !streamingReplySource(preview);
       preview.setAttribute('aria-live', 'off');
       if (wasRunning) row.dataset.state = 'running';
       groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
-    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !previewBefore?.textContent.trim());
+    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !streamingReplySource(previewBefore).trim());
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -4846,7 +4939,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
       role.textContent = socialMessageAuthor(item, people);
       const body = transcriptMessageBody(bodyViews.bodies.get(item.id), item.retracted ? '此消息已撤回' : (item.body || ''),
-        servedByDsbot && item.role === 'agent' && !item.retracted);
+        servedByDsbot && item.role === 'agent' && !item.retracted, previousGroupViews.get(groupReplyID)?.preview);
       body.className = 'body';
       body.hidden = item.attachment?.bytes !== undefined && item.body === item.attachment.title;
       if (item.forwarded_from && !item.retracted) {
@@ -5275,12 +5368,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
   }
 
-  function readingSocialContext(viewportHeight) {
+  function readingSocialContext(viewportHeight, {allowScrolled = false} = {}) {
     const scroller = document.getElementById('message-scroller');
     const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
       || (unread && unread.committed < unread.latest)
-      || !messageScrollerAtBottom(scroller, viewportHeight)
+      || (!allowScrolled && !messageScrollerAtBottom(scroller, viewportHeight))
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
   }
@@ -6185,7 +6278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -6213,11 +6306,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
-    const snapshot = startupSnapshot ? await startupSnapshot() : null;
-    if (startupSnapshot && !stillOpen()) return false;
-    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
+    if (!PRIVATE_THREAD_ID.test(position?.id || '')) position = null;
+    const snapshot = startupSnapshot && !position ? await startupSnapshot() : null;
+    if (startupSnapshot && !position && !stillOpen()) return false;
+    const latestPath = servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path;
+    const read = url => request('GET', url,
       undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
+    let result = snapshot || await read(position ? latestPath + '&around=' + position.id : latestPath);
+    if (position && stillOpen() && (result.status === 404 ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
       if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
@@ -6283,12 +6385,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = conversation;
     renderStudioDiscussionSource(conversation.studio_source);
-    let items = privateHistoryAfterSends(result.body.items || [], sends);
+    let items = position ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
-        readingHistory: !acknowledge};
+        readingHistory: Boolean(position) || !acknowledge};
       state.cursor = result.body.cursor ?? null;
-      if (sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+      if (position && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
+      if (!position && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
         items = items.slice(-Number(HISTORY_PAGE_SIZE));
         state.cursor = items[0].id;
       }
@@ -6298,9 +6401,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderAgentQuickStarts(detailAgent);
     if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(items, {followLatest: !refresh});
+    const pending = renderAgentMessages(items, {followLatest: !refresh, anchor:readingPositionAnchor(position)});
     const finished = items.filter(item => item.role === 'assistant' && item.status === 'succeeded');
-    if (acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const read = request('POST', `${path}/read`,
         {message_id: finished[finished.length - 1].id}).then(acknowledged => {
         if (!sameScope() || acknowledged.status !== 200) return;
@@ -6316,7 +6419,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6331,8 +6434,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
-    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = initialRead || await request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    if (!chatPathId(position?.id)) position = null;
+    const path = `${socialBase()}/${conversationId}`;
+    const latestPath = path + (unreadEntry ? '?start=unread' : '');
+    const read = url => request('GET', url, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    let result = initialRead || await read(position ? path + '?around=' + encodeURIComponent(position.id) : latestPath);
+    if (position && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -6356,7 +6468,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     if (publicStartCurrent && (!updated.public_agent || updated.public_agent.open === false)) return false;
-    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
+    const finishedVisibleReply = finishing?.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+      (result.body.items || []).some(item => (finishing.has(item.reply_job_id) && visibleGroupReply(item.reply_job_id))
+        || item.reply_jobs?.some(job => !waitingGroupReply(job) && finishing.has(job.id) && visibleGroupReply(job.id)));
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || (readingSocialContext() && !finishedVisibleReply)
+        || pendingSends.get(sendScope())?.active)) {
       if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
       scheduleSocialPoll(currentConversation);
       return false;
@@ -6382,7 +6498,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
     const lastSeq = shown.at(-1)?.seq;
-    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const snapshot = !position && unreadEntry ? result.body.unread_window : null;
     const first = snapshot?.first;
     const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
       Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
@@ -6391,7 +6507,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(unread?.firstId), unread});
+      readingHistory: Boolean(position || unread?.firstId), unread,
+      after: position && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
@@ -6414,7 +6531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh});
+    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -6427,7 +6544,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -7274,9 +7391,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const message = start.social
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+    const position = !start.message && !start.directAccess && readingPositions.get(start.social
+      ? readingPositionKey('social', workspace, start.social)
+      : readingPositionKey('agent', workspace, start.conversation, start.agent));
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link, position})
+      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot, position});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -7401,6 +7521,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
+      readingPositions.clear();
       chatSettings = null;
       clearSessionTransition();
       currentAgent = null;
@@ -7432,6 +7553,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      readingPositions.clear();
       clearSessionTransition();
       currentAgent = null;
       currentConversation = null;
@@ -7962,6 +8084,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    rememberReadingPosition();
     closePrivateThreadDialogs();
     if (messageLinkDialog?.open) messageLinkDialog.close();
     resetStickerSurface();
@@ -8622,6 +8745,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   pinButton?.addEventListener('click', toggleConversationPin);
   document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
+    rememberReadingPosition();
     cancelStartupLink();
     stopReplyProgress();
     stopGroupReplyProgress();

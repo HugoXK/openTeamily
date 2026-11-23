@@ -77,7 +77,7 @@ const MARKS = [
 
 function isWord(ch) { return Boolean(ch) && /[\p{L}\p{N}]/u.test(ch); }
 
-export function inlineTokens(text) {
+export function inlineTokens(text, {cellBreaks = false} = {}) {
   const src = String(text || '');
   const out = [];
   let buf = '';
@@ -85,8 +85,19 @@ export function inlineTokens(text) {
   let i = 0;
   while (i < src.length) {
     const ch = src[i];
-    if (ch === '\\' && i + 1 < src.length && ESCAPABLE.includes(src[i + 1])) { buf += src[i + 1]; i += 2; continue; }
+    if (ch === '\\' && i + 1 < src.length && (ESCAPABLE.includes(src[i + 1]) || (cellBreaks && src[i + 1] === '<'))) {
+      buf += src[i + 1]; i += 2; continue;
+    }
     if (ch === '\n') { flush(); out.push({type: 'br'}); i += 1; continue; }
+    if (cellBreaks && ch === '<') {
+      const lineBreak = /^<br[ \t]*\/?>/i.exec(src.slice(i));
+      if (lineBreak) {
+        flush();
+        out.push({type:'br'});
+        i += lineBreak[0].length;
+        continue;
+      }
+    }
     if (ch === '`') {
       let start = i + 1;
       while (src[start] === '`') start += 1;
@@ -115,7 +126,7 @@ export function inlineTokens(text) {
         const href = safeHref(src.slice(close + 2, end));
         if (href) {
           flush();
-          out.push({type: 'link', href, children: inlineTokens(src.slice(i + 1, close))});
+          out.push({type: 'link', href, children: inlineTokens(src.slice(i + 1, close), {cellBreaks})});
           i = end + 1;
           continue;
         }
@@ -135,7 +146,7 @@ export function inlineTokens(text) {
       const inner = src.slice(i + mark.length, end);
       if (!inner || inner.includes('\n\n')) continue;
       flush();
-      out.push({type, children: inlineTokens(inner)});
+      out.push({type, children: inlineTokens(inner, {cellBreaks})});
       i = end + mark.length;
       matched = true;
       break;
@@ -170,13 +181,11 @@ function appendInline(document, parent, tokens) {
   }
 }
 
-export function renderMarkdown(document, root, source, {readTable, renderTable, renderCode, headingOffset = 0} = {}) {
-  if (!root) return;
-  while (root.firstChild) root.removeChild(root.firstChild);
-  for (const block of markdownToBlocks(source, {readTable})) {
+export function renderMarkdownBlocks(document, root, blocks, {renderTable, renderCode, headingOffset = 0} = {}) {
+  for (const block of blocks) {
     let el;
     if (block.type === 'table') {
-      el = renderTable(document, block, (cell, text) => appendInline(document, cell, inlineTokens(text)));
+      el = renderTable(document, block, (cell, text) => appendInline(document, cell, inlineTokens(text, {cellBreaks:true})));
     } else if (block.type === 'code' && renderCode) el = renderCode(document, block);
     else if (block.type === 'hr') el = document.createElement('hr');
     else if (block.type === 'code') {
@@ -199,6 +208,12 @@ export function renderMarkdown(document, root, source, {readTable, renderTable, 
     }
     root.appendChild(el);
   }
+}
+
+export function renderMarkdown(document, root, source, options = {}) {
+  if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  renderMarkdownBlocks(document, root, markdownToBlocks(source, {readTable:options.readTable}), options);
   if (!root.firstChild) root.appendChild(document.createElement('p')).appendChild(document.createElement('br'));
 }
 
