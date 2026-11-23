@@ -1,11 +1,15 @@
 // Artifact model (legacy openteamily/artifacts.py): constants, validation,
 // public views and text-only thumbnails, executed inside the user's DS-Bot.
+import { GLB_MIME } from '../../lib/glb.js'
+import {decodeWorkbook} from './workbook.js'
 import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
 
 export const KINDS = ['document', 'website', 'whiteboard', 'media']
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
 export const MAX_MEDIA_BYTES = 2 * 1024 * 1024
+export const MAX_MEDIA_OBJECT_BYTES = 8 * 1024 * 1024
+export const MAX_GENERATED_VIDEO_BYTES = MAX_MEDIA_OBJECT_BYTES
 export const BOARD_JSON_MAX = 65536
 export const MAX_STROKES = 200
 export const MAX_POINTS = 400
@@ -18,7 +22,7 @@ export const PREFIX_LEN = 8
 export const SAFE_FILENAME = /^[A-Za-z0-9._-]{1,80}$/
 export const STROKE_ID = /^[A-Za-z0-9_-]{8,32}$/
 export const COLOR = /^#[0-9A-Fa-f]{6}$/
-export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm'])
+export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm', GLB_MIME])
 export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 export const emptyBoard = () => ({ schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: [] })
 export const SLIDES_SCHEMA = 'openteamily.slides.v1'
@@ -41,31 +45,37 @@ export const validTitle = (v) => typeof v === 'string' && v.trim().length >= 1 &
 export const validBody = (v) => validLongText(v, BODY_MAX)
 export const titleHash = (title) => digest(casefold(title.trim()))
 
-// Row = artifacts.* plus the joined columns the legacy ROW_SELECT produced.
-export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
- s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
- md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
- b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
- cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
- sl.deck AS slides_json, d.dashboard AS dashboard_json
- FROM artifacts a
+export const ROW_JOINS = ` FROM artifacts a
  LEFT JOIN artifact_meta m ON m.artifact_id=a.id
  LEFT JOIN artifact_sources s ON s.artifact_id=a.id
  LEFT JOIN artifact_media md ON md.artifact_id=a.id
  LEFT JOIN artifact_boards b ON b.artifact_id=a.id
  LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id
+ LEFT JOIN artifact_team_run_sources tr ON tr.artifact_id=a.id AND tr.workspace_id=a.workspace_id
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
- LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id `
+ LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
+ LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
+
+// Row = artifacts.* plus the saved kinds, sources and previews.
+export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
+ s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
+ md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
+ b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
+ cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
+ tr.run_id AS team_run_id, tr.position AS team_run_position, tr.run_title AS team_run_title,
+ sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json` + ROW_JOINS
 
 export function publicKind(row) {
   if (row.media_mime) return 'media'
   if (row.board_json) return 'whiteboard'
   if (row.slides_json) return 'slides'
   if (row.dashboard_json) return 'dashboard'
+  if (row.spreadsheet_json) return 'spreadsheet'
   return row.render === 'website' ? 'website' : 'document'
 }
 
 export function sourceView(row) {
+  if (row.team_run_id) return {kind:'team_run_step', id:row.team_run_id, position:row.team_run_position, run_title:row.team_run_title}
   if (row.chat_message_id) {
     const data = { kind: 'agent_message', id: row.chat_message_id, conversation_id: row.chat_conversation_id }
     if (row.chat_agent_id) data.agent_id = row.chat_agent_id
@@ -122,6 +132,11 @@ export function textLines(body, html = false) {
 export function preview(row, { decodeBoard, decodeSlides, decodeDashboard }) {
   const kind = publicKind(row)
   if (kind === 'media') return null
+  if (kind === 'spreadsheet') {
+    const workbook = decodeWorkbook(row.spreadsheet_json)
+    const first = workbook?.sheets[0]
+    return {type:'document',lines:first ? [first.name,...first.rows.slice(0,3).map(row=>row.join(' '))].map(previewText).filter(Boolean) : []}
+  }
   if (kind === 'whiteboard') {
     const board = decodeBoard(row.board_json) ?? emptyBoard()
     const shapes = board.strokes.slice(0, PREVIEW_STROKES).map((stroke) => {

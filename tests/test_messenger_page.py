@@ -8,7 +8,7 @@ class MessengerPageTests(unittest.TestCase):
     def setUp(self):
         settings_page_tests.SettingsPageTests.setUp(self)
 
-    def test_page_redirects_to_chat_and_keeps_assets(self):
+    def test_page_redirects_to_chat_and_old_assets_are_gone(self):
         page = self.raw.call('GET', '/messenger')
         self.assertEqual(page['status'], 302, page)
         self.assertEqual(page['headers']['Location'], '/chat')
@@ -26,10 +26,11 @@ class MessengerPageTests(unittest.TestCase):
         self.assertNotIn('href="/messenger"', html)
         self.assertNotIn('id="create-conversation"', html)
         self.assertIn('id="account-menu"', html)
-        script = self.raw.call('GET', '/messenger/app.mjs')
-        css = self.raw.call('GET', '/messenger/app.css')
+        self.assertEqual(self.raw.call('GET', '/messenger/')['headers']['Location'], '/chat')
+        self.assertEqual(self.raw.call('GET', '/messenger/app.mjs')['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/messenger/app.css')['status'], 404)
+        script = self.raw.call('GET', '/shell/chat-utils.mjs')
         self.assertEqual(script['status'], 200)
-        self.assertEqual(css['status'], 200)
         self.assertIn('javascript', script['headers']['Content-Type'])
         self.assertIn(b'conversationLabel', script['body'])
 

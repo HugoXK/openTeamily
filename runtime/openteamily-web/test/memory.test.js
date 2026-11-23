@@ -1,8 +1,73 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { bootMemory as boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/memory${rest}`
+
+test('a reviewed team message produces one private action with scoped provenance and current revision', async t => {
+  const team = 'b'.repeat(32)
+  const room = 'otc_' + 'C'.repeat(26)
+  const message = 'otm_' + 'D'.repeat(26)
+  const other = 'otm_' + 'E'.repeat(26)
+  const route = `/v1/ot/workspaces/${team}/conversations/${room}/messages/`
+  const reads = []
+  let accessible = true
+  setSharedBotSocial({
+    async request(method,path) {
+      assert.equal(method,'GET')
+      reads.push(path)
+      if (accessible && (path === route + message || path === route + other)) {
+        return {revision:2,body:'已保存的群聊原话'}
+      }
+      throw Object.assign(new Error('Fixture cannot view source'),{status:404})
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+  const bot = await boot(volume(),{teams:[team]})
+  const call = (...args)=>bot.call('memory',...args)
+  const path = base('/actions/from-chat')
+  const source = {kind:'social',workspace_id:team,conversation_id:room,message_id:message,revision:2}
+  const write = (changes={})=>call('POST',path,{source,title:'复查蓝图',notes:'我审阅过的私人备注',...changes},key())
+
+  assert.equal((await call('POST',base('/actions/from-chat',team),{source,title:'团队公开行动'},key())).status,404)
+  assert.equal((await write({source:{...source,revision:1}})).status,409)
+  assert.equal((await write({source:{...source,workspace_id:'f'.repeat(32)}})).status,404)
+  assert.deepEqual((await call('GET',base('/actions'))).body.items,[])
+  const [created,replayed] = (await Promise.all([write(),write()])).sort((a,b)=>b.status-a.status)
+  assert.deepEqual([created.status,replayed.status],[201,200])
+  const action = created.body.action
+  assert.equal(replayed.body.action.id,action.id)
+  assert.deepEqual(action.source_chat,source)
+  assert.equal(action.workspace_id,WS)
+  assert.equal(action.notes,'我审阅过的私人备注')
+  const exact = base('/actions/'+action.id)
+  assert.deepEqual((await call('GET',exact)).body.action,{...action, automation_followups:[]})
+  assert.equal((await call('GET',base('/actions/'+action.id,team))).status,404)
+  assert.equal((await call('GET',base('/actions'))).body.items[0].source_chat,undefined)
+  accessible = false
+  assert.equal((await write({source:{...source,message_id:other}})).status,404)
+  const verifiedReads = reads.length
+  assert.equal((await write()).body.action.id,action.id)
+  assert.equal(reads.length,verifiedReads)
+})
+
+test('the native message reference keeps its agent and rejects a source outside the active workspace', async () => {
+  const team = 'b'.repeat(32)
+  const bot = await boot(volume(),{teams:[team]})
+  const source = {kind:'agent',workspace_id:team,agent_id:'c'.repeat(32),
+    conversation_id:'d'.repeat(32),message_id:'e'.repeat(32)}
+  bot.features.table['agents/actionSource'] = async (payload,call) => {
+    assert.equal(call.internal,true)
+    assert.deepEqual(payload,source)
+    return true
+  }
+  const head = (ref)=>bot.call('memory','POST',base('/actions/from-chat'),{source:ref,title:'跟进回复'},key())
+  assert.equal((await head({...source,workspace_id:'f'.repeat(32)})).status,404)
+  const saved = await head(source)
+  assert.equal(saved.status,201)
+  assert.deepEqual(saved.body.action.source_chat,source)
+})
 
 test('memory pages run inside this DS-Bot: create, list, edit, conflict, versions, restore, export, remove', async () => {
   const bot = await boot()
@@ -39,6 +104,27 @@ test('memory pages run inside this DS-Bot: create, list, edit, conflict, version
   assert.equal((await call('GET', base('/' + page.id))).status, 404)
 })
 
+test('simultaneous edits and restores cannot replace a page from the same revision', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('memory', ...args)
+  const original = (await call('POST', base(), {title:'并行修订',body:'起始正文'},key())).body.page
+  const path = base('/' + original.id)
+  const edit = (revision, body) => call('POST', path, {revision, changes:{body}})
+  async function checkRace(writes, expectedRevision) {
+    const results = await Promise.all(writes)
+    assert.deepEqual(results.map(result => result.status).sort(),[200,409])
+    const saved = results.find(result => result.status === 200).body.page
+    const conflict = results.find(result => result.status === 409).body.error
+    assert.equal(saved.revision, expectedRevision)
+    assert.equal(conflict.current.revision, expectedRevision)
+    assert.equal(conflict.current.body,saved.body)
+    assert.deepEqual((await call('GET',path)).body.page,saved)
+    assert.equal((await call('GET',path+'/versions/'+expectedRevision)).body.version.body,saved.body)
+  }
+  await checkRace([edit(1,'正文版本一'),edit(1,'正文版本二')],2)
+  await checkRace([edit(2,'并行保留的内容'),call('POST',path+'/versions/1/restore',{revision:2})],3)
+})
+
 test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes the page', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('memory', ...args)
@@ -66,9 +152,9 @@ test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes 
 })
 
 test('memory/pages gives chat recall pages only from the selected workspace in this DS-Bot', async () => {
-  const bot = await boot()
-  await bot.call('memory', 'POST', base(), { title: '口味', body: '不吃辣。' }, key())
   const otherWorkspace = 'e'.repeat(32)
+  const bot = await boot(undefined, {teams:[otherWorkspace]})
+  await bot.call('memory', 'POST', base(), { title: '口味', body: '不吃辣。' }, key())
   await bot.call('memory', 'POST', base('', otherWorkspace), { title: '备忘', body: '只在另一工作区' }, key())
   const viaApi = await bot.endpoint('memory/pages', {workspace_id:WS})
   assert.equal(viaApi.ok, true)
@@ -83,11 +169,57 @@ test('memory/pages gives chat recall pages only from the selected workspace in t
   assert.deepEqual((await other.endpoint('memory/pages', {workspace_id:WS})).value, [], 'another DS-Bot has none of these pages')
 })
 
+test('memory citations read exact saved revisions with current workspace access', async () => {
+  const team = 'f'.repeat(32)
+  const teams = [team]
+  const bot = await boot(undefined, {teams})
+  const call = (...args) => bot.call('memory', ...args)
+  const local = (await call('POST', base(), {title:'发布笔记', body:'保留自己的发布记忆。'}, key())).body.page
+  const {page} = (await call('POST', base('', team), {title:'团队发布', body:'发布地点是北京。'}, key())).body
+  const path = base('/' + page.id, team)
+  const {action} = (await call('POST', base('/actions', team), {title:'核对发布准备', memory_page_id:page.id}, key())).body
+  const actionPath = base('/actions/' + action.id, team)
+  const edited = await call('POST', path, {revision:1, changes:{body:'发布地点改到上海。'}})
+  assert.equal(edited.status, 200)
+  assert.equal(edited.body.page.revision, 2)
+  const current = await bot.endpoint('memory/pages', {workspace_id:team})
+  assert.deepEqual(current.value.map(item => [item.id,item.revision,item.body]), [[page.id,2,'发布地点改到上海。']])
+  const historical = await call('GET', path + '/versions/1')
+  assert.equal(historical.body.current, 2)
+  assert.equal(historical.body.version.body, '发布地点是北京。')
+  assert.equal((await call('GET', path + '/versions/2')).body.version.body, '发布地点改到上海。')
+  assert.equal((await call('GET', path + '/versions/3')).status, 404)
+  assert.equal((await call('GET', base('/' + page.id) + '/versions/1')).status, 404)
+  assert.equal((await call('GET', actionPath)).body.action.id, action.id)
+  assert.equal((await bot.endpoint('memory/search', {q:'发布'})).value.items.length, 2)
+
+  teams.length = 0
+  for (const target of [base('',team), path, path + '/versions', path + '/versions/1', actionPath]) {
+    const result = await call('GET', target)
+    assert.equal(result.status, 404)
+    assert.equal(result.body.error.code, 'not_found')
+  }
+  assert.equal((await call('POST', path, {revision:2, changes:{body:'不应被保存。'}})).status, 404)
+  assert.equal((await call('POST', path + '/remove', {})).status, 404)
+  assert.equal((await bot.endpoint('memory/pages', {workspace_id:team})).ok, false)
+  assert.equal((await bot.endpoint('memory/personal', {workspace_id:team})).ok, false)
+  assert.deepEqual((await bot.endpoint('memory/search', {q:'发布'})).value.items.map(item => item.id), [local.id])
+
+  teams.push(team)
+  assert.equal((await call('GET', path)).body.page.body, '发布地点改到上海。')
+  assert.equal((await call('POST', path + '/remove', {})).status, 200)
+  assert.equal((await call('GET', path + '/versions/1')).status, 404)
+  bot.features.table['teams/activeWorkspaces'] = async () => { throw new Error('Bot Social disconnected') }
+  assert.equal((await call('GET', base('/' + local.id))).status, 200)
+  assert.equal((await call('GET', base('/profile'))).status, 200)
+  assert.deepEqual((await bot.endpoint('memory/search', {q:'发布'})).value.items.map(item => item.id), [local.id])
+})
+
 test('one test account\'s legacy memory (with history) imports into its DS-Bot only', async () => {
   const { bundles, expect } = legacyBundles(['memory'])
   const vol = volume()
   deliverBundle(vol, 'memory-1.bundle', bundles.memory)
-  const bot = await boot(vol)
+  const bot = await boot(vol, {personal:expect.workspace_id})
   assert.deepEqual((await bot.endpoint('memory/routes')).value.imported.map((item) => item.status), ['imported'])
   const wid = expect.workspace_id
   const page = await bot.call('memory', 'GET', base('/' + expect.memory.page_id, wid))

@@ -1,6 +1,7 @@
+import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
-import { createLookAvatar } from '../look/app.mjs';
+import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -42,21 +43,29 @@ export function meetingMeta(item) {
   return actions ? `${actions} 个行动项 · ${done} 已完成` : '没有行动项';
 }
 
-function csrfCookie(source) {
-  const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
-function hashWorkspace() {
-  const hash = (globalThis.location && globalThis.location.hash) || '';
+function hashWorkspace(hash = '') {
   return new URLSearchParams(hash.replace(/^#/, '')).get('workspace') || '';
 }
 
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+function workspaceLink(path, workspace, extras = {}) {
+  return path + '#' + new URLSearchParams({workspace, ...extras});
+}
+
+async function readLoginLinks(hash) {
+  const [agents, works, discover, teams, groups, chat] = await Promise.all([
+    import('../shell/public-agent-link.mjs'), import('../shell/public-work-link.mjs'),
+    import('../shell/discover-link.mjs'), import('../shell/team-invite-link.mjs'),
+    import('../shell/group-invite-link.mjs'), import('../shell/chat-utils.mjs'),
+  ]);
+  const agent = agents.publicAgentIntentFromHash(hash);
+  const work = works.publicWorkIntentFromHash(hash);
+  const discovery = discover.discoverIntentFromHash(hash);
+  const invite = teams.teamInviteHash(teams.teamInviteFromHash(hash)) || groups.groupInviteHash(groups.groupInviteFromHash(hash));
+  const agentHash = agent && agents.publicAgentContinuation(agent);
+  const access = chat.directAgentAccessFromHash(hash);
+  return {agent, agentHash, work, discovery, invite,
+    continuation:invite || agentHash || work?.continuation || discovery?.continuation,
+    message:chat.socialMessageFromHash(hash), agentPath:access && chat.directAgentAccessHref(access)};
 }
 
 function show(document, kind, text) {
@@ -73,8 +82,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('login-form');
+  const feedback = document.getElementById('login-feedback');
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
+  const whoami = document.getElementById('whoami');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
   const view = document.defaultView ?? globalThis;
@@ -89,10 +100,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let profile = null;
   let selectedId = '';
   let loading = false;
+  let signingIn = false;
+  let overviewRequest = null;
+  let lookAssets;
 
-  async function request(method, path, body) {
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  async function request(method, path, body, signal) {
     const headers = {Accept: 'application/json'};
     const options = {method, headers, credentials: 'same-origin'};
+    if (signal) options.signal = signal;
     if (method !== 'GET') headers['X-CSRF-Token'] = csrfCookie(document.cookie);
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -109,6 +131,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     globalThis.history.replaceState(null, '', '#workspace=' + encodeURIComponent(workspaceId));
   }
 
+  function loadLook() {
+    if (!lookAssets) {
+      const style = document.createElement('link');
+      style.rel = 'stylesheet';
+      style.href = new URL('../look/app.css', import.meta.url).href;
+      const styled = new Promise((resolve, reject) => {
+        style.addEventListener('load', resolve, {once:true});
+        style.addEventListener('error', reject, {once:true});
+        document.head.append(style);
+      });
+      lookAssets = Promise.all([import('../look/app.mjs'), styled]).then(([renderer]) => renderer).catch(() => {
+        style.remove();
+        lookAssets = null;
+        return null;
+      });
+    }
+    return lookAssets;
+  }
+
   function renderPersonal() {
     const agent = personal && personal.agent;
     const section = document.querySelector('.home-personal');
@@ -121,21 +162,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     document.getElementById('home-personal-title').textContent = agent.name;
     document.getElementById('home-personal-summary').textContent = agent.summary || '你的跨场景个人智能体。';
     const avatar = document.getElementById('home-personal-avatar');
-    avatar.replaceChildren();
-    const lookAvatar = createLookAvatar(personal.look, document);
-    if (lookAvatar) avatar.append(lookAvatar);
-    else avatar.textContent = (agent.name || 'P').trim().slice(0, 1).toUpperCase();
-    const context = document.getElementById('home-context');
-    if (context) {
-      const bits = [profile && profile.industry, profile && profile.role].filter(Boolean);
-      context.hidden = !bits.length;
-      context.textContent = bits.length ? '工作背景：' + bits.join(' · ') : '';
-    }
+    const binding = personal;
+    avatar.textContent = (agent.name || 'P').trim().slice(0, 1).toUpperCase();
+    if (binding.look) void loadLook().then(renderer => {
+      if (!renderer || !currentUser || binding !== personal) return;
+      const lookAvatar = renderer.createLookAvatar(binding.look, document);
+      if (lookAvatar) avatar.replaceChildren(lookAvatar);
+    });
+    renderPersonalContext();
     const workspaceId = personal.workspace && personal.workspace.id;
     const chat = document.getElementById('home-personal-chat');
     const agents = document.getElementById('home-personal-agents');
     if (chat && workspaceId) chat.href = '/chat#workspace=' + encodeURIComponent(workspaceId) + '&agent=' + encodeURIComponent(agent.id);
-    if (agents) agents.href = '/agents';
+    if (agents && workspaceId) agents.href = workspaceLink('/agents', workspaceId, {agent:agent.id});
+  }
+
+  function renderPersonalContext() {
+    const context = document.getElementById('home-context');
+    if (!context) return;
+    const bits = [profile?.industry, profile?.role].filter(Boolean);
+    context.hidden = !bits.length;
+    context.textContent = bits.length ? '工作背景：' + bits.join(' · ') : '';
   }
 
   function renderWorkspaceSelect() {
@@ -146,6 +193,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       return option;
     }));
     workspaceSelect.value = selectedId;
+    workspaceSelect.disabled = !workspaces.length;
   }
 
   function conversationLink(item) {
@@ -203,7 +251,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/meetings';
+      link.href = workspaceLink('/meetings', selectedId, {meeting:item.id});
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', meetingMeta(item));
       const when = element('time', 'home-row-time', formatWhen(item.started_at, now));
@@ -225,16 +273,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     ];
     holder.replaceChildren(...entries.map(([label, value, href]) => {
       const link = element('a', 'home-stat');
-      link.href = href;
+      link.href = workspaceLink(href, selectedId);
       link.append(element('strong', '', String(Number(value) || 0)), element('span', '', label));
       return link;
     }));
     holder.hidden = !counts;
   }
 
+  function renderWorkspaceLinks() {
+    for (const link of document.querySelectorAll('[data-home-workspace-path]')) {
+      if (selectedId) {
+        link.href = workspaceLink(link.dataset.homeWorkspacePath, selectedId);
+        link.removeAttribute('aria-disabled');
+      } else {
+        link.removeAttribute('href');
+        link.setAttribute('aria-disabled', 'true');
+      }
+    }
+  }
+
+  function clearOverview() {
+    renderConversations([]);
+    renderArtifacts([]);
+    renderMeetings([]);
+    renderStats(null);
+    for (const id of ['home-conversations-empty', 'home-artifacts-empty', 'home-meetings-empty', 'home-notifications']) {
+      const element = document.getElementById(id);
+      if (element) element.hidden = true;
+    }
+  }
+
   async function loadOverview() {
+    overviewRequest?.abort();
+    renderWorkspaceLinks();
+    clearOverview();
     if (!selectedId) return;
-    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`);
+    const controller = overviewRequest = new AbortController();
+    show(document, 'loading', '正在读取工作区概览…');
+    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`, undefined, controller.signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (overviewRequest !== controller || controller.signal.aborted) return;
+    overviewRequest = null;
     if (result.status !== 200) {
       show(document, 'error', (result.body.error && result.body.error.message) || '无法加载首页摘要。');
       return;
@@ -243,85 +322,240 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderArtifacts(result.body.recent_artifacts || []);
     renderMeetings(result.body.recent_meetings || []);
     renderStats(result.body.counts || null);
-    const quickChat = document.querySelector('.home-actions a[href="/chat"]');
-    if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
-    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
-    for (const link of spaceLinks) {
-      if (link.classList.contains('home-row')) continue;
-      link.href = spaceHref(selectedId);
-    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
       notifications.hidden = unread === 0;
       notifications.textContent = `有 ${unread} 条未读通知，打开聊天查看`;
     }
+    show(document, '', '');
+  }
+
+  async function continuePublicActivity({target, backPath, loadingText, errorText, retryId}) {
+    const hash = view.location.hash;
+    const stillCurrent = () => view.location.pathname === '/login' && view.location.hash === hash;
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    show(document, 'loading', loadingText);
+    try {
+      const personal = await initializePersonalAgent(target);
+      if (!stillCurrent() || !personal) return;
+      const ready = await request('GET', '/v1/workspaces?scope=personal');
+      if (!stillCurrent()) return;
+      if (ready.status === 200 && ready.body?.items?.length) {
+        view.location.replace(target);
+        return;
+      }
+    } catch {}
+    if (!stillCurrent()) return;
+    show(document, 'error', errorText);
+    const status = document.getElementById('status');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.id = retryId;
+    retry.className = 'public-agent-action';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => void load());
+    const back = document.createElement('a');
+    back.href = backPath;
+    back.className = 'public-agent-action';
+    back.textContent = '返回公开页面';
+    status.append(retry, back);
+  }
+
+  async function initializePersonalAgent(resumePath = '/runtime-starting#home=1') {
+    const result = await request('POST', '/v1/personal-agent').catch(() => null);
+    const agent = result?.body?.personal_agent;
+    const provisioning = agent?.runtime_provisioning;
+    if (agent && (!provisioning || ['ready', 'unmanaged'].includes(provisioning.readiness))) return agent;
+
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    let state;
+    if (provisioning?.readiness === 'starting') {
+      show(document, 'loading', '正在启动你的专属智能体。就绪后会自动继续。');
+      state = await waitForRuntime(() => request('GET', '/v1/auth/runtime-readiness'));
+      if (state === 'ready' || state === 'unmanaged') return agent;
+      if (state === 'signed-out') {
+        view.location.replace('/login' + view.location.hash);
+        return null;
+      }
+    }
+    if (provisioning?.readiness === 'stopped' || state === 'stopped') {
+      view.location.replace(resumePath);
+      return null;
+    }
+    const message = provisioning?.state === 'capacity'
+      ? '当前运行容量已满，请稍后重试。'
+      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
+        : '暂时无法打开你的工作区，请重试。';
+    show(document, 'error', message);
+    const retry = element('button', 'public-agent-action', '重试');
+    retry.type = 'button';
+    retry.id = 'runtime-startup-retry';
+    retry.addEventListener('click', () => void load());
+    document.getElementById('status')?.append(retry);
+    return null;
   }
 
   async function load() {
     if (loading) return;
     loading = true;
     try {
-      const session = await request('GET', '/v1/auth/session');
-      if (session.status === 401) {
+      const isLogin = view.location?.pathname === '/login';
+      const originalPage = workspacePageTarget(view.location);
+      const hash = isLogin ? view.location.hash : '';
+      const returnTo = originalPage || workspaceLoginTarget(hash);
+      const loginLinks = hash && !returnTo ? readLoginLinks(hash).catch(() => null) : null;
+      const sessionPath = isLogin || originalPage ? '/v1/auth/session' : '/v1/auth/session?include=home';
+      const session = await request('GET', sessionPath).catch(() => ({status: 0, body: {}}));
+      const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
+      if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
+        if (whoami) whoami.textContent = '';
+        document.body?.classList.remove('home-signed-in', 'app-primary');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        show(document, '', '');
+        const links = await loginLinks;
+        const continuation = workspaceLoginHash(returnTo) || links?.continuation;
+        const register = loginPanel.querySelector?.('.login-register-button');
+        if (register) register.href = '/register' + (continuation || '');
+        const back = document.getElementById('login-return-discover');
+        if (back) {
+          back.hidden = !links?.discovery;
+          if (links?.discovery) back.href = links.discovery.target;
+        }
+        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError :
+          returnTo ? '登录后会返回你刚打开的页面。' : '');
         return;
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
         return;
       }
+      if (returnTo) {
+        if (originalPage) view.location.reload();
+        else view.location.replace(returnTo);
+        return;
+      }
       let meeting = meetingFromLink;
       try {
         meeting ||= view.sessionStorage.getItem(pendingKey);
-        view.sessionStorage.removeItem(pendingKey);
       } catch {}
       const target = meetingHref(meeting);
       if (target) {
+        if (!await initializePersonalAgent(target)) return;
+        try { view.sessionStorage.removeItem(pendingKey); } catch {}
         view.location.replace(target);
         return;
       }
-      if (globalThis.location?.pathname === '/login') {
-        const params = new URLSearchParams((globalThis.location.hash || '').slice(1));
-        const slug = params.get('public-agent') || params.get('start');
-        globalThis.location.replace(slug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug)
-          ? '/chat#public-agent=' + slug : '/');
+      try { view.sessionStorage.removeItem(pendingKey); } catch {}
+      if (isLogin) {
+        const links = await loginLinks;
+        if (hash && !links) {
+          show(document, 'error', '暂时无法打开登录前的页面。请刷新重试。');
+          return;
+        }
+        const {invite, agent, agentHash, work, discovery, message, agentPath} = links || {};
+        if (invite) {
+          const destination = '/members' + invite;
+          if (await initializePersonalAgent(destination) && view.location.hash === hash) {
+            view.location.replace(destination);
+          }
+        } else if (message) {
+          view.location.replace(message);
+        } else if (agentPath) {
+          view.location.replace(agentPath);
+        } else if (agent) {
+          await continuePublicActivity({
+            target: '/chat' + agentHash, backPath: '/a/' + agent.slug,
+            loadingText: '正在打开公开智能体…', errorText: '聊天尚未准备好。', retryId: 'public-agent-login-retry',
+          });
+        } else if (work) {
+          await continuePublicActivity({
+            target: work.target, backPath: '/w/' + work.slug,
+            loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
+            errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
+          });
+        } else if (discovery) {
+          await continuePublicActivity({
+            target: discovery.target, backPath: discovery.target,
+            loadingText: '正在返回发现…', errorText: '暂时无法打开你的发现页。', retryId: 'discover-login-retry',
+          });
+        } else {
+          view.location.replace('/');
+        }
         return;
       }
       currentUser = session.body.user;
+      if (whoami) whoami.textContent = currentUser.username;
+      document.body?.classList.add('home-signed-in', 'app-primary');
       loginPanel.hidden = true;
-      mainPanel.hidden = false;
+      const startup = session.body.home;
+      const ready = ['ready', 'unmanaged'].includes(startup?.runtime_state);
+      personal = (ready && startup.personal_agent) || await initializePersonalAgent();
+      if (!personal) return;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
-      // Personal initialization creates the first workspace: do not race its listing.
-      const personalResult=await request('POST', '/v1/personal-agent');
-      const [listed, onboarding] = await Promise.all([
-        request('GET', '/v1/workspaces?limit=100'),
-        request('GET', '/v1/onboarding'),
-      ]);
-      personal = [200,201].includes(personalResult.status) ? personalResult.body.personal_agent : null;
-      profile = onboarding.status === 200 ? onboarding.body.onboarding : null;
-      workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+      workspaceSelect.disabled = true;
       const banner = document.getElementById('home-onboarding');
-      if (banner) banner.hidden = Boolean(onboarding.status === 200 && onboarding.body.onboarding
-        && onboarding.body.onboarding.completed);
-      if (!workspaces.length) {
-        show(document, '', '还没有工作区。先创建一个团队或工作区。');
-        renderPersonal();
+      if (banner) banner.hidden = true;
+      profile = null;
+      // The authenticated personal binding is already usable. Optional dashboard
+      // and onboarding reads no longer hold back opening the first chat.
+      renderPersonal();
+      const personalWorkspace = personal.workspace;
+      const requested = hashWorkspace(view.location?.hash);
+      const earlyId = !requested || requested === personalWorkspace?.id ? personalWorkspace?.id || '' : '';
+      selectedId = earlyId;
+      if (earlyId) {
+        workspaces = [{...personalWorkspace, name:personalWorkspace.name || '个人空间'}];
+        renderWorkspaceSelect();
+        workspaceSelect.disabled = true;
+      }
+      renderWorkspaceLinks();
+      mainPanel.hidden = false;
+      show(document, '', '');
+      const earlyOverview = earlyId ? loadOverview() : null;
+      const activeUser = currentUser;
+      void request('GET', '/v1/onboarding').then(onboarding => {
+        if (currentUser !== activeUser || onboarding.status !== 200) return;
+        profile = onboarding.body.onboarding;
+        if (banner) banner.hidden = Boolean(onboarding.body.progress?.completed ?? profile?.completed);
+        if (onboarding.body.steps?.look && personal) {
+          personal = {...personal, look: onboarding.body.steps.look};
+          renderPersonal();
+        } else renderPersonalContext();
+      }).catch(() => {});
+      const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0, body: {}}));
+      if (currentUser !== activeUser) return;
+      if (listed.status !== 200) {
+        await earlyOverview;
+        show(document, 'error', '暂时无法加载工作区列表。');
         return;
       }
-      const wanted = hashWorkspace();
+      workspaces = listed.body.items || [];
+      if (!workspaces.length) {
+        if (earlyOverview) await earlyOverview;
+        else show(document, '', '还没有工作区。先创建一个团队或工作区。');
+        return;
+      }
+      const wanted = hashWorkspace(view.location?.hash);
+      if (wanted && !workspaces.some(space => space.id === wanted)) {
+        overviewRequest?.abort();
+        selectedId = '';
+        renderWorkspaceSelect();
+        renderWorkspaceLinks();
+        clearOverview();
+        show(document, 'error', '无法访问链接中的工作区。请选择其他工作区。');
+        return;
+      }
       selectedId = workspaces.some((space) => space.id === wanted)
         ? wanted
         : (personal && personal.workspace ? personal.workspace.id : workspaces[0].id);
       if (!workspaces.some((space) => space.id === selectedId)) selectedId = workspaces[0].id;
       renderWorkspaceSelect();
       setHash(selectedId);
-      renderPersonal();
-      await loadOverview();
-      show(document, '', '');
+      await (selectedId === earlyId && earlyOverview ? earlyOverview : loadOverview());
     } finally {
       loading = false;
     }
@@ -335,24 +569,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const result = await request('POST', '/v1/auth/login', {
-      username: form.elements.username.value,
-      password: form.elements.password.value,
-    });
-    if (result.status !== 200) {
-      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
-        : (result.body.error && result.body.error.message) || '无法登录。');
-      return;
+    if (signingIn) return;
+    signingIn = true;
+    const submit = form.querySelector?.('button[type="submit"]');
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = '正在登录…';
     }
-    form.reset();
-    await load();
+    show(document, '', '');
+    if (feedback) feedback.textContent = '';
+    try {
+      const result = await request('POST', '/v1/auth/login', {
+        username: form.elements.username.value,
+        password: form.elements.password.value,
+      });
+      if (result.status !== 200) {
+        if (feedback) {
+          feedback.dataset.kind = 'error';
+          feedback.textContent = result.status === 401 ? '用户名或密码不正确。'
+            : result.status === 429 ? '登录尝试过多，请稍后再试。' : '暂时无法登录，请重试。';
+        }
+        return;
+      }
+      form.reset();
+      await load();
+    } catch {
+      if (feedback) {
+        feedback.dataset.kind = 'error';
+        feedback.textContent = '无法连接，请检查网络后重试。';
+      }
+    } finally {
+      signingIn = false;
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = '登录';
+      }
+    }
   });
 
   const logout = document.getElementById('logout-form');
   if (logout) logout.addEventListener('submit', async (event) => {
     event.preventDefault();
-    await request('POST', '/v1/auth/logout', {});
-    await load();
+    const result = await request('POST', '/v1/auth/logout', {});
+    if (result.status !== 200) return;
+    currentUser = null;
+    overviewRequest?.abort();
+    // A slow dashboard read may still be in flight after the page is usable.
+    view.location.replace('/');
   });
 
   load();
