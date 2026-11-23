@@ -58,6 +58,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
     (re.compile(r'^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$'), 'stickers'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/export$'), 'export'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),

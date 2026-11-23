@@ -7602,8 +7602,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sharedRequest = servedByDsbot ? listWorkspaces() : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
     let personalRequest;
-    const readPersonal = () => personalRequest ??= read('/v1/personal-agent').then(result =>
-      result.status === 200 ? result.body.personal_agent : null);
+    const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
+      const identity = ownedChatStartup(result, owner);
+      return identity ? {workspace: identity.space, agent: {id: identity.agentId}, look: result.body.personal_look ?? null} : null;
+    });
     const socialTarget = start.social && chatPathId(start.social);
     const exactTarget = start.social ? socialTarget : chatPathId(start.agent) && chatPathId(start.conversation);
     const workspaceOnly = !start.social && !start.agent && !start.conversation;

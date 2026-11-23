@@ -6,6 +6,7 @@ import secrets
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
@@ -570,6 +571,21 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+
+    def test_workspace_export_forwards_queries_to_authenticating_users_runtime(self):
+        path = f"/v1/workspaces/{'a' * 32}/export"
+        query = 'type=memory&cursor=20'
+        for owner, instance in (('a', '1'), ('b', '2')):
+            status, headers = self.call(self.tokens[owner * 32], uri=path + '?' + query)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], instance * 32)
+            target = urlsplit(headers['X-OT-Upstream-Path'])
+            self.assertEqual(target.path, '/api/openteamily/legacy')
+            self.assertEqual(parse_qs(target.query), {
+                'feature': ['export'], 'path': [path], 'query': [query],
+            })
+        self.assertEqual(self.call(uri=path)[0], 401)
+        self.assertEqual(self.call(self.tokens['a' * 32], uri=path + '/another')[0], 404)
 
     def test_profile_page_and_social_activity_use_owners_runtime(self):
         routes = gw.load_routes()

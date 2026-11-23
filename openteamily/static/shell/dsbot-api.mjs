@@ -15,6 +15,7 @@ export const MOVED = [
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
   [/^\/v1\/stickers(?:\/[0-9a-f]{32}(?:\/file)?)?$/, 'stickers'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/overview$/, 'overview'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/export$/, 'export'],
   [/^\/v1\/team-templates$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|remove|export|steps\/[0-7]\/(?:retry|artifact)))?)?$/, 'team-runs'],

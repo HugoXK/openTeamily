@@ -84,6 +84,26 @@ export function describeAppearance(values, now = new Date(), media) {
   return '当前为' + look + '（跟随系统）。';
 }
 
+const OVERVIEW_CHOICES = {
+  'appearance.light': ['浅色', 'Light'],
+  'appearance.dark': ['深色', 'Dark'],
+  'appearance.auto': ['自动', 'Automatic'],
+  'appearance.system': ['跟随系统', 'System'],
+  'message_folding.compact': ['紧凑', 'Compact'],
+  'message_folding.standard': ['标准', 'Standard'],
+  'message_folding.none': ['不折叠', 'Do not fold'],
+};
+
+export function syncOverviewCurrentValues(document, values) {
+  const appearance = document.getElementById('appearance-current');
+  const folding = document.getElementById('folding-current');
+  if (appearance) {
+    appearance.textContent = uiText(document, `appearance.${values.appearance}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+  if (folding) {
+    folding.textContent = uiText(document, `message_folding.${values.message_folding}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+}
 
 const AUTOSAVE_KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end',
                        'language', 'chat_language', 'auto_translate', 'send_shortcut',
@@ -645,6 +665,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncAppearanceExtras(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    syncOverviewCurrentValues(document, current);
     const languageCurrent = document.getElementById('language-current');
     const languageSelect = form.querySelector('select[name="language"]');
     if (languageCurrent && languageSelect) {

@@ -852,6 +852,19 @@ export function createAgents({ db, host }) {
         ...row, archived: false, title_edited: !!row.title_edited,
       })) }
     },
+    workspaceExportRows(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      const {limit} = p
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000) fail('invalid', 'Invalid export limit', 400)
+      const items = []
+      for (const agent of workspaceAgents(workspaceId)) {
+        if (agent.archived) continue
+        if (items.length === limit) return {items, truncated:true}
+        items.push({id:agent.id,name:agent.name,updated:agent.updated})
+      }
+      return {items,truncated:false}
+    },
     workspaceOverview(p, call) {
       if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
       const workspaceId = ws(p)
@@ -1446,6 +1459,7 @@ export default async function agents(host) {
   wrapped.templateRoles = endpoints.templateRoles
   wrapped.createTemplateRoles = endpoints.createTemplateRoles
   wrapped.workspaceOverview = endpoints.workspaceOverview
+  wrapped.workspaceExportRows = endpoints.workspaceExportRows
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)

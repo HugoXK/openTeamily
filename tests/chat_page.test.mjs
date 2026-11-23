@@ -4076,6 +4076,7 @@ const linkSocialOlder = 'otm_' + '9'.repeat(26);
 const linkSocialLatest = 'otm_' + 'A'.repeat(26);
 const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
+const linkPersonalIdentity = '/v1/workspaces?scope=personal&include=personal-agent';
 const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
 const linkPersonalStartup = linkPersonalDefault + '&workspace=';
 const linkPersonalSocial = workspace => linkPersonalStartup + workspace + '&directory=0';
@@ -4128,7 +4129,9 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
     const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call, options);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
-    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
+    if (path === linkPersonalIdentity) return json(200, {items: [
+      {id: linkWork, name: 'Personal', kind: 'personal', owner_id: alice},
+    ], personal_agent_id: agent.id});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
     if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [
@@ -5551,7 +5554,8 @@ test('a native startup snapshot from another owner cannot authorize a private co
     await settle();
     assert.equal(fixture.calls.some(call => call.path.startsWith(scope + '/')), false);
     assert.deepEqual(fixture.messages(), []);
-    assert.ok(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'GET'));
+    assert.ok(fixture.calls.some(call => call.path === linkPersonalIdentity && call.method === 'GET'));
+    assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'GET'), false);
     workspaces.resolve(json(200, {items: [{id: linkWork, name: 'Personal', kind: 'personal'}]}));
     await loading;
     await settle();
@@ -5595,9 +5599,9 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
   const earlier = Promise.withResolvers();
   const initialized = Promise.withResolvers();
   let workspaceReads = 0;
-  fixture.routes.set('/v1/personal-agent', ({method}) => method === 'GET'
-    ? json(200, {personal_agent: null})
-    : initialized.promise);
+  fixture.routes.set(linkPersonalIdentity, () => json(200, {items: []}));
+  fixture.routes.set('/v1/personal-agent', ({method}) => method === 'POST'
+    ? initialized.promise : json(404, {}));
   fixture.routes.set('/v1/workspaces?limit=100', () => {
     workspaceReads += 1;
     return workspaceReads === 1 ? earlier.promise
@@ -5671,7 +5675,7 @@ test('a linked native history and message jump render while settings and the Soc
     assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
     assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
-    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'GET');
+    const personal = fixture.calls.findIndex(call => call.path === linkPersonalIdentity && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
     const detail = fixture.calls.findIndex(call => call.path === scope + linkNativeLatest);
     assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
