@@ -711,7 +711,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         } else if (cursor) more.focus({preventScroll:true});
       }
       count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
-      empty.textContent = activeTeamQuery ? '没有匹配的团队。' : '暂无公开团队。';
+      empty.textContent = activeTeamQuery ? '没有匹配的团队。'
+        : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
       empty.hidden = directoryItems.size > 0;
       return seq;
     } catch (failure) {

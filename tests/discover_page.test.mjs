@@ -631,6 +631,28 @@ test('search and join use the team directory and show the approval status', asyn
   ]);
 });
 
+test('an empty team directory explains publication and keeps errors separate', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  let status = 200;
+  await mount(doc, {
+    location: {search: '?tab=agents&section=groups'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
+      if (path.startsWith('/v1/team-directory?')) return commentResponse({items: [], cursor: null}, status);
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const empty = doc.getElementById('discover-empty');
+  assert.equal(empty.hidden, false);
+  assert.match(empty.textContent, /创建团队后.*成员页.*团队目录/);
+  status = 503;
+  await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
+  assert.equal(empty.hidden, true);
+  assert.equal(doc.getElementById('catalog-error').hidden, false);
+  assert.equal(doc.getElementById('teams-retry').hidden, false);
+});
+
 test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('', ''), 'limit=12');
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');

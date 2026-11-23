@@ -32,7 +32,7 @@ const fixtureResponse = [
 const password = randomUUID() + 'CiFixture!';
 const uid = () => randomUUID().replaceAll('-', '');
 const featureNames = ['settings', 'model-api', 'skills', 'teams', 'team-templates', 'artifacts', 'discover', 'social',
-  'search', 'studio', 'memory', 'meetings', 'automations', 'team-runs', 'members', 'invites', 'overview', 'shell', 'chat', 'stickers'];
+  'search', 'studio', 'memory', 'meetings', 'automations', 'team-runs', 'members', 'invites', 'overview', 'shell', 'chat', 'stickers', 'connectors'];
 const platformScript = `
 import sys
 from wsgiref.simple_server import make_server

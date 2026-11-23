@@ -8,6 +8,7 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
+import {mountWorkspaceInvite} from '../openteamily/static/chat/workspace-invite.mjs';
 import {mountMessageUtilities} from '../openteamily/static/chat/utilities.mjs';
 import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/shell/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
@@ -2790,7 +2791,7 @@ test('pin a message and multi-select forward call the real endpoints', async () 
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
-    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('chat-invite').hidden, true, 'a legacy chat without verified workspace authority cannot issue links');
     assert.equal(el('multi-select-toggle').hidden, false);
     let li = el('message-list').children[0];
     const tools = li.children.find(node => node.className === 'message-tools');
@@ -3144,6 +3145,57 @@ function attachmentMessage(attachment) {
     body: '附件：' + attachment.title, created: '2026-01-01T00:00:00Z', attachment,
   };
 }
+
+test('the Chat workspace invitation copies a native recipient link and discards stale receipts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const workspace = 'a'.repeat(32), token = 'b'.repeat(32);
+  const receipt = {status:201, body:{invite:{id:'issued', workspace_id:workspace}, token}};
+  let active = {scope:'owner:team:chat', workspace};
+  const response = Promise.withResolvers();
+  const calls = [], copied = [];
+  let denyCopy = false;
+  const invite = mountWorkspaceInvite(doc, {
+    context: () => active,
+    view: {location:{origin:'https://test.example'}, navigator:{clipboard:{async writeText(value) {
+      if (denyCopy) throw new Error('Clipboard declined');
+      copied.push(value);
+    }}}},
+    async request(method, path, body) {
+      calls.push([method,path,body]);
+      return calls.length === 1 ? receipt : response.promise;
+    },
+  });
+  const trigger = el('chat-invite');
+  const link = el('chat-invite-link');
+  link.select = () => {link.selected = true;};
+  invite.sync();
+  assert.equal(trigger.hidden,false);
+  trigger.handlers.click[0]();
+  el('chat-invite-approval').checked = true;
+  const submit = () => el('chat-invite-form').handlers.submit[0]({preventDefault() {}});
+  await submit();
+  assert.deepEqual(calls[0], ['POST', `/v1/workspaces/${workspace}/invites`, {
+    role:'member',expires_in:604800,max_uses:1,requires_approval:true,
+  }]);
+  assert.equal(link.value,`https://test.example/login#team-invite=${token}`);
+  assert.equal(el('chat-invite-link-row').hidden,false);
+  await el('chat-invite-copy').handlers.click[0]();
+  assert.deepEqual(copied,[link.value]);
+  denyCopy = true;
+  await el('chat-invite-copy').handlers.click[0]();
+  assert.equal(link.selected,true);
+  assert.equal(el('chat-invite-result').textContent,'请复制选中的链接。');
+
+  const slow = submit();
+  active = null;
+  invite.sync();
+  response.resolve(receipt);
+  await slow;
+  assert.equal(trigger.hidden,true);
+  assert.equal(link.value,'');
+  assert.equal(el('chat-invite-link-row').hidden,true);
+  assert.equal(el('chat-invite-panel').hidden,true);
+});
 
 test('group announcements display the publisher and can be cleared only by an editor', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());

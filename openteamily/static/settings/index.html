@@ -492,30 +492,29 @@
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent 渠道</a>
         </header>
-        <p class="settings-lead">通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。</p>
+        <p class="settings-lead">外部渠道暂未开放连接。可在下方查看接入说明。</p>
         <ul class="settings-card channel-list">
           <li class="channel-row" data-channel="wechat">
             <span class="channel-mark" data-mark="wechat" aria-hidden="true"></span>
             <span class="channel-name">WeChat Official Account</span>
-            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WeChat Official Account。对照里未点连接。">+ 连接</button>
+            <a class="channel-link" href="/help#channel-wechat" aria-label="微信公众号接入说明">接入说明</a>
           </li>
           <li class="channel-row" data-channel="imessage">
             <span class="channel-mark" data-mark="imessage" aria-hidden="true"></span>
             <span class="channel-name">Apple iMessage</span>
-            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Apple iMessage。对照里未点连接。">+ 连接</button>
+            <a class="channel-link" href="/help#channel-imessage" aria-label="iMessage 接入说明">接入说明</a>
           </li>
           <li class="channel-row" data-channel="slack">
             <span class="channel-mark" data-mark="slack" aria-hidden="true"></span>
             <span class="channel-name">Slack</span>
-            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Slack。对照里未点连接。">+ 连接</button>
+            <a class="channel-link" href="/help#channel-slack" aria-label="Slack 接入说明">接入说明</a>
           </li>
           <li class="channel-row" data-channel="whatsapp">
             <span class="channel-mark" data-mark="whatsapp" aria-hidden="true"></span>
             <span class="channel-name">WhatsApp</span>
-            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WhatsApp。对照里未点连接。">+ 连接</button>
+            <a class="channel-link" href="/help#channel-whatsapp" aria-label="WhatsApp 接入说明">接入说明</a>
           </li>
         </ul>
-        <p class="note">对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。</p>
     </div>
     <div lang="zh-CN" data-settings-page="agent-access" hidden>
         <header class="settings-subhead">
@@ -550,6 +549,13 @@
           </form>
           <p id="composio-key-message" class="composio-key-message" role="status" aria-live="polite"></p>
         </section>
+        <div class="connectors-overview">
+          <p>
+            <span id="connectors-catalog-count"></span>
+            <span id="connectors-connected-count" role="status" hidden></span>
+          </p>
+          <a id="connectors-key-jump" href="#composio-key-input" hidden>配置 Composio 密钥</a>
+        </div>
         <div class="connectors-toolbar">
           <label class="visually-hidden" for="connector-search">搜索应用</label>
           <div class="connector-search-field">
@@ -560,6 +566,17 @@
             <input id="connector-search" type="search" placeholder="搜索应用…" maxlength="80" autocomplete="off">
           </div>
           <button type="button" id="add-mcp-server" aria-haspopup="dialog" aria-controls="mcp-dialog" aria-expanded="false">+ 添加 MCP 服务器</button>
+        </div>
+        <div id="connectors-filters" class="connectors-filters" role="group" aria-label="按分类筛选" hidden>
+          <button type="button" data-connector-group="all" aria-pressed="true">全部 <span></span></button>
+          <button type="button" data-connector-group="dev" aria-pressed="false">开发 <span></span></button>
+          <button type="button" data-connector-group="docs" aria-pressed="false">文档 <span></span></button>
+          <button type="button" data-connector-group="work" aria-pressed="false">办公 <span></span></button>
+          <button type="button" data-connector-group="commerce" aria-pressed="false">商业 <span></span></button>
+          <button type="button" data-connector-group="data" aria-pressed="false">数据 <span></span></button>
+          <button type="button" data-connector-group="design" aria-pressed="false">设计 <span></span></button>
+          <button type="button" data-connector-group="search" aria-pressed="false">搜索与地图 <span></span></button>
+          <button type="button" data-connector-group="mail" aria-pressed="false">邮件 <span></span></button>
         </div>
         <ul id="connectors-catalog" class="connector-list">
           <li class="connector-row" data-connector-id="github" data-composio-toolkit="github" data-composio-managed="yes" data-category="dev">
@@ -992,7 +1009,7 @@
             <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
         </ul>
-        <p id="connectors-empty" class="settings-card settings-empty" hidden>没有匹配的应用。</p>
+        <p id="connectors-empty" class="settings-card settings-empty" role="status" hidden>没有匹配的应用。</p>
         <section class="composio-key-card" id="custom-mcp-card">
           <h2>自定义 MCP 服务器 · 仅当前账号</h2>
           <p>公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。</p>

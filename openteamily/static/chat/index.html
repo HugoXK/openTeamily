@@ -265,7 +265,7 @@
         <button type="button" id="group-info-toggle" class="icon-action" hidden aria-expanded="false" aria-controls="group-info-panel" title="群信息" aria-label="群信息" data-ui-title="chat.group.info" data-ui-label="chat.group.info"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M15 5v14"/></svg><span class="sr-only" data-ui-text="chat.group.info">群信息</span></button>
         <button type="button" id="chat-more" class="icon-action" aria-label="更多会话操作" aria-expanded="false" aria-controls="chat-extra-actions" data-ui-label="chat.sessions.more_actions"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
         <div id="chat-extra-actions">
-          <button type="button" id="chat-invite" hidden aria-expanded="false" aria-controls="chat-invite-panel" title="为当前工作区生成邀请链接（所有者或管理员）" data-ui-title="chat.invite.create_help" data-ui-text="chat.invite.invite">邀请</button>
+          <button type="button" id="chat-invite" hidden aria-expanded="false" aria-controls="chat-invite-panel" title="为当前工作区生成邀请链接（所有者或管理员）" data-ui-title="chat.invite.create_help" data-ui-text="chat.invite.workspace">邀请加入工作区</button>
           <button type="button" id="chat-group-invite" hidden aria-haspopup="dialog" data-ui-text="chat.invite.members">邀请成员</button>
           <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发" data-ui-title="chat.messages.multi_select_help"><span data-ui-text="chat.messages.multi_select">多选</span></button>
           <button type="button" id="pin-conversation" hidden><span data-ui-text="chat.sessions.pin">置顶会话</span></button>
@@ -475,11 +475,15 @@
       <h2 id="chat-invite-heading" data-ui-text="chat.invite.workspace">邀请加入工作区</h2>
       <form id="chat-invite-form">
         <label class="check-row"><input type="checkbox" id="chat-invite-approval" checked> <span data-ui-text="chat.invite.require_approval">加入前需要审批</span></label>
-        <button type="submit" data-ui-text="chat.invite.generate_token">生成邀请令牌</button>
+        <button type="submit" id="chat-invite-create" data-ui-text="chat.invite.create_link">生成邀请链接</button>
         <button type="button" id="chat-invite-close" data-ui-text="chat.close">关闭</button>
       </form>
       <p id="chat-invite-result" class="note" role="status"></p>
-      <p class="note" data-ui-text="chat.invite.token_help">令牌只显示一次；对方在「成员」页接受。审批在「成员」页处理。不会发送任何外部消息。</p>
+      <div id="chat-invite-link-row" hidden>
+        <label for="chat-invite-link" class="visually-hidden" data-ui-text="chat.invite.link">邀请链接</label>
+        <input id="chat-invite-link" type="url" readonly autocomplete="off">
+        <button type="button" id="chat-invite-copy" data-ui-text="chat.invite.copy_link">复制链接</button>
+      </div>
     </section>
     <section id="forward-bar" class="chat-strip" hidden aria-label="所选消息操作" data-ui-label="chat.messages.selected_actions">
       <div class="message-selection-actions">

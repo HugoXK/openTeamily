@@ -951,6 +951,9 @@ a.notification-item { text-decoration: none; }
 #pinned-message-list button:hover { text-decoration: underline; }
 
 #chat-invite-result { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+#chat-invite-link-row { display: flex; flex-basis: 100%; gap: .5rem; }
+#chat-invite-link { flex: 1; min-width: 0; }
+#chat-invite-copy { flex-shrink: 0; }
 .message-tools { display: inline-flex; gap: .3rem; margin-top: .15rem; font-size: .78rem; }
 .message-tools button {
   padding: .05rem .45rem;

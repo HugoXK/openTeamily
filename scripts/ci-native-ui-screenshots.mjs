@@ -75,6 +75,54 @@ async function chat(page, name, send) {
   await screenshot(page,name);
 }
 
+async function connectors(page) {
+  await openNative(page,'/settings/connectors',fixture.owner.instanceId,'#connectors-filters');
+  const rows = page.locator('#connectors-catalog .connector-row:visible');
+  const group = id => page.locator('[data-connector-group="'+id+'"]');
+  const search = page.locator('#connector-search');
+  const jump = page.locator('#connectors-key-jump');
+  const focusKey = page.locator('#connectors-catalog button[data-composio-action="focus-key"]:enabled');
+  await jump.waitFor();
+  assert.equal(await page.locator('#connectors-catalog-count').innerText(),'39 个应用 · 8 个分类');
+  assert.equal(await page.locator('#connectors-connected-count').textContent(),'0 个已连接');
+  assert.equal(await page.locator('#connectors-filters button').count(),9);
+  assert.equal(await rows.count(),39);
+  assert.equal(await focusKey.count(),31);
+  assert.equal(await page.locator('#connectors-catalog button:disabled').count(),8);
+  const writes = [];
+  const recordRequest = request => {
+    if (new URL(request.url()).pathname !== '/b/api/openteamily' || request.method() !== 'POST') return;
+    const body = request.postDataJSON();
+    if (body?.endpoint === 'connectors/v1' && body.payload?.method === 'POST') writes.push(body.payload.path);
+  };
+  page.on('request',recordRequest);
+  try {
+    await jump.click();
+    await page.waitForFunction(() => document.activeElement.id === 'composio-key-input');
+    await focusKey.first().click();
+    await page.waitForFunction(() => document.activeElement.id === 'composio-key-input');
+    await group('dev').press('Enter');
+    assert.equal(await group('dev').getAttribute('aria-pressed'),'true');
+    assert.equal(await rows.count(),6);
+    await search.fill('cloudflare');
+    assert.equal(await rows.count(),1);
+    assert.equal(await rows.first().getAttribute('data-connector-id'),'cloudflare');
+    await group('docs').click();
+    assert.equal(await rows.count(),1);
+    assert.equal(await rows.first().getAttribute('data-connector-id'),'cloudflare-docs');
+    await group('mail').click();
+    assert.equal(await rows.count(),0);
+    await page.locator('#connectors-empty').waitFor();
+    await search.clear();
+    await group('all').click();
+    assert.equal(await rows.count(),39);
+    assert.deepEqual(writes,[]);
+  } finally {
+    page.off('request',recordRequest);
+  }
+  await screenshot(page,'desktop-connectors');
+}
+
 try {
   browser = await chromium.launch({executablePath:process.env.OT_UI_CHROMIUM_EXECUTABLE});
   const desktop = await contextFor({width:1440,height:900});
@@ -99,6 +147,7 @@ try {
     if (expected) await page.getByText(expected,{exact:true}).first().waitFor();
     await screenshot(page,name);
   }
+  await connectors(page);
   await openNative(page,'/members#workspace='+fixture.team.workspace_id,fixture.owner.instanceId,'#main-panel');
   await page.locator('#member-list').getByText(fixture.peer.profile.handle.split('.')[0],{exact:true}).first().waitFor();
   await screenshot(page,'desktop-members');

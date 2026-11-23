@@ -9,6 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
@@ -950,6 +951,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pinReceipt = 0;
   let sessionTransition = null;
   let currentSource = 'agent';
+  const workspaceInvite = mountWorkspaceInvite(document, {
+    request,
+    context() {
+      if (!servedByDsbot || !currentUser || !currentConversation || currentConversation.public_agent) return null;
+      const space = workspaces.find(item => item.id === workspaceId());
+      if (!space || space.kind === 'personal' || !canManage(space.role)) return null;
+      if (currentConversation.workspace_id && currentConversation.workspace_id !== space.id) return null;
+      return {workspace:space.id,scope:sendScope()};
+    },
+  });
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
@@ -6173,7 +6184,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function setSocialHeaderTools(social) {
     renderStudioDiscussionSource(null);
     if (social && captureButton) captureButton.hidden = true;
-    const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
     const group = social && currentConversation?.kind === 'group' && !publicChat;
@@ -6188,13 +6198,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social || group || Boolean(publicChat);
+    workspaceInvite.sync();
     if (multi) multi.hidden = !social || Boolean(publicChat);
-    if (!social || group || publicChat) {
-      const panel = document.getElementById('chat-invite-panel');
-      if (panel) panel.hidden = true;
-      invite?.setAttribute('aria-expanded', 'false');
-    }
     if (!social || publicChat) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
       if (!social) renderPinned([]);
@@ -7457,6 +7462,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     workspaceSelect.value = (items.find(space => space.id === preferred)
       || items.find(space => space.id === personal) || items[0])?.id || '';
+    workspaceInvite.sync();
   }
 
   function setPersonalChat(personal) {
@@ -8018,33 +8024,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       forwardBusy = false;
       syncForwardBar();
     }
-  });
-  const chatInvite = document.getElementById('chat-invite');
-  if (chatInvite) chatInvite.addEventListener('click', () => {
-    const panel = document.getElementById('chat-invite-panel');
-    panel.hidden = !panel.hidden;
-    chatInvite.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
-    document.getElementById('chat-invite-result').textContent = '';
-  });
-  const inviteClose = document.getElementById('chat-invite-close');
-  if (inviteClose) inviteClose.addEventListener('click', () => {
-    document.getElementById('chat-invite-panel').hidden = true;
-    if (chatInvite) chatInvite.setAttribute('aria-expanded', 'false');
-  });
-  const chatInviteForm = document.getElementById('chat-invite-form');
-  if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
-    event.preventDefault();
-    const out = document.getElementById('chat-invite-result');
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
-      role: 'member', expires_in: 7 * 86400, max_uses: 1,
-      requires_approval: document.getElementById('chat-invite-approval').checked,
-    });
-    if (result.status !== 201) {
-      out.textContent = result.status === 404 || result.status === 403
-        ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
-      return;
-    }
-    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
   notificationKind?.addEventListener('change', () => {
     if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);

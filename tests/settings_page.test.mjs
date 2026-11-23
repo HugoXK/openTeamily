@@ -306,6 +306,9 @@ test('filterConnectorCatalog matches name, about, or id and is empty when nothin
   const payments = filterConnectorCatalog('payments');
   assert.deepEqual(payments.map((item) => item.id), ['stripe', 'paypal', 'square']);
   assert.deepEqual(filterConnectorCatalog('no-such-connector-xyz'), []);
+  assert.equal(filterConnectorCatalog('', CONNECTOR_CATALOG, 'dev').length, 6);
+  assert.deepEqual(filterConnectorCatalog('cloudflare', CONNECTOR_CATALOG, 'docs').map(item => item.id), ['cloudflare-docs']);
+  assert.deepEqual(filterConnectorCatalog('github', CONNECTOR_CATALOG, 'mail'), []);
 });
 
 test('applyConnectorSearch hides unmatched rows and shows the empty state', () => {
@@ -329,7 +332,7 @@ test('applyConnectorSearch hides unmatched rows and shows the empty state', () =
   assert.equal(rows.find((row) => row.id === 'mail').hidden, false);
   assert.equal(rows.filter((row) => !row.hidden).length, 1);
   assert.equal(empty.hidden, true);
-  applyConnectorSearch(document, 'no-such-connector-xyz');
+  applyConnectorSearch(document, 'mailbox', 'dev');
   assert.equal(rows.every((row) => row.hidden), true);
   assert.equal(empty.hidden, false);
   applyConnectorSearch(document, '');
@@ -349,6 +352,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
   assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
   assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
+  assert.match(html, /id="connectors-key-jump" href="#composio-key-input" hidden/);
+  const groups = [...html.matchAll(/data-connector-group="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(new Set(groups), new Set(['all', ...CONNECTOR_CATALOG.map(item => item.category)]));
   assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
   assert.match(html, /data-mark="github"/);
   assert.match(html, /class="channel-mark" data-mark="slack"/);
@@ -805,8 +811,9 @@ test('composioRowState never shows success without a real connected state', () =
   assert.equal(composioRowState({toolkit: null}, true, null).status, '未接通');
   const unconfigured = composioRowState(mapped, false, {state: 'connected', id: 'x'});
   assert.equal(unconfigured.status, '未配置 Composio');
-  assert.equal(unconfigured.disabled, true);
-  assert.match(unconfigured.title, /你自己的 Composio API key/);
+  assert.equal(unconfigured.disabled, false);
+  assert.equal(unconfigured.action, 'focus-key');
+  assert.equal(unconfigured.button, '配置密钥');
   assert.equal(composioRowState(mapped, true, null).status, '未连接');
   assert.equal(composioRowState(mapped, true, null).action, 'connect');
   assert.equal(composioRowState(mapped, true, {state: 'connecting'}).status, '连接中…');
@@ -841,7 +848,12 @@ test('applyComposioRows updates status, button and connection id from server dat
   }
   const github = node({'data-connector-id': 'github', 'data-composio-toolkit': 'github', 'data-composio-managed': 'yes'});
   const amap = node({'data-connector-id': 'amap'});
-  const document = {getElementById: id => id === 'connectors-catalog' ? {querySelectorAll: () => [github, amap]} : null};
+  const count = {hidden: true};
+  const nodes = {
+    'connectors-catalog': {querySelectorAll: () => [github, amap]},
+    'connectors-connected-count': count,
+  };
+  const document = {getElementById: id => nodes[id]};
   applyComposioRows(document, true, [{id: 'c1', toolkit: 'github', state: 'connected', created_at: 1}]);
   assert.equal(github.status.textContent, '已连接');
   assert.equal(github.status.attrs['data-state'], 'connected');
@@ -850,9 +862,13 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(github.button.attrs['data-connection-id'], 'c1');
   assert.equal(amap.status.textContent, '未接通');
   assert.equal(amap.button.disabled, true);
+  assert.equal(count.textContent, '1 个已连接');
+  assert.equal(count.hidden, false);
   applyComposioRows(document, false, []);
   assert.equal(github.status.textContent, '未配置 Composio');
-  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.disabled, false);
+  assert.equal(github.button.attrs['data-composio-action'], 'focus-key');
+  assert.equal(count.textContent, '0 个已连接');
   assert.equal(github.button.attrs['data-connection-id'], undefined);
 });
 

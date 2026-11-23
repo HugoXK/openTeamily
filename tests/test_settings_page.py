@@ -360,8 +360,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('Slack', html)
         self.assertIn('WhatsApp', html)
         channels = html[html.find('data-settings-page="channels"'):html.find('data-settings-page="agent-access"')]
-        self.assertEqual(channels.count('+ 连接'), 4)
-        self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 4)
+        help_page = self.raw.call('GET', '/help')
+        self.assertEqual(help_page['status'], 200)
+        help_html = help_page['body'].decode()
+        for channel in ('wechat', 'imessage', 'slack', 'whatsapp'):
+            self.assertIn(f'href="/help#channel-{channel}"', channels)
+            self.assertIn(f'id="channel-{channel}"', help_html)
+        self.assertNotIn('+ 连接', channels)
         self.assertIn('disabled', html)
         self.assertNotIn('Teamily Agent', html)
         agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
