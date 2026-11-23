@@ -6,6 +6,14 @@ a stable instance ID independent of the user and workspace IDs. Joining or
 switching workspaces reuses the same runtime. Workspace membership defines access
 to shared data in the dedicated Bot Social service.
 
+## Accepted DSH target
+
+Every user owns a DS-Bot. All OpenTeamily pages, APIs and execution are the
+`@openteamily/web` DSH plugin inside that DS-Bot. The platform only owns identity,
+provisioning and authenticated forwarding; cross-user features go through Bot
+Social. See the full contract in
+[DS-Bot plugin architecture](DSBOT_PLUGIN_ARCHITECTURE.md).
+
 | Boundary | Responsibility |
 |---|---|
 | Central platform (`openteamily/app.py`, `server.py`) | Accounts, sessions, OIDC, registration, operator admin, runtime provisioning/lifecycle (manager), edge routing (`dsbot_gateway.py`), the Bot Social URL handed to runtimes, and the one-off membership migration CLI (`social_membership_migrate.py`). No model calls, agent loop, scheduler or task queue. |
@@ -37,6 +45,7 @@ seal keys are never rotated by deploys.
 
 ## Public homepage conversations
 
-A visitor on `/a/<slug>` follows "开始对话" to `/messenger/#start=<slug>` on
-their own DS-Bot, which asks Bot Social to open a thread with the creator's
-agent. The creator's DS-Bot answers from its agent inbox (one native turn).
+A visitor on `/a/<slug>` can compose a message before sign-in. After sign-in,
+`/chat` on the visitor's DS-Bot asks Bot Social to open a thread with the
+published agent and restores the draft for the visitor to send. The creator's
+DS-Bot answers from its agent inbox.

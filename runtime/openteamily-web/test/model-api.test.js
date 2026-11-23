@@ -113,3 +113,51 @@ test('feature factory publishes the in-process proxy override', async () => {
   assert.equal(await feature.endpoints.imageProvider({}, { internal: true }), null)
   delete globalThis[OVERRIDE]
 })
+
+test('Runway video key is sealed per account, revision checked and absent from HTTP responses', async () => {
+  const api = make()
+  const call = (method, body) => compatHandler(api.legacy)({method, path: '/v1/model-api/video', body})
+  const initial = await call('GET')
+  assert.deepEqual(initial.body.video_api, {provider: 'runway', model: 'gen4.5', has_api_key: false, revision: 0})
+  assert.equal(api.resolveVideo(), null)
+  assert.equal((await call('POST', {revision: 0, api_key: 'invalid token'})).status, 400)
+  const stored = await call('POST', {revision: 0, api_key: KEY})
+  assert.equal(stored.status, 200)
+  assert.equal(stored.body.video_api.has_api_key, true)
+  assert.equal(stored.body.video_api.revision, 1)
+  assert.equal(JSON.stringify(stored).includes(KEY), false)
+  assert.equal(JSON.stringify(api.store.read()).includes(KEY), false)
+  assert.deepEqual(api.resolveVideo(), {provider: 'runway', model: 'gen4.5', api_key: KEY})
+  assert.equal(make().resolveVideo(), null)
+  assert.equal((await call('POST', {revision: 0, api_key: null})).status, 409)
+  assert.equal((await call('POST', {revision: 1, api_key: null})).status, 200)
+  assert.equal(api.resolveVideo(), null)
+})
+
+test('ElevenLabs keys have independent encrypted storage and can only be resolved internally', async () => {
+  const dir = tmp()
+  const feature = modelApiFeature({featureDir: () => dir, dataDir: dir, log: () => {}})
+  const call = (kind, method, body) => feature.endpoints.v1({method, path: '/v1/model-api/' + kind, body})
+  const musicKey = 'music-key-test-' + 'a'.repeat(20)
+  const empty = {provider: 'elevenlabs', model: 'music_v2_5', has_api_key: false, revision: 0}
+  assert.deepEqual((await call('music', 'GET')).body.music_api, empty)
+  assert.equal((await call('video', 'POST', {api_key: KEY, revision: 0})).status, 200)
+  assert.equal(await feature.endpoints.musicProvider({}, {internal: true}), null)
+  assert.equal((await call('music', 'POST', {api_key: 'contains a space', revision: 0})).status, 400)
+  const saved = await call('music', 'POST', {api_key: musicKey, revision: 0})
+  assert.equal(saved.status, 200)
+  assert.deepEqual(saved.body.music_api, {...empty, has_api_key: true, revision: 1})
+  assert.ok(!JSON.stringify(saved).includes(musicKey))
+  const api = createModelApi({dir, sealKey: loadSealKey({fallbackFile: join(dir, 'seal.key'), preferFallback: true})})
+  assert.ok(!readFileSync(api.store.file, 'utf8').includes(musicKey))
+  await assert.rejects(() => feature.endpoints.musicProvider({}, {}), {code: 'model-api/not-found'})
+  assert.deepEqual(await feature.endpoints.musicProvider({}, {internal: true}), {
+    provider: 'elevenlabs', model: 'music_v2_5', api_key: musicKey,
+  })
+  assert.equal(make().resolveMusic(), null)
+  assert.equal((await call('music', 'POST', {api_key: null, revision: 0})).status, 409)
+  assert.equal((await call('music', 'POST', {api_key: null, revision: 1})).status, 200)
+  assert.equal(await feature.endpoints.musicProvider({}, {internal: true}), null)
+  assert.equal((await feature.endpoints.videoProvider({}, {internal: true})).api_key, KEY)
+  delete globalThis[OVERRIDE]
+})
