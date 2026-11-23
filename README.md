@@ -1,27 +1,61 @@
+<div align="center">
+
+<img src="docs/media/overview.png" width="920" alt="OpenTeamily chat on desktop and mobile, showing an agent reply with a table and flowchart">
+
 # OpenTeamily
 
-An independent, open-source, self-hostable project targeting full Teamily feature parity. This is a new project under the openTeamily organization, not a continuation of development in the original FlyBot repository.
+**A self-hosted workspace for conversations, AI agents, and team projects.**
 
-OpenTeamily is a project name, not a claim of affiliation with or endorsement by Teamily. Final product branding remains open; no proprietary code, logos, fonts or legal text are included.
+[Quick start](docs/GETTING_STARTED.md) · [Deployment](docs/COMPOSE_MANAGER.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md)
 
-## Architecture
+[![Management tests](https://github.com/openTeamily/openTeamily/actions/workflows/tests.yml/badge.svg)](https://github.com/openTeamily/openTeamily/actions/workflows/tests.yml)
+[![Container integration](https://github.com/openTeamily/openTeamily/actions/workflows/flybot-runtime-image.yml/badge.svg)](https://github.com/openTeamily/openTeamily/actions/workflows/flybot-runtime-image.yml)
+[![Browser checks](https://github.com/openTeamily/openTeamily/actions/workflows/ui-screenshots.yml/badge.svg)](https://github.com/openTeamily/openTeamily/actions/workflows/ui-screenshots.yml)
 
-- **Management server:** accounts, authentication, runtime lifecycle and routing to the authorized user’s DS-Bot.
-- **DS-Bot:** each user gets one isolated container running DS-Bot, the Bot Social plugin, and the OpenTeamily web plugin. The same container serves that user across workspaces. Agents, private chat, skills, memory, and automations run there.
-- **Dedicated Bot Social:** manages shared workspaces, membership, group messaging and public sharing.
-- Instance IDs are independent of user and workspace IDs. See the [architecture](docs/ARCHITECTURE.md) for service boundaries.
-- The [runtime pin](runtime/ds-bot-upstream.pin.json) identifies the bundled DS-Bot and DSH releases. The FlyBot Social plugin and Bot Social service are tracked as separate source imports. See [migration notes](docs/upstream/MIGRATION.md) and [licensing](docs/LICENSING.md).
+</div>
 
-## Deployment and verification
+## Start with a conversation
 
-- [Compose manager setup and recovery](docs/COMPOSE_MANAGER.md)
-- [Dedicated Bot Social and gateway deployment](deploy/isolated/BOT_SOCIAL_DEPLOY.md)
-- [Management API](docs/MANAGEMENT_API.md) and [DS-Bot plugin contract](docs/DSBOT_PLUGIN_ARCHITECTURE.md)
+- **Chat with your personal agent** or invite people and agents to a group. Replies stream as they arrive and can include Markdown, tables, and flowcharts.
+- **Save work and recall context.** Keep chat outputs in your library, manage versions and sharing, and retrieve context from workspace memory.
+- **Keep work moving.** Schedule recurring work, review run results, and turn meeting notes into action items.
+- **Explore and manage your team.** Browse public works and agents, and manage team members, agents, and permissions.
 
-The [container workflow](.github/workflows/flybot-runtime-image.yml) checks provisioning, volume retention, account routing and collaboration between two DS-Bots through Bot Social. The [browser workflow](.github/workflows/ui-screenshots.yml) exercises sign-in, streamed chat, group creation, mobile layout and account isolation in Chromium using synthetic accounts and model replies. See the [capability roadmap](docs/ROADMAP.md) for remaining work.
+| Discover | Work library |
+| --- | --- |
+| <img src="docs/media/discover.png" width="430" alt="Discover page with public works and agents"> | <img src="docs/media/work-library.png" width="430" alt="Work library showing filters and project cards"> |
+
+These screenshots come from [OpenTeamily's Chromium checks](https://github.com/openTeamily/openTeamily/actions/runs/45196194565) using test accounts and sample content.
+
+## One DS-Bot container per account
+
+An account uses the same container across workspaces. Private chats, inference, memory, skills, and automations run in that container, with state stored on a dedicated volume. The management service handles accounts, authentication, and routing. Bot Social coordinates shared membership, cross-account messages, and public sharing.
+
+```mermaid
+flowchart LR
+    Browser["Desktop / mobile"] --> Gateway["Management service and gateway"]
+    Gateway --> A["Account A's DS-Bot<br/>OpenTeamily and Bot Social plugins"]
+    Gateway --> B["Account B's DS-Bot<br/>OpenTeamily and Bot Social plugins"]
+    A --- VA[("Account A data volume")]
+    B --- VB[("Account B data volume")]
+    A --> Social["Shared Bot Social service"]
+    B --> Social
+```
+
+OpenTeamily pins **DS-Bot v0.3.10**. Automatically provisioned accounts can use the operator's default model API. See the [runtime pin](runtime/ds-bot-upstream.pin.json), [service and data boundaries](docs/ARCHITECTURE.md), and [two-account upgrade checks](https://github.com/openTeamily/openTeamily/actions/runs/45196194368).
+
+## Run, verify, and contribute
+
+| What you want to do | Where to start |
+| --- | --- |
+| Preview the interface locally and explore the repository | [Quick start](docs/GETTING_STARTED.md) |
+| Deploy a dedicated container for each account | [Compose manager](docs/COMPOSE_MANAGER.md) · [Bot Social and gateway](deploy/isolated/BOT_SOCIAL_DEPLOY.md) |
+| Develop an API integration or runtime plugin | [Management API](docs/MANAGEMENT_API.md) · [DS-Bot plugin contract](docs/DSBOT_PLUGIN_ARCHITECTURE.md) |
+| Check coverage or reproduce a workflow | [Acceptance records](docs/ACCEPTANCE.md) · [Runtime and image migration](docs/upstream/MIGRATION.md) |
+| Contribute a fix or improvement | Open a [pull request](https://github.com/openTeamily/openTeamily/pulls) with reproduction steps and verification results. |
+
+OpenTeamily is an independent open-source project that uses Teamily as a reference for workflows outside its credit system. See the [roadmap](docs/ROADMAP.md) for current coverage and workflows still awaiting verification.
 
 ## License
 
-New material authored in this repository is licensed under MIT; see [LICENSE](LICENSE). This does not relicense any FlyBot, Bot Social, runtime or third-party material.
-
-Imported FlyBot customization source remains Apache-2.0 with its `NOTICE`. Imported Bot Social source remains MIT, Copyright (c) 2026 Birfy. `runtime/ds-bot-upstream/` is an unmodified, pinned copy of upstream [DS Bot](https://github.com/Fei2411/DS-Bot) under the **Apache License 2.0** (its `LICENSE` and `NOTICE` are kept there). No upstream git history is imported. See [docs/LICENSING.md](docs/LICENSING.md) and [runtime/ds-bot-upstream/UPSTREAM.md](runtime/ds-bot-upstream/UPSTREAM.md).
+New work in this repository is licensed under the [MIT License](LICENSE). The pinned DS-Bot source and imported FlyBot customizations retain their Apache-2.0 licenses and NOTICE files. The imported Bot Social source retains its MIT license and original copyright notice (Copyright © 2026 Birfy). Third-party components retain their respective licenses. See [licensing details](docs/LICENSING.md) and [NOTICE](NOTICE).
