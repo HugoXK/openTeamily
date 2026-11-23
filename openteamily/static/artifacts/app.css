@@ -1481,6 +1481,43 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #work-version-preview table { border-collapse: collapse; margin: .5rem 0; }
 #work-version-preview td { padding: .3rem; border: 1px solid var(--ot-line); min-width: 3rem; }
 #work-version-link { margin-top: .5rem; width: 100%; }
+.work-version-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .5rem;
+  margin-top: .75rem;
+}
+.work-version-actions > label { display: grid; flex: 1 1 11rem; gap: .25rem; min-width: 0; }
+.work-version-actions select { min-width: 0; width: 100%; }
+.work-version-actions > :is(a, button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: .4rem .65rem;
+  white-space: nowrap;
+}
+.work-version-actions > [hidden],
+#work-version-tools:has(#work-version-restore-review:not([hidden])) > .work-version-actions { display: none; }
+.work-version-actions > a {
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .55rem;
+  background: var(--ot-surface);
+  text-decoration: none;
+}
+@media (max-width: 540px) {
+  .work-version-actions > label { flex-basis: 100%; }
+}
+#work-version-restore-review {
+  margin-block-start: .75rem;
+  padding: .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+  background: var(--ot-surface-2);
+}
+#work-version-restore-summary { margin: 0 0 .5rem; }
 #studio-copy-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem; overflow-wrap: anywhere; }
 #studio-copy-preview, #shared-work-copy-preview {
   background: var(--ot-surface-2);

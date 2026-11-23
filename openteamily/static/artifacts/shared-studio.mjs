@@ -3,9 +3,9 @@ import {mountStudioHistory} from './studio-history.mjs';
 import {mountStudioDiscussion} from './studio-discussion.mjs';
 import {mountStudioPersonalCopy} from './studio-personal-copy.mjs';
 import {mergeStudioDraft} from './studio-merge.mjs';
+import {requestStudio, studioScope} from './entry.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
-const ROLES = new Set(['owner', 'admin', 'member']);
 const UPDATE_INTERVAL = 4000;
 const WATCH_INTERVAL = 200;
 const WATCH_BACKOFF = 20000;
@@ -33,7 +33,7 @@ function setEditorValue(input, value) {
   input.scrollTop = scrollTop;
 }
 
-export function mountSharedStudio(document, {request, personalWorkspace, onClose, onCatalog, onDocument}) {
+export function mountSharedStudio(document, {request, personalWorkspace, onClose, onOpenCatalog, onCatalog, onDocument}) {
   const get = id => document.getElementById('studio-' + id);
   const button = get('open');
   const dialog = get('dialog');
@@ -61,6 +61,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   let screen;
 
   const searchable = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  const catalogQueryKey = () => 'openteamily.studio-query:' + JSON.stringify([scope.account, scope.id]);
 
   function filterCatalog() {
     if (!catalogQuery || !catalogNoMatch) return;
@@ -72,6 +73,17 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       if (!row.hidden) matches++;
     }
     catalogNoMatch.hidden = !query || !list.children.length || matches > 0;
+  }
+
+  function searchCatalog() {
+    if (scope) {
+      try {
+        const key = catalogQueryKey();
+        if (catalogQuery.value.trim()) view.sessionStorage.setItem(key, catalogQuery.value.slice(0, 80));
+        else view.sessionStorage.removeItem(key);
+      } catch {}
+    }
+    filterCatalog();
   }
 
   function show(text = '', kind = '') {
@@ -148,9 +160,15 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   savePersonal?.addEventListener('click',()=>saveToPersonal());
 
   function send(method, path, body, signal) {
-    const timeout = AbortSignal.timeout(12000);
-    return request(method, path, body, {signal: signal ? AbortSignal.any([signal, timeout]) : timeout})
-      .catch(() => ({status: 0, body: {}}));
+    return requestStudio(request, method, path, body, signal);
+  }
+
+  async function readOpening(state, path) {
+    const pending = state.opening;
+    state.opening = null;
+    const response = pending && await pending;
+    if (response && (response.status || !isCurrent(state))) return response;
+    return send('GET', path, undefined, state.controller.signal);
   }
 
   const history = mountStudioHistory(document, {
@@ -227,11 +245,14 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     if (catalogNoMatch) catalogNoMatch.hidden = true;
   }
 
-  function newScreen(mode, id) {
+  function newScreen(mode, id, prepared) {
     stopScreen();
+    const opening = prepared?.workspace === scope.id && prepared?.id === id && prepared?.account === scope.account
+      && !prepared.controller.signal.aborted ? prepared : null;
     screen = {
       path: '/v1/workspaces/' + scope.id + '/studio/documents',
-      mode, controller: new AbortController(),
+      mode, controller: opening?.controller || new AbortController(),
+      opening: opening?.response,
       draftKey:mode === 'catalog' ? null : draftKey(id || 'new'),
       base: null, remote: null, attempt: null, busy: false, blocked: false, unavailable: false, composing: false,
     };
@@ -419,17 +440,18 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     queueUpdate(state);
   }
 
-  async function openDocument(id, revision) {
+  async function openDocument(id, revision, prepared) {
     if (!ID.test(id || '')) return;
-    const state = newScreen('edit', id);
+    const state = newScreen('edit', id, prepared);
     show('正在打开团队文档…');
-    const result = await send('GET', documentPath(state, id), undefined, state.controller.signal);
+    const result = await readOpening(state, documentPath(state, id));
     if (!isCurrent(state)) return;
     const item = responseDocument(result, id);
     if (!item) {
       const failure = result.status === 403 || result.status === 404
         ? '团队文档不存在，或你没有访问权限。' : '暂时无法打开团队文档。';
       if ([401,403,404,410].includes(result.status)) discardDraft(state);
+      onCatalog?.(scope.id);
       await loadCatalog(failure);
       return;
     }
@@ -448,14 +470,14 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     else get('back').focus();
   }
 
-  async function loadCatalog(failure = '', returnTo = '') {
-    const state = newScreen('catalog');
+  async function loadCatalog(failure = '', returnTo = '', prepared) {
+    const state = newScreen('catalog', undefined, prepared);
     add.textContent = readDraft({mode:'new',draftKey:draftKey('new')}) ? '继续新建团队文档' : '新建团队文档';
     const refresh = get('refresh');
     refresh.disabled = true;
     list.setAttribute('aria-busy', 'true');
     show('正在读取团队文档…');
-    const result = await send('GET', state.path, undefined, state.controller.signal);
+    const result = await readOpening(state, state.path);
     if (!isCurrent(state)) return;
     refresh.disabled = false;
     list.setAttribute('aria-busy', 'false');
@@ -488,30 +510,39 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     }
   }
 
-  async function open(id, revision) {
+  async function open(id, revision, returnTo, prepared) {
     if (!scope || dialog.open) return false;
     get('workspace-name').textContent = scope.name;
     dialog.showModal();
     closeButton.focus();
-    if (id) await openDocument(id, revision);
-    else await loadCatalog();
+    if (id) await openDocument(id, revision, prepared);
+    else {
+      onOpenCatalog?.(scope.id);
+      const loading = loadCatalog('', returnTo, prepared);
+      if (returnTo) add.focus();
+      await loading;
+    }
     return true;
+  }
+
+  function leaveForNavigation() {
+    if (!dialog.open) return;
+    discardDraft(screen);
+    stopScreen();
+    dialog.close();
   }
 
   function close() {
     if (!mayLeave()) return;
-    discardDraft(screen);
-    stopScreen();
-    dialog.close();
+    leaveForNavigation();
     onClose?.();
     if (!button.hidden) button.focus();
   }
 
-  button.addEventListener('click', () => void open());
-  catalogQuery?.addEventListener('input', filterCatalog);
+  catalogQuery?.addEventListener('input', searchCatalog);
   catalogClear?.addEventListener('click', () => {
     catalogQuery.value = '';
-    filterCatalog();
+    searchCatalog();
     catalogQuery.focus();
   });
   closeButton.addEventListener('click', close);
@@ -523,7 +554,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     if (!mayLeave()) return;
     const last = screen?.base?.id;
     discardDraft(screen);
-    onCatalog?.();
+    if (onCatalog?.(scope.id, {back:Boolean(last)})) return;
     void loadCatalog('', last);
     add.focus();
   });
@@ -647,7 +678,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     state.busy = false;
     if (result.status === 200 || result.status === 204) {
       discardDraft(state);
-      onCatalog?.();
+      onCatalog?.(scope.id);
       await loadCatalog();
       return;
     }
@@ -696,23 +727,28 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
 
   return {
     setWorkspace(team, account) {
-      const next = account && ID.test(team?.id || '') && team.kind === 'team' &&
-        ROLES.has(team.role) ? {id: team.id, name: team.name, account} : null;
-      if (next?.id !== scope?.id || next?.account !== scope?.account) {
+      const next = studioScope(team, account);
+      const changed = next?.id !== scope?.id || next?.account !== scope?.account;
+      if (changed) {
         if (dialog.open) {
           rememberDraft(screen);
           stopScreen();
           dialog.close();
           onClose?.();
         }
-        if (catalogQuery) {
-          catalogQuery.value = '';
-          filterCatalog();
-        }
       }
       scope = next;
+      if (changed && catalogQuery) {
+        catalogQuery.value = '';
+        if (scope) {
+          try { catalogQuery.value = (view.sessionStorage.getItem(catalogQueryKey()) || '').slice(0, 80); } catch {}
+        }
+        filterCatalog();
+      }
       button.hidden = !scope;
     },
+    canLeave: () => !dialog.open || mayLeave(),
+    leaveForNavigation,
     open,
   };
 }

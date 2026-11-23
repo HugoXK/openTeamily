@@ -18,12 +18,15 @@ export function memoryDirectoryQuery({needle, topic, updatedAfter, cursor} = {})
   return '?' + params.toString();
 }
 
-export function actionQuery(needle, status, cursor, limit) {
+const ACTION_DUE_CURSOR = /^[012]:-?\d{1,11}:[0-9a-f]{32}$/;
+
+export function actionQuery(needle, status, cursor, limit, order) {
   const params = new URLSearchParams();
   if (needle) params.set('q', needle);
   if (status) params.set('status', status);
-  if (cursor) params.set('cursor', cursor);
+  if (cursor) params.set(order === 'due' ? 'after' : 'cursor', cursor);
   if (limit) params.set('limit', String(limit));
+  if (order) params.set('order', order);
   const query = params.toString();
   return query ? `?${query}` : '';
 }
@@ -399,6 +402,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const actionEditor = document.getElementById('action-editor-form');
   const actionSearch = document.getElementById('action-search');
   const actionFilter = document.getElementById('action-filter');
+  const actionQuickStatus = document.getElementById('action-quick-status');
   const actionMore = document.getElementById('action-list-more');
   const actionRetry = document.getElementById('action-list-retry');
   const actionFollowup = document.getElementById('action-follow-up');
@@ -1223,12 +1227,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderActions(items) {
     const list = document.getElementById('action-list');
-    const focused = list.contains?.(document.activeElement) ? document.activeElement.dataset.id : undefined;
+    const focus = list.contains?.(document.activeElement) ? document.activeElement.dataset || {} : {};
+    const scope = actionDraftScope();
+    const now = new Date();
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     list.replaceChildren();
     for (const item of items) {
       const li = document.createElement('li');
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'action-row-toggle';
+      toggle.dataset.actionToggle = item.id;
+      toggle.dataset.status = item.status;
+      toggle.setAttribute('aria-label', `${item.status === 'done' ? '重新打开' : '标记完成'}：${item.title}`);
+      const busy = pendingQuickActions.has(quickActionKey(scope, item.id));
+      toggle.setAttribute('aria-busy', String(busy));
+      toggle.setAttribute('aria-disabled', String(busy));
+      toggle.addEventListener('click', () => changeActionStatus(item));
       const button = document.createElement('button');
       button.type = 'button';
+      button.className = 'action-row-detail';
       const title = document.createElement('strong');
       title.textContent = item.title;
       const meta = document.createElement('span');
@@ -1236,6 +1254,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const due = dueDateValue(item.due_at);
       meta.textContent = [item.status === 'done' ? '已完成' : '未完成',
         due && `截止 ${due}`, item.memory_page_title].filter(Boolean).join(' · ');
+      if (item.status === 'open' && due && due < today) {
+        const overdue = document.createElement('span');
+        overdue.className = 'action-row-overdue';
+        overdue.textContent = '已逾期';
+        meta.append(document.createTextNode(' · '), overdue);
+      }
       const copy = document.createElement('span');
       copy.className = 'action-row-copy';
       copy.append(title, meta);
@@ -1247,9 +1271,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.dataset.status = item.status;
       button.dataset.id = item.id;
       button.addEventListener('click', () => openAction(item.id));
-      li.appendChild(button);
+      li.append(toggle, button);
       list.appendChild(li);
-      if (focused === item.id) button.focus({preventScroll: true});
+      if (focus.id === item.id) button.focus({preventScroll: true});
+      if (focus.actionToggle === item.id) toggle.focus({preventScroll: true});
     }
     syncActionComposer();
   }
@@ -1267,6 +1292,59 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let actionListing;
   let actionSearchTimer;
+  const pendingQuickActions = new Set();
+  const quickActionKey = (scope, id) => JSON.stringify([scope, id]);
+
+  async function changeActionStatus(item) {
+    const state = actionListing;
+    const scope = actionDraftScope();
+    const key = quickActionKey(scope, item.id);
+    if (!state || !scope || pendingQuickActions.has(key) || !state.items.includes(item)) return;
+    const status = item.status === 'done' ? 'open' : 'done';
+    const path = `/v1/workspaces/${state.workspace}/memory/actions/${item.id}`;
+    pendingQuickActions.add(key);
+    actionQuickStatus.textContent = '正在更新行动…';
+    renderActions(state.items);
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    const result = await request('POST', path, {revision: item.revision, changes: {status}}, undefined, timeout())
+      .catch(() => ({status:0, body:{}}));
+    let updated = result.status === 200 ? result.body.action : result.body.error?.current;
+    if (!updated && actionDraftScope() === scope &&
+      (result.status === 0 || result.status === 408 || result.status >= 500)) {
+      const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      if (checked.status === 200) updated = checked.body.action;
+    }
+    pendingQuickActions.delete(key);
+    if (actionDraftScope() !== scope) return;
+    const active = actionListing;
+    if (!active) return;
+    const index = active.items.findIndex(row => row.id === item.id);
+    const keepFocus = document.activeElement?.dataset.actionToggle === item.id;
+    const valid = updated?.id === item.id && updated.workspace_id === state.workspace && updated.revision >= item.revision;
+    const confirmed = valid && updated.status === status && updated.revision > item.revision;
+    const current = valid && index >= 0 && updated.revision >= active.items[index].revision;
+    const removed = current && active.status && active.status !== updated.status;
+    if (removed) active.items.splice(index, 1);
+    else if (current) active.items[index] = updated;
+    renderActions(active.items);
+    renderActionListing(active);
+    if (keepFocus && removed) {
+      const toggles = document.querySelectorAll('#action-list .action-row-toggle');
+      (toggles[Math.min(index, toggles.length - 1)] || actionSearch).focus({preventScroll:true});
+    }
+    actionQuickStatus.textContent = confirmed ? (status === 'done' ? '行动已完成。' : '行动已重新打开。')
+      : valid && updated.revision > item.revision ? '行动已在别处更新。请核对最新状态。'
+        : '无法确认更新，请重试。';
+    if (current && updated.revision > item.revision && !removed) {
+      const limit = Math.max(20, active.items.length);
+      const refresh = loadActions({limit: Math.min(100, limit)});
+      const refreshed = actionListing;
+      await refresh;
+      if (limit > 100 && ownsActionListing(refreshed) && refreshed.cursor) {
+        await readActionPage(refreshed, refreshed.cursor, false, limit - 100);
+      }
+    }
+  }
 
   function renderActionListing(state) {
     const list = document.getElementById('action-list');
@@ -1293,13 +1371,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const ownsActionListing = state => actionListing === state && state.owner === currentUser && state.workspace === workspaceId();
 
-  async function readActionPage(state, cursor, focusResults = false) {
+  async function readActionPage(state, cursor, focusResults = false, limit) {
     if (!ownsActionListing(state) || state.controller) return;
     const controller = state.controller = new AbortController();
     state.busy = true;
     state.error = false;
     renderActionListing(state);
-    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor)}`;
+    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor, limit, 'due')}`;
     const listed = await request('GET', path, undefined, undefined, controller.signal).catch(() => ({status:0, body:{}}));
     if (!ownsActionListing(state)) return;
     state.controller = null;
@@ -1318,7 +1396,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     state.items = cursor ? [...state.items, ...items] : items;
     const next = listed.body.cursor;
-    state.cursor = next !== cursor && /^[0-9a-f]{32}$/.test(next || '') ? next : '';
+    state.cursor = next !== cursor && ACTION_DUE_CURSOR.test(next || '') ? next : '';
     renderActions(state.items);
     renderActionListing(state);
     if (focusResults) {
@@ -1328,20 +1406,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function loadActions({delay = 0} = {}) {
+  function loadActions({delay = 0, limit} = {}) {
     stopActionListing();
     const workspace = workspaceId();
     const owner = currentUser;
     const previous = actionListing;
     const sameScope = previous && previous.workspace === workspace && previous.owner === owner;
-    if (!sameScope) actionSearch.value = '';
+    if (!sameScope) {
+      actionSearch.value = '';
+      if (actionQuickStatus) actionQuickStatus.textContent = '';
+    }
     const needle = actionSearch.value.trim(), status = actionFilter.value;
     const keep = sameScope && previous.needle === needle && previous.status === status;
     const state = actionListing = workspace ? {workspace, owner, needle, status, items:keep ? previous.items : [], busy:true} : null;
     if (!keep) renderActions([]);
     renderActionListing(state);
     if (!state) return;
-    if (!delay) return readActionPage(state, '');
+    if (!delay) return readActionPage(state, '', false, limit);
     actionSearchTimer = setTimeout(() => {
       actionSearchTimer = undefined;
       void readActionPage(state, '');

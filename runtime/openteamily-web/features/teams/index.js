@@ -11,7 +11,7 @@ export default function teams(host) {
       activeWorkspaces: async (_payload,call) => {
         if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'teams/not-found'})
         const data = await bs().get('/v1/ot/workspaces',{signal:AbortSignal.timeout(2000)})
-        return (data.workspaces ?? []).map(({workspace_id,name}) => ({id:workspace_id,name}))
+        return (data.workspaces ?? []).map(({workspace_id,name,role}) => ({id:workspace_id,name,role}))
       },
       list: async () => bs().get('/v1/ot/teams'),
       create: async (p) => bs().post('/v1/ot/teams', { name: p?.name, slug: p?.slug, summary: p?.summary }),
