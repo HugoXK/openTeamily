@@ -136,6 +136,7 @@ function linkedMeetingAction(params) {
   return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1', completed};
 }
 const unavailable = {status: 0, body: {}};
+const DETAIL_READ_TIMEOUT_MS = 15000;
 const SAVE_TIMEOUT_MS = 12000;
 const DRAFT_WAIT_MS = 185000;
 const DRAFT_POLL_MS = 1200;
@@ -617,6 +618,8 @@ function mount() {
   const inboxOpen = document.getElementById('meeting-inbox-open');
   const inboxReturn = document.getElementById('meeting-inbox-return');
   const inboxList = document.getElementById('meeting-inbox-list');
+  const main = document.getElementById('main');
+  const inboxHeading = document.getElementById('meeting-inbox-heading');
   const inboxState = document.getElementById('meeting-inbox-state');
   const inboxMine = document.getElementById('meeting-inbox-mine');
   const inboxMore = document.getElementById('meeting-inbox-more');
@@ -670,6 +673,7 @@ function mount() {
   let catalogueSize = 0;
   let catalogueTranscript = false;
   let inboxView = null;
+  let inboxResume = null;
   const inboxWrites = new Set();
   let actions = [];
   let actionBoxes = [];
@@ -716,12 +720,41 @@ function mount() {
   const draftRequests = new Map();
   let storedDraft = null;
   let draftPoll = 0;
+  let openRetry = null;
 
   filters.hidden = !native;
 
   function show(kind, text) {
+    openRetry = null;
     status.dataset.kind = kind;
     status.textContent = text;
+  }
+
+  function readDetail(path) {
+    return request('GET', path, undefined, undefined, AbortSignal.timeout(DETAIL_READ_TIMEOUT_MS))
+      .catch(() => unavailable);
+  }
+
+  function showOpenError(result, message, reopen) {
+    show('error', message);
+    if (result.status && ![408, 429].includes(result.status) && result.status < 500) return;
+    const target = scope();
+    const account = viewerId;
+    const button = openRetry = document.createElement('button');
+    button.type = 'button';
+    button.id = 'meeting-open-retry';
+    button.className = 'secondary';
+    button.textContent = '重试打开';
+    button.addEventListener('click', () => confirmNavigation(async () => {
+      if (openRetry !== button || !active(target) || viewerId !== account) return;
+      await reopen();
+      if (document.activeElement === document.body) openRetry?.focus();
+    }));
+    status.append(button);
+  }
+
+  function clearOpenRetry() {
+    if (openRetry) show('', '');
   }
 
   function showSave(kind, text) {
@@ -741,11 +774,32 @@ function mount() {
     return workspaceSelect.value;
   }
 
-  const sameInboxScope = state => state.viewer === viewer && state.workspace === workspaceId();
+  const sameInboxScope = state => state.owner === viewerId && state.viewer === viewer && state.workspace === workspaceId();
   const currentInbox = state => state === inboxView && sameInboxScope(state);
   const inboxKey = (state, item) => `${state.viewer}/${state.workspace}/${item.meeting_id}`;
 
-  function renderInbox(state) {
+  function inboxPosition(button = document.activeElement) {
+    const row = button?.closest?.('li[data-action]');
+    if (row?.parentElement !== inboxList || !button.dataset.inboxControl) return null;
+    return {key:row.dataset.action, index:Array.from(inboxList.children).indexOf(row),
+      control:button.dataset.inboxControl, top:button.getBoundingClientRect().top};
+  }
+
+  function focusInboxPosition(position, restorePosition = false) {
+    if (!position) return;
+    const rows = Array.from(inboxList.children);
+    const original = rows.find(item => item.dataset.action === position.key);
+    const row = original || rows[Math.min(position.index, rows.length - 1)];
+    const button = row?.querySelector(`button[data-inbox-control="${position.control}"]:enabled`) ||
+      row?.querySelector('button[data-inbox-control="source"]');
+    (button || inboxHeading).focus({preventScroll:true});
+    if (restorePosition && original && button) {
+      main.scrollTop += button.getBoundingClientRect().top - position.top;
+    }
+  }
+
+  function renderInbox(state, position = inboxPosition()) {
+    const scrollTop = main.scrollTop;
     inboxList.replaceChildren();
     for (const item of state.items) {
       const row = document.createElement('li');
@@ -762,18 +816,30 @@ function mount() {
       buttons.className = 'meeting-inbox-buttons';
       const source = document.createElement('button');
       source.type = 'button';
-      source.textContent = '查看会议';
+      source.dataset.inboxControl = 'source';
+      const retry = state.retryMeeting;
+      source.textContent = retry?.meeting_id === item.meeting_id && retry.action_index === item.action_index &&
+        retry.revision === item.revision ? '重试打开会议' : '查看会议';
       source.addEventListener('click', () => {
         if (!currentInbox(state)) return;
         return confirmNavigation(async () => {
           if (!currentInbox(state)) return;
+          inboxResume = {state, position:inboxPosition(source), scrollTop:main.scrollTop};
           setInbox(false, {focus:false});
-          await openMeeting(item.meeting_id, undefined, undefined,
+          const expectedSelection = selection + 1;
+          const opened = await openMeeting(item.meeting_id, undefined, undefined,
             {index:item.action_index, revision:item.revision, inbox:true, mine:state.mine, completed:state.completed});
+          if (!opened && selection === expectedSelection && !inboxView && sameInboxScope(state)) {
+            const notice = openRetry ? status.firstChild?.textContent || '' : status.textContent;
+            const retryMeeting = openRetry ? item : null;
+            show('', '');
+            setInbox(true, {notice, retryMeeting});
+          }
         });
       });
       const done = document.createElement('button');
       done.type = 'button';
+      done.dataset.inboxControl = 'status';
       done.textContent = state.completed ? '重新打开' : '标记完成';
       done.disabled = inboxWrites.has(inboxKey(state, item));
       done.addEventListener('click', () => changeInboxAction(state, item, done));
@@ -787,46 +853,83 @@ function mount() {
     inboxEmpty.textContent = state.completed
       ? state.mine ? '没有分配给你的已完成行动项。' : '没有已完成的会议行动项。'
       : state.mine ? '没有分配给你的待办行动项。' : '没有待完成的会议行动项。';
+    main.scrollTop = scrollTop;
+    focusInboxPosition(position, true);
   }
 
-  async function loadInbox(state, {append = false, notice = ''} = {}) {
+  async function loadInbox(state, {append = false, notice = '', minimum = Math.max(20, state.items.length)} = {}) {
     if (!currentInbox(state) || (append && (!state.cursor || state.request))) return;
+    const firstNew = state.items.length;
+    const paging = append && document.activeElement === inboxMore;
     state.request?.abort();
     const controller = state.request = new AbortController();
-    const params = new URLSearchParams({view:'actions', limit:'20'});
-    if (state.mine) params.set('mine', '1');
-    if (state.completed) params.set('status', 'completed');
-    if (append) params.set('cursor', state.cursor);
     inboxMore.disabled = true;
     inboxList.setAttribute('aria-busy', 'true');
     inboxStatus.textContent = '正在读取行动项…';
-    const result = await request('GET', `/v1/workspaces/${state.workspace}/meetings?${params}`, undefined, undefined, controller.signal)
-      .catch(() => unavailable);
-    if (!currentInbox(state) || state.request !== controller) return;
+    let cursor = append ? state.cursor : '';
+    let version = append ? state.version : undefined;
+    const items = append ? [...state.items] : [];
+    const seen = new Set(items.map(item => `${item.meeting_id}.${item.action_index}`));
+    const cursors = new Set(cursor ? [cursor] : []);
+    const target = append ? items.length + 20 : minimum;
+    let failure = '';
+    do {
+      const params = new URLSearchParams({view:'actions', limit: String(Math.min(50, target - items.length))});
+      if (state.mine) params.set('mine', '1');
+      if (state.completed) params.set('status', 'completed');
+      if (cursor) params.set('cursor', cursor);
+      const result = await request('GET', `/v1/workspaces/${state.workspace}/meetings?${params}`, undefined, undefined, controller.signal)
+        .catch(() => unavailable);
+      if (!currentInbox(state) || state.request !== controller) return;
+      const wrongScope = result.status === 200 &&
+        (result.body.workspace_id !== state.workspace || result.body.viewer_username !== state.viewer);
+      if (wrongScope || [401, 403, 404].includes(result.status)) {
+        state.items = [];
+        state.cursor = '';
+        state.loaded = false;
+        renderInbox(state);
+        failure = '无法访问这个工作区的行动项。';
+        break;
+      }
+      if (result.status !== 200 || !Array.isArray(result.body.items)) {
+        failure = '无法读取行动项，请刷新重试。';
+        break;
+      }
+      if (cursor && result.body.activity_version !== version) {
+        if (append) return loadInbox(state, {minimum, notice:'会议记录有更新，已重新加载行动项。'});
+        failure = '会议记录有更新，请刷新行动项。';
+        break;
+      }
+      version = result.body.activity_version;
+      for (const item of result.body.items) {
+        const key = `${item?.meeting_id}.${item?.action_index}`;
+        if (!meetingIdPattern.test(item?.meeting_id || '') || !Number.isSafeInteger(item.revision) || item.revision < 1 ||
+            !Number.isInteger(item.action_index) || item.action_index < 0 || item.action_index >= 50 ||
+            typeof item.text !== 'string' || typeof item.meeting_title !== 'string' || typeof item.owner !== 'string' || seen.has(key)) continue;
+        seen.add(key);
+        items.push(item);
+      }
+      const next = result.body.cursor;
+      cursor = typeof next === 'string' && /^\d{1,10}\.[0-9a-f]{32}\.\d{1,2}$/.test(next) && !cursors.has(next) ? next : '';
+      if (cursor) cursors.add(cursor);
+    } while (cursor && items.length < target);
     state.request = null;
     inboxList.setAttribute('aria-busy', 'false');
-    if (result.status !== 200 || !Array.isArray(result.body.items) || result.body.workspace_id !== state.workspace || result.body.viewer_username !== state.viewer) {
+    if (failure) {
       inboxMore.disabled = false;
-      inboxStatus.textContent = '无法读取行动项，请刷新重试。';
+      inboxStatus.textContent = [notice, failure].filter(Boolean).join(' ');
       return;
     }
-    if (append && result.body.activity_version !== state.version) return loadInbox(state, {notice:'会议记录有更新，已重新加载行动项。'});
-    state.version = result.body.activity_version;
-    const seen = new Set(append ? state.items.map(item => `${item.meeting_id}.${item.action_index}`) : []);
-    const items = result.body.items.filter(item => {
-      const key = `${item?.meeting_id}.${item?.action_index}`;
-      if (!meetingIdPattern.test(item?.meeting_id || '') || !Number.isSafeInteger(item.revision) || item.revision < 1 ||
-          !Number.isInteger(item.action_index) || item.action_index < 0 || item.action_index >= 50 ||
-          typeof item.text !== 'string' || typeof item.meeting_title !== 'string' || typeof item.owner !== 'string' || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    state.version = version;
     state.loaded = true;
-    state.items = append ? [...state.items, ...items] : items;
-    const cursor = result.body.cursor;
-    state.cursor = typeof cursor === 'string' && (!append || cursor !== state.cursor) && /^\d{1,10}\.[0-9a-f]{32}\.\d{1,2}$/.test(cursor) ? cursor : '';
+    state.items = items;
+    state.cursor = cursor;
+    const requestedMore = paging && (document.activeElement === inboxMore || document.activeElement === document.body);
     inboxStatus.textContent = notice;
     renderInbox(state);
+    if (requestedMore && items.length > firstNew) {
+      inboxList.children[firstNew]?.querySelector('button[data-inbox-control="source"]')?.focus();
+    }
   }
 
   async function changeInboxAction(state, item, button) {
@@ -834,6 +937,7 @@ function mount() {
     if (!currentInbox(state) || inboxWrites.has(key)) return;
     inboxWrites.add(key);
     const done = !state.completed;
+    const position = inboxPosition(button);
     button.disabled = true;
     button.textContent = done ? '正在完成…' : '正在重新打开…';
     const path = `/v1/workspaces/${state.workspace}/meetings/${item.meeting_id}`;
@@ -871,35 +975,47 @@ function mount() {
       if (inboxView) void loadInbox(inboxView);
       return;
     }
+    const minimum = Math.max(20, state.items.length);
+    const keepPosition = document.activeElement === button || document.activeElement === document.body;
     if (success) {
       state.items = state.items.filter(row => row.meeting_id !== item.meeting_id || row.action_index !== item.action_index);
-      renderInbox(state);
+      renderInbox(state, keepPosition ? position : inboxPosition());
     } else if (button.isConnected) {
       button.disabled = false;
       button.textContent = done ? '标记完成' : '重新打开';
     }
     const notice = success ? (done ? '已标记完成。' : '已重新打开，行动项已回到待完成。')
       : result.status === 409 ? '会议已更新，请核对最新行动项。' : '暂时无法确认行动项状态，请核对最新行动项。';
-    await loadInbox(state, {notice});
-    if (currentInbox(state) && !inbox.contains(document.activeElement)) document.getElementById('meeting-inbox-heading').focus();
+    if (!success && keepPosition) focusInboxPosition(position);
+    await loadInbox(state, {notice, minimum});
   }
 
-  function setInbox(open, {focus = true} = {}) {
+  function setInbox(open, {focus = true, notice = '', retryMeeting = null} = {}) {
     if (!inbox || !native || (open && (!viewer || !workspaceId()))) return;
-    inboxView?.request?.abort();
+    if (inboxView?.request) {
+      inboxView.request.abort();
+      inboxView.request = null;
+    }
     inboxView = null;
     inbox.hidden = !open;
     layout.hidden = open;
     inboxOpen.setAttribute('aria-expanded', String(open));
     if (open) {
-      inboxView = {workspace:workspaceId(), viewer, mine:inboxMine.checked, completed:inboxState?.value === 'completed',
+      clearOpenRetry();
+      const mine = inboxMine.checked, completed = inboxState?.value === 'completed';
+      const saved = inboxResume;
+      inboxResume = null;
+      const resumable = saved && sameInboxScope(saved.state) && saved.state.mine === mine && saved.state.completed === completed;
+      inboxView = resumable ? saved.state : {workspace:workspaceId(), owner:viewerId, viewer, mine, completed,
         items:[], cursor:'', loaded:false};
-      renderInbox(inboxView);
-      if (focus) {
-        document.getElementById('main').scrollTop = 0;
-        document.getElementById('meeting-inbox-heading').focus({preventScroll:true});
+      inboxView.retryMeeting = retryMeeting;
+      if (resumable) main.scrollTop = saved.scrollTop;
+      renderInbox(inboxView, resumable ? saved.position : null);
+      if (!resumable && focus) {
+        main.scrollTop = 0;
+        inboxHeading.focus({preventScroll:true});
       }
-      void loadInbox(inboxView);
+      void loadInbox(inboxView, {notice});
     } else if (focus) {
       const narrow = globalThis.matchMedia?.('(max-width: 700px)').matches;
       (narrow && inboxReturn && !inboxReturn.hidden ? inboxReturn : inboxOpen).focus();
@@ -1705,6 +1821,7 @@ function mount() {
   }
 
   function fill(meeting, source = null, draftJob = undefined, {recover = false, chatEditor = ''} = {}) {
+    clearOpenRetry();
     editorReady = false;
     if (inboxReturn) inboxReturn.hidden = true;
     if (mobileBack) mobileBack.hidden = false;
@@ -1749,6 +1866,7 @@ function mount() {
   }
 
   function openCatalogue({focus = false} = {}) {
+    clearOpenRetry();
     selection += 1;
     resetSave();
     current = null;
@@ -1845,7 +1963,7 @@ function mount() {
       form.inert = true;
       show('loading', '正在打开会议…');
     }
-    const result = read || await request('GET', `${base()}/${id}`).catch(() => unavailable);
+    const result = read || await readDetail(`${base()}/${id}`);
     if (workspaceId() !== workspace || pendingSelection !== selection || viewer !== owner) return;
     form.inert = false;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
@@ -1856,7 +1974,10 @@ function mount() {
       }
       syncWriting();
       syncDraft();
-      show('error', messageFor(result.body.error, '无法打开会议。'));
+      const message = !result.status || result.status >= 500 ? '无法打开会议。'
+        : messageFor(result.body.error, '无法打开会议。');
+      showOpenError(result, message,
+        () => openMeeting(id, undefined, transcriptQuery, actionReference));
       return;
     }
     fill(result.body.meeting, null, result.body.draft_job || null, {recover:true});
@@ -1908,13 +2029,14 @@ function mount() {
     setReceiptMode(true);
     sharedDetail.hidden = true;
     emptyDetail.hidden = true;
-    show('', '正在加载共享纪要…');
-    const result = read || await request('GET', `${base()}/shared/${id}`).catch(() => unavailable);
+    show('loading', '正在加载共享纪要…');
+    const result = read || await readDetail(`${base()}/shared/${id}`);
     if (!active(target)) return;
     const meeting = result.body.meeting;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         meeting?.id !== id || meeting.shared !== true) {
-      show('error', result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。' : '无法打开共享纪要，请重试。');
+      showOpenError(result, result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。'
+        : '无法打开共享纪要。', () => openSharedMeeting(id));
       return;
     }
     const copy = native && result.body.received === true ? async index => {
@@ -1958,7 +2080,7 @@ function mount() {
     const target = scope();
     const account = viewerId;
     show('loading', '正在打开通话纪要…');
-    const result = await (read || request('GET', `${base()}/from-call/${id}`).catch(() => unavailable));
+    const result = await (read || readDetail(`${base()}/from-call/${id}`));
     if (!active(target)) return;
     const {source, meeting, viewer_username: owner, workspace_id: workspace} = result.body;
     if (result.status !== 200 || owner !== target.viewer || workspace !== target.workspace ||
@@ -1967,9 +2089,9 @@ function mount() {
         !Array.isArray(source.attendees) || (meeting &&
         (!meetingIdPattern.test(meeting.id) || meeting.source_call_id !== id || meeting.workspace_id !== workspace))) {
       const code = result.body.error?.code;
-      show('error', result.status === 409 && code === 'meeting_call_active' ? '通话还未结束。结束后可刷新此页面整理纪要。'
+      showOpenError(result, result.status === 409 && code === 'meeting_call_active' ? '通话还未结束。结束后可刷新此页面整理纪要。'
         : result.status === 404 ? '无法访问这场通话的纪要。'
-        : '无法加载通话纪要，请刷新重试。');
+        : '无法加载通话纪要。', () => openCallDraft(id, null, linkedWorkspace));
       return;
     }
     if (meeting) {
@@ -1994,6 +2116,8 @@ function mount() {
 
   async function load() {
     const seq = ++workspaceLoad;
+    clearOpenRetry();
+    inboxResume = null;
     setInbox(false, {focus:false});
     selection += 1;
     savedDraft = null;
@@ -2014,10 +2138,9 @@ function mount() {
     const exact = !fromCall && meetingIdPattern.test(linkedWorkspace)
       && (linked.has('shared') ? !meetingId && meetingIdPattern.test(shareId) : meetingIdPattern.test(meetingId));
     const eagerDetail = native && exact
-      ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`)
-        .catch(() => unavailable) : null;
+      ? readDetail(`/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`) : null;
     const eagerSource = validCallLink && linkedWorkspace
-      ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/from-call/${callId}`).catch(() => unavailable) : null;
+      ? readDetail(`/v1/workspaces/${linkedWorkspace}/meetings/from-call/${callId}`) : null;
     if (fromCall) {
       form.hidden = true;
       if (layout) layout.dataset.view = 'catalogue';
@@ -2222,7 +2345,7 @@ function mount() {
   function renderConflictReview(review, local, remote, revision) {
     document.getElementById('meeting-conflict-description').textContent = review.conflicts.length
       ? `请选择有冲突的字段。其他修改会合并到修订 ${revision}。`
-      : `你的修改可与修订 ${revision} 合并。请载入后核对内容。`;
+      : `载入修订 ${revision} 后，可在编辑器里核对内容。`;
     conflictFields.replaceChildren();
     const chosen = new Set();
     for (const index of review.conflicts) {
@@ -2530,25 +2653,41 @@ function mount() {
 
   remove.addEventListener('click', () => {
     if (!current?.id || remove.disabled) return;
-    deleting = {...scope(), id: current.id};
+    deleting = {...scope(), id: current.id, revision: current.revision};
     document.getElementById('meeting-delete-target').textContent = current.title;
     deleteDialog.showModal();
   });
   document.getElementById('cancel-remove-meeting')?.addEventListener('click', () => deleteDialog.close());
   document.getElementById('confirm-remove-meeting')?.addEventListener('click', async () => {
     const target = deleting;
+    deleting = null;
     deleteDialog.close();
     if (!target || !active(target) || current?.id !== target.id || remove.disabled) return;
     const operation = {...target, kind: 'delete'};
     writing = operation;
     syncWriting();
     show('loading', '正在删除会议…');
-    const result = await request('POST', `${base()}/${target.id}/remove`, {}).catch(() => unavailable);
+    const body = native ? {revision: target.revision} : {};
+    const result = await request('POST', `${base()}/${target.id}/remove`, body).catch(() => unavailable);
     if (writing === operation) writing = null;
     if (!active(operation)) return;
+    if (native && result.status === 409) {
+      saveConflict = true;
+      syncWriting();
+      show('', '');
+      showSave('error', '会议已更新，已取消删除。请核对最新版本。');
+      reviewConflict?.focus({preventScroll:true});
+      return;
+    }
     syncWriting();
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
+      return;
+    }
+    const removed = result.body.removed;
+    if (native && (result.body.viewer_username !== target.viewer || removed?.id !== target.id ||
+        removed.workspace_id !== target.workspace || removed.revision !== target.revision)) {
+      show('error', '无法确认删除结果，请重新打开会议核对。');
       return;
     }
     meetings = meetings.filter(item => item.id !== target.id);
@@ -2612,6 +2751,7 @@ function mount() {
   function changeWorkspace(next) {
     workspaceSelect.value = next;
     const actionView = Boolean(inboxView);
+    inboxResume = null;
     setInbox(false, {focus:false});
     workspaceLoad += 1;
     selection += 1;

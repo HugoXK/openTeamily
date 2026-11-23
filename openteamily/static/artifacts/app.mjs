@@ -3,6 +3,9 @@ import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
 import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
+import { artifactTargetFromSearch, startSavedArtifactReads, takeSpaceStartup } from './startup.mjs';
+
+export { artifactTargetFromSearch };
 
 function studioTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -12,22 +15,6 @@ function studioTargetFromSearch(search) {
     return {workspace, catalog:true};
   }
   return studioDocumentFromSearch(search) || {invalid:true};
-}
-
-// A workspace-only link opens its catalog; a saved-result link also opens the record.
-export function artifactTargetFromSearch(search) {
-  const params = new URLSearchParams(search || '');
-  if (!params.has('workspace') && !params.has('artifact') && !params.has('revision')) return null;
-  const id = /^[0-9a-f]{32}$/;
-  const workspace = params.get('workspace');
-  const artifact = params.get('artifact');
-  const revision = params.get('revision');
-  if ([...params.keys()].some(key => !['workspace', 'artifact', 'revision'].includes(key))
-    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
-    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))
-    || (revision !== null && (!artifact || params.getAll('revision').length !== 1 || !/^[1-9][0-9]{0,7}$/.test(revision)))) return {invalid: true};
-  if (revision !== null) return {workspace, artifact, revision:Number(revision)};
-  return artifact ? {workspace, artifact} : {workspace};
 }
 
 import { mountArtifactNotifications } from './notifications.mjs';
@@ -570,6 +557,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const listPanel = document.getElementById('list-panel');
   const editorLoading = document.getElementById('editor-loading');
   const main = document.getElementById('main');
+  const catalogScrollers = [main, listPanel, listPanel.querySelector?.('.artifact-main')];
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
@@ -1492,6 +1480,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterSessions = [];
     filterUpdated = {};
     readFilterDates();
+    renderFilterControls();
+  }
+
+  function restoreCatalogFilters({filters}) {
+    if (!filters) return;
+    search.value = filters.query;
+    if (clearSearch) clearSearch.hidden = !search.value;
+    filterTypes = filters.types;
+    filterCreators = filters.creators;
+    filterSessions = filters.sessions;
+    for (const input of document.querySelectorAll('#filter-panel input[name="file-type"]')) {
+      input.checked = filterTypes.includes(input.value);
+    }
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) {
+      input.checked = input.value === filters.dateMode;
+    }
+    if (dateStart) dateStart.value = filters.start;
+    if (dateEnd) dateEnd.value = filters.end;
+    readFilterDates();
+    // Keep the applied range shown before the work opened, including an
+    // already-applied range while the user was typing the next date.
+    filterUpdated = filters.updated;
     renderFilterControls();
   }
 
@@ -2633,7 +2643,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
     const catalogView = !listPanel.hidden && !target?.artifact ? {
-      workspace, kind:catalogKind, scope:catalogScope, scroll:main?.scrollTop ?? 0, focus:item?.id,
+      account:currentUser.id, workspace, kind:catalogKind, scope:catalogScope,
+      scroll:catalogScrollers.map(node => node?.scrollTop ?? 0), focus:item?.id,
+      depth:sameSelection(catalog) ? catalog.depth : CATALOG_PAGE_SIZE,
+      filters:{query:search.value, types:filterTypes, creators:filterCreators, sessions:filterSessions,
+        dateMode:dateMode(), start:dateStart?.value || '', end:dateEnd?.value || '', updated:filterUpdated},
     } : null;
     hideEditor();
     closeNewMenu();
@@ -2779,35 +2793,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     selection.reads.delete('discover');
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
-    const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
+    const id = current.id;
+    const path = editorPath(selection, id) + '/discover';
     const payload = publish ? {slug,revision:current.revision} : {};
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
       payload.allow_editable_remix = discoverEditable.checked;
     }
-    const result = await request('POST', path, payload, undefined, selection.controller.signal)
-      .catch(() => ({status: 0, body: {}}));
-    if (!activeEditor(selection)) return;
-    selection.discoverWrite = false;
-    setDiscoverPending(false);
-    if (result.status === 200 || (publish && result.status === 201)) {
+    const isCurrent = () => activeEditor(selection) && current?.id === id;
+    const validListing = row => row?.listed === false ||
+      (row?.listed === true && typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug));
+    const showConfirmed = row => {
       if (publish) selection.discoverSlugEdited = false;
       selection.discoverEditableEdited = false;
-      if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
-      else await loadDiscover();
-      if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
-      return;
-    }
-    const error = result.body?.error;
-    const messages = {
-      forbidden: '只有所有者或管理员可以将作品发布到发现页。',
-      conflict: '这个短地址已经在用。',
-      invalid: '请输入符合要求的公开短地址。',
-      attachment_type_blocked: '这个文件格式无法公开发布。',
+      renderDiscoverListing(row, !selection.discoverSlugEdited);
+      if (!publish) panelStatus('discover', '已从发现页撤回。');
     };
-    const code = typeof error === 'string' ? error : error?.code;
-    if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
-    const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
-    panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+
+    try {
+      const result = await request('POST', path + (publish ? '' : '/revoke'), payload, undefined,
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(15000)]))
+        .catch(() => ({status: 0}));
+      if (!isCurrent()) return;
+      const accepted = result.status === 200 || (publish && result.status === 201);
+      const received = result.body?.discover;
+      if (accepted && validListing(received) && received.listed === publish && (!publish || received.slug === slug)) {
+        showConfirmed(received);
+        return;
+      }
+
+      const action = publish ? '发布' : '撤回';
+      if (accepted || !result.status || result.status === 408 || result.status >= 500) {
+        panelStatus('discover', '正在核对公开状态…');
+        const check = await request('GET', path, undefined, undefined,
+          AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+          .catch(() => ({status: 0}));
+        if (!isCurrent()) return;
+        const observed = check.body?.discover;
+        if (check.status !== 200 || !validListing(observed)) {
+          panelStatus('discover', `未能确认${action}结果。重新展开此面板可查询公开状态。`);
+          return;
+        }
+        const matches = publish ? observed.listed && observed.slug === slug && observed.published_revision === payload.revision &&
+          Boolean(observed.editable_remix) === Boolean(payload.allow_editable_remix) : observed.listed === false;
+        if (matches) showConfirmed(observed);
+        else {
+          renderDiscoverListing(observed, !selection.discoverSlugEdited);
+          panelStatus('discover', `当前公开状态与本次${action}请求不一致。请核对后重试。`);
+        }
+        return;
+      }
+
+      const error = result.body?.error;
+      const messages = {
+        forbidden: '只有所有者或管理员可以将作品发布到发现页。',
+        conflict: '这个短地址已经在用。',
+        invalid: '请输入符合要求的公开短地址。',
+        attachment_type_blocked: '这个文件格式无法公开发布。',
+      };
+      const code = typeof error === 'string' ? error : error?.code;
+      if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
+      const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
+      panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+    } finally {
+      selection.discoverWrite = false;
+      if (isCurrent()) setDiscoverPending(false);
+    }
   }
 
   function clearCreatedShare() {
@@ -3407,7 +3457,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
   }
 
-  async function loadList({reuse = false, background = false, signal, initial} = {}) {
+  async function loadList({reuse = false, background = false, signal, initial, minDepth = CATALOG_PAGE_SIZE} = {}) {
     if (background && searchTimer !== null) return 'defer';
     if (!background) cancelScheduledSearch();
     if (catalogKind === 'meetings') {
@@ -3424,7 +3474,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     activity.setScope(workspace);
     const query = catalogQuery();
     const sameCatalog = sameSelection(catalog);
-    if (reuse && sameCatalog && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
+    if (reuse && sameCatalog && catalog.depth >= minDepth && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
       listStatus(catalog.message, catalog.state === 'error');
       if (!listPanel.hidden) showCatalog();
       return;
@@ -3437,7 +3487,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const bookmarkBefore = bookmarkRevision;
     if (!sameCatalog) allItems = [];
-    const depth = sameCatalog ? before.depth : CATALOG_PAGE_SIZE;
+    const depth = Math.max(minDepth, sameCatalog ? before.depth : CATALOG_PAGE_SIZE);
     const loading = {
       workspace, account: currentUser, query, depth, controller, state: 'loading',
       message: search.value.trim() ? '正在搜索作品…' : '正在加载资料…',
@@ -3525,7 +3575,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
-    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const startup = nativeCatalog ? takeSpaceStartup(document) ||
+      (requested?.artifact ? startSavedArtifactReads(path => request('GET', path), requested.workspace) : null) : null;
+    const sessionRequest = startup?.sessionRequest || request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sharedPath = '/v1/workspaces?limit=100';
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const studioDirectory = namedStudio ? request('GET', sharedPath)
+      .catch(() => ({status: 0, body: {}})).then(initial => ({initial, supplemental: null})) : null;
+    const linkedDirectory = studioDirectory || startup?.linkedDirectory;
     const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
     const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
@@ -3564,7 +3621,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     whoami.textContent = currentUser.username;
     // The native Studio GET checks team membership itself. Start it alongside
     // the workspace directory, and use it only for the verified selected team.
-    const namedStudio = nativeCatalog && linkedStudio?.workspace;
     const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
     if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
@@ -3576,10 +3632,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    const sharedPath = '/v1/workspaces?limit=100';
-    let {initial: space, supplemental} = namedStudio
-      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
-      : await readWorkspaceChoices(request, sharedPath, personalRequest);
+    let {initial: space, supplemental} = await (linkedDirectory || readWorkspaceChoices(request, sharedPath, personalRequest));
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -4786,7 +4839,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       sharedWorkCopy.instance?.close();
       studio.instance?.leaveForNavigation();
       show('', '');
-      const catalogView = tracked ? next.catalogView : null;
+      const catalogView = tracked && currentUser?.id && next.catalogView?.account === currentUser.id
+        ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
       const studioTarget = studioTargetFromSearch(view.location.search);
@@ -4794,12 +4848,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
         return;
       }
-      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
+      const requested = artifactTargetFromSearch(view.location.search);
+      if (studioTarget || requested?.artifact || requested?.invalid ||
           newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
       }
-      const targetWorkspace = catalogView?.workspace || workspaceFromFragment(view.location.hash);
+      const targetWorkspace = requested?.workspace || catalogView?.workspace || workspaceFromFragment(view.location.hash);
       if (targetWorkspace && ![...workspaceSelect.options].some(option => option.value === targetWorkspace)) {
         void load();
         return;
@@ -4809,9 +4864,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         notifications.setWorkspace(workspaceId());
         syncStudioWorkspace();
       }
-      await loadList({reuse: true});
-      if (catalogView && main && spaceAddress === address && !listPanel.hidden) {
-        main.scrollTop = catalogView.scroll;
+      const returningToCatalog = catalogView?.workspace === workspaceId();
+      if (returningToCatalog) restoreCatalogFilters(catalogView);
+      await loadList({reuse: true, minDepth:returningToCatalog ? catalogView.depth : undefined});
+      if (returningToCatalog && spaceAddress === address && !listPanel.hidden) {
+        catalogScrollers.forEach((node, index) => {
+          if (node) node.scrollTop = catalogView.scroll[index];
+        });
         const rows = document.getElementById('artifact-list').children;
         const row = [...rows].find(node => node.dataset.artifactId === catalogView.focus);
         row?.firstElementChild?.focus?.({preventScroll: true});

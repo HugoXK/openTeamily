@@ -1642,6 +1642,51 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
 
+test('Space opens a verified team document before the unrelated personal directory arrives', async () => {
+  const session = deferred();
+  const teams = deferred();
+  const local = deferred();
+  const personal = 'c'.repeat(32);
+  const page = linkFixture(path => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/workspaces?limit=100') return teams.promise;
+    if (path === '/v1/workspaces?scope=personal') return local.promise;
+    if (path === linkedCatalog + '?order=recent') return reply({body: {items: [linkedRecord]}});
+  }, linkedSearch, {native:true});
+  await nextTask();
+  assert.ok(page.calls.some(call => call.path === '/v1/workspaces?limit=100'));
+  assert.ok(page.calls.some(call => call.path === '/v1/workspaces?scope=personal'));
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  teams.finish(reply({body: {items: [{id: linkedWorkspace, name: '团队空间'}]}}));
+  await nextTask();
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  session.finish(reply({body: {user: {id:'u1', username:'alice'}}}));
+  await page.mounted;
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+  local.finish(reply({body: {items: [{id:personal, name: '个人空间'}]}}));
+  await nextTask();
+  const picker = page.elements.get('workspace');
+  assert.deepEqual(picker.children.map(option => option.value), [personal, linkedWorkspace]);
+  assert.equal(picker.value, linkedWorkspace);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+});
+
+test('Space still waits for the linked workspace when the first signed directory only returns other workspaces', async () => {
+  const local = deferred();
+  const page = linkFixture(path => {
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items: [{id:'w2', name:'其他工作区'}]}});
+    if (path === '/v1/workspaces?scope=personal') return local.promise;
+  }, linkedSearch, {native:true});
+  await nextTask();
+  assert.equal(page.form.hidden, true);
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  local.finish(reply({body: {items: [{id:linkedWorkspace, name:'个人空间'}]}}));
+  await page.mounted;
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+});
+
 test('Space keeps the selected workspace in its catalog address and reloads the intended catalog', async () => {
   const personal = 'c'.repeat(32);
   const respond = path => {
@@ -1673,6 +1718,46 @@ test('Space leaves an inaccessible pinned workspace unselected before starting a
   assert.match(page.elements.get('status').textContent,/无法访问此工作区/);
   assert.equal(page.elements.get('new-menu-button').disabled,true);
   assert.equal(page.calls.some(call => /\/artifacts(?:\?|$)/.test(call.path)),false);
+});
+
+test('Space uses the saved release to confirm a lost publish or withdrawal receipt', async () => {
+  const saved = {...linkedRecord,revision:2};
+  const path = linkedDetail+'/discover';
+  const slug = 'public-work';
+  let listing = {listed:true,slug,published_revision:1};
+  const page = linkFixture((requested,options) => {
+    if (requested === linkedDetail) return reply({body:{artifact:saved}});
+    if (requested === linkedCatalog+'?order=recent') return reply({body:{items:[saved]}});
+    if (requested === path && options.method === 'GET') return reply({body:{discover:listing}});
+    if (requested === path && options.method === 'POST') return reply({status:503});
+    if (requested === path+'/revoke' && options.method === 'POST') {
+      listing = {listed:false};
+      return reply({status:503});
+    }
+  },linkedSearch,{native:true});
+  await page.mounted;
+  const el = id => page.elements.get(id);
+  const discover = el('discover-panel');
+  discover.open = true;
+  await discover.dispatch('toggle');
+  await nextTask();
+  assert.equal(el('discover-slug').value,slug);
+
+  await el('publish-discover').dispatch('click');
+  assert.match(el('discover-status').textContent,/当前公开状态与本次发布请求不一致/);
+  assert.match(el('discover-revision').textContent,/公开修订 1 · 当前保存的修订 2/);
+  assert.equal(el('discover-public-link').href,'/w/'+slug);
+
+  listing = {...listing,published_revision:2};
+  await el('publish-discover').dispatch('click');
+  assert.equal(el('discover-status').textContent,'已公开到发现页。');
+  assert.equal(el('discover-revision').textContent,'发现页公开修订 2。');
+  await el('revoke-discover').dispatch('click');
+  assert.equal(el('discover-status').textContent,'已从发现页撤回。');
+  assert.equal(el('discover-public-link').hidden,true);
+  assert.deepEqual(page.calls.filter(call => call.path.startsWith(path)).map(call => [call.method,call.path]),[
+    ['GET',path], ['POST',path], ['GET',path], ['POST',path], ['GET',path], ['POST',path+'/revoke'], ['GET',path],
+  ]);
 });
 
 test('copying a historic version recovers a lost receipt without discarding an unsaved Space draft', async () => {
