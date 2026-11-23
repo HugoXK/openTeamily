@@ -153,14 +153,21 @@
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="edit-agent-quick-starts-help"></textarea></label>
           <p class="note" id="edit-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
-          <p class="note" id="agent-edit-conflict" role="status" hidden>设置已在别处更新。当前编辑仍在表单中，载入最新设置会替换这些未保存的内容。</p>
+          <p class="note" id="agent-edit-conflict" role="status" hidden>设置已在别处更新。载入最新设置后，可以核对并恢复草稿。</p>
+          <div id="agent-edit-draft" hidden>
+            <p class="note" id="agent-edit-draft-note" role="status"></p>
+            <div class="actions">
+              <button type="button" id="restore-agent-draft" hidden>恢复草稿</button>
+              <button type="button" id="discard-agent-draft">丢弃草稿</button>
+            </div>
+          </div>
           <div class="actions">
             <button type="submit">保存</button>
             <button type="button" id="reload-agent-settings" hidden>载入最新设置</button>
             <button type="button" id="agent-share-open" aria-haspopup="dialog" aria-controls="agent-share-dialog" hidden>私下分享</button>
             <button type="button" id="agent-access-open" aria-haspopup="dialog" aria-controls="agent-share-dialog" hidden>授权与原智能体对话</button>
             <button type="button" id="archive-button">归档</button>
-            <button type="button" id="cancel-edit">取消</button>
+            <button type="button" id="cancel-edit">关闭</button>
           </div>
         </fieldset>
       </form>

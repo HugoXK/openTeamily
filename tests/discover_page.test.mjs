@@ -1461,6 +1461,70 @@ function detailFetcher(item, previewResult) {
   return {fetcher, requests};
 }
 
+test('a public work copy with a lost response can recover across reload and withdrawal for its original viewer', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const work = detailFixture({remix_available:true});
+  const workspace = 'a'.repeat(32);
+  const artifactId = 'b'.repeat(32);
+  const revision = 'c'.repeat(64);
+  const copyTitle = 'Copy the reviewed version';
+  const detailPath = '/v1/discover/works/' + work.slug;
+  const remixPath = detailPath + '/remix';
+  const storage = new Map();
+  const writes = [];
+  let withdrawn = false;
+  async function reopen(viewer) {
+    const doc = feedDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    await mount(doc, {
+      location:{search:'?work=' + work.slug},
+      window:{sessionStorage:{
+        getItem:key => storage.get(key) ?? null,
+        setItem:(key,value) => storage.set(key,value),
+        removeItem:key => storage.delete(key),
+      }},
+      fetcher:async (path, options) => {
+        if (path === '/v1/auth/session') return commentResponse({user:{id:viewer+'-id',username:viewer}});
+        if (path === detailPath) return withdrawn ? commentResponse({},404) : commentResponse({work,viewer_username:viewer});
+        if (path.startsWith('/v1/discover/works?')) return commentResponse({items:[],viewer_username:viewer});
+        if (path.startsWith('/w/')) return commentResponse({},404);
+        assert.equal(path,remixPath);
+        if (options.method === 'GET') return commentResponse({
+          template:{revision,title:work.title,kind:work.kind},viewer_username:viewer,
+        });
+        writes.push({viewer,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+        return writes.length === 1 ? commentResponse({},503) : commentResponse({
+          artifact:{id:artifactId,workspace_id:workspace,kind:work.kind},viewer_username:viewer,
+        });
+      },
+    });
+    return id => doc.getElementById(id);
+  }
+  const started = await reopen('reader');
+  started('work-detail-remix').handlers.click();
+  await flush();
+  started('work-remix-name').value = copyTitle;
+  await started('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,1);
+  assert.equal(started('work-remix-submit').textContent,'确认副本');
+  withdrawn = true;
+  const other = await reopen('other-reader');
+  assert.equal(other('work-detail-resume-remix').hidden,true);
+  const reload = await reopen('reader');
+  assert.equal(reload('work-detail-resume-remix').hidden,false);
+  reload('work-detail-resume-remix').handlers.click();
+  assert.equal(writes.length,1);
+  assert.equal(reload('work-remix-name').disabled,true);
+  assert.equal(reload('work-remix-name').value,copyTitle);
+  await reload('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0],writes[1]);
+  assert.deepEqual(writes[1].body,{title:copyTitle,revision});
+  assert.equal(reload('work-remix-open').href,`/space?workspace=${workspace}&artifact=${artifactId}`);
+  assert.equal(storage.size,0);
+  assert.equal(reload('work-detail-resume-remix').hidden,true);
+});
+
 test('public work bylines link to canonical creator directories from cards and details', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
