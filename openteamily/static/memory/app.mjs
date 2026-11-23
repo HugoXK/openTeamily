@@ -1229,25 +1229,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const meta = document.createElement('span');
+      meta.className = 'action-row-meta';
       const due = dueDateValue(item.due_at);
-      const linked = item.memory_page_title ? ` · ${item.memory_page_title}` : '';
-      button.textContent = `${item.status === 'done' ? '已完成' : '未完成'} · ${item.title}${due ? ` · ${due}` : ''}${linked}`;
+      meta.textContent = [item.status === 'done' ? '已完成' : '未完成',
+        due && `截止 ${due}`, item.memory_page_title].filter(Boolean).join(' · ');
+      const copy = document.createElement('span');
+      copy.className = 'action-row-copy';
+      copy.append(title, meta);
+      const arrow = document.createElement('span');
+      arrow.className = 'action-row-arrow';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '›';
+      button.append(copy, arrow);
+      button.dataset.status = item.status;
       button.dataset.id = item.id;
       button.addEventListener('click', () => openAction(item.id));
       li.appendChild(button);
       list.appendChild(li);
       if (focused === item.id) button.focus({preventScroll: true});
     }
-    syncActionComposer(items.length > 0);
+    syncActionComposer();
   }
 
-  function syncActionComposer(hasItems) {
+  function syncActionComposer() {
     const form = document.getElementById('new-action-form');
     const opener = document.getElementById('new-action-open');
     if (!form) return;
-    const keep = form.dataset.open === 'true';
-    form.hidden = !(hasItems || keep);
-    if (opener) opener.hidden = hasItems || keep;
+    form.hidden = form.dataset.open !== 'true';
+    if (opener) {
+      opener.setAttribute('aria-expanded', String(!form.hidden));
+      opener.textContent = form.hidden ? '新建行动' : '收起表单';
+    }
   }
 
   let actionListing;
@@ -2599,29 +2614,59 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('action-edit-keep')?.addEventListener('click', () => resolveActionEdit(true));
   document.getElementById('action-edit-use-saved')?.addEventListener('click', () => resolveActionEdit(false));
 
+  async function resolveActionMeetingSource(action, meeting, status) {
+    const workspace = workspaceId();
+    const user = currentUser;
+    status.textContent = '正在核对来源行动项…';
+    const result = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}/meeting-source`)
+      .catch(() => ({status:0}));
+    if (currentUser !== user || workspaceId() !== workspace || currentAction !== action || actionEditor.hidden) return;
+    if ([403, 404].includes(result.status)) {
+      status.textContent = '原会议已删除或无法访问。';
+      return;
+    }
+    const original = action.source;
+    const source = result.body?.source;
+    const link = new URLSearchParams({workspace:original.workspace_id, meeting:original.meeting_id});
+    const resolved = result.status === 200 && source?.workspace_id === original.workspace_id &&
+      source.meeting_id === original.meeting_id && Number.isSafeInteger(source.revision) &&
+      source.revision >= original.revision;
+    const hasAction = resolved && Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
+    if (hasAction) {
+      link.set('action', source.action_index);
+      link.set('revision', source.revision);
+    }
+    meeting.href = '/meetings#' + link;
+    meeting.textContent = hasAction ? '查看来源行动项' : '查看原会议';
+    meeting.hidden = false;
+    status.textContent = hasAction ? '' : resolved
+      ? '来源行动项已变更，可在最新纪要中核对。' : '暂时无法定位行动项，可直接打开会议。';
+  }
+
   function renderActionDetail() {
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     const source = currentAction.source;
     const meeting = document.getElementById('action-source-meeting');
+    const meetingStatus = document.getElementById('action-source-meeting-status');
     const ownedMeeting = source?.kind === 'meeting' && /^[0-9a-f]{32}$/.test(source.workspace_id || '') &&
       /^[0-9a-f]{32}$/.test(source.meeting_id || '') && Number.isSafeInteger(source.revision) && source.revision > 0 &&
       Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
-    meeting.hidden = source?.kind !== 'shared_meeting' && !ownedMeeting;
+    meeting.hidden = source?.kind !== 'shared_meeting';
+    meeting.removeAttribute('href');
+    meetingStatus.textContent = '';
     if (ownedMeeting) {
-      meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, meeting:source.meeting_id,
-        action:source.action_index, revision:source.revision});
-      meeting.textContent = `查看来源行动项 · 修订 ${source.revision}`;
+      void resolveActionMeetingSource(currentAction, meeting, meetingStatus);
     } else if (!meeting.hidden) {
       meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
       meeting.textContent = `查看来源纪要 · 版本 ${source.revision}`;
-    } else meeting.removeAttribute('href');
+    }
     const chat = document.getElementById('action-source-chat');
     const chatLink = actionChatHref(currentAction.source_chat);
     chat.hidden = !chatLink;
     if (chatLink) chat.href = chatLink;
     else chat.removeAttribute('href');
-    document.getElementById('action-editor-source').hidden = meeting.hidden && chat.hidden;
+    document.getElementById('action-editor-source').hidden = !ownedMeeting && meeting.hidden && chat.hidden;
     renderActionFollowups();
     syncActionFollowup();
   }
@@ -3325,7 +3370,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyNewActionDraft(attempt?.payload);
     newActionForm.dataset.open = String(Boolean(attempt));
     renderNewActionAttempt(attempt);
-    syncActionComposer(false);
+    syncActionComposer();
   }
 
   const newActionOpen = document.getElementById('new-action-open');
@@ -3336,8 +3381,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   newActionForm.addEventListener('change', () => renderNewActionAttempt());
   if (newActionOpen) {
     newActionOpen.addEventListener('click', () => {
-      newActionForm.dataset.open = 'true';
-      syncActionComposer(false);
+      newActionForm.dataset.open = String(newActionForm.hidden);
+      syncActionComposer();
+      if (!newActionForm.hidden) newActionForm.elements.title.focus();
     });
   }
   newActionForm.addEventListener('submit', async (event) => {
@@ -3367,6 +3413,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyNewActionDraft();
     newActionForm.dataset.open = 'false';
     renderNewActionAttempt();
+    syncActionComposer();
     if (pageRequest !== visible || currentView !== 'actions') return;
     show('ok', '已创建下一步行动。');
     void loadActions();

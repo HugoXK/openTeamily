@@ -41,6 +41,9 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
 
   const catalog = get('catalog');
   const list = get('list');
+  const catalogQuery = get('catalog-query');
+  const catalogClear = get('catalog-clear');
+  const catalogNoMatch = get('catalog-no-match');
   const form = get('form');
   const titleInput = get('title');
   const bodyInput = get('body');
@@ -56,6 +59,20 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   const view = document.defaultView;
   let scope = null;
   let screen;
+
+  const searchable = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+
+  function filterCatalog() {
+    if (!catalogQuery || !catalogNoMatch) return;
+    const query = searchable(catalogQuery.value);
+    catalogClear.hidden = !catalogQuery.value;
+    let matches = 0;
+    for (const row of list.children) {
+      row.hidden = !row.dataset.search.includes(query);
+      if (!row.hidden) matches++;
+    }
+    catalogNoMatch.hidden = !query || !list.children.length || matches > 0;
+  }
 
   function show(text = '', kind = '') {
     const status = get('status');
@@ -207,6 +224,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     clearComparison();
     renderPresence([]);
     list.replaceChildren();
+    if (catalogNoMatch) catalogNoMatch.hidden = true;
   }
 
   function newScreen(mode, id) {
@@ -430,15 +448,17 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     else get('back').focus();
   }
 
-  async function loadCatalog(failure = '') {
+  async function loadCatalog(failure = '', returnTo = '') {
     const state = newScreen('catalog');
     add.textContent = readDraft({mode:'new',draftKey:draftKey('new')}) ? '继续新建团队文档' : '新建团队文档';
     const refresh = get('refresh');
     refresh.disabled = true;
+    list.setAttribute('aria-busy', 'true');
     show('正在读取团队文档…');
     const result = await send('GET', state.path, undefined, state.controller.signal);
     if (!isCurrent(state)) return;
     refresh.disabled = false;
+    list.setAttribute('aria-busy', 'false');
     if (result.status !== 200 || !Array.isArray(result.body.items)) {
       show(result.status === 403 || result.status === 404
         ? '你已无法访问此工作区的团队文档。' : '暂时无法读取团队文档，请刷新列表。', 'error');
@@ -449,6 +469,8 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     for (const item of result.body.items) {
       if (!ID.test(item?.id || '') || typeof item.title !== 'string') continue;
       const row = document.createElement('li');
+      row.dataset.search = searchable(item.title + ' ' + (item.updated_by || ''));
+      row.dataset.document = item.id;
       const open = document.createElement('button');
       open.className = 'secondary';
       open.type = 'button';
@@ -459,6 +481,10 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       meta.textContent = '版本 ' + item.revision + (item.updated_by ? ' · ' + item.updated_by : '');
       row.append(open, meta);
       list.append(row);
+    }
+    filterCatalog();
+    if (returnTo && document.activeElement === add) {
+      [...list.children].find(row => row.dataset.document === returnTo && !row.hidden)?.firstElementChild.focus();
     }
   }
 
@@ -482,6 +508,12 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   }
 
   button.addEventListener('click', () => void open());
+  catalogQuery?.addEventListener('input', filterCatalog);
+  catalogClear?.addEventListener('click', () => {
+    catalogQuery.value = '';
+    filterCatalog();
+    catalogQuery.focus();
+  });
   closeButton.addEventListener('click', close);
   dialog.addEventListener('cancel', event => {
     event.preventDefault();
@@ -489,9 +521,10 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   });
   get('back').addEventListener('click', () => {
     if (!mayLeave()) return;
+    const last = screen?.base?.id;
     discardDraft(screen);
     onCatalog?.();
-    void loadCatalog();
+    void loadCatalog('', last);
     add.focus();
   });
   add.addEventListener('click', () => {
@@ -665,11 +698,17 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     setWorkspace(team, account) {
       const next = account && ID.test(team?.id || '') && team.kind === 'team' &&
         ROLES.has(team.role) ? {id: team.id, name: team.name, account} : null;
-      if (dialog.open && (next?.id !== scope?.id || next?.account !== scope?.account)) {
-        rememberDraft(screen);
-        stopScreen();
-        dialog.close();
-        onClose?.();
+      if (next?.id !== scope?.id || next?.account !== scope?.account) {
+        if (dialog.open) {
+          rememberDraft(screen);
+          stopScreen();
+          dialog.close();
+          onClose?.();
+        }
+        if (catalogQuery) {
+          catalogQuery.value = '';
+          filterCatalog();
+        }
       }
       scope = next;
       button.hidden = !scope;

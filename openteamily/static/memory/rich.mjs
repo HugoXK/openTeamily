@@ -47,7 +47,8 @@ export function markdownToBlocks(source) {
       blocks.push({type: ordered ? 'ol' : 'ul', items});
       continue;
     }
-    const body = [];
+    const body = [line];
+    i += 1;
     while (i < lines.length && lines[i].trim() && !/^(#{1,3})\s|^```|^\s*>|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^\s*(-{3,}|\*{3,})\s*$/.test(lines[i])) {
       body.push(lines[i]); i += 1;
     }
