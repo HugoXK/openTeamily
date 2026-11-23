@@ -13,6 +13,8 @@ const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
 const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
+const WORK_REMIX_KINDS = new Set(['document','website','media','slides','whiteboard']);
+const WORK_REMIX_PENDING = '上次复制结果尚未确认。可以重试原请求。';
 const BROWSE_RESTORE_PAGES = 12;
 const CATALOG_RETURN_LINKS = ['catalog-profile', 'catalog-chat', 'catalog-author'];
 
@@ -104,7 +106,7 @@ export function feedStateFromSearch(search) {
   const requestedKind = params.get('kind');
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
-  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator : '';
+  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
   return {
     tab,
     kind,
@@ -121,7 +123,7 @@ export function feedSearchText(state) {
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
-  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator);
+  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -561,6 +563,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentFilters) agentFilters.hidden = !agentsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
+    const createAgentTeam = document.getElementById('catalog-create-agent-team');
+    if (createAgentTeam) createAgentTeam.hidden = !teamsView || !currentUser;
     if (createAgent) createAgent.hidden = !agentsView || !currentUser;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
@@ -709,7 +713,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         } else if (cursor) more.focus({preventScroll:true});
       }
       count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
-      empty.textContent = activeTeamQuery ? '没有匹配的团队。' : '暂无公开团队。';
+      empty.textContent = activeTeamQuery ? '没有匹配的团队。'
+        : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
       empty.hidden = directoryItems.size > 0;
       return seq;
     } catch (failure) {
@@ -760,7 +765,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const clearSearch = document.getElementById('feed-clear');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -770,6 +775,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const detailPanel = document.getElementById('work-detail');
   const initialView = document.getElementById('main');
   const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
+  const workRemixAttempts = new Map();
   let activeWork;
   let activeRemix;
   let feedReturn;
@@ -797,6 +803,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function disposeWorkPreview() {
+    activeWork?.disposeReader?.();
+    detail.reader.replaceChildren();
     activeWork?.model?.setSource('');
     if (activeWork?.media) {
       const player = activeWork.media;
@@ -911,6 +919,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     renderWorkMeta(item);
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
+    detail['resume-remix'].hidden = true;
     detail.actions.hidden = true;
     detail.comments.hidden = true;
     detail.paper.setAttribute('aria-busy', 'true');
@@ -931,6 +940,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (!entry.item) return failWorkDetail(entry, result.status);
       return finishWorkDetail(entry, null);
     }
+    showWorkRemixRecovery(entry);
 
     const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
     const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
@@ -1047,7 +1057,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
-    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage || entry.item?.remix_available !== true;
+    const recoverable = showWorkRemixRecovery(entry);
+    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage ||
+      entry.item?.remix_available !== true || recoverable;
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
@@ -1057,6 +1069,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
       }
     }
+  }
+
+  function workRemixScope(entry, viewer = currentUser) {
+    return typeof viewer?.id === 'string' && viewer.id && validSlug(entry.slug)
+      ? 'openteamily.work-remix.' + JSON.stringify([viewer.id, entry.slug]) : '';
+  }
+
+  function readWorkRemixAttempt(scope) {
+    if (!scope) return null;
+    if (workRemixAttempts.has(scope)) return workRemixAttempts.get(scope);
+    try {
+      const attempt = JSON.parse(window.sessionStorage.getItem(scope));
+      if (typeof attempt?.title === 'string' && attempt.title.trim() && attempt.title.length <= 80 &&
+          WORK_REMIX_KINDS.has(attempt.kind) && /^[0-9a-f]{64}$/.test(attempt.revision) &&
+          /^[A-Za-z0-9_-]{16,64}$/.test(attempt.key)) return attempt;
+    } catch { /* Storage is optional. */ }
+    return null;
+  }
+
+  function storeWorkRemixAttempt(scope, attempt) {
+    if (!scope) return;
+    if (attempt) workRemixAttempts.set(scope, attempt);
+    else workRemixAttempts.delete(scope);
+    try {
+      if (attempt) window.sessionStorage.setItem(scope, JSON.stringify(attempt));
+      else window.sessionStorage.removeItem(scope);
+    } catch { /* The open page retains the request if storage is unavailable. */ }
+  }
+
+  function showWorkRemixRecovery(entry) {
+    const recoverable = Boolean(nativeCatalog && readWorkRemixAttempt(workRemixScope(entry)));
+    detail['resume-remix'].hidden = !recoverable;
+    return recoverable;
   }
 
   function closeWorkRemix() {
@@ -1081,7 +1126,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!sameWorkRemix(state) || state.read !== controller) return;
     const template = result.body?.template;
     if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
-        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !WORK_REMIX_KINDS.has(template?.kind) || typeof template.title !== 'string' ||
         !/^[0-9a-f]{64}$/.test(template.revision || '')) {
       workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
       workRemix.refresh.hidden = result.status === 404;
@@ -1099,44 +1144,53 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function openWorkRemix() {
     const entry = activeWork;
-    if (!nativeCatalog || !entry?.ready || entry.viewer !== currentUser || !entry.viewer || entry.item?.remix_available !== true ||
-        !workRemix.dialog || workRemix.dialog.open) return;
-    const state = {entry,viewer:entry.viewer,path:`/v1/discover/works/${entry.slug}/remix`,keys:new Map()};
+    if (!nativeCatalog || !entry || !currentUser || !workRemix.dialog || workRemix.dialog.open) return;
+    const scope = workRemixScope(entry);
+    const attempt = readWorkRemixAttempt(scope);
+    if (!attempt && (!entry.ready || entry.viewer !== currentUser || entry.item?.remix_available !== true)) return;
+    const state = {entry,viewer:currentUser,path:`/v1/discover/works/${entry.slug}/remix`,scope,attempt};
     activeRemix = state;
     workRemix.source.textContent = '';
-    workRemix.name.value = '';
-    workRemix.name.disabled = false;
+    workRemix.name.value = attempt?.title || '';
+    workRemix.name.disabled = Boolean(attempt);
     workRemix['name-field'].hidden = false;
     workRemix.open.hidden = true;
     workRemix.open.removeAttribute('href');
     workRemix.close.disabled = workRemix.submit.hidden = false;
     workRemix.close.textContent = '取消';
-    workRemix.submit.textContent = '创建副本';
+    workRemix.submit.textContent = attempt ? '确认副本' : '创建副本';
+    workRemix.submit.disabled = !attempt;
+    workRemix.refresh.hidden = true;
+    workRemix.status.textContent = attempt ? WORK_REMIX_PENDING : '';
     workRemix.dialog.showModal();
-    void readWorkRemix(state);
+    if (attempt) workRemix.submit.focus();
+    else void readWorkRemix(state);
   }
 
   async function submitWorkRemix(event) {
     event.preventDefault();
     const state = activeRemix;
     const title = workRemix.name.value.trim();
-    if (!state || !sameWorkRemix(state) || !state.template || state.pending || !title) return;
-    const {revision} = state.template;
-    const stamp = JSON.stringify([revision,title]);
-    const key = state.keys.get(stamp) || reuseKey();
-    state.keys.set(stamp,key);
+    if (!state || !sameWorkRemix(state) || state.pending || (!state.attempt && (!state.template || !title))) return;
+    const recovering = Boolean(state.attempt);
+    const attempt = state.attempt ||= {title,revision:state.template.revision,kind:state.template.kind,key:reuseKey()};
+    storeWorkRemixAttempt(state.scope, attempt);
+    setWorkEngagement(state.entry);
     state.pending = true;
     workRemix.submit.disabled = workRemix.close.disabled = workRemix.name.disabled = true;
-    workRemix.status.textContent = '正在创建副本…';
-    const result = await request('POST',state.path,{title,revision},{'Idempotency-Key':key},AbortSignal.timeout(12000))
+    workRemix.status.textContent = recovering ? '正在确认副本…' : '正在创建副本…';
+    const result = await request('POST',state.path,{title:attempt.title,revision:attempt.revision},
+      {'Idempotency-Key':attempt.key},AbortSignal.timeout(12000))
       .catch(() => ({status:0}));
     if (!sameWorkRemix(state)) return;
     state.pending = false;
-    workRemix.close.disabled = workRemix.name.disabled = false;
+    workRemix.close.disabled = false;
     const artifact = result.body?.artifact;
     if ([200,201].includes(result.status) && matchesNativeViewer(result.body?.viewer_username,state.viewer)
         && /^[a-f0-9]{32}$/.test(artifact?.workspace_id || '') && /^[a-f0-9]{32}$/.test(artifact?.id || '')
-        && artifact.kind === state.template.kind) {
+        && artifact.kind === attempt.kind) {
+      storeWorkRemixAttempt(state.scope, null);
+      setWorkEngagement(state.entry);
       state.template = null;
       workRemix['name-field'].hidden = workRemix.submit.hidden = true;
       workRemix.open.href = spaceHref(artifact.workspace_id,artifact.id);
@@ -1146,11 +1200,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       workRemix.open.focus();
       return;
     }
+    if (!result.status || result.status >= 500 || [200,201,401,408].includes(result.status)) {
+      workRemix.submit.textContent = '确认副本';
+      workRemix.submit.disabled = false;
+      workRemix.status.textContent = WORK_REMIX_PENDING;
+      return;
+    }
+    storeWorkRemixAttempt(state.scope, null);
+    setWorkEngagement(state.entry);
+    state.attempt = null;
+    workRemix.name.disabled = false;
+    workRemix.submit.textContent = '创建副本';
     const unavailable = result.status === 404 || result.body?.error?.code === 'listing_changed';
     workRemix.status.textContent = result.status === 404 ? '这个作品已下架或没有可复制的公开版本。'
       : messageFor(result.body?.error,'暂时无法确认是否已创建副本，可以重试。');
-    workRemix.submit.disabled = unavailable;
-    workRemix.refresh.hidden = result.body?.error?.code !== 'listing_changed';
+    workRemix.submit.disabled = unavailable || !state.template;
+    workRemix.refresh.hidden = unavailable ? result.body?.error?.code !== 'listing_changed' : Boolean(state.template);
     if (unavailable) state.template = null;
     if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
@@ -1239,6 +1304,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   detail.share.addEventListener('click', openWorkShare);
   detail.remix?.addEventListener('click',openWorkRemix);
+  detail['resume-remix']?.addEventListener('click',openWorkRemix);
   workRemix.form?.addEventListener('submit',submitWorkRemix);
   workRemix.close?.addEventListener('click',closeWorkRemix);
   workRemix.refresh?.addEventListener('click',() => activeRemix && readWorkRemix(activeRemix));
@@ -1466,6 +1532,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+      note.textContent = '该作者还没有公开作品。';
     else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
@@ -1615,6 +1683,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
+    if (item.kind === 'document') {
+      void import('./document-reader.mjs').then(({mountDocumentReader}) => {
+        if (!stillShowing()) return;
+        entry.disposeReader = mountDocumentReader(document, detail.reader, {
+          stillShowing,
+          async read(signal) {
+            const result = await request('GET', '/w/' + item.slug, undefined, {}, signal);
+            const work = result.body;
+            if (result.status !== 200 || work?.kind !== 'work' || work.slug !== item.slug || work.work_kind !== 'document') {
+              return {status:result.status};
+            }
+            return {status:200, source:work.snapshot ?? ''};
+          },
+        });
+      }).catch(() => {});
+    }
     const result = inlinePreview === undefined ? await cachedPreview(item) : {ok: true, preview: inlinePreview};
     if (!stillShowing()) return;
     if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }

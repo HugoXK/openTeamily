@@ -2,9 +2,18 @@ import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
-import { mountSharedStudio } from './shared-studio.mjs';
-import { mountStudioCopy } from './studio-copy.mjs';
-import { mountSharedWorkCopy, sharedWorkCopyToken } from './shared-work-copy.mjs';
+import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
+
+function studioTargetFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  if (!params.has('studio')) return null;
+  const workspace = params.get('workspace');
+  if (params.size === 2 && params.get('studio') === 'catalog' && /^[0-9a-f]{32}$/.test(workspace || '')) {
+    return {workspace, catalog:true};
+  }
+  return studioDocumentFromSearch(search) || {invalid:true};
+}
+
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -622,6 +631,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let workspaceResolved = false;
   let studioWorkspaces = [];
   let workspaceLoad = 0;
+  let studioPreload = null;
   let current = null;
   let editor = null;
   let catalog = null;
@@ -695,26 +705,54 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (method, path, body, options = {}) =>
       request(method, path, body, undefined, options.signal, options.keepalive),
   });
-  const studio = mountSharedStudio(document, {
-    request: (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal),
+  const studioButton = document.getElementById('studio-open');
+  const studioDialog = document.getElementById('studio-dialog');
+  const studioCopyButtons = ['studio-copy-open','studio-copy-mobile'].map(id => document.getElementById(id)).filter(Boolean);
+  const studioRequest = (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal);
+  const selectedStudioWorkspace = () => nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null;
+  const studioOptions = {
+    request: studioRequest,
     personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
       (!item.owner_id || item.owner_id === currentUser?.id))?.id,
+    onOpenCatalog(workspace) {
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      if (current?.catalog && current.workspace === workspace) return;
+      writeSpaceAddress(studioCatalogAddress(workspace), {push:true});
+    },
     onDocument(workspace, id, revision) {
       const href = studioDocumentHref(workspace, id, revision);
-      if (href) writeSpaceAddress(href);
+      if (!href || spaceLocation() === href) return;
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      const studioFromCatalog = current?.catalog === true && current.workspace === workspace;
+      if (studioFromCatalog) writeSpaceAddress(spaceLocation(), {studioFocus:id});
+      writeSpaceAddress(href, {push:studioFromCatalog, studioFromCatalog});
     },
-    onCatalog() {
-      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    onCatalog(workspace, {back = false} = {}) {
+      const history = document.defaultView?.history;
+      if (back && spaceAddress?.entry.studioFromCatalog && typeof history?.back === 'function') {
+        approvedBack = true;
+        history.back();
+        return true;
+      }
+      writeSpaceAddress(studioCatalogAddress(workspace));
+      return false;
     },
     onClose() {
-      if (studioDocumentFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+      if (studioTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     },
+  };
+  const studio = lazyEditor(async () => {
+    const {mountSharedStudio} = await import('./shared-studio.mjs');
+    const component = mountSharedStudio(document, studioOptions);
+    component?.setWorkspace(selectedStudioWorkspace(), currentUser?.id);
+    return component;
   });
-  const studioCopy = mountStudioCopy(document, {
-    source: () => ({
-      selection: editor, item: current,
-      workspaces: nativeCatalog ? studioWorkspaces : [],
-    }),
+  const studioCopySource = () => ({
+    selection: editor, item: current,
+    workspaces: nativeCatalog ? studioWorkspaces : [],
+  });
+  const studioCopyOptions = {
+    source: studioCopySource,
     ready(selection) {
       if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
       if (selection.saving) return '作品正在保存，请稍候。';
@@ -724,13 +762,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     request: (selection, id, review) =>
       request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
     show,
+  };
+  const studioCopy = lazyEditor(async () => {
+    const {mountStudioCopy} = await import('./studio-copy.mjs');
+    return mountStudioCopy(document, studioCopyOptions);
   });
-  const sharedWorkCopy = mountSharedWorkCopy(document, {
+  const sharedWorkCopyOptions = {
     request: (method, path, body, signal) => request(method, path, body, undefined, signal),
     dismissLink: () => syncViewUrl(),
     openArtifact: (workspace, artifact) => {
       void openEditor(artifact, {workspace,saved:true,notice:{kind:'ok',text:'已保存到个人空间。'}});
     },
+  };
+  const sharedWorkCopy = lazyEditor(async () => {
+    const {mountSharedWorkCopy} = await import('./shared-work-copy.mjs');
+    return mountSharedWorkCopy(document, sharedWorkCopyOptions);
   });
   const workVersion = lazyEditor(async () => {
     const {mountWorkVersion} = await import('./version-preview.mjs');
@@ -741,11 +787,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     });
   });
 
-  function syncStudioWorkspace() {
-    studio?.setWorkspace(nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null,
-      currentUser?.id);
-    studioCopy?.update();
+  function syncStudioCopy() {
+    const available = Boolean(studioCopyCandidate(studioCopySource()));
+    for (const button of studioCopyButtons) button.hidden = !available;
   }
+
+  function syncStudioWorkspace() {
+    const team = selectedStudioWorkspace();
+    if (studio.instance) studio.instance.setWorkspace(team, currentUser?.id);
+    else if (studioButton) studioButton.hidden = typeof studioDialog?.showModal !== 'function' || !studioScope(team, currentUser?.id);
+    syncStudioCopy();
+  }
+
+  studioButton?.addEventListener('click', async () => {
+    if (!workspaceResolved || !studioScope(selectedStudioWorkspace(), currentUser?.id)) return;
+    const load = workspaceLoad;
+    studioButton.disabled = true;
+    show('', '正在打开团队协作…');
+    try {
+      await studio.prepare();
+      if (load !== workspaceLoad) return;
+      show('', '');
+      await studio.instance?.open();
+    } catch {
+      if (load === workspaceLoad) show('error', '无法加载团队协作，请重试。');
+    } finally {
+      studioButton.disabled = false;
+    }
+  });
+
+  for (const button of studioCopyButtons) button.addEventListener('click', async () => {
+    const source = studioCopyCandidate(studioCopySource());
+    if (!source) return;
+    button.disabled = true;
+    try {
+      await studioCopy.prepare();
+      if (source.selection === editor && source.item === current) studioCopy.instance?.open();
+    } catch {
+      if (source.selection === editor) show('error', '无法打开团队复制，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   async function renderProviders() {
     const box = document.getElementById('oidc-providers');
@@ -1296,7 +1379,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return trimmed === '/artifacts' ? '/artifacts' : '/space';
   }
 
-  const spaceHistoryId = idempotencyKey();
+  const previousSpaceState = document.defaultView?.history?.state;
+  const previousSpaceEntry = previousSpaceState?.openTeamilySpace;
+  const restoredSpaceEntry = /^[A-Za-z0-9_-]{24}$/.test(previousSpaceEntry?.session || '') &&
+    Number.isSafeInteger(previousSpaceEntry.position) && previousSpaceEntry.position >= 0 ? previousSpaceEntry : null;
+  const spaceHistoryId = restoredSpaceEntry?.session || idempotencyKey();
   let spaceAddress;
   let restoringAddress = false;
   let approvedBack = false;
@@ -1306,12 +1393,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return location ? location.pathname + (location.search || '') + (location.hash || '') : '';
   }
 
-  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView} = {}) {
+  function studioCatalogAddress(workspace) {
+    return worksPath() + '?' + new URLSearchParams({workspace, studio:'catalog'});
+  }
+
+  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView, studioFromCatalog = false, studioFocus} = {}) {
     const history = document.defaultView?.history;
     if (!history?.replaceState || (push && !history.pushState)) return;
     const entry = {
       session: spaceHistoryId, position: (spaceAddress?.entry.position ?? 0) + Number(push),
-      fromCatalog, catalogView,
+      fromCatalog, catalogView, studioFromCatalog, studioFocus,
     };
     const state = {...history.state, openTeamilySpace:entry};
     history[push ? 'pushState' : 'replaceState'](state, '', url);
@@ -2463,14 +2554,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
-    studioCopy?.update();
+    syncStudioCopy();
   }
 
   function hideEditor() {
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
-    studioCopy?.close();
+    studioCopy.instance?.close();
     editor?.controller.abort();
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
@@ -2887,8 +2978,79 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const workspace = selection.workspace;
     const href = worksPath() + '?' + new URLSearchParams({workspace, artifact:artifact.id, revision:String(revision)});
     writeSpaceAddress(href, {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)});
+    const canRestore = () => nativeCatalog && currentSelection() && current.revision !== revision;
     workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
-      path:editorPath(selection,artifact.id) + '/versions/' + revision});
+      path:editorPath(selection,artifact.id) + '/versions/' + revision,
+      canRestore,
+      reviewRestore: () => restoreReviewMessage(selection) || {revision:current.revision, key:idempotencyKey()},
+      submitRestore: review => restoreWorkVersion(selection, artifact.id, revision, review),
+    });
+  }
+
+  function restoreReviewMessage(selection) {
+    if (selection.saving || form.inert) return '作品正在保存，请稍候。';
+    if (hasEditorDraft()) return '请先保存当前草稿，再恢复历史版本。';
+    return '';
+  }
+
+  async function restoreWorkVersion(selection, id, to, {revision, key}) {
+    const ownsSelection = () => activeEditor(selection) && current?.id === id;
+    const changed = {conflict:true, message:'当前修订已更新。关闭预览后查看最新版本，再确认恢复。'};
+    if (!ownsSelection() || current.revision !== revision) return changed;
+    const blocked = restoreReviewMessage(selection);
+    if (blocked) return {message:blocked};
+    selection.saving = true;
+    form.inert = true;
+    setSaving(true);
+    try {
+      const path = editorPath(selection, id) + '/restore';
+      const send = () => request('POST', path, {revision,to}, {'Idempotency-Key':key},
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+        .catch(() => ({status:0,body:{}}));
+      const receipt = result => {
+        const {artifact,restore} = result.body || {};
+        return result.status === 200 && artifact?.id === id && artifact.workspace_id === selection.workspace
+          && restore?.base_revision === revision && restore.source_revision === to
+          && [revision, revision+1].includes(restore.result_revision)
+          && Number.isSafeInteger(artifact.revision) && artifact.revision >= restore.result_revision;
+      };
+      const uncertain = result => !result.status || result.status >= 500 || (result.status === 200 && !receipt(result));
+      let result = await send();
+      if (!ownsSelection()) return changed;
+      if (uncertain(result)) result = await send();
+      if (!ownsSelection()) return changed;
+      if (revealRevisionConflict(result)) return changed;
+      if (uncertain(result)) return {uncertain:true, message:'暂未确认服务器是否已恢复。重试会核对同一次请求。'};
+      if (!receipt(result)) return {message:messageFor(result.body?.error, '无法恢复此版本，请重试。')};
+      const next = result.body.artifact;
+      const tools = editorTools(next);
+      if (tools && !tools.instance) {
+        try { await tools.prepare(); }
+        catch {
+          if (ownsSelection()) displayEditorUpdate({failed:true});
+          return {message:'服务器已确认恢复。关闭预览后重新打开作品以查看最新内容。'};
+        }
+      }
+      if (!ownsSelection()) return changed;
+      if (next.revision > current.revision) {
+        current = next;
+        catalog = null;
+        fillEditor(current);
+        readEditorRecovery();
+        liveBanner.hidden = true;
+      }
+      const applied = result.body.restore.result_revision;
+      show('ok', current.revision > applied ? `已恢复为修订 ${applied}。当前为修订 ${current.revision}。`
+        : applied === revision ? `当前修订 ${revision} 已包含所选版本的内容。` : `已恢复为修订 ${applied}。`);
+      if (editorPanels.get('version')?.open) void loadVersions();
+      return {saved:true};
+    } finally {
+      selection.saving = false;
+      if (ownsSelection()) {
+        form.inert = false;
+        setSaving(false);
+      }
+    }
   }
 
   async function loadVersions() {
@@ -2911,6 +3073,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       row.dataset.revision = String(item.revision);
       meta.className = 'note';
       meta.textContent = `修订 ${item.revision} · ${item.title || ''} · ${item.created_by || ''}`;
+      if (Number.isSafeInteger(item.restored_from)) meta.textContent += ' · 恢复自修订 ' + item.restored_from;
       row.appendChild(meta);
       if (typeof document.getElementById('work-version-dialog')?.showModal === 'function') {
         const preview = document.createElement('button');
@@ -2934,50 +3097,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           if (activeEditor(selection) && current.id === artifact.id) openDuplicateDialog(copySource,copy);
         });
         row.appendChild(copy);
-      }
-      if (item.revision !== current.revision) {
-        const restore = document.createElement('button');
-        restore.type = 'button';
-        restore.textContent = '恢复为新修订';
-        restore.addEventListener('click', async () => {
-          if (!activeEditor(selection) || current.id !== artifact.id || selection.saving || form.inert) return;
-          if (hasEditorDraft()) {
-            show('error', '请先保存当前草稿，再恢复历史版本。');
-            return;
-          }
-          const revision = current.revision;
-          selection.saving = true;
-          form.inert = true;
-          setSaving(true);
-          try {
-            const result = await request('POST', editorPath(selection, artifact.id) + '/restore',
-              {revision, to: item.revision}, undefined, selection.controller.signal)
-              .catch(() => ({status: 0, body: {}}));
-            if (!activeEditor(selection) || current.revision !== revision) return;
-            if (revealRevisionConflict(result)) {
-              show('error', '恢复遇到新版本，请先查看服务器版本。');
-              return;
-            }
-            if (result.status !== 200) {
-              show('error', messageFor(result.body.error, '恢复失败。'));
-              return;
-            }
-            current = result.body.artifact;
-            catalog = null;
-            fillEditor(current);
-            readEditorRecovery();
-            liveBanner.hidden = true;
-            show('ok', `已恢复为修订 ${current.revision}。`);
-            await loadVersions();
-          } finally {
-            selection.saving = false;
-            if (activeEditor(selection)) {
-              form.inert = false;
-              setSaving(false);
-            }
-          }
-        });
-        row.appendChild(restore);
       }
       list.appendChild(row);
     }
@@ -3382,8 +3501,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncStudioWorkspace();
   }
 
+  function cancelStudioPreload() {
+    studioPreload?.controller.abort();
+    studioPreload = null;
+  }
+
+  function nextWorkspaceLoad() {
+    cancelStudioPreload();
+    return ++workspaceLoad;
+  }
+
   async function load() {
-    const seq = ++workspaceLoad;
+    const seq = nextWorkspaceLoad();
     workspaceResolved = false;
     workspacePending.hidden = false;
     syncWorkspaceCreation();
@@ -3391,13 +3520,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
     const sharedWork = !location?.search && sharedWorkCopyToken(location?.hash);
-    const linkedStudio = new URLSearchParams(location?.search).has('studio')
-      ? studioDocumentFromSearch(location.search) || {invalid: true} : null;
+    const linkedStudio = studioTargetFromSearch(location?.search);
     const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
+    const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
       !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
       ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
@@ -3432,6 +3562,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
+    // The native Studio GET checks team membership itself. Start it alongside
+    // the workspace directory, and use it only for the verified selected team.
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
+    if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
       const items = result?.body?.items;
       if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
@@ -3441,7 +3576,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    const sharedPath = '/v1/workspaces?limit=100';
+    let {initial: space, supplemental} = namedStudio
+      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
+      : await readWorkspaceChoices(request, sharedPath, personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -3449,6 +3587,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
+      cancelStudioPreload();
       workspacePending.hidden = true;
       show('error', '无法读取工作区。');
       return;
@@ -3460,6 +3599,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
     if (!workspaces.length) {
+      cancelStudioPreload();
       hideEditor();
       catalog = null;
       allItems = [];
@@ -3476,15 +3616,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     hideEditor();
     if (sharedWork) {
       void loadList();
-      if (personal && personal.id === workspaceId() && sharedWorkCopy) sharedWorkCopy.open(personal.id,sharedWork);
+      const ready = await sharedCopyCode;
+      if (seq !== workspaceLoad) return;
+      if (ready && personal && personal.id === workspaceId() && sharedWorkCopy.instance) {
+        sharedWorkCopy.instance.open(personal.id, sharedWork);
+      }
       else show('error', '无法打开个人空间，请重试。');
       return;
     }
     if (linkedStudio) {
-      void loadList();
-      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
-          !await studio?.open(linkedStudio.id, linkedStudio.revision)) {
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace) {
+        cancelStudioPreload();
+        void loadList();
         show('error', '团队文档链接无效，或你没有访问权限。');
+        return;
+      }
+      void loadList();
+      const codeReady = await studioCode;
+      if (seq !== workspaceLoad) return;
+      if (!codeReady) {
+        cancelStudioPreload();
+        show('error', '无法加载团队协作，请刷新页面重试。');
+        return;
+      }
+      const opening = studio.instance?.open(linkedStudio.id, linkedStudio.revision,
+        linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined, prepared);
+      studioPreload = null;
+      if (!await opening) {
+        prepared?.controller.abort();
+        if (seq === workspaceLoad) show('error', '团队文档链接无效，或你没有访问权限。');
       }
       return;
     }
@@ -3553,7 +3713,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor) workspaceSelect.value = editor.workspace;
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     syncWorkspaceCreation();
     closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
@@ -4575,7 +4735,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     hideEditor();
     currentUser = null;
     syncStudioWorkspace();
@@ -4597,7 +4757,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
-    writeSpaceAddress(spaceLocation());
+    if (restoredSpaceEntry) spaceAddress = {url:spaceLocation(), state:previousSpaceState, entry:restoredSpaceEntry};
+    else writeSpaceAddress(spaceLocation());
     view.addEventListener('popstate', async event => {
       if (restoringAddress) {
         restoringAddress = false;
@@ -4607,7 +4768,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const tracked = next?.session === spaceHistoryId;
       const approved = approvedBack;
       approvedBack = false;
-      if (!approved && !canLeaveEditor()) {
+      if (!approved && (!canLeaveEditor() || studio.instance?.canLeave() === false)) {
         if (spaceAddress) {
           const delta = tracked ? spaceAddress.entry.position - next.position : 0;
           if (delta && typeof view.history?.go === 'function') {
@@ -4620,14 +4781,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (tracked) spaceAddress = {url:spaceLocation(), state:event.state, entry:next};
       else writeSpaceAddress(spaceLocation());
       const address = spaceAddress;
-      workspaceLoad += 1;
+      nextWorkspaceLoad();
       hideEditor();
-      sharedWorkCopy?.close();
+      sharedWorkCopy.instance?.close();
+      studio.instance?.leaveForNavigation();
       show('', '');
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
-      if (studioDocumentFromSearch(view.location.search) || artifactTargetFromSearch(view.location.search) ||
+      const studioTarget = studioTargetFromSearch(view.location.search);
+      if (studio.instance && studioTarget && !studioTarget.invalid && workspaceResolved && workspaceId() === studioTarget.workspace) {
+        void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
+        return;
+      }
+      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
           newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
