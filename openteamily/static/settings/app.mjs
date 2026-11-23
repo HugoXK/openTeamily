@@ -1,4 +1,5 @@
-import { NIGHT_WINDOW, resolveTheme } from '../shell/app.mjs';
+import { NIGHT_WINDOW, resolveTheme, syncAppearanceButton } from '../shell/app.mjs';
+import {applySystemLocale, supportsSystemLocale, systemLocale, uiText} from '../shell/system-locale.mjs';
 
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
@@ -16,7 +17,7 @@ export function readForm(form) {
     appearance_schedule: data.get('appearance_schedule'),
     appearance_start: data.get('appearance_start'),
     appearance_end: data.get('appearance_end'),
-    language: data.get('language'),
+    language: form.elements?.language?.value ?? data.get('language'),
     chat_language: data.get('chat_language'),
     auto_translate: data.has('auto_translate'),
     send_shortcut: data.get('send_shortcut'),
@@ -38,7 +39,7 @@ export function diff(current, next) {
 }
 
 export function applyTheme(document, values) {
-  document.documentElement.lang = values.language || 'zh-CN';
+  if (document.documentElement.lang !== systemLocale(values.language)) applySystemLocale(document, values.language);
   document.body.dataset.theme = values.appearance === 'system' ? '' : values.appearance;
   if (values.appearance === 'auto') {
     document.body.dataset.schedule = values.appearance_schedule || 'sunset_sunrise';
@@ -78,11 +79,31 @@ export function describeAppearance(values, now = new Date(), media) {
   if (appearance === 'dark') return '当前为深色。';
   if (appearance === 'auto') {
     const until = nextSwitchLabel(values, theme);
-    return until ? '当前为' + look + '，直到 ' + until + '。' : '当前为' + look + '。';
+    return until ? look + '，直到 ' + until + '。' : '当前为' + look + '。';
   }
   return '当前为' + look + '（跟随系统）。';
 }
 
+const OVERVIEW_CHOICES = {
+  'appearance.light': ['浅色', 'Light'],
+  'appearance.dark': ['深色', 'Dark'],
+  'appearance.auto': ['自动', 'Automatic'],
+  'appearance.system': ['跟随系统', 'System'],
+  'message_folding.compact': ['紧凑', 'Compact'],
+  'message_folding.standard': ['标准', 'Standard'],
+  'message_folding.none': ['不折叠', 'Do not fold'],
+};
+
+export function syncOverviewCurrentValues(document, values) {
+  const appearance = document.getElementById('appearance-current');
+  const folding = document.getElementById('folding-current');
+  if (appearance) {
+    appearance.textContent = uiText(document, `appearance.${values.appearance}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+  if (folding) {
+    folding.textContent = uiText(document, `message_folding.${values.message_folding}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+}
 
 const AUTOSAVE_KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end',
                        'language', 'chat_language', 'auto_translate', 'send_shortcut',
@@ -99,6 +120,7 @@ const PATH_VIEWS = {
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
   '/settings/skill-configuration': 'skill-configuration',
+  '/settings/model-api': 'model-api',
 };
 
 const HASH_VIEWS = {
@@ -112,6 +134,9 @@ const HASH_VIEWS = {
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
   'image-api': 'model-api',
+  'video-api': 'model-api',
+  'music-api': 'model-api',
+  'model3d-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -197,20 +222,21 @@ export const CONNECTOR_CATALOG = [
   {id: 'mail', name: 'Mailbox', category: 'mail', about: 'Read and send email over IMAP and SMTP'},
 ];
 
-export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG) {
+export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG, group = 'all') {
   const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return catalog.slice();
   return catalog.filter((item) => (
-    item.id.toLowerCase().includes(needle)
-    || item.name.toLowerCase().includes(needle)
-    || item.about.toLowerCase().includes(needle)
+    (group === 'all' || item.category === group)
+    && (!needle
+      || item.id.toLowerCase().includes(needle)
+      || item.name.toLowerCase().includes(needle)
+      || item.about.toLowerCase().includes(needle))
   ));
 }
 
-export function applyConnectorSearch(document, query) {
+export function applyConnectorSearch(document, query, group = 'all') {
   const list = document.getElementById('connectors-catalog');
   const empty = document.getElementById('connectors-empty');
-  const visible = filterConnectorCatalog(query);
+  const visible = filterConnectorCatalog(query, CONNECTOR_CATALOG, group);
   if (!list) {
     if (empty) empty.hidden = visible.length > 0;
     return visible;
@@ -245,8 +271,8 @@ export function composioRowState(row, configured, connection) {
             title: '未接通：Composio 没有这个应用，暂时不能连接。'};
   }
   if (!configured) {
-    return {state: 'unconfigured', status: '未配置 Composio', button: '+ 连接', disabled: true, action: '',
-            title: '未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。'};
+    return {state: 'unconfigured', status: '未配置 Composio', button: '配置密钥', disabled: false, action: 'focus-key',
+            title: '前往 Composio API key 输入框。'};
   }
   if (connection && connection.state === 'connected') {
     return {state: 'connected', status: '已连接', button: '断开', disabled: false, action: 'disconnect',
@@ -294,6 +320,11 @@ export function applyComposioRows(document, configured, items) {
     }
     applied.push({id: node.getAttribute('data-connector-id'), ...view});
   }
+  const connectedCount = document.getElementById('connectors-connected-count');
+  if (connectedCount) {
+    connectedCount.textContent = applied.filter(row => row.state === 'connected').length + ' 个已连接';
+    connectedCount.hidden = false;
+  }
   return applied;
 }
 
@@ -301,19 +332,41 @@ const COMPOSIO_ERRORS = {
   composio_not_configured: '未配置 Composio：先填入你自己的 Composio API key。',
   composio_key_rejected: 'Composio 拒绝了这个 API key，请检查后重新保存。',
   composio_unreachable: '暂时连不上 Composio，请稍后再试。',
-  composio_rate_limited: 'Composio 请求太频繁，请稍后再试。',
+  composio_conflict: 'Composio 报告连接冲突。请刷新页面查看当前连接，再重试。',
+  composio_rate_limited: 'Composio 暂时限制了请求次数。请稍后重试。',
+  composio_upstream: 'Composio 服务暂时异常，请稍后重试。',
   composio_not_found: 'Composio 里找不到这个连接。',
   composio_failed: 'Composio 请求失败。',
 };
 
 export function composioMessage(error, fallback) {
-  return (error && COMPOSIO_ERRORS[error.code]) || fallback;
+  return error && Object.hasOwn(COMPOSIO_ERRORS, error.code) ? COMPOSIO_ERRORS[error.code] : fallback;
+}
+
+function placeAppearanceStatus(document, auto) {
+  const status = document.getElementById('appearance-status');
+  const scheduleCard = document.getElementById('appearance-schedule-card');
+  const appearance = document.getElementById('appearance');
+  if (!status || !status.parentNode) return;
+  if (auto && scheduleCard && typeof scheduleCard.insertBefore === 'function') {
+    const notes = typeof scheduleCard.querySelectorAll === 'function'
+      ? scheduleCard.querySelectorAll(':scope > .note')
+      : [];
+    const lastNote = notes[notes.length - 1];
+    if (lastNote) scheduleCard.insertBefore(status, lastNote);
+    else if (typeof scheduleCard.appendChild === 'function') scheduleCard.appendChild(status);
+    return;
+  }
+  if (appearance && appearance.parentNode && typeof appearance.parentNode.insertBefore === 'function') {
+    appearance.parentNode.insertBefore(status, scheduleCard || appearance.nextSibling);
+  }
 }
 
 export function syncAppearanceExtras(document, values) {
   const scheduleCard = document.getElementById('appearance-schedule-card');
   const customFields = document.getElementById('custom-period-fields');
-  if (scheduleCard) scheduleCard.hidden = !values || values.appearance !== 'auto';
+  const auto = Boolean(values && values.appearance === 'auto');
+  if (scheduleCard) scheduleCard.hidden = !auto;
   if (customFields) {
     customFields.hidden = !(values && values.appearance === 'auto' && values.appearance_schedule === 'custom');
   }
@@ -325,6 +378,7 @@ export function syncAppearanceExtras(document, values) {
       zone.textContent = 'Asia/Shanghai';
     }
   }
+  placeAppearanceStatus(document, auto);
 }
 
 export function readModelForm(form) {
@@ -346,6 +400,38 @@ export function fillModelForm(form, values) {
   form.elements.base_url.value = values && values.api_key_set ? (values.base_url || '') : '';
   form.elements.model.value = values && values.api_key_set ? (values.model || '') : '';
   form.elements.api_key.value = '';
+}
+
+export function renderModelApi(document, form, data, failed = false) {
+  const values = data?.model_api;
+  const effective = data?.effective;
+  const platform = effective?.source === 'platform';
+  const account = effective?.source === 'account';
+  const state = platform ? 'platform' : account ? 'account' : (values || failed) ? 'unavailable' : 'loading';
+  const source = platform ? 'platform-active' : account ? 'account-active' :
+    failed ? 'load-error' : values ? 'none' : 'loading';
+
+  function label(id, suffix) {
+    const node = document.getElementById(id);
+    const key = 'settings.model-api.' + suffix;
+    node.textContent = uiText(document, key);
+    node.setAttribute('data-ui-text', key);
+  }
+
+  label('model-key-state', state);
+  label('model-effective-source', source);
+  label('model-api-override-title', account ? 'override-edit' : 'override');
+  const model = (platform || account) && effective.model;
+  document.getElementById('model-effective-model').textContent = model ? ' (' + model + ')' : '';
+  document.getElementById('model-platform-ready').hidden = !platform;
+  document.getElementById('model-key-state-detail').hidden = !values?.api_key_set;
+  document.getElementById('restore-platform-model').hidden = !values?.api_key_set;
+  const override = document.getElementById('model-api-override');
+  override.hidden = !values;
+  override.open = account;
+  document.getElementById('model-api-fields').disabled = !values;
+  fillModelForm(form, values);
+  form.elements.api_key.required = Boolean(values && !values.api_key_set);
 }
 
 export function fillForm(form, values) {
@@ -372,15 +458,14 @@ export function newlineBinding(sendShortcut) {
 
 // The stored value is a code; the sentence a user reads has to say what the
 // choice actually does when a message is sent, not just echo the label.
-export function chatLanguageEffect(value, label = '') {
-  if (!value || value === 'auto') {
-    return '跟随界面语言：发消息时不指定语言，智能体按你消息的语种回复。';
-  }
-  return '发消息时会带上「' + (label || value) + '」：智能体按这个语言回复。';
+export function chatLanguageEffect(value, label = '', locale) {
+  return !value || value === 'auto'
+    ? uiText(locale, 'settings.language.auto-hint')
+    : uiText(locale, 'settings.language.reply-hint', {language:label || value});
 }
 
 export function syncChatLanguageNote(document, value, label = '') {
-  const text = chatLanguageEffect(value, label);
+  const text = chatLanguageEffect(value, label, document);
   const note = document.getElementById('chat-language-effect');
   if (note) note.textContent = text;
   return text;
@@ -430,6 +515,80 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function mountMediaApi(document, request, type, noun) {
+  const id = type + '-api';
+  const form = document.getElementById(id + '-form');
+  if (!form) return null;
+  const fields = document.getElementById(id);
+  const status = document.getElementById(id + '-status');
+  const remove = document.getElementById('clear-' + id);
+  const keyInput = form.elements.api_key;
+  const endpoint = '/v1/model-api/' + type;
+  const responseKey = type + '_api';
+  let config = null;
+
+  function fill(view, message) {
+    config.revision = view.revision;
+    remove.hidden = !view.has_api_key;
+    status.textContent = message || (view.has_api_key ? noun + '密钥已保存。' : '尚未配置' + noun + '密钥。');
+    fields.disabled = false;
+  }
+
+  async function load(message) {
+    const active = config;
+    if (!active || active.busy) return;
+    active.busy = fields.disabled = true;
+    status.textContent = '正在读取' + noun + '配置…';
+    const response = await request('GET', endpoint).catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = false;
+    if (response.status === 200 && response.body[responseKey]) fill(response.body[responseKey], message);
+    else status.textContent = '无法读取' + noun + '配置，请刷新后重试。';
+  }
+
+  async function save(api_key) {
+    const active = config;
+    if (!active || active.revision === null || active.busy) return;
+    active.busy = fields.disabled = true;
+    keyInput.value = '';
+    status.textContent = '正在保存…';
+    const response = await request('POST', endpoint, {revision: active.revision, api_key})
+      .catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = fields.disabled = false;
+    if (response.status === 200 && response.body[responseKey]) {
+      fill(response.body[responseKey], api_key === null ? '已移除' + noun + '密钥。' : noun + '配置已保存。');
+    } else if (response.status === 409) {
+      await load(noun + '配置已在其他窗口更新，请重新输入密钥。');
+    } else {
+      status.textContent = messageFor(response.body.error, '无法保存' + noun + '配置，请重试。');
+    }
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const secret = keyInput.value.trim();
+    if (secret) void save(secret);
+    else status.textContent = '请输入' + noun + ' API 密钥。';
+  });
+  remove.addEventListener('click', () => void save(null));
+
+  return {
+    setAccount(account) {
+      if (config?.account === account) return;
+      config = account === null ? null : {account, revision: null, busy: false};
+      keyInput.value = '';
+      fields.disabled = true;
+      remove.hidden = true;
+      status.textContent = '';
+    },
+    render(hash) {
+      if (config?.revision === null) void load();
+      if (hash === '#' + id) fields.scrollIntoView?.({block: 'start'});
+    },
+  };
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -437,17 +596,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const modelFields = modelForm && document.getElementById('model-api-fields');
   const imageForm = document.getElementById('image-api-form');
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
   const removeImageKey = document.getElementById('clear-image-api');
+  const mediaApis = [
+    mountMediaApi(document, request, 'video', '视频'),
+    mountMediaApi(document, request, 'music', '音乐'),
+    mountMediaApi(document, request, 'model3d', '3D 模型'),
+  ].filter(Boolean);
   let imageAccount = null;
   let imageRevision = null;
   let imageLoading = false;
   let imageSaving = false;
   let revision = 0;
   let current = null;
-  let modelRevision = 0;
+  let loadSequence = 0;
+  const notificationState = document.getElementById('notification-prefs-state');
+  const notificationInputs = Object.fromEntries(['mentions', 'task_completion', 'artifacts'].map(key =>
+    [key, document.getElementById('notify-' + key.replaceAll('_', '-'))]).filter(([, input]) => input));
+  let notificationValues = {};
+  let languageSave = null;
+  let modelRevision = null;
   let pendingSecretConfirm = null;
   let secretConfirmSeq = 0;
 
@@ -506,18 +677,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (current) syncAppearanceExtras(document, current);
     if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
     if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
+    if (view === 'model-api') for (const api of mediaApis) api.render(location.hash);
   }
 
   function refreshAppearance() {
     applyTheme(document, current);
+    syncAppearanceButton(document, current);
     syncAppearanceExtras(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    syncOverviewCurrentValues(document, current);
     const languageCurrent = document.getElementById('language-current');
     const languageSelect = form.querySelector('select[name="language"]');
     if (languageCurrent && languageSelect) {
       const option = languageSelect.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
+    }
+    const fallback = document.getElementById('system-language-fallback');
+    if (fallback) {
+      fallback.hidden = supportsSystemLocale(current.language);
+      languageSelect?.setAttribute('aria-describedby',
+        fallback.hidden ? 'system-language-scope' : 'system-language-scope system-language-fallback');
     }
     const chatLanguageSelect = form.elements.chat_language;
     if (chatLanguageSelect) {
@@ -548,10 +728,73 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: payload};
   }
 
+  function prepareNotificationPrefs() {
+    notificationValues = {};
+    if (notificationState) notificationState.textContent = '';
+    for (const input of Object.values(notificationInputs)) {
+      input.disabled = true;
+      input.checked = false;
+    }
+  }
+
+  async function renderNotificationPrefs(sequence, pending) {
+    if (!pending) return;
+    const result = await pending;
+    if (sequence !== loadSequence) return;
+    if (result?.status !== 200 || !result.body?.prefs) {
+      if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.load-error');
+      return;
+    }
+    for (const [key, input] of Object.entries(notificationInputs)) {
+      const value = result.body.prefs[key];
+      const supported = typeof value === 'boolean';
+      const row = document.getElementById('row-notify-' + key.replaceAll('_', '-'));
+      if (row) row.hidden = !supported;
+      if (!supported) continue;
+      notificationValues[key] = value;
+      input.checked = value;
+      input.disabled = false;
+    }
+  }
+
+  for (const [key, input] of Object.entries(notificationInputs)) {
+    input.addEventListener('change', async () => {
+      const previous = notificationValues[key];
+      if (input.disabled || typeof previous !== 'boolean') return;
+      const sequence = loadSequence;
+      input.disabled = true;
+      const saved = await request('PUT', '/v1/notification-prefs', {changes:{[key]:input.checked}}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      const value = saved?.status === 200 ? saved.body?.prefs?.[key] : undefined;
+      input.disabled = false;
+      if (typeof value !== 'boolean') {
+        input.checked = previous;
+        if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.save-error');
+        return;
+      }
+      input.checked = notificationValues[key] = value;
+      if (notificationState) notificationState.textContent = uiText(document, value ? 'settings.notify.enabled' : 'settings.notify.disabled');
+    });
+  }
+
   async function load() {
+    const sequence = ++loadSequence;
+    prepareNotificationPrefs();
+    if (modelForm) {
+      modelRevision = null;
+      renderModelApi(document, modelForm);
+    }
+    if (languageSave) {
+      languageSave.input.disabled = false;
+      languageSave = null;
+    }
     const session = await request('GET', '/v1/auth/session');
+    if (sequence !== loadSequence) return;
     if (session.status === 401) {
+      current = null;
+      if (document.documentElement.lang !== 'zh-CN') applySystemLocale(document, 'zh-CN');
       switchImageAccount(null);
+      for (const api of mediaApis) api.setAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -562,10 +805,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
-    switchImageAccount(session.body.user.id ?? session.body.user.username);
+    const account = session.body.user.id ?? session.body.user.username;
+    switchImageAccount(account);
+    for (const api of mediaApis) api.setAccount(account);
+    const modelRead = modelForm && request('GET', '/v1/model-api').catch(() => null);
+    const location = globalThis.location || {};
+    const prefsRead = Object.keys(notificationInputs).length > 0 && settingsViewFromLocation(location.pathname, location.hash) === 'hub'
+      ? request('GET', '/v1/notification-prefs').catch(() => null) : null;
     const settings = await request('GET', '/v1/settings');
+    if (sequence !== loadSequence) return;
     if (settings.status !== 200) {
-      show('error', messageFor(settings.body.error, '无法读取设置。'));
+      show('error', uiText(document, 'settings.load.error'));
       return;
     }
     current = settings.body.settings.values;
@@ -576,21 +826,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillForm(form, current);
     refreshAppearance();
     renderView();
-    if (modelForm) {
-      const model = await request('GET', '/v1/model-api');
-      if (model.status === 200) {
-        modelRevision = model.body.model_api.revision;
-        fillModelForm(modelForm, model.body.model_api);
-        const effective = model.body.effective || {};
-        const source = effective.source === 'account' ? '正在使用你自己的配置' :
-          effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
-        const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
-        document.getElementById('model-effective').textContent = label;
-        const keyText = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
-        document.getElementById('model-key-state').textContent = keyText;
-        const keyDetail = document.getElementById('model-key-state-detail');
-        if (keyDetail) keyDetail.textContent = keyText;
-      }
+    void renderNotificationPrefs(sequence, prefsRead);
+    if (modelRead) {
+      const model = await modelRead;
+      if (sequence !== loadSequence) return;
+      const values = model?.status === 200 && model.body?.model_api;
+      if (values && Number.isInteger(values.revision)) modelRevision = values.revision;
+      renderModelApi(document, modelForm, modelRevision === null ? null : model.body, modelRevision === null);
     }
     await renderSkillSecrets();
     await syncComposio();
@@ -633,36 +875,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  async function autosave(successMessage) {
+  async function autosave(successKey, language = false) {
     if (!current) return;
     const changes = diff(current, readForm(form));
     const selected = {};
     for (const key of AUTOSAVE_KEYS) {
+      if ((key === 'language') !== language) continue;
       if (Object.prototype.hasOwnProperty.call(changes, key)) selected[key] = changes[key];
     }
     if (!Object.keys(selected).length) return;
-    const result = await request('POST', '/v1/settings', {revision, changes: selected});
+    const sequence = loadSequence;
+    const result = await request('POST', '/v1/settings', {revision, changes: selected}).catch(() => ({status:0, body:{}}));
+    if (sequence !== loadSequence) return;
     if (result.status === 409) {
       current = result.body.error.current.values;
       revision = result.body.error.current.revision;
       fillForm(form, current);
       refreshAppearance();
-      show('error', '设置已在别处更新，已重新加载。');
+      show('error', uiText(document, 'settings.save.conflict'));
       return;
     }
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, successMessage === '外观已更新。' ? '无法更新外观。' : '无法保存设置。'));
+      if (language) form.elements.language.value = current.language;
+      show('error', uiText(document, 'settings.save.error'));
       return;
     }
     current = result.body.settings.values;
     revision = result.body.settings.revision;
     fillForm(form, current);
     refreshAppearance();
-    show('ok', successMessage);
+    show('ok', uiText(document, successKey));
   }
 
   settingsPanel.addEventListener('change', (event) => {
     const name = event.target && event.target.name;
+    if (name === 'language') {
+      const input = event.target;
+      if (!current || languageSave || !supportsSystemLocale(input.value)) return;
+      const attempt = {input, focused:document.activeElement === input};
+      languageSave = attempt;
+      input.disabled = true;
+      return autosave('settings.saved', true).finally(() => {
+        if (languageSave !== attempt) return;
+        input.disabled = false;
+        languageSave = null;
+        if (attempt.focused && document.activeElement === document.body) input.focus({preventScroll:true});
+      });
+    }
     if (name === 'likes_visible' || name === 'favorites_visible') {
       const field = event.target;
       if (field && field.getAttribute('role') === 'switch') {
@@ -680,19 +939,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       syncChatLanguageNote(document, event.target.value, selected ? selected.textContent : '');
     }
     if (!AUTOSAVE_KEYS.includes(name)) return;
-    const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
-      ? '外观已更新。' : '已保存。';
-    autosave(message);
+    const key = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
+      ? 'settings.appearance.saved' : 'settings.saved';
+    autosave(key);
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (!current) return;
     const changes = diff(current, readForm(form));
+    delete changes.language;
     if (!Object.keys(changes).length) {
       show('ok', '没有需要保存的更改。');
       return;
     }
+    const sequence = loadSequence;
     const result = await request('POST', '/v1/settings', {revision, changes});
+    if (sequence !== loadSequence) return;
     if (result.status === 409) {
       current = result.body.error.current.values;
       revision = result.body.error.current.revision;
@@ -830,27 +1093,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
   if (modelForm) {
-    modelForm.addEventListener('submit', async event => {
-      event.preventDefault();
-      const changes = readModelForm(modelForm);
+    async function saveModelApi(changes, success) {
+      if (modelRevision === null || modelFields.disabled) return;
+      const sequence = loadSequence;
       if (!Object.keys(changes).length) {
-        show('ok', '没有需要保存的模型 API 更改。');
+        show('ok', uiText(document, 'settings.model-api.no-changes'));
         return;
       }
-      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes});
+      modelFields.disabled = true;
+      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      modelFields.disabled = false;
       modelForm.elements.api_key.value = '';
-      if (result.status === 409) {
-        show('error', '模型 API 已在别处更新，已重新加载，请再保存一次。');
+      if (result?.status === 409) {
+        show('error', uiText(document, 'settings.model-api.save-conflict'));
         await load();
         return;
       }
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '保存模型 API 失败。'));
+      if (result?.status !== 200) {
+        show('error', uiText(document, 'settings.model-api.save-error'));
         return;
       }
-      show('ok', '模型 API 已保存。');
+      show('ok', uiText(document, success));
       await load();
+    }
+
+    modelForm.addEventListener('submit', event => {
+      event.preventDefault();
+      return saveModelApi(readModelForm(modelForm), 'settings.model-api.saved');
     });
+    document.getElementById('restore-platform-model').addEventListener('click', () =>
+      saveModelApi({api_key: null}, 'settings.model-api.restored'));
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -863,6 +1136,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     revision = 0;
     switchImageAccount(null);
+    for (const api of mediaApis) api.setAccount(null);
     await load();
   });
 
@@ -878,6 +1152,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     node.textContent = text;
   }
 
+  function focusComposioKey() {
+    const input = document.getElementById('composio-key-input');
+    if (input) input.focus();
+  }
+
+  const keyJump = document.getElementById('connectors-key-jump');
+  if (keyJump) keyJump.addEventListener('click', event => {
+    event.preventDefault();
+    focusComposioKey();
+  });
+
   function renderComposio(view) {
     composioConfigured = Boolean(view && view.configured);
     const badge = document.getElementById('composio-key-state');
@@ -889,6 +1174,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (input) input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
     if (remove) remove.hidden = !composioConfigured;
+    if (keyJump) keyJump.hidden = composioConfigured;
     applyComposioRows(document, composioConfigured, composioItems);
   }
 
@@ -976,6 +1262,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? event.target.closest('button[data-composio-action]') : null;
       if (!button || button.disabled) return;
       const action = button.getAttribute('data-composio-action');
+      if (action === 'focus-key') {
+        focusComposioKey();
+        return;
+      }
       const row = button.closest('[data-connector-id]');
       const toolkit = row ? row.getAttribute('data-composio-toolkit') : '';
       if (action === 'connect' && toolkit) {
@@ -1020,7 +1310,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const connectorSearch = document.getElementById('connector-search');
   if (connectorSearch) {
-    const applySearch = () => applyConnectorSearch(document, connectorSearch.value);
+    let group = 'all';
+    const applySearch = () => applyConnectorSearch(document, connectorSearch.value, group);
+    const filters = document.getElementById('connectors-filters');
+    if (filters) {
+      const groups = new Map();
+      for (const row of CONNECTOR_CATALOG) {
+        groups.set(row.category, (groups.get(row.category) || 0) + 1);
+      }
+      const overview = document.getElementById('connectors-catalog-count');
+      if (overview) overview.textContent = CONNECTOR_CATALOG.length + ' 个应用 · ' + groups.size + ' 个分类';
+
+      const choices = filters.querySelectorAll('[data-connector-group]');
+      for (const choice of choices) {
+        const category = choice.dataset.connectorGroup;
+        const count = category === 'all' ? CONNECTOR_CATALOG.length : (groups.get(category) || 0);
+        choice.querySelector('span').textContent = count;
+        choice.addEventListener('click', () => {
+          group = category;
+          for (const option of choices) {
+            option.setAttribute('aria-pressed', String(option === choice));
+          }
+          applySearch();
+        });
+      }
+      filters.hidden = false;
+    }
     connectorSearch.addEventListener('input', applySearch);
     connectorSearch.addEventListener('search', applySearch);
     applySearch();

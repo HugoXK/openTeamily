@@ -70,14 +70,18 @@ export async function importOfficialBundle(endpoints, bundle) {
 
 // Used by importOfficialBundle when the feature exposes it.
 export function recordLegacyRuns(db, { runs, clock = () => Math.floor(Date.now() / 1000) }) {
-  const insert = db.prepare('INSERT OR IGNORE INTO ot_automation_runs VALUES(?,?,?,?,?,?,?,?,?,?)')
+  const insert = db.prepare(`INSERT OR IGNORE INTO ot_automation_runs
+    (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`)
   let imported = 0
   for (const row of runs) {
     if (!row?.id || !row.automation_id) continue
     const stored = row.status === 'queued' ? 'skipped' : (row.status ?? 'skipped')
     const error = row.status === 'queued' ? 'migrated' : (row.error_code ?? null)
+    let dispatch
+    try { dispatch = JSON.parse(row.dispatch) } catch { dispatch = {} }
     insert.run(row.id, row.automation_id, row.workspace_id, Number(row.due_at) || 0, Number(row.started) || clock(),
-      row.finished ?? (stored === 'queued' ? null : clock()), stored, error, typeof row.dispatch === 'string' ? row.dispatch : JSON.stringify({ backend: 'ds-bot' }), null)
+      row.finished ?? clock(), stored, error, JSON.stringify({ ...dispatch, backend: 'legacy' }), null)
     imported += 1
   }
   return imported

@@ -13,8 +13,7 @@ import { tokens, rank } from '../features/chat/recall.js'
 const dir = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'features')
 const identity = { instanceId: 'd'.repeat(32) }
 
-async function load() {
-  const data = mkdtempSync(join(tmpdir(), 'ot-chat-'))
+async function load(data = mkdtempSync(join(tmpdir(), 'ot-chat-'))) {
   const { table, failed } = await loadFeatures({ dir, identity, dataDir: data, log: () => {} })
   assert.deepEqual(failed, [])
   return table
@@ -189,30 +188,35 @@ test('personal chat history is adopted through the trusted importer only', async
   assert.equal(table['chat/importStatus'], undefined)
 })
 
-test('skills/sync materializes digest-checked bound skills and detaches stale ones', async () => {
-  const { createHash } = await import('node:crypto')
+test('legacy private chat export preserves insertion order for messages at the same time', async t => {
+  const data = mkdtempSync(join(tmpdir(), 'ot-chat-'))
+  const table = await load(data)
+  await table['chat/exportLegacy']()
+  const db = new DatabaseSync(join(data, 'openteamily', 'features', 'chat', 'chat.sqlite3'))
+  t.after(() => db.close())
+  db.exec(`INSERT INTO conversations VALUES ('c','Conversation',1,1);
+    INSERT INTO messages VALUES
+      ('zzz','c','user','Question',1,'{}'),
+      ('aaa','c','assistant','Answer',1,'{}');`)
+  const {conversations} = await table['chat/exportLegacy']()
+  assert.deepEqual(conversations[0].messages.map(message => message.id), ['zzz', 'aaa'])
+})
+
+test('the browser can neither provide raw skill material nor invoke the internal materializer', async () => {
   const table = await load()
-  const bot = { capabilities: ['ot-bound-old', 'ot-skill-x'] }
-  const rt = { botOf: () => bot, capabilitySave: async () => {},
-    changeCapabilityAttachment: async (op, { name }) => { bot.capabilities = op === 'attach' ? [...bot.capabilities, name] : bot.capabilities.filter((n) => n !== name) } }
-  attachRuntime({ rt, ctx: {}, mainBot: async () => 'bot1' })
-  try {
-    const content = '# Weekly review'
-    const digest = createHash('sha256').update(content).digest('hex')
-    assert.deepEqual(await table['skills/sync']({ items: [{ id: 'weekly-review', version: '1.0.0', name: 'Weekly', digest, content }] }), { attached: ['ot-bound-weekly-review'] })
-    assert.deepEqual(bot.capabilities.sort(), ['ot-bound-weekly-review', 'ot-skill-x'])
-    await assert.rejects(table['skills/sync']({ items: [{ id: 'weekly-review', digest, content: 'tampered' }] }), { code: 'skills/digest-mismatch' })
-  } finally { detachRuntime() }
+  assert.equal(table['skills/sync'], undefined)
+  await assert.rejects(table['skills/materialForScope']({scope:'account'}, {request:new Request('https://example.test')}),
+    {status:404, code:'skills/not-found'})
 })
 
 
 test('native skill names fit DS-Bot after migrated profiles; save, bind and revoke use stable identities', async () => {
   const { userSkillName, boundName } = await import('../features/skills/index.js')
-  const { createHash } = await import('node:crypto')
   const table = await load()
-  const bot = { capabilities: ['ot-skill-existing', 'ot-bound-old'] }
+  const bot = { id:'migrated-main', capabilities: ['ot-skill-existing', 'ot-bound-old'] }
   const library = new Map()
   const rt = {
+    state: {bots:{[bot.id]:bot}},
     botOf: () => bot,
     capabilitySave: async cap => {
       assert.ok(cap.name.length <= 32)
@@ -238,14 +242,20 @@ test('native skill names fit DS-Bot after migrated profiles; save, bind and revo
     }
     assert.equal(userSkillName('weekly-review'), 'ot-user-skill-weekly-review')
     assert.notEqual(userSkillName('a'.repeat(47) + 'b'), userSkillName('a'.repeat(47) + 'c'))
+    const v1 = (method, path, body) => table['skills/v1']({method,path:'/v1/skills/' + path,body})
+    const id = 'import-' + '0123456789abcdef'.repeat(2)
     const content = '# Bound instructions'
-    const id = '0123456789abcdef'.repeat(2)
-    await table['skills/sync']({ items: [{ id, digest: createHash('sha256').update(content).digest('hex'), content }] })
+    const imported = await v1('POST','packages',{revision:0,consent:true,
+      package:{id,name:'Long identifier',version:'1.0.0',content,permissions:['model_context'],format:'openteamily.prompt-skill.v2'}})
+    assert.equal(imported.status,200)
+    const bind = enabled => v1('POST','bindings',{skill_id:id,scope:'account',version:'1.0.0',
+      digest:imported.body.package.digest,permissions:['model_context'],enabled})
+    assert.equal((await bind(true)).status,200)
     assert.ok(bot.capabilities.includes(boundName(id)))
     assert.equal(library.get(boundName(id)).content, content)
     assert.ok(bot.capabilities.includes('ot-skill-existing'))
     assert.ok(!bot.capabilities.includes('ot-bound-old'))
-    await table['skills/sync']({ items: [] })
+    assert.equal((await bind(false)).status,200)
     assert.deepEqual(bot.capabilities, ['ot-skill-existing'])
   } finally { detachRuntime() }
 })

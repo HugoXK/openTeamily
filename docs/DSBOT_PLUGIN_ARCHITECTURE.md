@@ -8,7 +8,7 @@ PRs keep merging.
 
 ## 1. Target in one paragraph
 
-Every account owns exactly one isolated **DS-Bot** (upstream DS-Bot v0.3.8 on DSH 0.2.2-rc.1, pinned in
+Every account owns exactly one isolated **DS-Bot** (upstream DS-Bot v0.3.9 on DSH 0.2.2-rc.1, pinned in
 `runtime/ds-bot-upstream.pin.json`, one container + one volume per user, provisioned by the compose
 manager). The OpenTeamily product — pages, APIs and **all execution** (chat, skills, Composio/MCP tools,
 automations and schedules, exports, memory, artifacts, meetings, group replies) — is an **OpenTeamily DSH
@@ -75,8 +75,10 @@ All of these already exist in the pinned tree and are used by today's runtime im
   (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
   calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
   page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`, `automations`, `agents`, `artifacts`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations`, workspace lists, runtime keys and public `/share/<token>` pages stay on the platform. `/members/`, `/team/`, `/messenger/` and `/discover/` wait for a dedicated (not old FlyBot) Bot Social URL. Office format exports of works still follow.
-  platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
-  `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
+* The native skills feature keeps the catalogue, saved library entries and approved bindings in the
+  user's DS-Bot. A binding pins the package version, content digest and scope. The runtime applies
+  approved instruction-only skills when a binding changes and resolves the current set before a turn.
+  Saving an item to the library leaves its model permissions unchanged.
 
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's
@@ -237,6 +239,9 @@ sequenced by the deploy owner).
 * **Delivery:** a manager job (`import-openteamily-state`) writes the bundle into the user's volume as
   `/data/openteamily/import/<version>.bundle`; the plugin imports idempotently at start (version marker
   table, upsert by original id), verifies the manifest, then deletes the bundle.
+  Each import also requires the manager-supplied instance ID to match this DS-Bot's
+  routing identity. Bundles with a missing or different target remain on disk for
+  operator review.
 * **Cut per feature:** each batch PR migrates only its own tables; on success the platform flips that
   feature for that user in `dsbot_routes` state and marks its legacy rows `migrated_at` (read-only, kept).
 * **Shared (S) data:** teams, members, invites, social conversations, discover entries are published into
