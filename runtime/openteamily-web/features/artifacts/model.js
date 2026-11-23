@@ -8,7 +8,8 @@ export const KINDS = ['document', 'website', 'whiteboard', 'media']
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
 export const MAX_MEDIA_BYTES = 2 * 1024 * 1024
-export const MAX_GENERATED_VIDEO_BYTES = 8 * 1024 * 1024
+export const MAX_MEDIA_OBJECT_BYTES = 8 * 1024 * 1024
+export const MAX_GENERATED_VIDEO_BYTES = MAX_MEDIA_OBJECT_BYTES
 export const BOARD_JSON_MAX = 65536
 export const MAX_STROKES = 200
 export const MAX_POINTS = 400
@@ -44,22 +45,25 @@ export const validTitle = (v) => typeof v === 'string' && v.trim().length >= 1 &
 export const validBody = (v) => validLongText(v, BODY_MAX)
 export const titleHash = (title) => digest(casefold(title.trim()))
 
-// Row = artifacts.* plus the joined columns the legacy ROW_SELECT produced.
-export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
- s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
- md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
- b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
- cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
- sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json
- FROM artifacts a
+export const ROW_JOINS = ` FROM artifacts a
  LEFT JOIN artifact_meta m ON m.artifact_id=a.id
  LEFT JOIN artifact_sources s ON s.artifact_id=a.id
  LEFT JOIN artifact_media md ON md.artifact_id=a.id
  LEFT JOIN artifact_boards b ON b.artifact_id=a.id
  LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id
+ LEFT JOIN artifact_team_run_sources tr ON tr.artifact_id=a.id AND tr.workspace_id=a.workspace_id
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
  LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
  LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
+
+// Row = artifacts.* plus the saved kinds, sources and previews.
+export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
+ s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
+ md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
+ b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
+ cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
+ tr.run_id AS team_run_id, tr.position AS team_run_position, tr.run_title AS team_run_title,
+ sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json` + ROW_JOINS
 
 export function publicKind(row) {
   if (row.media_mime) return 'media'
@@ -71,6 +75,7 @@ export function publicKind(row) {
 }
 
 export function sourceView(row) {
+  if (row.team_run_id) return {kind:'team_run_step', id:row.team_run_id, position:row.team_run_position, run_title:row.team_run_title}
   if (row.chat_message_id) {
     const data = { kind: 'agent_message', id: row.chat_message_id, conversation_id: row.chat_conversation_id }
     if (row.chat_agent_id) data.agent_id = row.chat_agent_id

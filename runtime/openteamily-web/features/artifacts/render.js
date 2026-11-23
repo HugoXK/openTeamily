@@ -220,11 +220,14 @@ export function cleanFilename(name) {
   return SAFE_FILENAME.test(name) ? name : 'file'
 }
 
+export function savedMediaFilename(name) {
+  const value = typeof name === 'string' ? name.trim().toWellFormed() : ''
+  if (!value || value.length > 80 || value.startsWith('.') || value.includes('..') || /[\x00-\x1f\x7f<>:"/\\|?*]/.test(value)) return 'file'
+  return value
+}
+
 export function exportFilename(title, kind, revision = null, mediaFilename = null) {
-  if (kind === 'media') {
-    const name = cleanFilename(mediaFilename || '')
-    return name !== 'file' || !mediaFilename ? name : 'file'
-  }
+  if (kind === 'media') return savedMediaFilename(mediaFilename)
   const suffix = { document: '.txt', website: '.html', whiteboard: '.svg', slides: '.html', dashboard: '.html' }[kind] ?? '.txt'
   const base = kind + (revision ? `-${revision}` : '') + suffix
   return SAFE_FILENAME.test(base) ? base : 'artifact' + suffix

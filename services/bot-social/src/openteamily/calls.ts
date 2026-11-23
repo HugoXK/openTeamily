@@ -6,6 +6,7 @@ import { newId } from "../ids.js";
 import { body, hashCode, OtContext, params, query, text } from "./core.js";
 import { requireMember } from "./teams.js";
 import { requireDirectReach } from "./messenger.js";
+import { CALL_RECORDING_SCHEMA, callRecording, changeCallRecording, recordingCommand } from "./call-recording.js";
 
 export const CALLS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_live_calls (
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS ot_call_peers (
   owner_id TEXT NOT NULL, expires INTEGER NOT NULL, UNIQUE(call_id,owner_id)
 );
 CREATE INDEX IF NOT EXISTS ot_call_peer_expiry ON ot_call_peers(expires);
+${CALL_RECORDING_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_call_signals (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, call_id TEXT NOT NULL REFERENCES ot_live_calls(id) ON DELETE CASCADE,
   sender TEXT NOT NULL REFERENCES ot_call_peers(id) ON DELETE CASCADE,
@@ -31,6 +33,21 @@ CREATE TABLE IF NOT EXISTS ot_call_meetings (
   conversation_id TEXT PRIMARY KEY REFERENCES ot_conversations(id) ON DELETE CASCADE,
   host_owner TEXT NOT NULL, code_hash TEXT NOT NULL UNIQUE, expires INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ot_call_records (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('audio','video')),
+  started_at INTEGER NOT NULL, ended_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS ot_call_attendees (
+  call_id TEXT NOT NULL REFERENCES ot_call_records(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, name TEXT NOT NULL, joined_at INTEGER NOT NULL,
+  PRIMARY KEY(call_id,owner_id)
+);
+CREATE TRIGGER IF NOT EXISTS ot_call_record_after_delete
+AFTER DELETE ON ot_live_calls
+BEGIN
+  UPDATE ot_call_records SET ended_at=MAX(started_at,CAST(strftime('%s','now') AS INTEGER)*1000)
+    WHERE id=OLD.id AND ended_at IS NULL;
+END;
 `;
 
 const PEER_TTL = 60_000;
@@ -39,9 +56,12 @@ const MAX_SIGNALS = 240;
 const SIGNAL_KEY = /^[a-zA-Z0-9_-]{16,64}$/;
 const MEETING_CODE = /^[a-zA-Z0-9_-]{24}$/;
 const MEETING_TTL = 6 * 60 * 60 * 1000;
+const CALL_ID = /^otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const RECORD_ATTENDEES = 50;
 type Call = { id: string; conversation_id: string; kind: "audio" | "video"; created_at: number };
 type Peer = { id: string; owner_id: string };
 type Meeting = Call & { title: string; host_owner: string };
+type CallRecord = { id: string; title: string; kind: Call["kind"]; started_at: number; ended_at: number | null };
 
 function callContext(ot: OtContext, req: FastifyRequest, teamId: unknown) {
   const me = ot.me(req);
@@ -62,7 +82,8 @@ function callContext(ot: OtContext, req: FastifyRequest, teamId: unknown) {
 }
 
 function prune(ot: OtContext, conversationId?: string) {
-  ot.run("DELETE FROM ot_call_peers WHERE expires<=?", ot.now());
+  const now = ot.now();
+  ot.run("DELETE FROM ot_call_peers WHERE expires<=?", now);
   if (conversationId && !ot.get("SELECT 1 FROM ot_call_meetings WHERE conversation_id=?", conversationId)) {
     ot.run(`DELETE FROM ot_call_peers WHERE call_id IN (SELECT id FROM ot_live_calls WHERE conversation_id=?)
       AND owner_id NOT IN (SELECT owner_id FROM ot_conversation_members WHERE conversation_id=?)`, conversationId, conversationId);
@@ -71,18 +92,40 @@ function prune(ot: OtContext, conversationId?: string) {
       AND owner_id NOT IN (SELECT m.owner_id FROM ot_team_members m JOIN ot_conversations g ON g.team_id=m.team_id
         WHERE g.id=? AND m.suspended=0)`, conversationId, conversationId);
   }
+  ot.run(`UPDATE ot_call_records SET ended_at=MAX(started_at,?) WHERE ended_at IS NULL AND id IN (
+    SELECT c.id FROM ot_live_calls c LEFT JOIN ot_call_meetings m ON m.conversation_id=c.conversation_id
+    WHERE m.expires<=? OR NOT EXISTS (SELECT 1 FROM ot_call_peers p WHERE p.call_id=c.id))`, now, now);
   ot.run(`DELETE FROM ot_conversations WHERE id IN (SELECT m.conversation_id FROM ot_call_meetings m
     WHERE m.expires<=? OR NOT EXISTS (SELECT 1 FROM ot_live_calls c JOIN ot_call_peers p ON p.call_id=c.id
-      WHERE c.conversation_id=m.conversation_id))`, ot.now());
+      WHERE c.conversation_id=m.conversation_id))`, now);
   ot.run("DELETE FROM ot_live_calls WHERE id NOT IN (SELECT call_id FROM ot_call_peers)");
 }
 
-function describe(ot: OtContext, call: Call) {
+function recordAttendance(ot: OtContext, call: Call, ownerId: string, joinedAt: number) {
+  if (!ot.get("SELECT 1 FROM ot_call_records WHERE id=?", call.id)) {
+    const named = ot.get<{title: string}>("SELECT title FROM ot_call_titles WHERE call_id=?", call.id);
+    const conversation = ot.get<{title: string}>("SELECT title FROM ot_conversations WHERE id=?", call.conversation_id);
+    const fallback = call.kind === "video" ? "视频通话" : "语音通话";
+    const title = (named?.title || conversation?.title || "").trim().slice(0, 80).replace(/[\uD800-\uDBFF]$/, "") || fallback;
+    ot.run("INSERT OR IGNORE INTO ot_call_records(id,title,kind,started_at) VALUES(?,?,?,?)", call.id, title, call.kind, call.created_at);
+  }
+  const profile = ot.profileView(ownerId);
+  const name = (profile.display_name || profile.handle || "").trim().slice(0, 80).replace(/[\uD800-\uDBFF]$/, "") || "成员";
+  ot.run("INSERT OR IGNORE INTO ot_call_attendees VALUES(?,?,?,?)", call.id, ownerId, name, joinedAt);
+}
+
+function attendedCall(ot: OtContext, id: string, ownerId: string) {
+  return ot.get<CallRecord>(`SELECT r.* FROM ot_call_records r JOIN ot_call_attendees a ON a.call_id=r.id
+    WHERE r.id=? AND a.owner_id=?`, id, ownerId);
+}
+
+function describe(ot: OtContext, call: Call, joined = false) {
   const named = ot.get<{title: string}>("SELECT title FROM ot_call_titles WHERE call_id=?", call.id);
   const peers = ot.all<Peer>("SELECT id,owner_id FROM ot_call_peers WHERE call_id=? ORDER BY id", call.id);
   return {
     id: call.id, kind: call.kind, created_at: call.created_at,
     ...(named ? {title: named.title} : {}),
+    ...(joined ? {recording: callRecording(ot, call.id)} : {}),
     peers: peers.map(peer => {
       const profile = ot.profileView(peer.owner_id);
       return { id: peer.id, name: profile.display_name || profile.handle || "成员" };
@@ -111,6 +154,7 @@ function joinPeer(ot: OtContext, call: Call, ownerId: string, peerId: unknown, n
     assert(count && count.n < MAX_PEERS, 409, "call_full", "call is full");
     ot.run("INSERT INTO ot_call_peers VALUES(?,?,?,?)", peerId, call.id, ownerId, now + PEER_TTL);
   }
+  recordAttendance(ot, call, ownerId, now);
   return peerId;
 }
 
@@ -159,6 +203,28 @@ type CallAccess = (req: FastifyRequest, input: any) => {ownerId: string; convers
 export function registerCalls(app: FastifyInstance, ot: OtContext) {
   const root = "/v1/ot/conversations/:id/call";
   const iceServers = iceConfig();
+  // Rooms already active during a service upgrade have only their current peer leases.
+  ot.tx(() => {
+    const peers = ot.all<Call & {owner_id: string}>(`SELECT c.*,p.owner_id FROM ot_live_calls c
+      JOIN ot_call_peers p ON p.call_id=c.id WHERE p.expires>?`, ot.now());
+    for (const peer of peers) recordAttendance(ot, peer, peer.owner_id, ot.now());
+  });
+  app.get("/v1/ot/call-records/:id", async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req);
+    const id = params(req).id;
+    const record = CALL_ID.test(id) && attendedCall(ot, id, me.ownerId);
+    assert(record, 404, "call_record_not_found", "call record not found");
+    if (record.ended_at === null) {
+      const live = ot.get<Call>("SELECT * FROM ot_live_calls WHERE id=?", id);
+      ot.tx(() => prune(ot, live?.conversation_id));
+    }
+    const closed = attendedCall(ot, id, me.ownerId);
+    assert(closed && closed.ended_at !== null, 409, "meeting_call_active", "the call has not ended");
+    const attendees = ot.all<{name: string}>(`SELECT name FROM ot_call_attendees WHERE call_id=?
+      ORDER BY joined_at,owner_id LIMIT ?`, id, RECORD_ATTENDEES);
+    return {record: {...closed, attendees: attendees.map(row => row.name)}};
+  });
   app.get(root, async req => {
     const {conversation} = callContext(ot, req, query(req).team_id);
     prune(ot, conversation.id);
@@ -185,7 +251,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
         }
       }
       const peerId = joinPeer(ot, call, me.ownerId, input.peer_id, now);
-      const view = describe(ot, call);
+      const view = describe(ot, call, true);
       if (starting) {
         const by = ot.profileView(me.ownerId);
         for (const member of ot.all<{owner_id: string}>(
@@ -244,7 +310,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
         meeting = {id, conversation_id: conversationId, created_at: now, kind: "video", title, host_owner: ownerId};
       }
       const peerId = joinPeer(ot, meeting, ownerId, input.peer_id, now);
-      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting), peer_id: peerId, ice_servers: iceServers(peerId, now)};
+      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting, true), peer_id: peerId, ice_servers: iceServers(peerId, now)};
     });
   });
 
@@ -262,7 +328,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
       prune(ot);
       const meeting = findMeeting(input.code);
       const peerId = joinPeer(ot, meeting, ownerId, input.peer_id, now);
-      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting), peer_id: peerId, ice_servers: iceServers(peerId, now)};
+      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting, true), peer_id: peerId, ice_servers: iceServers(peerId, now)};
     });
   });
 
@@ -278,11 +344,14 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
   app.post(meetings + "/end", async req => {
     const input = body(req);
     const {ownerId, conversationId} = meetingAccess(req, input);
-    lease(ot, conversationId, ownerId, input);
-    const ended = ot.run(`DELETE FROM ot_conversations WHERE id=? AND id IN
-      (SELECT conversation_id FROM ot_call_meetings WHERE host_owner=?)`, conversationId, ownerId);
-    assert(ended.changes === 1, 403, "forbidden", "only the host may end the meeting");
-    return {ended: true};
+    return ot.tx(() => {
+      const {call} = lease(ot, conversationId, ownerId, input);
+      assert(ot.get("SELECT 1 FROM ot_call_meetings WHERE conversation_id=? AND host_owner=?", conversationId, ownerId),
+        403, "forbidden", "only the host may end the meeting");
+      ot.run("UPDATE ot_call_records SET ended_at=MAX(started_at,?) WHERE id=? AND ended_at IS NULL", ot.now(), call.id);
+      ot.run("DELETE FROM ot_conversations WHERE id=?", conversationId);
+      return {ended: true, handoff: {id: call.id}};
+    });
   });
 }
 
@@ -296,7 +365,18 @@ function registerCallActions(app: FastifyInstance, ot: OtContext, root: string, 
     ot.run("UPDATE ot_call_peers SET expires=? WHERE id=?", ot.now() + PEER_TTL, peer.id);
     const signals = ot.all<{seq: number; sender: string; payload: string}>(
       "SELECT seq,sender,payload FROM ot_call_signals WHERE call_id=? AND recipient=? AND seq>? ORDER BY seq LIMIT 64", call.id, peer.id, after);
-    return {call: describe(ot, call), signals: signals.map(row => ({seq: row.seq, from: row.sender, ...JSON.parse(row.payload)}))};
+    return {call: describe(ot, call, true), signals: signals.map(row => ({seq: row.seq, from: row.sender, ...JSON.parse(row.payload)}))};
+  });
+
+  app.post(root + "/recording", {bodyLimit: 1024}, async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const input = body(req);
+    const {ownerId, conversationId} = access(req, input);
+    const command = recordingCommand(input);
+    return ot.tx(() => {
+      const {call, peer} = lease(ot, conversationId, ownerId, input);
+      return {recording: changeCallRecording(ot, call.id, peer.id, command)};
+    });
   });
 
   app.post(root + "/signal", async req => {
@@ -319,11 +399,14 @@ function registerCallActions(app: FastifyInstance, ot: OtContext, root: string, 
   app.post(root + "/leave", async req => {
     const input = body(req);
     const {ownerId, conversationId} = access(req, input);
-    if (typeof input.peer_id === "string" && typeof input.call_id === "string") {
-      ot.run(`DELETE FROM ot_call_peers WHERE id=? AND owner_id=? AND call_id IN
-        (SELECT id FROM ot_live_calls WHERE id=? AND conversation_id=?)`, input.peer_id, ownerId, input.call_id, conversationId);
-    }
-    prune(ot, conversationId);
-    return {left: true};
+    return ot.tx(() => {
+      if (typeof input.peer_id === "string" && typeof input.call_id === "string") {
+        ot.run(`DELETE FROM ot_call_peers WHERE id=? AND owner_id=? AND call_id IN
+          (SELECT id FROM ot_live_calls WHERE id=? AND conversation_id=?)`, input.peer_id, ownerId, input.call_id, conversationId);
+      }
+      prune(ot, conversationId);
+      const record = typeof input.call_id === "string" && attendedCall(ot, input.call_id, ownerId);
+      return {left: true, ...(record && record.ended_at !== null ? {handoff: {id: record.id}} : {})};
+    });
   });
 }

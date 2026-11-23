@@ -79,11 +79,31 @@ export function describeAppearance(values, now = new Date(), media) {
   if (appearance === 'dark') return '当前为深色。';
   if (appearance === 'auto') {
     const until = nextSwitchLabel(values, theme);
-    return until ? '当前为' + look + '，直到 ' + until + '。' : '当前为' + look + '。';
+    return until ? look + '，直到 ' + until + '。' : '当前为' + look + '。';
   }
   return '当前为' + look + '（跟随系统）。';
 }
 
+const OVERVIEW_CHOICES = {
+  'appearance.light': ['浅色', 'Light'],
+  'appearance.dark': ['深色', 'Dark'],
+  'appearance.auto': ['自动', 'Automatic'],
+  'appearance.system': ['跟随系统', 'System'],
+  'message_folding.compact': ['紧凑', 'Compact'],
+  'message_folding.standard': ['标准', 'Standard'],
+  'message_folding.none': ['不折叠', 'Do not fold'],
+};
+
+export function syncOverviewCurrentValues(document, values) {
+  const appearance = document.getElementById('appearance-current');
+  const folding = document.getElementById('folding-current');
+  if (appearance) {
+    appearance.textContent = uiText(document, `appearance.${values.appearance}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+  if (folding) {
+    folding.textContent = uiText(document, `message_folding.${values.message_folding}`, undefined, OVERVIEW_CHOICES) || '';
+  }
+}
 
 const AUTOSAVE_KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end',
                        'language', 'chat_language', 'auto_translate', 'send_shortcut',
@@ -202,20 +222,21 @@ export const CONNECTOR_CATALOG = [
   {id: 'mail', name: 'Mailbox', category: 'mail', about: 'Read and send email over IMAP and SMTP'},
 ];
 
-export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG) {
+export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG, group = 'all') {
   const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return catalog.slice();
   return catalog.filter((item) => (
-    item.id.toLowerCase().includes(needle)
-    || item.name.toLowerCase().includes(needle)
-    || item.about.toLowerCase().includes(needle)
+    (group === 'all' || item.category === group)
+    && (!needle
+      || item.id.toLowerCase().includes(needle)
+      || item.name.toLowerCase().includes(needle)
+      || item.about.toLowerCase().includes(needle))
   ));
 }
 
-export function applyConnectorSearch(document, query) {
+export function applyConnectorSearch(document, query, group = 'all') {
   const list = document.getElementById('connectors-catalog');
   const empty = document.getElementById('connectors-empty');
-  const visible = filterConnectorCatalog(query);
+  const visible = filterConnectorCatalog(query, CONNECTOR_CATALOG, group);
   if (!list) {
     if (empty) empty.hidden = visible.length > 0;
     return visible;
@@ -250,8 +271,8 @@ export function composioRowState(row, configured, connection) {
             title: '未接通：Composio 没有这个应用，暂时不能连接。'};
   }
   if (!configured) {
-    return {state: 'unconfigured', status: '未配置 Composio', button: '+ 连接', disabled: true, action: '',
-            title: '未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。'};
+    return {state: 'unconfigured', status: '未配置 Composio', button: '配置密钥', disabled: false, action: 'focus-key',
+            title: '前往 Composio API key 输入框。'};
   }
   if (connection && connection.state === 'connected') {
     return {state: 'connected', status: '已连接', button: '断开', disabled: false, action: 'disconnect',
@@ -299,6 +320,11 @@ export function applyComposioRows(document, configured, items) {
     }
     applied.push({id: node.getAttribute('data-connector-id'), ...view});
   }
+  const connectedCount = document.getElementById('connectors-connected-count');
+  if (connectedCount) {
+    connectedCount.textContent = applied.filter(row => row.state === 'connected').length + ' 个已连接';
+    connectedCount.hidden = false;
+  }
   return applied;
 }
 
@@ -306,19 +332,41 @@ const COMPOSIO_ERRORS = {
   composio_not_configured: '未配置 Composio：先填入你自己的 Composio API key。',
   composio_key_rejected: 'Composio 拒绝了这个 API key，请检查后重新保存。',
   composio_unreachable: '暂时连不上 Composio，请稍后再试。',
-  composio_rate_limited: 'Composio 请求太频繁，请稍后再试。',
+  composio_conflict: 'Composio 报告连接冲突。请刷新页面查看当前连接，再重试。',
+  composio_rate_limited: 'Composio 暂时限制了请求次数。请稍后重试。',
+  composio_upstream: 'Composio 服务暂时异常，请稍后重试。',
   composio_not_found: 'Composio 里找不到这个连接。',
   composio_failed: 'Composio 请求失败。',
 };
 
 export function composioMessage(error, fallback) {
-  return (error && COMPOSIO_ERRORS[error.code]) || fallback;
+  return error && Object.hasOwn(COMPOSIO_ERRORS, error.code) ? COMPOSIO_ERRORS[error.code] : fallback;
+}
+
+function placeAppearanceStatus(document, auto) {
+  const status = document.getElementById('appearance-status');
+  const scheduleCard = document.getElementById('appearance-schedule-card');
+  const appearance = document.getElementById('appearance');
+  if (!status || !status.parentNode) return;
+  if (auto && scheduleCard && typeof scheduleCard.insertBefore === 'function') {
+    const notes = typeof scheduleCard.querySelectorAll === 'function'
+      ? scheduleCard.querySelectorAll(':scope > .note')
+      : [];
+    const lastNote = notes[notes.length - 1];
+    if (lastNote) scheduleCard.insertBefore(status, lastNote);
+    else if (typeof scheduleCard.appendChild === 'function') scheduleCard.appendChild(status);
+    return;
+  }
+  if (appearance && appearance.parentNode && typeof appearance.parentNode.insertBefore === 'function') {
+    appearance.parentNode.insertBefore(status, scheduleCard || appearance.nextSibling);
+  }
 }
 
 export function syncAppearanceExtras(document, values) {
   const scheduleCard = document.getElementById('appearance-schedule-card');
   const customFields = document.getElementById('custom-period-fields');
-  if (scheduleCard) scheduleCard.hidden = !values || values.appearance !== 'auto';
+  const auto = Boolean(values && values.appearance === 'auto');
+  if (scheduleCard) scheduleCard.hidden = !auto;
   if (customFields) {
     customFields.hidden = !(values && values.appearance === 'auto' && values.appearance_schedule === 'custom');
   }
@@ -330,6 +378,7 @@ export function syncAppearanceExtras(document, values) {
       zone.textContent = 'Asia/Shanghai';
     }
   }
+  placeAppearanceStatus(document, auto);
 }
 
 export function readModelForm(form) {
@@ -351,6 +400,38 @@ export function fillModelForm(form, values) {
   form.elements.base_url.value = values && values.api_key_set ? (values.base_url || '') : '';
   form.elements.model.value = values && values.api_key_set ? (values.model || '') : '';
   form.elements.api_key.value = '';
+}
+
+export function renderModelApi(document, form, data, failed = false) {
+  const values = data?.model_api;
+  const effective = data?.effective;
+  const platform = effective?.source === 'platform';
+  const account = effective?.source === 'account';
+  const state = platform ? 'platform' : account ? 'account' : (values || failed) ? 'unavailable' : 'loading';
+  const source = platform ? 'platform-active' : account ? 'account-active' :
+    failed ? 'load-error' : values ? 'none' : 'loading';
+
+  function label(id, suffix) {
+    const node = document.getElementById(id);
+    const key = 'settings.model-api.' + suffix;
+    node.textContent = uiText(document, key);
+    node.setAttribute('data-ui-text', key);
+  }
+
+  label('model-key-state', state);
+  label('model-effective-source', source);
+  label('model-api-override-title', account ? 'override-edit' : 'override');
+  const model = (platform || account) && effective.model;
+  document.getElementById('model-effective-model').textContent = model ? ' (' + model + ')' : '';
+  document.getElementById('model-platform-ready').hidden = !platform;
+  document.getElementById('model-key-state-detail').hidden = !values?.api_key_set;
+  document.getElementById('restore-platform-model').hidden = !values?.api_key_set;
+  const override = document.getElementById('model-api-override');
+  override.hidden = !values;
+  override.open = account;
+  document.getElementById('model-api-fields').disabled = !values;
+  fillModelForm(form, values);
+  form.elements.api_key.required = Boolean(values && !values.api_key_set);
 }
 
 export function fillForm(form, values) {
@@ -515,6 +596,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const modelFields = modelForm && document.getElementById('model-api-fields');
   const imageForm = document.getElementById('image-api-form');
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
@@ -531,8 +613,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let revision = 0;
   let current = null;
   let loadSequence = 0;
+  const notificationState = document.getElementById('notification-prefs-state');
+  const notificationInputs = Object.fromEntries(['mentions', 'task_completion', 'artifacts'].map(key =>
+    [key, document.getElementById('notify-' + key.replaceAll('_', '-'))]).filter(([, input]) => input));
+  let notificationValues = {};
   let languageSave = null;
-  let modelRevision = 0;
+  let modelRevision = null;
   let pendingSecretConfirm = null;
   let secretConfirmSeq = 0;
 
@@ -600,6 +686,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncAppearanceExtras(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    syncOverviewCurrentValues(document, current);
     const languageCurrent = document.getElementById('language-current');
     const languageSelect = form.querySelector('select[name="language"]');
     if (languageCurrent && languageSelect) {
@@ -641,8 +728,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: payload};
   }
 
+  function prepareNotificationPrefs() {
+    notificationValues = {};
+    if (notificationState) notificationState.textContent = '';
+    for (const input of Object.values(notificationInputs)) {
+      input.disabled = true;
+      input.checked = false;
+    }
+  }
+
+  async function renderNotificationPrefs(sequence, pending) {
+    if (!pending) return;
+    const result = await pending;
+    if (sequence !== loadSequence) return;
+    if (result?.status !== 200 || !result.body?.prefs) {
+      if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.load-error');
+      return;
+    }
+    for (const [key, input] of Object.entries(notificationInputs)) {
+      const value = result.body.prefs[key];
+      const supported = typeof value === 'boolean';
+      const row = document.getElementById('row-notify-' + key.replaceAll('_', '-'));
+      if (row) row.hidden = !supported;
+      if (!supported) continue;
+      notificationValues[key] = value;
+      input.checked = value;
+      input.disabled = false;
+    }
+  }
+
+  for (const [key, input] of Object.entries(notificationInputs)) {
+    input.addEventListener('change', async () => {
+      const previous = notificationValues[key];
+      if (input.disabled || typeof previous !== 'boolean') return;
+      const sequence = loadSequence;
+      input.disabled = true;
+      const saved = await request('PUT', '/v1/notification-prefs', {changes:{[key]:input.checked}}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      const value = saved?.status === 200 ? saved.body?.prefs?.[key] : undefined;
+      input.disabled = false;
+      if (typeof value !== 'boolean') {
+        input.checked = previous;
+        if (notificationState) notificationState.textContent = uiText(document, 'settings.notify.save-error');
+        return;
+      }
+      input.checked = notificationValues[key] = value;
+      if (notificationState) notificationState.textContent = uiText(document, value ? 'settings.notify.enabled' : 'settings.notify.disabled');
+    });
+  }
+
   async function load() {
     const sequence = ++loadSequence;
+    prepareNotificationPrefs();
+    if (modelForm) {
+      modelRevision = null;
+      renderModelApi(document, modelForm);
+    }
     if (languageSave) {
       languageSave.input.disabled = false;
       languageSave = null;
@@ -667,6 +808,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const account = session.body.user.id ?? session.body.user.username;
     switchImageAccount(account);
     for (const api of mediaApis) api.setAccount(account);
+    const modelRead = modelForm && request('GET', '/v1/model-api').catch(() => null);
+    const location = globalThis.location || {};
+    const prefsRead = Object.keys(notificationInputs).length > 0 && settingsViewFromLocation(location.pathname, location.hash) === 'hub'
+      ? request('GET', '/v1/notification-prefs').catch(() => null) : null;
     const settings = await request('GET', '/v1/settings');
     if (sequence !== loadSequence) return;
     if (settings.status !== 200) {
@@ -681,23 +826,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillForm(form, current);
     refreshAppearance();
     renderView();
-    if (modelForm) {
-      const model = await request('GET', '/v1/model-api');
-      if (model.status === 200) {
-        modelRevision = model.body.model_api.revision;
-        fillModelForm(modelForm, model.body.model_api);
-        const effective = model.body.effective || {};
-        const source = effective.source === 'account' ? '正在使用你自己的配置' :
-          effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
-        const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
-        document.getElementById('model-effective').textContent = label;
-        const keyText = uiText(document, model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
-        const keyState = document.getElementById('model-key-state');
-        keyState.setAttribute('data-ui-text', model.body.model_api.api_key_set ? 'settings.model-api.key-set' : 'settings.model-api.key-unset');
-        keyState.textContent = keyText;
-        const keyDetail = document.getElementById('model-key-state-detail');
-        if (keyDetail) keyDetail.textContent = keyText;
-      }
+    void renderNotificationPrefs(sequence, prefsRead);
+    if (modelRead) {
+      const model = await modelRead;
+      if (sequence !== loadSequence) return;
+      const values = model?.status === 200 && model.body?.model_api;
+      if (values && Number.isInteger(values.revision)) modelRevision = values.revision;
+      renderModelApi(document, modelForm, modelRevision === null ? null : model.body, modelRevision === null);
     }
     await renderSkillSecrets();
     await syncComposio();
@@ -958,27 +1093,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
   if (modelForm) {
-    modelForm.addEventListener('submit', async event => {
-      event.preventDefault();
-      const changes = readModelForm(modelForm);
+    async function saveModelApi(changes, success) {
+      if (modelRevision === null || modelFields.disabled) return;
+      const sequence = loadSequence;
       if (!Object.keys(changes).length) {
-        show('ok', '没有需要保存的模型 API 更改。');
+        show('ok', uiText(document, 'settings.model-api.no-changes'));
         return;
       }
-      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes});
+      modelFields.disabled = true;
+      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes}).catch(() => null);
+      if (sequence !== loadSequence) return;
+      modelFields.disabled = false;
       modelForm.elements.api_key.value = '';
-      if (result.status === 409) {
-        show('error', '模型 API 已在别处更新，已重新加载，请再保存一次。');
+      if (result?.status === 409) {
+        show('error', uiText(document, 'settings.model-api.save-conflict'));
         await load();
         return;
       }
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '保存模型 API 失败。'));
+      if (result?.status !== 200) {
+        show('error', uiText(document, 'settings.model-api.save-error'));
         return;
       }
-      show('ok', '模型 API 已保存。');
+      show('ok', uiText(document, success));
       await load();
+    }
+
+    modelForm.addEventListener('submit', event => {
+      event.preventDefault();
+      return saveModelApi(readModelForm(modelForm), 'settings.model-api.saved');
     });
+    document.getElementById('restore-platform-model').addEventListener('click', () =>
+      saveModelApi({api_key: null}, 'settings.model-api.restored'));
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -1007,6 +1152,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     node.textContent = text;
   }
 
+  function focusComposioKey() {
+    const input = document.getElementById('composio-key-input');
+    if (input) input.focus();
+  }
+
+  const keyJump = document.getElementById('connectors-key-jump');
+  if (keyJump) keyJump.addEventListener('click', event => {
+    event.preventDefault();
+    focusComposioKey();
+  });
+
   function renderComposio(view) {
     composioConfigured = Boolean(view && view.configured);
     const badge = document.getElementById('composio-key-state');
@@ -1018,6 +1174,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (input) input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
     if (remove) remove.hidden = !composioConfigured;
+    if (keyJump) keyJump.hidden = composioConfigured;
     applyComposioRows(document, composioConfigured, composioItems);
   }
 
@@ -1105,6 +1262,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? event.target.closest('button[data-composio-action]') : null;
       if (!button || button.disabled) return;
       const action = button.getAttribute('data-composio-action');
+      if (action === 'focus-key') {
+        focusComposioKey();
+        return;
+      }
       const row = button.closest('[data-connector-id]');
       const toolkit = row ? row.getAttribute('data-composio-toolkit') : '';
       if (action === 'connect' && toolkit) {
@@ -1149,7 +1310,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const connectorSearch = document.getElementById('connector-search');
   if (connectorSearch) {
-    const applySearch = () => applyConnectorSearch(document, connectorSearch.value);
+    let group = 'all';
+    const applySearch = () => applyConnectorSearch(document, connectorSearch.value, group);
+    const filters = document.getElementById('connectors-filters');
+    if (filters) {
+      const groups = new Map();
+      for (const row of CONNECTOR_CATALOG) {
+        groups.set(row.category, (groups.get(row.category) || 0) + 1);
+      }
+      const overview = document.getElementById('connectors-catalog-count');
+      if (overview) overview.textContent = CONNECTOR_CATALOG.length + ' 个应用 · ' + groups.size + ' 个分类';
+
+      const choices = filters.querySelectorAll('[data-connector-group]');
+      for (const choice of choices) {
+        const category = choice.dataset.connectorGroup;
+        const count = category === 'all' ? CONNECTOR_CATALOG.length : (groups.get(category) || 0);
+        choice.querySelector('span').textContent = count;
+        choice.addEventListener('click', () => {
+          group = category;
+          for (const option of choices) {
+            option.setAttribute('aria-pressed', String(option === choice));
+          }
+          applySearch();
+        });
+      }
+      filters.hidden = false;
+    }
     connectorSearch.addEventListener('input', applySearch);
     connectorSearch.addEventListener('search', applySearch);
     applySearch();

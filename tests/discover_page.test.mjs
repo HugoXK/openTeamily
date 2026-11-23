@@ -42,7 +42,7 @@ test('isTeamsCatalog only matches the recorded tab=agents&section=groups query',
 });
 
 test('available feed categories have a consistent order', () => {
-  assert.deepEqual(FEED_CATEGORIES, ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品']);
+  assert.deepEqual(FEED_CATEGORIES, ['网页', '文档', '图片', '音乐', '幻灯片', '视频', '3D 作品', '白板', '看板', '电子表格']);
 });
 
 test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
@@ -83,25 +83,28 @@ test('catalog categories are selectable and the search opens a real dialog', () 
 });
 
 
-test('the teams catalog links to the existing team wizard', () => {
+test('the teams catalog links to separate workspace and AI team creation flows', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
   assert.match(html, /id="catalog-create-team" href="\/team" hidden>\+ 创建团队</);
+  assert.match(html, /id="catalog-create-agent-team" href="\/agents\?tab=teams&amp;new=1" hidden>\+ 创建 AI 智能体团队</);
   assert.doesNotMatch(html, /没有公共 AI 团队目录接口/);
 });
 
 test('team cards render real membership and keep a join action for nonmembers', () => {
   const doc = fakeDocument();
-  const team = {workspace_id: 'ott_1', name: '策划团队', summary: '<b>Brief</b>', member_count: 2};
+  const team = {workspace_id: 'd'.repeat(32), name: '策划团队', summary: '<b>Brief</b>', member_count: 2};
   const card = renderTeamCard(doc, team, {onJoin() {}});
   assert.equal(card.children[0].children[1].textContent, team.name);
   assert.equal(card.children[1].textContent, team.summary);
   assert.equal(card.children[2].children[0].textContent, '2 位成员');
   assert.equal(card.children[2].children[1].textContent, '申请加入');
   for (const [membership, label] of [['member','已加入'],['pending','等待审批'],['suspended','已暂停']]) {
-    const state = renderTeamCard(doc, {...team, membership}, {onJoin() {}}).children[2].children[1];
+    const footer = renderTeamCard(doc, {...team, membership}, {onJoin() {}}).children[2];
+    const state = footer.children[1];
     assert.equal(state.tagName, 'span');
     assert.equal(state.textContent, label);
+    assert.equal(footer.children[2]?.href, membership === 'member' ? '/members#workspace=' + team.workspace_id : undefined);
   }
 });
 
@@ -153,6 +156,8 @@ class Element {
   prepend(...nodes) { this.children.unshift(...nodes); }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
+  focus() {}
+  select() {}
   replaceChildren(...nodes) { this.children = nodes; }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; }
@@ -436,7 +441,10 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
     const cursor = url.searchParams.get('cursor');
     return {status: 200, json: async () => query
       ? {items: []}
-      : {items: [{name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one', summary: '<script>not HTML</script>'}],
+      : {items: [{
+        name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one',
+        summary: '<script>not HTML</script>', chat_enabled: Boolean(cursor),
+      }],
         cursor: cursor ? null : 'fixture-one'}};
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents'}});
@@ -450,9 +458,14 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
   assert.equal(profile.href, '/a/fixture-one');
   assert.equal(profile.textContent, 'Fixture');
   assert.equal(card.children[1].children[1].textContent, '<script>not HTML</script>');
-  assert.equal(classHits(card, 'catalog-use')[0].textContent, '复制');
+  assert.equal(classHits(card, 'catalog-use').length, 0);
+  assert.equal(classHits(card, 'catalog-chat')[0].href, '/a/fixture-one');
+  assert.equal(classHits(card, 'catalog-chat')[0].textContent, '查看主页');
   await el('catalog-more').handlers.click();
   assert.equal(el('discover-list').children.length, 2);
+  const chat = classHits(el('discover-list').children[1], 'catalog-chat')[0];
+  assert.equal(chat.href, '/a/fixture-two#conversation-title');
+  assert.equal(chat.textContent, '聊天');
   assert.equal(el('catalog-more').hidden, true);
   el('catalog-query').value = 'nothing & 中文';
   el('catalog-search').handlers.submit({preventDefault() {}});
@@ -479,6 +492,39 @@ test('catalog failure displays an error and leaves loading state', async () => {
   assert.match(doc.getElementById('catalog-error').textContent, /fixture unavailable/);
   assert.equal(doc.getElementById('catalog-panel').attributes['aria-busy'], 'false');
   assert.equal(doc.getElementById('discover-empty').hidden, true);
+});
+
+test('catalog history only reloads bounded pages for the same viewer and filters', async () => {
+  const {catalogQuery, mount} = await import('../openteamily/static/discover/app.mjs');
+  const query = '验收';
+  const category = 'content-creation';
+  const initial = catalogQuery(query, '', category);
+  const next = catalogQuery(query, 'page-one', category);
+  const key = (owner, path = initial) => JSON.stringify(['signed-in', owner, path]);
+  for (const [scope, pages, expected] of [
+    [key('reader'), 2, [initial, next]],
+    [key('someone-else'), 2, [initial]],
+    [key('reader', catalogQuery('另一条件', '', category)), 2, [initial]],
+    [key('reader'), 500, [initial]],
+  ]) {
+    const doc = fakeDocument();
+    const requests = [];
+    await mount(doc, {
+      location:{search:'?tab=agents&category=' + category + '&q=' + encodeURIComponent(query)},
+      history:{state:{discoverAgentDirectory:{key:scope, pages, scroll:320}}},
+      fetcher:async (path, {method}) => {
+        assert.equal(method, 'GET');
+        if (path === '/v1/auth/session') return commentResponse({user:{id:'reader', username:'alice'}});
+        if (path === '/v1/workspaces?limit=100') return commentResponse({items:[]});
+        requests.push(path);
+        return commentResponse(path === initial
+          ? {items:[{slug:'first-result',name:'First'}],cursor:'page-one'}
+          : {items:[{slug:'next-result',name:'Next'}]});
+      },
+    });
+    assert.deepEqual(requests, expected);
+    assert.equal(doc.getElementById('discover-list').children.length, expected.length);
+  }
 });
 
 test('catalog cards only link to profiles with a valid public slug', async () => {
@@ -543,6 +589,7 @@ test('anonymous viewers see login guidance and never query the teams directory',
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   assert.equal(doc.getElementById('catalog-tab-teams').attributes['aria-current'], 'page');
   assert.equal(doc.getElementById('catalog-create-team').hidden, false);
+  assert.equal(doc.getElementById('catalog-create-agent-team').hidden, true);
   assert.match(doc.getElementById('discover-empty').textContent, /登录后/);
   await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
   assert.deepEqual(requests, ['/v1/auth/session']);
@@ -559,11 +606,13 @@ test('search and join use the team directory and show the approval status', asyn
     requests.push([path, options.method]);
     if (path === '/v1/auth/session') return respond(200, {user: {id: 'one', username: 'alice'}});
     if (path === '/v1/team-directory/ott_1/join') return pending.promise;
-    assert.match(path, /^\/v1\/team-directory\?limit=100/);
+    assert.match(path, /^\/v1\/team-directory\?limit=24/);
     return respond(200, {items: path.includes('&q=') ? [] : [team]});
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-create-team').hidden, false);
+  assert.equal(el('catalog-create-agent-team').hidden, false);
   const teamAction = () => el('discover-list').children[0].children[0].children[1].children[1];
   const original = teamAction();
   const clicked = original.handlers.click();
@@ -579,11 +628,33 @@ test('search and join use the team directory and show the approval status', asyn
   assert.equal(el('discover-list').children.length, 1);
   assert.deepEqual(requests, [
     ['/v1/auth/session', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
     ['/v1/team-directory/ott_1/join', 'POST'],
-    ['/v1/team-directory?limit=100&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
   ]);
+});
+
+test('an empty team directory explains publication and keeps errors separate', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  let status = 200;
+  await mount(doc, {
+    location: {search: '?tab=agents&section=groups'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
+      if (path.startsWith('/v1/team-directory?')) return commentResponse({items: [], cursor: null}, status);
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const empty = doc.getElementById('discover-empty');
+  assert.equal(empty.hidden, false);
+  assert.match(empty.textContent, /创建团队后.*成员页.*团队目录/);
+  status = 503;
+  await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
+  assert.equal(empty.hidden, true);
+  assert.equal(doc.getElementById('catalog-error').hidden, false);
+  assert.equal(doc.getElementById('teams-retry').hidden, false);
 });
 
 test('feedQuery encodes a keyword and a recency cursor', () => {
@@ -591,6 +662,34 @@ test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
   assert.equal(feedQuery('设计', 'hot-key', '', 'popular'), 'limit=12&q=%E8%AE%BE%E8%AE%A1&cursor=hot-key&sort=popular');
   assert.equal(feedQuery('', '', '', 'latest', 'vera.home'), 'limit=12&creator=vera.home');
+});
+
+test('an empty author feed uses the canonical handle and can be cleared', async () => {
+  const {mount, feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const requests = [];
+  const mixedCase = '?creator=Writer.Home';
+  assert.equal(feedSearchText(feedStateFromSearch(mixedCase)), '?creator=writer.home');
+  assert.equal(feedSearchText(feedStateFromSearch('?kind=image&q=sample&creator=Writer.Home')),
+    '?kind=image&q=sample&creator=writer.home');
+  assert.equal(feedStateFromSearch('?creator=writer%2Fhome').creator, undefined);
+  await mount(doc, {
+    location: {search: mixedCase},
+    async fetcher(path) {
+      requests.push(path);
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [], cursor: null});
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const clear = doc.getElementById('feed-creator-filter');
+  assert.match(clear.textContent, /writer\.home/);
+  assert.equal(doc.getElementById('feed-note').textContent, '该作者还没有公开作品。');
+  assert.ok(requests.includes('/v1/discover/works?limit=12&creator=writer.home'));
+  await clear.handlers.click();
+  assert.equal(clear.hidden, true);
+  assert.equal(doc.getElementById('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
+  assert.ok(requests.includes('/v1/discover/works?limit=12'));
 });
 
 test('the activity feed renders opted-in work cards from the public API', async () => {
@@ -670,6 +769,81 @@ test('the feed only presents available filters', () => {
   }
   assert.doesNotMatch(html, />小游戏</);
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
+});
+
+test('a failed Discover feed shows retry before a successful empty result', async t => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const cases = [
+    {name: 'public feed', search: '', path: '/v1/discover/works?limit=12', note: FEED_ACTIVITY_EMPTY_NOTE},
+    {name: 'public search', search: '?q=notes', path: '/v1/discover/works?limit=12&q=notes', note: FEED_SEARCH_EMPTY_NOTE},
+    {name: 'following feed', search: '?feed=following', path: '/v1/discover/me/works?limit=12&tab=following',
+      note: FEED_FOLLOWING_NOTE, viewer: 'alice'},
+  ];
+  for (const {name, search, path, note, viewer} of cases) {
+    await t.test(name, async () => {
+      const doc = fakeDocument();
+      doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+      const reads = [];
+      await mount(doc, {location: {search}, fetcher: async requested => {
+        if (requested === '/v1/auth/session') {
+          return viewer ? commentResponse({user: {id: 'owner', username: viewer}}) : commentResponse({}, 401);
+        }
+        reads.push(requested);
+        if (reads.length === 1) return commentResponse({}, 503);
+        return commentResponse({items: [], viewer_username: viewer || null});
+      }});
+      const el = id => doc.getElementById(id);
+      assert.deepEqual(reads, [path]);
+      assert.equal(el('feed-error').hidden, false);
+      assert.match(el('feed-error').textContent, /无法加载公开作品/);
+      assert.equal(el('feed-note').textContent, '');
+      assert.equal(el('feed-following-empty').hidden, true);
+      assert.equal(el('feed-retry').hidden, false);
+
+      await el('feed-retry').handlers.click();
+      assert.deepEqual(reads, [path, path]);
+      assert.equal(el('feed-error').hidden, true);
+      assert.equal(el('feed-retry').hidden, true);
+      assert.equal(el('feed-note').textContent, note);
+      assert.equal(el('feed-following-empty').hidden, !viewer);
+    });
+  }
+});
+
+test('selecting the active feed category refreshes once and preserves its items and cursor on failure', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [], visits = [];
+  const delayed = Promise.withResolvers();
+  const work = {slug: 'layout-notes', title: '公开笔记', kind: 'document', creator: {username: 'alice'}};
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    calls.push(path);
+    if (calls.length === 2) return delayed.promise;
+    return {status: 200, json: async () => ({items: [work], cursor: '1.layout-notes'})};
+  };
+  await mount(doc, {fetcher, location: {search: '?kind=document'}, history: {pushState(...args) { visits.push(args); }}});
+  const el = id => doc.getElementById(id);
+  const selected = el('feed-kind-document');
+  const card = el('feed-grid').children[0];
+  assert.equal(card.dataset.slug, 'layout-notes');
+  const refresh = selected.handlers.click();
+  await selected.handlers.click();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1], '/v1/discover/works?limit=12&kind=document');
+  assert.equal(el('feed-grid').children[0], card);
+  assert.equal(el('feed-filters').dataset.refreshing, 'true');
+  assert.equal(el('feed-more').disabled, true);
+  delayed.resolve({status: 503, json: async () => ({})});
+  await refresh;
+  assert.equal(el('feed-grid').children[0], card);
+  assert.equal(el('feed-filters').dataset.refreshing, 'false');
+  assert.equal(el('feed-more').disabled, false);
+  assert.equal(el('feed-retry').hidden, false);
+  await el('feed-retry').handlers.click();
+  assert.equal(calls[2], calls[1]);
+  assert.equal(el('feed-retry').hidden, true);
+  assert.deepEqual(visits, []);
 });
 
 
@@ -752,6 +926,9 @@ test('feed selection round-trips through the URL search', async () => {
   assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', sort: 'latest', query: ''});
   assert.deepEqual(feedStateFromSearch('?sort=popular&q=cat'), {tab: 'activity', kind: '', sort: 'popular', query: 'cat'});
   assert.deepEqual(feedStateFromSearch('?kind=model3d'), {tab: 'activity', kind: 'model3d', sort: 'latest', query: ''});
+  for (const kind of ['document', 'whiteboard', 'dashboard', 'spreadsheet']) {
+    assert.equal(feedStateFromSearch('?kind=' + kind).kind, kind);
+  }
   assert.equal(feedSearchText(feedStateFromSearch('?sort=popular&q=cat')), '?sort=popular&q=cat');
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
@@ -946,12 +1123,26 @@ test('following nobody from a shared URL shows the following empty note, not a b
 
 test('work covers use real same-origin published media, not invented screenshots', () => {
   const doc = fakeDocument();
-  const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});
-  const cover = image.children.find(node => node.className === 'work-cover');
-  assert.equal(cover.tagName, 'img');
-  assert.equal(cover.src, '/w/real-photo/file');
-  assert.equal(cover.loading, 'lazy');
-  assert.equal(cover.alt, '');
+  const photo = {slug: 'real-photo', path: '/social/w/real-photo', title: '<safe>',
+    kind: 'image', file_available: true, file_mime: 'image/png'};
+  const image = renderFeedCard(doc, photo);
+  const [cover] = classHits(image, 'work-cover');
+  const [photoImage] = classHits(cover, 'work-cover-image');
+  assert.equal(cover.tagName, 'div');
+  assert.equal(photoImage.tagName, 'img');
+  assert.equal(photoImage.src, '/social/w/real-photo/file');
+  assert.equal(photoImage.loading, 'lazy');
+  assert.equal(photoImage.decoding, 'async');
+  assert.equal(photoImage.fetchPriority, 'low');
+  assert.equal(photoImage.alt, '');
+  photoImage.handlers.error();
+  assert.equal(photoImage.hidden, true);
+  assert.equal(cover.dataset.kind, 'image', 'the fixed cover remains after an image fails');
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: false}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_mime: 'video/mp4'}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, slug: '../photo'}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: undefined}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: undefined}, {legacyImage: true}), 'work-cover-image').length, 1);
   const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
   const fallback = website.children.find(node => node.className === 'work-cover');
   assert.equal(fallback.tagName, 'div');
@@ -961,6 +1152,133 @@ test('work covers use real same-origin published media, not invented screenshots
   assert.equal(fallback.src, undefined);
   const badge = website.children.find(node => node.className === 'kind');
   assert.equal(badge.textContent, '网页');
+});
+
+test('search excerpts highlight validated UTF-16 ranges using literal content', () => {
+  const doc = fakeDocument();
+  const prefix = '🚀 <script>';
+  const title = '标题';
+  const hit = '<img src=x>';
+  const text = prefix + hit + '</script>';
+  const item = detailFixture({title, match: {kind: 'body', text, start: prefix.length, end: prefix.length + hit.length}});
+  const card = renderFeedCard(doc, item);
+  const [before, mark, after] = classHits(card, 'feed-search-excerpt')[0].children;
+  assert.equal(before, prefix);
+  assert.equal(mark.tagName, 'mark');
+  assert.equal(mark.textContent, hit);
+  assert.equal(after, '</script>');
+  assert.equal(card.children[2].textContent, title);
+  const titleCard = renderFeedCard(doc, {...item, match: {kind: 'title', text: title, start: 1, end: 2}});
+  assert.equal(titleCard.children[2].children[1].textContent, '题');
+  assert.equal(classHits(titleCard, 'feed-search-excerpt').length, 0);
+  const bad = renderFeedCard(doc, {...item, match: {...item.match, end: text.length + 1}});
+  assert.equal(classHits(bad, 'feed-search-excerpt').length, 0);
+});
+
+test('the search debounces an IME commit, aborts an older query, retries the active filter, then clears on Escape', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const calls = [], visits = [];
+  const slow = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const location = {search: '?kind=document', pathname: '/discover'};
+  let retry = false;
+  await mount(doc, {
+    location,
+    history: {pushState(_state, _title, url) {visits.push(url);}},
+    async fetcher(path, {signal} = {}) {
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      calls.push({params, signal});
+      if (params.get('q') === '中文') {
+        started.resolve();
+        return slow.promise;
+      }
+      if (params.get('q') === '最新' && !retry) {
+        retry = true;
+        return commentResponse({}, 503);
+      }
+      return commentResponse({items: [detailFixture({title: params.get('q') || '目录'})]});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  const input = el('feed-query');
+  input.handlers.compositionstart();
+  input.value = '中';
+  input.handlers.input();
+  assert.equal(el('feed-clear').hidden, false);
+  assert.equal(calls.length, 1);
+  input.value = '中文';
+  input.handlers.compositionend();
+  assert.equal(calls.length, 1, 'composition waits for the debounce');
+  await started.promise;
+  assert.equal(calls.at(-1).params.get('q'), '中文');
+  const old = calls.at(-1);
+  input.value = '最新';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.equal(old.signal.aborted, true);
+  assert.match(el('feed-error').textContent, /无法加载/);
+  assert.equal(el('feed-retry').hidden, false);
+  await el('feed-retry').handlers.click();
+  assert.equal(el('feed-retry').hidden, true);
+  assert.equal(calls.at(-1).params.get('q'), '最新');
+  assert.equal(calls.at(-1).params.get('kind'), 'document');
+  slow.resolve(commentResponse({items: [detailFixture({title: '过期结果'})]}));
+  await flush();
+  assert.equal(el('feed-grid').children[0].children[0].children[2].textContent, '最新');
+  assert.match(el('feed-count').textContent, /1 件匹配作品/);
+  await input.handlers.keydown({key: 'Escape', preventDefault() {}});
+  assert.equal(el('feed-clear').hidden, true);
+  assert.equal(input.value, '');
+  assert.equal(visits.at(-1), '/discover?kind=document');
+  assert.equal(calls.at(-1).params.has('q'), false);
+});
+
+test('Back after changing a filter rereads fresh cursors to restore the previous depth, position and card focus', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const createElement = doc.createElement;
+  doc.createElement = tag => {
+    const element = createElement(tag);
+    element.focus = () => { doc.activeElement = element; };
+    return element;
+  };
+  const location = {pathname: '/discover', search: '?q=layout'};
+  const calls = [], handlers = {};
+  let firstPages = 0;
+  await mount(doc, {
+    location,
+    window: {addEventListener(type, handler) {handlers[type] = handler;}},
+    history: {pushState(_state, _title, url) {location.search = new URL(url, 'https://example.test').search;}},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      calls.push(params);
+      if (params.has('kind')) return commentResponse({items: []});
+      if (params.has('cursor')) return commentResponse({items: [detailFixture({slug: 'second-page'})]});
+      return commentResponse({items: [detailFixture({slug: 'first-page'})], cursor: 'page-' + ++firstPages});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  await el('feed-more').handlers.click();
+  const second = el('feed-grid').children[1];
+  const original = second.children[0];
+  original.closest = selector => selector === '.feed-entry' ? second : null;
+  original.focus();
+  el('main').scrollTop = 550;
+  await el('feed-kind-dashboard').handlers.click();
+  assert.equal(location.search, '?kind=dashboard&q=layout');
+  assert.equal(el('main').scrollTop, 0);
+  location.search = '?q=layout';
+  await handlers.popstate();
+  assert.equal(calls.at(-1).get('cursor'), 'page-2');
+  assert.equal(el('feed-grid').children.length, 2);
+  const restored = el('feed-grid').children[1].children[0];
+  assert.notEqual(restored, original);
+  assert.equal(doc.activeElement, restored);
+  assert.equal(el('main').scrollTop, 550);
 });
 
 test('feed cover patterns are stable for a title and stay in 0-7', () => {
@@ -986,15 +1304,19 @@ test('thumbModel keeps only bounded text and validated shapes from the preview',
 test('feed covers load from the public work preview path, never for images or odd slugs', () => {
   assert.equal(feedPreviewPath({slug: 'public-note', kind: 'document'}), '/w/public-note/preview');
   assert.equal(feedPreviewPath({slug: 'photo-1', kind: 'image'}), '');
+  assert.equal(feedPreviewPath({slug: 'music-1', kind: 'audio'}), '');
+  assert.equal(feedPreviewPath({slug: 'movie-1', kind: 'video'}), '');
   assert.equal(feedPreviewPath({slug: '../x', kind: 'document'}), '');
   assert.equal(feedPreviewPath(null), '');
   assert.equal(attachFeedThumb({}, null, {type: 'document'}), false);
 });
 
 
-async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{id:'space-1',name:'我的工作区'}], signedIn = true} = {}) {
+async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{id:'space-1',name:'我的工作区'}],
+  signedIn = true, preview, submit, language = 'zh-CN'} = {}) {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
+  doc.documentElement = {lang: language};
   const calls = [];
   const response = (status, body) => ({status, json:async()=>body});
   const fetcher = async (path, options) => {
@@ -1002,8 +1324,11 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
     if (path === '/v1/auth/session') return response(signedIn ? 200 : 401, {user:{username:'alice'}});
     if (path === '/v1/workspaces?limit=100') return response(workspaceStatus, {items:workspaces});
     if (path === '/v1/discover/agents/weekly-digest/remix' && options.method === 'GET') {
-      return response(200, {template:{revision:'public-revision',name:'竞品周报助手',summary:'每周竞品摘要',instructions:'公开指令'}});
+      if (preview) return preview();
+      return response(200, {template:{revision:'public-revision',name:'竞品周报助手',summary:'每周竞品摘要',instructions:'公开指令',
+        quick_starts:['汇总本周的竞品变化。', '列出三个值得关注的信号。']}});
     }
+    if (options.method === 'POST' && submit) return submit();
     if (options.method === 'POST') return response(status, status === 201
       ? {agent:{id:'agent-1',workspace_id:'space-1',name:'竞品周报助手'}}
       : {error:{code:'name_conflict',message:'工作区已有同名智能体，请换个名称。'}});
@@ -1016,10 +1341,14 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
   return {calls, el, use, navigation};
 }
 
-test('copy previews the released instructions before creating a real agent', async () => {
+test('copy previews the released instructions and quick starts before creating a real agent', async () => {
   const {calls, el, use, navigation} = await setupRemix();
   await use.handlers.click();
   assert.equal(el('catalog-remix-prompt').textContent,'公开指令');
+  assert.equal(el('catalog-remix-quick-starts').hidden,false);
+  assert.equal(el('catalog-remix-quick-starts-heading').textContent,'将复制的快捷开场');
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children.map(item=>item.textContent),
+    ['汇总本周的竞品变化。', '列出三个值得关注的信号。']);
   assert.equal(calls.filter(([,method])=>method==='POST').length,0);
   el('catalog-remix-workspace').value='space-1';
   await el('catalog-remix-form').handlers.submit({preventDefault() {}});
@@ -1040,6 +1369,81 @@ test('copy presents a duplicate name error in the preview dialog', async () => {
   assert.deepEqual(navigation,[]);
 });
 
+test('copy retains the draft name through a slow preview and a stale release', async () => {
+  const firstPreview = Promise.withResolvers();
+  const template = {revision:'initial-revision',name:'原发布名称',summary:'每周竞品摘要',instructions:'旧指令',quick_starts:['旧开场']};
+  let reads = 0;
+  const {calls, el, use} = await setupRemix({
+    preview: () => ++reads === 1 ? firstPreview.promise
+      : commentResponse({template:{...template,revision:'new-revision',instructions:'新指令',quick_starts:['新开场']}}),
+    submit: () => commentResponse({error:{code:'listing_changed'}},409),
+  });
+  const opening = use.handlers.click();
+  el('catalog-remix-name').value = '我的名称';
+  firstPreview.resolve(commentResponse({template}));
+  await opening;
+  assert.equal(el('catalog-remix-name').value,'我的名称');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'旧开场');
+  el('catalog-remix-workspace').value = 'space-1';
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(el('catalog-remix-dialog').open,true);
+  assert.equal(el('catalog-remix-refresh').hidden,false);
+  assert.equal(el('catalog-remix-submit').disabled,true);
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
+  await el('catalog-remix-refresh').handlers.click();
+  assert.equal(el('catalog-remix-name').value,'我的名称');
+  assert.equal(el('catalog-remix-prompt').textContent,'新指令');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'新开场');
+  assert.equal(el('catalog-remix-submit').disabled,false);
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const [first,last] = calls.filter(([,method])=>method==='POST').map(([, ,options])=>options);
+  assert.notEqual(first.headers['Idempotency-Key'],last.headers['Idempotency-Key']);
+  assert.equal(JSON.parse(last.body).revision,'new-revision');
+});
+
+test('copy localizes quick starts and clears them when the next release omits them', async () => {
+  let reads = 0;
+  const {el, use} = await setupRemix({language:'en-US', preview: () => commentResponse({template:{
+    name:'Writer',summary:'A summary',instructions:'',revision:'release-' + reads,
+    quick_starts: reads++ === 0 ? ['Plan the release <this week>'] : [],
+  }})});
+  await use.handlers.click();
+  assert.equal(el('catalog-remix-quick-starts-heading').textContent,'Quick starts included in the copy');
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'Plan the release <this week>');
+  assert.equal(el('catalog-remix-description').textContent,
+    'You can add your own instructions after creating the copy. Configure tools separately in the new copy.');
+  el('catalog-remix-cancel').handlers.click();
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
+  await use.handlers.click();
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.deepEqual(el('catalog-remix-quick-starts-list').children,[]);
+});
+
+test('copy reuses the request key after an ambiguous response for the same submission', async () => {
+  let writes = 0;
+  const {calls, el, use, navigation} = await setupRemix({
+    submit: () => {
+      if (++writes === 1) throw new Error('connection interrupted');
+      return commentResponse({agent:{id:'agent-1',workspace_id:'space-1'}});
+    },
+  });
+  await use.handlers.click();
+  el('catalog-remix-workspace').value = 'space-1';
+  const submit = () => el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const pending = submit();
+  assert.equal(el('catalog-remix-name').disabled,true);
+  assert.equal(el('catalog-remix-cancel').disabled,true);
+  await pending;
+  assert.match(el('catalog-remix-status').textContent,/暂时无法确认/);
+  assert.equal(el('catalog-remix-name').disabled,false);
+  await submit();
+  const keys = calls.filter(([,method])=>method==='POST').map(([, ,{headers}])=>headers['Idempotency-Key']);
+  assert.equal(keys.length,2);
+  assert.equal(keys[0],keys[1]);
+  assert.deepEqual(navigation,['/chat#workspace=space-1&agent=agent-1']);
+});
+
 test('copy distinguishes a failed workspace read from an empty workspace list', async () => {
   for (const [status,text] of [[500,'无法读取工作区'],[200,'暂无可用工作区']]) {
     const {calls, el, use}=await setupRemix({workspaceStatus:status,workspaces:[]});
@@ -1050,12 +1454,51 @@ test('copy distinguishes a failed workspace read from an empty workspace list', 
   }
 });
 
-test('copy asks a signed-out visitor to sign in and sends no writes', async () => {
+test('guest agent cards link to the public homepage without exposing private copy actions', async () => {
   const {el, calls, use}=await setupRemix({signedIn:false});
-  const before = calls.length;
-  await use.handlers.click();
-  assert.match(el('status').textContent,/请登录/);
-  assert.equal(calls.length,before);
+  assert.equal(use,undefined);
+  assert.equal(classHits(el('discover-list'), 'catalog-chat')[0].href, '/a/weekly-digest');
+  assert.equal(calls.some(([path, method])=>method!=='GET' || path.endsWith('/remix')), false);
+});
+
+test('a received private agent link waits for sign-in and uses the pinned personal copy review', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const id = 'otag_' + 'A'.repeat(26);
+  const path = '/v1/agent-copy-grants/' + id + '/remix';
+  const requests = [];
+  const grant = {id,state:'active',agent_name:'私享助理',sender:{display_name:'团队伙伴'}};
+  const init = mount(doc,{location:{search:'?tab=agents&share='+id},fetcher:async (route, options)=>{
+    requests.push([route,options]);
+    if (route === '/v1/auth/session') return session.promise;
+    if (route === path && options.method === 'GET') return commentResponse({grant,template:{
+      name:grant.agent_name,summary:'只在授权后出现的简介',instructions:'分享的指令',quick_starts:['看看讨论摘要'],revision:'pinned-release',
+    }});
+    if (route === path && options.method === 'POST') return commentResponse({error:{code:'agent_copy_revoked'}},410);
+    return commentResponse({items:[],viewer_username:'alice'});
+  }});
+  await flush();
+  assert.ok(!requests.some(([route])=>route===path));
+  assert.ok(doc.getElementById('discover-login').href.includes('share%3D'+id));
+  session.resolve(commentResponse({user:{id:'recipient',username:'alice'}}));
+  await init;
+  const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-remix-dialog').open,true);
+  assert.equal(el('catalog-remix-share-sender').textContent,'来自 团队伙伴');
+  assert.equal(el('catalog-remix-workspace-field').hidden,true);
+  assert.equal(el('catalog-remix-personal-destination').hidden,false);
+  assert.equal(el('catalog-remix-quick-starts-list').children[0].textContent,'看看讨论摘要');
+  await el('catalog-remix-form').handlers.submit({preventDefault() {}});
+  const write = requests.find(([route,options])=>route===path&&options.method==='POST')[1];
+  assert.deepEqual(JSON.parse(write.body),{revision:'pinned-release',name:grant.agent_name});
+  assert.match(write.headers['Idempotency-Key'],/^[A-Za-z0-9_-]{16,64}$/);
+  assert.equal(el('catalog-remix-submit').disabled,true);
+  assert.equal(el('catalog-remix-share-sender').hidden,true);
+  assert.equal(el('catalog-remix-quick-starts').hidden,true);
+  assert.equal(el('catalog-remix-summary').textContent,'');
+  assert.equal(el('catalog-remix-status').textContent,'此分享已不可用。');
 });
 
 test('the status line is a polite live region for the create receipt', () => {
@@ -1104,12 +1547,94 @@ function detailFetcher(item, previewResult) {
     if (path.startsWith('/v1/discover/works')) {
       return {status: 200, json: async () => ({items: [item], cursor: null})};
     }
-    if (path === '/w/' + item.slug) return {status: 200, json: async () => item};
+    if (path === '/w/' + item.slug + '?view=preview') return {status: 200, json: async () => item};
     if (path === '/w/' + item.slug + '/preview') return previewResult(path);
     throw new Error('unexpected ' + path);
   };
   return {fetcher, requests};
 }
+
+test('a public work copy with a lost response can recover across reload and withdrawal for its original viewer', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const work = detailFixture({remix_available:true});
+  const workspace = 'a'.repeat(32);
+  const artifactId = 'b'.repeat(32);
+  const revision = 'c'.repeat(64);
+  const copyTitle = 'Copy the reviewed version';
+  const detailPath = '/v1/discover/works/' + work.slug;
+  const remixPath = detailPath + '/remix';
+  const storage = new Map();
+  const writes = [];
+  let withdrawn = false;
+  async function reopen(viewer) {
+    const doc = feedDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    await mount(doc, {
+      location:{search:'?work=' + work.slug},
+      window:{sessionStorage:{
+        getItem:key => storage.get(key) ?? null,
+        setItem:(key,value) => storage.set(key,value),
+        removeItem:key => storage.delete(key),
+      }},
+      fetcher:async (path, options) => {
+        if (path === '/v1/auth/session') return commentResponse({user:{id:viewer+'-id',username:viewer}});
+        if (path === detailPath) return withdrawn ? commentResponse({},404) : commentResponse({work,viewer_username:viewer});
+        if (path.startsWith('/v1/discover/works?')) return commentResponse({items:[],viewer_username:viewer});
+        if (path.startsWith('/w/')) return commentResponse({},404);
+        assert.equal(path,remixPath);
+        if (options.method === 'GET') return commentResponse({
+          template:{revision,title:work.title,kind:work.kind},viewer_username:viewer,
+        });
+        writes.push({viewer,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+        return writes.length === 1 ? commentResponse({},503) : commentResponse({
+          artifact:{id:artifactId,workspace_id:workspace,kind:work.kind},viewer_username:viewer,
+        });
+      },
+    });
+    return id => doc.getElementById(id);
+  }
+  const started = await reopen('reader');
+  started('work-detail-remix').handlers.click();
+  await flush();
+  started('work-remix-name').value = copyTitle;
+  await started('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,1);
+  assert.equal(started('work-remix-submit').textContent,'确认副本');
+  withdrawn = true;
+  const other = await reopen('other-reader');
+  assert.equal(other('work-detail-resume-remix').hidden,true);
+  const reload = await reopen('reader');
+  assert.equal(reload('work-detail-resume-remix').hidden,false);
+  reload('work-detail-resume-remix').handlers.click();
+  assert.equal(writes.length,1);
+  assert.equal(reload('work-remix-name').disabled,true);
+  assert.equal(reload('work-remix-name').value,copyTitle);
+  await reload('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0],writes[1]);
+  assert.deepEqual(writes[1].body,{title:copyTitle,revision});
+  assert.equal(reload('work-remix-open').href,`/space?workspace=${workspace}&artifact=${artifactId}`);
+  assert.equal(storage.size,0);
+  assert.equal(reload('work-detail-resume-remix').hidden,true);
+});
+
+test('public work bylines link to canonical creator directories from cards and details', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const creator = {handle: 'writer.home', name: '作者'};
+  const {fetcher} = detailFetcher(detailFixture({creator}));
+  await mount(doc, {fetcher, location: {search: ''}});
+
+  const [entry] = doc.getElementById('feed-grid').children;
+  assert.equal(classHits(entry.children[0], 'work-author-link').length, 0);
+  const [author] = classHits(entry, 'work-author-link');
+  assert.equal(author.textContent, creator.name);
+  assert.equal(author.href, '/discover?creator=writer.home');
+
+  await classHits(entry, 'feed-detail-toggle')[0].handlers.click();
+  const [detailAuthor] = classHits(doc.getElementById('work-detail-meta'), 'work-author-link');
+  assert.equal(detailAuthor.href, author.href);
+});
 
 test('the 3D detail exposes an explicit preview and direct download without prefetching the file', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
@@ -1192,6 +1717,41 @@ test('a work card opens a shareable detail and returns to the originating feed a
   assert.equal(requests.filter(path => path.startsWith('/v1/discover/works?')).length, 1);
 });
 
+test('work feed reload restores only saved cursor pages after confirming the viewer', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const search = '?kind=document&q=release';
+  for (const viewer of ['original-owner', 'different-owner']) {
+    const doc = feedDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const session = Promise.withResolvers();
+    const history = {state:{discoverWorkFeed:{
+      key:JSON.stringify(['signed-in','original-owner',search]),pageCount:2,scroll:240,
+    }}};
+    const requests = [];
+    const first = detailFixture({slug:'release-first'});
+    const next = detailFixture({slug:'release-second'});
+    const mounted = mount(doc, {history, location:{pathname:'/discover',search},fetcher(path) {
+      if (path === '/v1/auth/session') return session.promise;
+      const url = new URL(path, 'https://discover.test');
+      assert.equal(url.pathname, '/v1/discover/works');
+      assert.equal(url.searchParams.get('kind'), 'document');
+      assert.equal(url.searchParams.get('q'), 'release');
+      const cursor = url.searchParams.get('cursor');
+      requests.push(cursor);
+      return commentResponse({items:cursor ? [next] : [first],cursor:cursor ? '' : 'release-cursor',viewer_username:'alice'});
+    }});
+    await flush();
+    assert.deepEqual(requests, [null]);
+    assert.equal(doc.getElementById('feed-grid').children.length, 1);
+    session.resolve(commentResponse({user:{id:viewer,username:'alice'}}));
+    await mounted;
+    const same = viewer === 'original-owner';
+    assert.deepEqual(requests,same ? [null,'release-cursor'] : [null]);
+    assert.equal(doc.getElementById('feed-grid').children.length,same ? 2 : 1);
+    if (same) assert.equal(doc.getElementById('main').scrollTop,240);
+  }
+});
+
 test('work navigation keeps the signed-in feed context and sharing copies the canonical public URL', async () => {
   const {mount, workDetailFromSearch} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
@@ -1244,7 +1804,7 @@ test('the native direct excerpt paints before auth and is retained through a mis
   const scoped = Promise.withResolvers();
   const work = detailFixture();
   const next = detailFixture({slug: 'next-work'});
-  const publicPath = '/w/' + work.slug + '?view=preview';
+  const publicPath = '/w/' + work.slug + '?view=preview&nav=latest';
   const privatePath = '/v1/discover/works/' + work.slug;
   const requests = [];
   const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async (path, options) => {
@@ -1285,6 +1845,53 @@ test('the native direct excerpt paints before auth and is retained through a mis
   assert.equal(el('next').disabled, false);
 });
 
+test('a guest detail pages only its filtered feed and a late page cannot reopen the detail after Back', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const first = detailFixture({slug:'guest-first', title:'前一件公开作品'});
+  const last = detailFixture({slug:'guest-edge', title:'首尾公开作品'});
+  const later = detailFixture({slug:'guest-later', title:'下一页公开作品'});
+  const pending = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const paths = [];
+  const history = {replaceState(_state, _unused, path) { paths.push(path); }};
+  const detailRequests = [];
+  const publicPath = '/w/guest-edge?kind=document&q=%E5%85%AC%E5%BC%80&view=preview&nav=latest';
+  await mount(doc, {history, location:{search:'?kind=document&q=公开&work=guest-edge'}, fetcher: async path => {
+    if (path === '/v1/auth/session') return commentResponse({},401);
+    if (path.startsWith('/v1/discover/works?')) {
+      const args = new URL(path,'https://discover.test').searchParams;
+      assert.equal(args.get('kind'),'document');
+      assert.equal(args.get('q'),'公开');
+      if (args.has('cursor')) {
+        assert.equal(args.get('cursor'),'guest-next-cursor');
+        started.resolve();
+        return pending.promise;
+      }
+      return commentResponse({items:[first,last],cursor:'guest-next-cursor'});
+    }
+    if (path.startsWith('/w/')) {
+      detailRequests.push(path);
+      if (path === publicPath) return commentResponse({...last,preview:'公开详情正文'});
+    }
+    assert.fail('Unexpected request ' + path);
+  }});
+  const button = name => doc.getElementById('work-detail-' + name);
+  assert.equal(button('previous').disabled,false);
+  assert.equal(button('next').disabled,false);
+  const advancing = button('next').handlers.click();
+  await started.promise;
+  assert.equal(button('next').disabled,true);
+  assert.equal(button('next').attributes['aria-busy'],'true');
+  button('back').handlers.click();
+  pending.resolve(commentResponse({items:[later],cursor:null}));
+  await advancing;
+  assert.equal(doc.getElementById('work-detail').hidden,true);
+  assert.deepEqual(paths,['/discover?kind=document&q=%E5%85%AC%E5%BC%80']);
+  assert.deepEqual(detailRequests,[publicPath]);
+  assert.deepEqual(doc.getElementById('feed-grid').children.map(child=>child.dataset.slug),[first.slug,last.slug,later.slug]);
+});
+
 test('a failed public detail cannot block the native scoped work or its preview', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
@@ -1295,7 +1902,7 @@ test('a failed public detail cannot block the native scoped work or its preview'
   await mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
     requests.push(path);
     if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
-    if (path === publicPath + '?view=preview') return commentResponse({}, 503);
+    if (path === publicPath + '?view=preview&nav=latest') return commentResponse({}, 503);
     if (path === publicPath + '/preview') return commentResponse({preview: 'Normal scoped preview'});
     if (path === '/v1/discover/works/' + work.slug) return commentResponse({viewer_username: 'alice', work});
     if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
@@ -1315,7 +1922,7 @@ test('an authoritative withdrawal clears the optimistic public preview and actio
   const work = detailFixture();
   const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
     if (path === '/v1/auth/session') return session.promise;
-    if (path === '/w/' + work.slug + '?view=preview') return commentResponse({...work, preview: 'Was public'});
+    if (path === '/w/' + work.slug + '?view=preview&nav=latest') return commentResponse({...work, preview: 'Was public'});
     if (path === '/v1/discover/works/' + work.slug) return commentResponse({}, 404);
     if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
     throw new Error(path);
@@ -1342,8 +1949,8 @@ test('an older detail response cannot overwrite a newer work', async () => {
   const fetcher = async path => {
     if (path === '/v1/auth/session') return commentResponse({}, 401);
     if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [first, second]});
-    if (path === '/w/slow-work') return new Promise(resolve => { finish = resolve; });
-    if (path === '/w/new-work') return commentResponse(second);
+    if (path === '/w/slow-work?view=preview') return new Promise(resolve => { finish = resolve; });
+    if (path === '/w/new-work?view=preview') return commentResponse(second);
     if (path.endsWith('/preview')) return commentResponse({preview: null});
     throw new Error('Unexpected ' + path);
   };
@@ -1379,7 +1986,61 @@ test('an image work uses the public media file without reading a text preview', 
   await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
   const [image] = classHits(doc.getElementById('work-detail-preview'), 'work-detail-image');
   assert.equal(image.src, '/w/ci-fixture-doc/file');
+  assert.equal(doc.getElementById('work-detail-download').href, image.src);
   assert.equal(requests.some(path => path.endsWith('/preview')), false);
+});
+
+test('audio and video have no feed player but offer a real controllable player and original download in detail', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  for (const [kind, mime] of [['audio', 'audio/wav'], ['video', 'video/webm']]) {
+    const doc = feedDocument();
+    const work = detailFixture({kind, kind_label: '', path: '/social/w/ci-fixture-doc',
+      file_available: true, file_mime: mime, file_bytes: 4096});
+    const {fetcher, requests} = detailFetcher(work, () => assert.fail('media needs no text preview'));
+    await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+    const grid = doc.getElementById('feed-grid');
+    const [cover] = classHits(grid, 'work-cover');
+    assert.equal(cover.dataset.kind, kind);
+    assert.equal(cover.children.length, 0);
+    assert.equal(requests.some(path => path.endsWith('/file') || path.endsWith('/preview')), false);
+    await classHits(grid, 'feed-detail-toggle')[0].handlers.click();
+    const surface = doc.getElementById('work-detail-preview');
+    const [player] = classHits(surface, 'work-detail-' + kind);
+    const download = doc.getElementById('work-detail-download');
+    assert.equal(player.tagName, kind);
+    assert.equal(player.src, '/social/w/ci-fixture-doc/file');
+    assert.equal(player.controls, true);
+    assert.equal(player.preload, 'none');
+    assert.notEqual(player.autoplay, true);
+    if (kind === 'video') assert.equal(player.playsInline, true);
+    assert.equal(download.href, player.src);
+    assert.equal(download.download, '');
+    assert.match(download.textContent, /下载原文件 · 4 KB/);
+    player.handlers.error();
+    assert.equal(player.hidden, true);
+    assert.match(classHits(surface, 'work-media-status')[0].textContent, /可以尝试下载原文件/);
+    assert.equal(download.hidden, false);
+    let paused = false, unloaded = false;
+    player.pause = () => { paused = true; };
+    player.load = () => { unloaded = true; };
+    doc.getElementById('work-detail-back').handlers.click();
+    assert.equal(paused && unloaded, true);
+    assert.equal(surface.children.length, 0);
+  }
+});
+
+test('known missing video visibly reports unavailable without a player or download', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture({kind: 'video', file_available: false}),
+    () => assert.fail('known missing video needs no text or binary read'));
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  await classHits(doc.getElementById('feed-grid'), 'feed-detail-toggle')[0].handlers.click();
+  const preview = doc.getElementById('work-detail-preview');
+  assert.equal(classHits(preview, 'work-detail-video').length, 0);
+  assert.match(classHits(preview, 'work-media-status')[0].textContent, /暂无可用的视频文件/);
+  assert.equal(doc.getElementById('work-detail-download').hidden, true);
+  assert.equal(requests.some(path => path.endsWith('/file') || path.endsWith('/preview')), false);
 });
 
 test('a native plain-text snapshot appears verbatim and is bounded in the work detail', async () => {
@@ -1432,7 +2093,7 @@ test('guest comments are loaded on demand and render literal text with a safe si
   const [row] = classHits(doc.getElementById('feed-comments-list'), 'feed-comment-body');
   assert.equal(row.textContent, '<script>公开文本</script>');
   assert.equal(doc.getElementById('feed-comments-form').hidden, true);
-  assert.equal(doc.getElementById('feed-comments-login').href, '/login#work-comments=ci-fixture-doc');
+  assert.equal(doc.getElementById('feed-comments-login').href, '/login#discover=work%3Dci-fixture-doc%26comments%3D1');
   assert.equal(requests.every(([, method]) => method === 'GET'), true);
 });
 

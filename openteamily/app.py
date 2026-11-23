@@ -11,14 +11,14 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
+from . import agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
 from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
-GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
+GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys'})
 GONE_WORKSPACE_EVENTS = re.compile(r'/v1/workspaces/[0-9a-f]{32}/events')
 
 class APIError(Exception):
@@ -43,7 +43,6 @@ class Config:
     max_workspaces: int = 10000
     max_members_per_workspace: int = 50
     max_invites_per_workspace: int = 20
-    max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
     max_versions_per_artifact: int = 100
@@ -58,7 +57,6 @@ class Config:
     max_social_conversations_per_workspace: int = 200
     max_social_messages_per_conversation: int = 500
     max_social_members_per_conversation: int = 50
-    max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
     auth_global_limit: int = 100
@@ -494,16 +492,20 @@ class App:
             if path.endswith('register'):
                 if not self.config.allow_registration:
                     refuse(403, 'registration_closed', 'Public registration is disabled')
+                hashed_password = password_hash(password)
                 with self.store.transaction() as db:
                     if db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone():
                         refuse(409, 'conflict', 'Registration is unavailable for this username')
                     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] >= self.config.max_users:
                         refuse(429, 'quota', 'Account capacity reached')
                     user_id = uuid4().hex
-                    db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, password_hash(password), now))
-                    self.queue_new_account_runtime(db, user_id, username, now)
+                    db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, hashed_password, now))
+                    personal_chat = self.queue_new_account_runtime(db, user_id, username, now)
                     headers = self.new_session(db, user_id, now)
-                return 201, {'user': {'id': user_id, 'username': username}}, headers
+                signup = {'user': {'id': user_id, 'username': username}}
+                if personal_chat is not None:
+                    signup['personal_chat'] = personal_chat
+                return 201, signup, headers
             with self.store.connect() as db:
                 user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
             if user is None:
@@ -556,7 +558,7 @@ class App:
             refuse(404, 'not_found', 'Route not found')
         if GONE_WORKSPACE_EVENTS.fullmatch(path):
             refuse(410, 'retired', 'Workspace event streams have been retired')
-        if path.startswith(('/v1/agent/', '/v1/gateway/')) or path in GONE_PATHS or moved_api(path):
+        if path.startswith(('/v1/agent/', '/v1/gateway/', '/v1/runtime/')) or path in GONE_PATHS or moved_api(path):
             # Execution moved to each user's DS-Bot; public pages to Bot Social. Old clients get 410.
             refuse(410, 'moved_to_dsbot', 'This route now runs on your own DS-Bot')
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
@@ -571,18 +573,31 @@ class App:
             if method == 'POST':
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
-        if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
+        if path == '/v1/auth/runtime-readiness' and method == 'GET' and query in ('', 'include=personal-chat'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-                state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
-            return 200, {'state': state}, []
+                owner = session['user_id']
+                state = self.runtime_readiness(db, owner)
+                result = {'state': state, 'user_id': owner}
+                if query and state in ('starting', 'stopped', 'ready'):
+                    row = personal.load(db, owner)
+                    if row is not None:
+                        result['personal_chat'] = {'workspace_id': row['workspace_id'], 'agent_id': row['agent_id']}
+            return 200, result, []
+        if path == '/v1/auth/runtime-start' and method == 'POST' and not query:
+            return self.start_personal_runtime(env, now)
+        if path == '/v1/auth/session' and method == 'GET' and query in ('', 'include=home'):
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+                result = {'user': {'id': session['user_id'], 'username': session['username']},
+                          'expires_at': session['expires']}
+                if query:
+                    result['home'] = self.home_session(db, session['user_id'])
+            return 200, result, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
                 self.csrf_check(env, session)
-            if path == '/v1/auth/session' and method == 'GET' and not query:
-                return 200, {'user': {'id': session['user_id'], 'username': session['username']},
-                             'expires_at': session['expires']}, []
             if path == '/v1/auth/logout' and method == 'POST':
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
@@ -809,11 +824,53 @@ class App:
         ]
 
 
+    def runtime_readiness(self, db, user_id):
+        if not self.auto_provision.enabled:
+            return 'unmanaged'
+        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id)
+
+    def start_personal_runtime(self, env, now):
+        with self.store.connect() as db:
+            session = self.authenticated(db, env, now)
+            self.csrf_check(env, session)
+            self.body(env, [])
+            owner = session['user_id']
+            state = self.runtime_readiness(db, owner)
+            if state in ('starting', 'ready'):
+                return 200, {'state': state}, []
+            if state != 'stopped':
+                refuse(409, 'runtime_unavailable', 'The personal runtime cannot be started here')
+            instance = runtime_autoprovision.resumable_instance(db, owner, self.auto_provision.manager_id)
+        if instance is None:
+            refuse(409, 'runtime_unavailable', 'The personal runtime changed; check its current state')
+        started, _ = self.lifecycle.start(owner, instance['id'], expected_revision=instance['revision'])
+        with self.store.connect() as db:
+            state = self.runtime_readiness(db, owner)
+        return (202 if started else 200), {'state': state}, []
+
     def personal_agent_get(self, db, session):
         row = personal.load(db, session['user_id'])
         if row is None:
             return 200, {'personal_agent': None}, []
         return 200, self.personal_payload(db, session, row), []
+
+    def home_session(self, db, user_id):
+        state = self.runtime_readiness(db, user_id)
+        card = None
+        if state in ('ready', 'unmanaged'):
+            row = db.execute('''
+                SELECT w.id AS workspace_id, w.name AS workspace_name,
+                       a.id AS agent_id, a.name AS agent_name, a.summary AS agent_summary
+                FROM personal_agents p
+                JOIN workspaces w ON w.id=p.workspace_id AND w.owner_id=p.user_id
+                JOIN workspace_agents a ON a.id=p.agent_id AND a.workspace_id=w.id
+                WHERE p.user_id=?
+            ''', (user_id,)).fetchone()
+            if row is not None:
+                card = {'workspace': {'id': row['workspace_id'], 'name': row['workspace_name'], 'kind': 'personal'},
+                        'agent': {'id': row['agent_id'], 'name': row['agent_name'], 'summary': row['agent_summary']},
+                        'look': onboarding.load_look(db, user_id)}
+        return {'runtime_state': state, 'personal_agent': card}
 
     def personal_agent_ensure(self, db, session, now):
         try:
@@ -825,7 +882,7 @@ class App:
             provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
             payload['personal_agent']['runtime_provisioning'] = {
                 'state': provision['state'], 'instance_id': provision['instance_id'],
-                'readiness': owner_runtime_readiness(db, session['user_id']),
+                'readiness': self.runtime_readiness(db, session['user_id']),
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []
@@ -843,7 +900,9 @@ class App:
         except personal.WorkspaceCapacity:
             # Signup can succeed even if the personal workspace must be retried.
             return
-        self.ensure_personal_runtime(db, user_id, row, now)
+        provision = self.ensure_personal_runtime(db, user_id, row, now)
+        if provision['instance_id']:
+            return {'workspace_id': row['workspace_id'], 'agent_id': row['agent_id']}
 
     def ensure_personal_runtime(self, db, user_id, row, now):
         """Server-derived: the caller's own personal workspace and agent only."""

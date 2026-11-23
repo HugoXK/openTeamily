@@ -1,4 +1,18 @@
 const CODE = /^[A-Za-z0-9_-]{24}$/;
+const CALL_ID = /^otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const WORKSPACE_ID = /^[a-f0-9]{32}$/;
+
+export function isMeetingCallId(value) {
+  return typeof value === 'string' && CALL_ID.test(value);
+}
+
+export function meetingDraftFromCallHref(callId, workspace) {
+  if (!isMeetingCallId(callId)) return '';
+  const params = new URLSearchParams();
+  if (WORKSPACE_ID.test(workspace)) params.set('workspace', workspace);
+  params.set('from-call', callId);
+  return '/meetings#' + params;
+}
 
 export function meetingCodeFromHash(hash) {
   const code = new URLSearchParams(hash?.slice(1)).get('meeting');
