@@ -47,6 +47,7 @@ jobs:
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
       - run: node --test tests/shell_page.test.mjs
+      - run: node --test tests/markdown_table.test.mjs
       - run: node --test tests/studio_merge.test.mjs
       - run: node --test tests/agent_bootstrap.test.mjs
       - run: node --test tests/agent_private_sharing.test.mjs
@@ -64,6 +65,7 @@ jobs:
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
+      - run: node --test tests/meeting_editor_recovery.test.mjs
       - run: node --test tests/dsbot_api_shim.test.mjs
       - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
