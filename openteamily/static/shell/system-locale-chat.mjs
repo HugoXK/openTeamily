@@ -86,7 +86,6 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.sessions.conversations": ["对话", "Conversations"],
   "chat.sessions.mark_read": ["单聊和群聊已读", "Mark chats as read"],
   "chat.sessions.empty": ["还没有对话。用右上角的 + 新建群组或添加联系人，或到智能体目录里开始聊天。", "No conversations yet. Use + to create a group or add a contact, or start a chat from the agent directory."],
-  "chat.group.create_intro": ["选择联系人或智能体加入群组。", "Choose contacts or agents for your group."],
   "chat.group.kind": ["群组类型", "Group type"],
   "chat.group.custom": ["自定义群组", "Custom group"],
   "chat.group.agent_team": ["AI 智能体团队", "AI agent team"],

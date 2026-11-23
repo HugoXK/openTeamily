@@ -159,7 +159,9 @@ test('every tool call waits for the owner: pending → approve → runs once, sc
   await v1('POST', `/v1/composio/approvals/${next.id}`, { decision: 'approve' })
   const ran = await api.callTool(mcpName, { q: 'x' }, { waitMs: 0 })
   assert.equal(ran.content[0].text, 'found search_docs')
-  assert.equal(ran.token, '[redacted]')
+  assert.equal(mcp.seen.find(s => s.method === 'tools/call').auth, 'Bearer tok_secret_123')
+  assert.equal(ran.token, 'Bearer [redacted]')
+  assert.ok(!JSON.stringify(ran).includes('tok_secret_123'))
 })
 
 test('approvals expire, and a key change blocks an approved call', async () => {
