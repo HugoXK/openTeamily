@@ -1,11 +1,5 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
-import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
-import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
-import { discoverIntentFromHash } from '../shell/discover-link.mjs';
-import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
-import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
-import { socialMessageFromHash, directAgentAccessFromHash, directAgentAccessHref } from '../shell/chat-utils.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
@@ -56,6 +50,23 @@ function hashWorkspace(hash = '') {
 
 function workspaceLink(path, workspace, extras = {}) {
   return path + '#' + new URLSearchParams({workspace, ...extras});
+}
+
+async function readLoginLinks(hash) {
+  const [agents, works, discover, teams, groups, chat] = await Promise.all([
+    import('../shell/public-agent-link.mjs'), import('../shell/public-work-link.mjs'),
+    import('../shell/discover-link.mjs'), import('../shell/team-invite-link.mjs'),
+    import('../shell/group-invite-link.mjs'), import('../shell/chat-utils.mjs'),
+  ]);
+  const agent = agents.publicAgentIntentFromHash(hash);
+  const work = works.publicWorkIntentFromHash(hash);
+  const discovery = discover.discoverIntentFromHash(hash);
+  const invite = teams.teamInviteHash(teams.teamInviteFromHash(hash)) || groups.groupInviteHash(groups.groupInviteFromHash(hash));
+  const agentHash = agent && agents.publicAgentContinuation(agent);
+  const access = chat.directAgentAccessFromHash(hash);
+  return {agent, agentHash, work, discovery, invite,
+    continuation:invite || agentHash || work?.continuation || discovery?.continuation,
+    message:chat.socialMessageFromHash(hash), agentPath:access && chat.directAgentAccessHref(access)};
 }
 
 function show(document, kind, text) {
@@ -369,29 +380,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     if (loading) return;
     loading = true;
     try {
-      const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
-      const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
       const isLogin = view.location?.pathname === '/login';
       const originalPage = workspacePageTarget(view.location);
-      const returnTo = originalPage || (isLogin ? workspaceLoginTarget(view.location.hash) : '');
+      const hash = isLogin ? view.location.hash : '';
+      const returnTo = originalPage || workspaceLoginTarget(hash);
+      const loginLinks = hash && !returnTo ? readLoginLinks(hash).catch(() => null) : null;
+      const sessionPath = isLogin || originalPage ? '/v1/auth/session' : '/v1/auth/session?include=home';
+      const session = await request('GET', sessionPath).catch(() => ({status: 0, body: {}}));
+      const unconfirmedSignup = [200, 401].includes(session.status) && !confirmSignupSession(view, session);
       if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
         if (whoami) whoami.textContent = '';
         document.body?.classList.remove('home-signed-in', 'app-primary');
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        const hash = isLogin ? view.location.hash : '';
-        const intent = publicAgentIntentFromHash(hash);
-        const work = publicWorkIntentFromHash(hash);
-        const discover = discoverIntentFromHash(hash);
-        const continuation = workspaceLoginHash(returnTo) || teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash)) ||
-          (intent ? publicAgentContinuation(intent) : work?.continuation || discover?.continuation);
+        const links = await loginLinks;
+        const continuation = workspaceLoginHash(returnTo) || links?.continuation;
         const register = loginPanel.querySelector?.('.login-register-button');
         if (register) register.href = '/register' + (continuation || '');
         const back = document.getElementById('login-return-discover');
         if (back) {
-          back.hidden = !discover;
-          if (discover) back.href = discover.target;
+          back.hidden = !links?.discovery;
+          if (links?.discovery) back.href = links.discovery.target;
         }
         show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError :
           returnTo ? '登录后会返回你刚打开的页面。' : '');
@@ -419,13 +429,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       }
       try { view.sessionStorage.removeItem(pendingKey); } catch {}
       if (isLogin) {
-        const hash = view.location.hash;
-        const invite = teamInviteHash(teamInviteFromHash(hash)) || groupInviteHash(groupInviteFromHash(hash));
-        const intent = publicAgentIntentFromHash(hash);
-        const work = publicWorkIntentFromHash(hash);
-        const discover = discoverIntentFromHash(hash);
-        const message = socialMessageFromHash(hash);
-        const access = directAgentAccessFromHash(hash);
+        const links = await loginLinks;
+        if (hash && !links) {
+          show(document, 'error', '暂时无法打开登录前的页面。请刷新重试。');
+          return;
+        }
+        const {invite, agent, agentHash, work, discovery, message, agentPath} = links || {};
         if (invite) {
           const destination = '/members' + invite;
           if (await initializePersonalAgent(destination) && view.location.hash === hash) {
@@ -433,11 +442,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
           }
         } else if (message) {
           view.location.replace(message);
-        } else if (access) {
-          view.location.replace(directAgentAccessHref(access));
-        } else if (intent) {
+        } else if (agentPath) {
+          view.location.replace(agentPath);
+        } else if (agent) {
           await continuePublicActivity({
-            target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
+            target: '/chat' + agentHash, backPath: '/a/' + agent.slug,
             loadingText: '正在打开公开智能体…', errorText: '聊天尚未准备好。', retryId: 'public-agent-login-retry',
           });
         } else if (work) {
@@ -446,9 +455,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
             loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
             errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
           });
-        } else if (discover) {
+        } else if (discovery) {
           await continuePublicActivity({
-            target: discover.target, backPath: discover.target,
+            target: discovery.target, backPath: discovery.target,
             loadingText: '正在返回发现…', errorText: '暂时无法打开你的发现页。', retryId: 'discover-login-retry',
           });
         } else {
@@ -460,7 +469,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       if (whoami) whoami.textContent = currentUser.username;
       document.body?.classList.add('home-signed-in', 'app-primary');
       loginPanel.hidden = true;
-      personal = await initializePersonalAgent();
+      const startup = session.body.home;
+      const ready = ['ready', 'unmanaged'].includes(startup?.runtime_state);
+      personal = (ready && startup.personal_agent) || await initializePersonalAgent();
       if (!personal) return;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
       workspaceSelect.disabled = true;

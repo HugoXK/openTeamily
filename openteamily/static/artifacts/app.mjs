@@ -633,6 +633,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let workspaceResolved = false;
   let studioWorkspaces = [];
   let workspaceLoad = 0;
+  let studioPreload = null;
   let current = null;
   let editor = null;
   let catalog = null;
@@ -3417,8 +3418,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncStudioWorkspace();
   }
 
+  function cancelStudioPreload() {
+    studioPreload?.controller.abort();
+    studioPreload = null;
+  }
+
+  function nextWorkspaceLoad() {
+    cancelStudioPreload();
+    return ++workspaceLoad;
+  }
+
   async function load() {
-    const seq = ++workspaceLoad;
+    const seq = nextWorkspaceLoad();
     workspaceResolved = false;
     workspacePending.hidden = false;
     syncWorkspaceCreation();
@@ -3466,6 +3477,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
+    // The native Studio GET checks team membership itself. Start it alongside
+    // the workspace directory, and use it only for the verified selected team.
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const prepared = namedStudio ? studio?.preload(namedStudio, linkedStudio.id, currentUser.id) : null;
+    if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
       const items = result?.body?.items;
       if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
@@ -3475,7 +3491,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    const sharedPath = '/v1/workspaces?limit=100';
+    let {initial: space, supplemental} = namedStudio
+      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
+      : await readWorkspaceChoices(request, sharedPath, personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -3483,6 +3502,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
+      cancelStudioPreload();
       workspacePending.hidden = true;
       show('error', '无法读取工作区。');
       return;
@@ -3494,6 +3514,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
     if (!workspaces.length) {
+      cancelStudioPreload();
       hideEditor();
       catalog = null;
       allItems = [];
@@ -3515,10 +3536,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     if (linkedStudio) {
-      void loadList();
-      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace ||
-          !await studio?.open(linkedStudio.id, linkedStudio.revision, linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined)) {
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace) {
+        cancelStudioPreload();
+        void loadList();
         show('error', '团队文档链接无效，或你没有访问权限。');
+        return;
+      }
+      const opening = studio?.open(linkedStudio.id, linkedStudio.revision,
+        linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined, prepared);
+      studioPreload = null;
+      void loadList();
+      if (!await opening) {
+        prepared?.controller.abort();
+        if (seq === workspaceLoad) show('error', '团队文档链接无效，或你没有访问权限。');
       }
       return;
     }
@@ -3587,7 +3617,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor) workspaceSelect.value = editor.workspace;
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     syncWorkspaceCreation();
     closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
@@ -4609,7 +4639,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     hideEditor();
     currentUser = null;
     syncStudioWorkspace();
@@ -4655,7 +4685,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (tracked) spaceAddress = {url:spaceLocation(), state:event.state, entry:next};
       else writeSpaceAddress(spaceLocation());
       const address = spaceAddress;
-      workspaceLoad += 1;
+      nextWorkspaceLoad();
       hideEditor();
       sharedWorkCopy?.close();
       studio?.leaveForNavigation();

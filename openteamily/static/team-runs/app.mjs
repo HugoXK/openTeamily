@@ -193,6 +193,7 @@ function runFromResponse(result, workspace, runId) {
 }
 
 export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalThis)) {
+  const native = document.querySelector?.('meta[name="openteamily-served-by"]')?.content === 'ds-bot';
   const view = document.defaultView;
   const node = id => document.getElementById(id);
   const main = node('main-panel');
@@ -261,8 +262,34 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     document, request, adopt: adoptShare, selectAddress: id => updateLocation(id ? {shared: id} : {}),
   });
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
+  const automationResultPath = (space, source) =>
+    pathFor(space) + '/automation-results/' + source.automation_id + '/' + source.run_id;
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
+
+  function beginStartupRead(space, target) {
+    const path = target.automationSource ? automationResultPath(space, target.automationSource)
+      : target.run ? pathFor(space) + '/' + target.run : target.draft ? '' : pathFor(space);
+    return path ? {path, result:request('GET', path)} : null;
+  }
+
+  async function readTeamRuns(path, target, reading) {
+    if (reading) {
+      const early = await reading;
+      if (!active(target)) return {status:0, body:{}};
+      if (early?.path === path) {
+        const result = await early.result;
+        if (!active(target)) return {status:0, body:{}};
+        // The browser can receive a response from an earlier session while
+        // the current account/workspace is still being checked.
+        if (result.status === 200 && target.viewer?.username &&
+            result.body.viewer_username === target.viewer.username) return result;
+      }
+    }
+    const result = await request('GET', path);
+    if (result.body.viewer_username && result.body.viewer_username !== target.viewer?.username) return {status:403, body:{}};
+    return result;
+  }
 
   function updateLocation(extra = {}, {replace = false} = {}) {
     if (!workspace || !view?.history) return;
@@ -405,11 +432,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  async function loadList() {
+  async function loadList(reading) {
     clearTimeout(timer);
     if (!workspace) return;
     const target = scope(), read = ++reads;
-    const result = await request('GET', pathFor());
+    const result = await readTeamRuns(pathFor(), target, reading);
     if (!active(target) || read !== reads) return;
     if (result.status !== 200 || !Array.isArray(result.body.items)) {
       if (cannotRead(result.status)) clearInaccessibleRunData();
@@ -424,7 +451,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (tasks.some(item => item.status === 'running')) afterPoll(loadList);
   }
 
-  function showList({address = true, focus = false, shared} = {}) {
+  function showList({address = true, focus = false, shared, read = true, reading} = {}) {
     changeScreen('list');
     shares.openTarget(shared);
     tasks = [];
@@ -432,9 +459,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-runs-empty').hidden = true;
     if (address) updateLocation(shared ? {shared} : {});
     if (focus) node('team-runs-list-heading').focus();
-    if (workspace) {
+    if (workspace && read) {
       show('status', '正在读取任务…');
-      return loadList();
+      return loadList(reading);
     }
   }
 
@@ -475,8 +502,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return showEditor({replaceAddress:true});
   }
 
-  async function openAutomationDraft(source) {
-    void showList({address:false});
+  async function openAutomationDraft(source, reading) {
+    showList({address:false, read:false});
     const target = scope();
     automationHandoff = {source};
     node('team-run-handoff').hidden = false;
@@ -484,14 +511,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-handoff-replace').hidden = true;
     node('team-run-handoff-retry').hidden = true;
     show('team-run-handoff-status', '正在读取自动化运行…');
-    const path = pathFor() + '/automation-results/' + source.automation_id + '/' + source.run_id;
-    const result = await request('GET', path);
+    const result = await readTeamRuns(automationResultPath(target.workspace, source), target, reading);
     if (!active(target)) return;
     if (result.status !== 200 || !sameAutomationSource(readSource(result.body.source), source) ||
         typeof result.body.title !== 'string' || !result.body.title.trim()) {
       const unavailable = [401, 403, 404, 409].includes(result.status);
       show('team-run-handoff-status', unavailable ? '原运行已不可访问或没有可跟进的结果。' : '暂时无法读取原运行。', 'error');
       node('team-run-handoff-retry').hidden = unavailable;
+      void loadList();
       return;
     }
     const existing = drafts.get(workspace);
@@ -503,6 +530,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-handoff-replace').hidden = pending;
     show('team-run-handoff-status', pending ? '请先确认现有草稿的启动结果，再创建后续任务。'
       : '这个工作区已有草稿。可以继续原草稿，或用此运行结果新建并替换草稿。');
+    void loadList();
   }
 
   function renderDraftSource() {
@@ -807,11 +835,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  async function loadDetail() {
+  async function loadDetail(reading) {
     clearTimeout(timer);
     if (doing) return;
     const target = scope(), read = ++reads, runId = detailId;
-    const result = await request('GET', pathFor() + '/' + runId);
+    const result = await readTeamRuns(pathFor() + '/' + runId, target, reading);
     if (!active(target) || read !== reads) return;
     const run = runFromResponse(result, workspace, runId);
     if (run) {
@@ -828,7 +856,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     else if (current?.status === 'running') afterPoll(loadDetail);
   }
 
-  function openDetail(id, initial, {address = true, step} = {}) {
+  function openDetail(id, initial, {address = true, step, reading} = {}) {
     if (!workspace || !ID.test(id)) return;
     changeScreen('detail', id);
     linkedStep = step;
@@ -843,7 +871,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (initial) renderDetail(initial);
     else show('team-run-progress', '正在读取步骤…');
     node('team-run-heading').focus();
-    if (!initial) return loadDetail();
+    if (!initial) return loadDetail(reading);
     if (initial.status === 'running') afterPoll(loadDetail);
   }
 
@@ -955,7 +983,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return showEditor();
   }
 
-  function choose(target, address = false) {
+  function choose(target, address = false, reading) {
     const allowed = spaces.find(item => item.id === target.workspace);
     workspace = allowed?.id || (target.workspace || target.invalid ? '' : spaces[0]?.id || '');
     picker.value = workspace;
@@ -966,10 +994,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       return;
     }
     hydrateDraft();
-    if (target.automationSource) return openAutomationDraft(target.automationSource);
+    if (target.automationSource) return openAutomationDraft(target.automationSource, reading);
     if (target.draft) return showEditor({address});
-    if (target.run) return openDetail(target.run, null, {address, step:target.step});
-    return showList({address: address && !target.shared, shared: target.shared});
+    if (target.run) return openDetail(target.run, null, {address, step:target.step, reading});
+    return showList({address: address && !target.shared, shared: target.shared, reading});
   }
 
   function fillSpaces(items) {
@@ -989,8 +1017,20 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   async function load() {
     const seq = ++auth;
+    const startingHash = view.location.hash;
+    const startingTarget = teamRunTarget(startingHash);
     const sessionRead = request('GET', '/v1/auth/session');
     const personalRead = request('GET', '/v1/workspaces?scope=personal');
+    const reading = native && !startingTarget.invalid
+      ? startingTarget.workspace
+        ? beginStartupRead(startingTarget.workspace, startingTarget)
+        : personalRead.then(result => {
+          if (seq !== auth || view.location.hash !== startingHash || result.status !== 200) return null;
+          const personal = Array.isArray(result.body.items) &&
+            result.body.items.find(item => item?.kind === 'personal' && ID.test(item.id));
+          return personal ? beginStartupRead(personal.id, startingTarget) : null;
+        })
+      : null;
     const trustedPersonal = Promise.all([sessionRead, personalRead]).then(([session, local]) => {
       const user = session.body.user;
       if (session.status !== 200 || !user || local.status !== 200 || !Array.isArray(local.body.items)) return {status: 0, body: {}};
@@ -1024,13 +1064,16 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('login-panel').hidden = true;
     picker.disabled = true;
     let [{initial, supplemental}, personal] = await Promise.all([directory, trustedPersonal]);
-    const target = teamRunTarget(view.location.hash);
+    if (seq !== auth) return;
+    const targetHash = view.location.hash;
+    const target = teamRunTarget(targetHash);
     if (target.workspace && !initial.body.items?.some(item => item.id === target.workspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) initial = shared;
       supplemental = null;
     }
     if (seq !== auth) return;
+    if (view.location.hash !== targetHash) return load();
     personalSpaces = new Set((personal.body.items || []).map(item => item.id));
     if (initial.status !== 200 || !Array.isArray(initial.body.items)) {
       show('status', '无法读取工作区，点击刷新重试。', 'error');
@@ -1044,7 +1087,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         picker.disabled = !spaces.length;
       }
     });
-    return choose(target);
+    return choose(target, false, targetHash === startingHash ? reading : null);
   }
 
   editor.addEventListener('submit', startRun);

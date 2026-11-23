@@ -98,5 +98,29 @@ class HomePageTests(unittest.TestCase):
         self.assertEqual(bob.call('GET', f'/v1/workspaces/{self.wid}/overview')['status'], 404)
 
 
+class HomeSessionTests(unittest.TestCase):
+    def test_home_session_reads_only_the_signed_in_personal_card(self):
+        with tempfile.TemporaryDirectory() as directory:
+            api = App(Store(Path(directory) / 'state'), Config(ORIGIN, allow_registration=True))
+            app = SettingsPage(api)
+            alice = Client(app)
+            self.assertEqual(alice.register('alice')['status'], 201)
+            path = '/v1/auth/session?include=home'
+            checked = alice.call('GET', path)
+            self.assertEqual(checked['status'], 200)
+            self.assertEqual(checked['body']['home'], {'runtime_state': 'unmanaged', 'personal_agent': None})
+            self.assertIsNone(alice.call('GET', '/v1/personal-agent')['body']['personal_agent'])
+            self.assertNotIn('home', alice.call('GET', '/v1/auth/session')['body'])
+            binding = alice.call('POST', '/v1/personal-agent')['body']['personal_agent']
+            card = alice.call('GET', path)['body']['home']['personal_agent']
+            self.assertEqual(card['workspace'], binding['workspace'])
+            self.assertEqual(card['agent'], {field: binding['agent'][field] for field in ('id', 'name', 'summary')})
+            self.assertEqual(card['look'], binding['look'])
+            bob = Client(app, peer='127.0.0.2')
+            self.assertEqual(bob.call('GET', path)['status'], 401)
+            self.assertEqual(bob.register('bob')['status'], 201)
+            self.assertIsNone(bob.call('GET', path)['body']['home']['personal_agent'])
+
+
 if __name__ == '__main__':
     unittest.main()

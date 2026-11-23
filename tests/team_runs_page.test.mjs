@@ -146,6 +146,42 @@ test('startup overlaps account and workspace reads before rendering private task
   assert.equal(node('team-runs-workspace').value, WS);
 });
 
+test('native history overlaps sign-in and uses only the exact read for the verified viewer', async () => {
+  const {document, node} = fixture(`#workspace=${OTHER_WS}&run=${RUN}`);
+  document.querySelector = () => ({content:'ds-bot'});
+  const authenticate = Promise.withResolvers();
+  const directory = Promise.withResolvers();
+  const read = Promise.withResolvers();
+  const path = `/v1/workspaces/${OTHER_WS}/team-runs/${RUN}`;
+  const exact = {...run, workspace_id:OTHER_WS};
+  let requests = 0;
+  const mounted = mountTeamRuns(document, async address => {
+    if (address === '/v1/auth/session') return authenticate.promise;
+    if (address === '/v1/workspaces?limit=100') return directory.promise;
+    if (address === path) {
+      if (++requests === 1) return ok({viewer_username:'previous-owner', run:{...exact, title:'Different owner'}});
+      return read.promise;
+    }
+    return baseRead(address);
+  });
+  assert.equal(requests, 1);
+  authenticate.resolve(ok({user}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 1);
+  assert.equal(node('team-run-results').children.length, 0);
+  assert.equal(node('team-run-heading').textContent, '');
+
+  directory.resolve(ok({items:[workspace, alternate]}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 2);
+  assert.equal(node('team-run-heading').textContent, '任务详情');
+  read.resolve(ok({viewer_username:user.username, run:exact}));
+  await mounted;
+  assert.equal(node('team-runs-workspace').value, OTHER_WS);
+  assert.equal(node('team-run-heading').textContent, exact.title);
+  assert.equal(node('team-run-results').children.length, 2);
+});
+
 test('a lost create response survives reload and only its owner can retry the exact request', async () => {
   const storage = new Map();
   const {document, node} = fixture('', storage);
