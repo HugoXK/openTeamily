@@ -67,7 +67,7 @@ function homeFixture(pathname = '/', hash = '') {
     sessionStorage: {setItem: (key, value) => values.set(key, value), getItem: key => values.get(key), removeItem: key => values.delete(key)},
   };
   const document = {
-    defaultView: view, cookie: '', getElementById: read,
+    defaultView: view, cookie: '', getElementById: read, createElement:fixtureNode,
     querySelector: selector => selector === '.home-personal' ? read('home-personal') : null,
     querySelectorAll: () => [],
   };
@@ -210,8 +210,13 @@ test('a ready personal chat becomes clickable while the workspace list and onboa
   assert.equal(read('home-personal-chat').href, `/chat#workspace=${alice}&agent=${bob}`);
   assert.equal(read('home-workspace').disabled, true);
   assert.equal(takeSignupSession(view), null);
-  assert.deepEqual(pending.map(({url}) => url), ['/v1/onboarding', '/v1/workspaces?limit=100']);
-  for (const {url, resolve} of pending) resolve(url.endsWith('onboarding') ? reply({onboarding: {industry: '测试'}}) : reply({items: []}));
+  assert.deepEqual(pending.map(({url}) => url), [
+    '/v1/workspaces/'+alice+'/overview?limit=5', '/v1/onboarding', '/v1/workspaces?limit=100',
+  ]);
+  for (const {url, resolve} of pending) {
+    resolve(url.endsWith('onboarding') ? reply({onboarding: {industry: '测试'}})
+      : url.includes('/overview') ? reply({counts:{agents:1}}) : reply({items: [{id:alice,name:'个人空间'}]}));
+  }
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(read('home-context').textContent, '工作背景：测试');
 });

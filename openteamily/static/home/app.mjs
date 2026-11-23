@@ -58,13 +58,6 @@ function workspaceLink(path, workspace, extras = {}) {
   return path + '#' + new URLSearchParams({workspace, ...extras});
 }
 
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
 function show(document, kind, text) {
   const signedIn = document.getElementById('main-panel')?.hidden === false;
   const status = document.getElementById(signedIn ? 'home-status' : 'status');
@@ -99,6 +92,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   let loading = false;
   let signingIn = false;
   let overviewRequest = null;
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
 
   async function request(method, path, body, signal) {
     const headers = {Accept: 'application/json'};
@@ -470,10 +470,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       // The authenticated personal binding is already usable. Optional dashboard
       // and onboarding reads no longer hold back opening the first chat.
       renderPersonal();
-      selectedId = '';
+      const personalWorkspace = personal.workspace;
+      const requested = hashWorkspace(view.location?.hash);
+      const earlyId = !requested || requested === personalWorkspace?.id ? personalWorkspace?.id || '' : '';
+      selectedId = earlyId;
+      if (earlyId) {
+        workspaces = [{...personalWorkspace, name:personalWorkspace.name || '个人空间'}];
+        renderWorkspaceSelect();
+        workspaceSelect.disabled = true;
+      }
       renderWorkspaceLinks();
       mainPanel.hidden = false;
       show(document, '', '');
+      const earlyOverview = earlyId ? loadOverview() : null;
       const activeUser = currentUser;
       void request('GET', '/v1/onboarding').then(onboarding => {
         if (currentUser !== activeUser || onboarding.status !== 200) return;
@@ -487,17 +496,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0, body: {}}));
       if (currentUser !== activeUser) return;
       if (listed.status !== 200) {
+        await earlyOverview;
         show(document, 'error', '暂时无法加载工作区列表。');
         return;
       }
       workspaces = listed.body.items || [];
       if (!workspaces.length) {
-        show(document, '', '还没有工作区。先创建一个团队或工作区。');
+        if (earlyOverview) await earlyOverview;
+        else show(document, '', '还没有工作区。先创建一个团队或工作区。');
         return;
       }
       const wanted = hashWorkspace(view.location?.hash);
       if (wanted && !workspaces.some(space => space.id === wanted)) {
+        overviewRequest?.abort();
+        selectedId = '';
         renderWorkspaceSelect();
+        renderWorkspaceLinks();
         clearOverview();
         show(document, 'error', '无法访问链接中的工作区。请选择其他工作区。');
         return;
@@ -508,7 +522,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       if (!workspaces.some((space) => space.id === selectedId)) selectedId = workspaces[0].id;
       renderWorkspaceSelect();
       setHash(selectedId);
-      await loadOverview();
+      await (selectedId === earlyId && earlyOverview ? earlyOverview : loadOverview());
     } finally {
       loading = false;
     }

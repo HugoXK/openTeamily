@@ -252,6 +252,7 @@
     </form>
   </section>
   <section id="main-panel" hidden>
+    <p id="session-opening-view" aria-hidden="true" hidden></p>
     <header class="chat-top">
       <button type="button" id="chat-back" class="icon-action" title="返回会话列表" aria-label="返回会话列表" data-ui-title="chat.sessions.back" data-ui-label="chat.sessions.back"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
       <div class="chat-identity">
@@ -458,6 +459,7 @@
       <button type="button" id="conversation-search-more" hidden data-ui-text="chat.load_more">加载更多</button>
       <button type="button" id="conversation-search-retry" hidden data-ui-text="chat.retry">重试</button>
     </section>
+    <div id="conversation-search-return" class="chat-strip" hidden><button type="button" data-ui-text="chat.search.back_to_attachments">返回附件结果</button></div>
     <p id="conversation-live-update" class="chat-strip" hidden><span role="status" data-ui-text="chat.messages.conversation_updated">会话有更新</span><button type="button" id="conversation-live-load" data-ui-text="chat.messages.view_latest">查看最新消息</button></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
       <h2 id="pinned-messages-heading" data-ui-text="chat.messages.pinned">置顶消息</h2>

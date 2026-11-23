@@ -282,7 +282,7 @@ export function createAgents({ db, host }) {
     return {rows,cursor:page.length > limit ? `${last.archived_at}.${last.id}` : null}
   }
 
-  async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
+  function* workspaceAgents(workspaceId, cursor = '') {
     const rows = db.prepare(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
       FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id
       WHERE a.workspace_id=? AND a.id>? ORDER BY a.id`)
@@ -291,7 +291,6 @@ export function createAgents({ db, host }) {
     const rt = host.currentRuntime?.()?.rt
     const rosterAttached = typeof rt?.botOf === 'function'
     let unmapped
-    const page = []
     for (const row of rows.iterate(workspaceId, cursor)) {
       if (rosterAttached && !row.native_bot_id && !unmapped) {
         unmapped = new Map()
@@ -301,7 +300,13 @@ export function createAgents({ db, host }) {
         }
       }
       const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped?.get(row.id)
-      const observed = observeAgent(row, bot, rosterAttached)
+      yield observeAgent(row, bot, rosterAttached)
+    }
+  }
+
+  async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
+    const page = []
+    for (const observed of workspaceAgents(workspaceId, cursor)) {
       if (!includeArchived && observed.archived) continue
       page.push(observed)
       if (page.length > limit) break
@@ -834,6 +839,21 @@ export function createAgents({ db, host }) {
       return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)).map(row => ({
         ...row, archived: false, title_edited: !!row.title_edited,
       })) }
+    },
+    workspaceOverview(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      const {limit} = p
+      if (!Number.isInteger(limit) || limit < 1 || limit > 10) fail('invalid', 'Invalid overview limit', 400)
+      const available = new Map()
+      for (const agent of workspaceAgents(workspaceId)) {
+        if (!agent.archived) available.set(agent.id, agent.name)
+      }
+      const items = all(`SELECT id,agent_id,title,created,updated FROM agent_conversations
+        WHERE agent_id IN (SELECT value FROM json_each(?)) AND archived_at IS NULL
+        ORDER BY updated DESC,id LIMIT ?`, JSON.stringify([...available.keys()]), limit)
+        .map(row => ({...row, source:'agent', agent_name:available.get(row.agent_id)}))
+      return {count:available.size, items}
     },
     async archivedConversationDirectory(p) {
       const workspaceId = ws(p)
@@ -1391,6 +1411,7 @@ export default async function agents(host) {
   wrapped.actionSource = endpoints.actionSource
   wrapped.templateRoles = endpoints.templateRoles
   wrapped.createTemplateRoles = endpoints.createTemplateRoles
+  wrapped.workspaceOverview = endpoints.workspaceOverview
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)

@@ -2510,9 +2510,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const transition = sessionTransition;
     const pending = Boolean(transition?.pending);
     document.getElementById('session-transition').hidden = !transition;
-    document.getElementById('session-transition-status').textContent = !transition ? '' : pending
+    const message = !transition ? '' : pending
       ? uiLabel(`正在打开「${transition.title}」…`, `Opening “${transition.title}”…`)
       : uiLabel(`无法打开「${transition.title}」。`, `Couldn’t open “${transition.title}”.`);
+    document.getElementById('session-transition-status').textContent = message;
+    const openingView = document.getElementById('session-opening-view');
+    openingView.hidden = !pending;
+    openingView.textContent = pending ? message : '';
     const retry = document.getElementById('session-transition-retry');
     retry.hidden = !transition || pending;
     retry.textContent = uiLabel('重试', 'Retry');
@@ -2526,19 +2530,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function clearSessionTransition() {
-    if (!sessionTransition) return;
+    const transition = sessionTransition;
+    if (!transition) return;
     sessionTransition = null;
+    transition.controller.abort();
     syncSessionTransition();
   }
 
-  async function openSessionTarget(target) {
+  function resumeOpenSession(target) {
+    if (target.source !== currentSource || target.cid !== currentConversation?.id ||
+        (target.source === 'agent' && target.agent !== currentAgent?.id)) return false;
+    if (sessionTransition?.pending) socialOpen += 1;
+    clearSessionTransition();
+    setSessionsOpen(false);
+    if (currentSource === 'social') {
+      scheduleUnreadRead();
+      syncGroupReplyProgress();
+      if (!pollTimer && !socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+    } else if (!syncReplyProgress() && lastAgentItems.some(waitingAgentReply) && !pollTimer) schedulePoll();
+    if (narrowScreen()) document.getElementById('chat-title').focus({preventScroll:true});
+    return true;
+  }
+
+  async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
-    const transition = {...target, pending: true};
+    if (resume && resumeOpenSession(target)) return true;
+    sessionTransition?.controller.abort();
+    const controller = new AbortController();
+    const transition = {...target, pending: true, controller};
     sessionTransition = transition;
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition};
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition,
+      signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
     if (sessionTransition !== transition) return false;
@@ -3834,6 +3859,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let privateRefresh = 0;
   let socialOpen = 0;
   let historyJump = 0;
+  let searchHighlightTimer;
   let groupReplyWatch = null;
   const groupReplyViews = new Map();
   const groupReplyRetries = new Map();
@@ -4216,11 +4242,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const follow = messageScrollerAtBottom(scroller);
     const viewportTop = scroller.getBoundingClientRect().top;
     const anchor = !follow && [...document.getElementById('message-list').children]
-      .find(row => row.getBoundingClientRect().bottom > viewportTop);
+      .find(row => !row.hidden && row.getBoundingClientRect().bottom > viewportTop);
     const offset = anchor && anchor.getBoundingClientRect().top;
     update();
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
-    if (anchor?.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
+    if (anchor?.isConnected && !anchor.hidden) scroller.scrollTop += anchor.getBoundingClientRect().top - offset;
     if (!follow) updateLatestMessageControl();
   }
 
@@ -4253,8 +4279,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         view.preview.textContent = text;
         view.preview.hidden = !text;
         view.row.dataset.state = state;
-        view.note.textContent = groupReplyLabel(state, view.job);
+        view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
       }
+      updateGroupReplyVisibility();
     });
   }
 
@@ -4348,7 +4375,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     running: ['正在生成回复', 'Writing a reply'],
     failed: ['回复未完成', 'Reply could not be completed'],
   };
-  function groupReplyLabel(state, job) {
+  function compactGroupReplies() {
+    return currentConversation?.kind === 'group' && !currentConversation.public_agent;
+  }
+
+  function updateGroupReplyVisibility(list = document.getElementById('message-list')) {
+    if (!compactGroupReplies()) return;
+    const pending = [];
+    let running;
+    let streaming = false;
+    for (const row of list.children) {
+      if (!row.classList.contains('group-reply-job')) continue;
+      const state = row.dataset.state;
+      const waiting = state === 'queued' || state === 'running';
+      const hasText = Boolean(groupReplyViews.get(row.dataset.replyJobId)?.preview.textContent.trim());
+      row.classList.toggle('group-reply-thinking', waiting && !hasText);
+      if (waiting && !hasText) {
+        pending.push(row);
+        if (state === 'running') running ??= row;
+      } else {
+        row.hidden = false;
+        streaming ||= waiting && hasText;
+      }
+    }
+    const shown = running || (!streaming && pending[0]);
+    for (const row of pending) row.hidden = row !== shown;
+  }
+
+  function groupReplyLabel(state, job, compact = false) {
+    if (compact && (state === 'queued' || state === 'running')) {
+      const name = job?.agent_name || uiLabel('智能体', 'Agent');
+      if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
+      return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
+    }
     if (state === 'failed' && job?.error_code === 'direct_agent_unavailable') {
       return uiLabel('智能体已无法在此私聊回复', 'This agent is no longer available in this chat');
     }
@@ -4381,6 +4440,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const previewBefore = sameAttempt ? previous?.preview : null;
     const wasRunning = sameAttempt && row.dataset.state === 'running';
     row.className = 'other group-reply-job';
+    row.hidden = false;
     row.dataset.chatAuthor = 'agent';
     row.tabIndex = -1;
     row.dataset.replyJobId = job.id;
@@ -4392,21 +4452,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const note = document.createElement('div');
     note.className = 'group-reply-state';
     note.setAttribute('role', 'status');
-    note.textContent = groupReplyLabel(job.status, job);
     row.replaceChildren(role, note);
     if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
       const preview = previewBefore || document.createElement('div');
       preview.className = 'group-reply-preview body';
       preview.hidden = !preview.textContent;
       preview.setAttribute('aria-live', 'off');
-      if (wasRunning) {
-        row.dataset.state = 'running';
-        note.textContent = groupReplyLabel('running');
-      }
+      if (wasRunning) row.dataset.state = 'running';
       groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
+    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !previewBefore?.textContent.trim());
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -4448,6 +4505,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           withGroupReplyScroll(() => {
             if (next.status === 'passed') { row.remove(); groupReplyViews.delete(next.id); }
             else renderGroupReplyRow(updated, next, row);
+            updateGroupReplyVisibility();
           });
           if (focused && next.status !== 'passed') (groupReplyButton(row) || row).focus({preventScroll: true});
         }
@@ -4666,6 +4724,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = (groupReplyID && existingGroupReplies.get(groupReplyID)) || document.createElement('li');
       if (groupReplyID) {
         li.replaceChildren();
+        li.hidden = false;
         li.dataset.replyJobId = groupReplyID;
         li.dataset.state = 'replied';
         delete li.dataset.replyAttempt;
@@ -4838,6 +4897,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
       }
     }
+    updateGroupReplyVisibility(list);
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     if (focusedGroupReply) {
       const target = [...list.children].find(row => row.dataset.replyJobId === focusedGroupReply.id);
@@ -5949,7 +6009,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -5977,7 +6037,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const snapshot = startupSnapshot ? await startupSnapshot() : null;
     if (startupSnapshot && !stillOpen()) return false;
     const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
-      undefined, undefined, foreground ? AbortSignal.timeout(5000) : undefined)
+      undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
@@ -7780,16 +7840,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result.body;
   });
   async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
-    isCurrent = () => true, {signal, onLocated} = {}) {
+    isCurrent = () => true, {signal, onLocated, attachmentPath} = {}) {
     if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findAnchor = target => attachmentPath && target
+      ? Array.from(target.querySelectorAll('[data-chat-file-path]')).find(card => card.dataset.chatFilePath === attachmentPath)
+      : target;
     let target = findTarget();
+    let anchor = findAnchor(target);
     const jump = ++historyJump;
     const privateChat = currentSource === 'agent';
     const currentHistory = () => privateChat ? privateHistory : socialHistory;
     const state = currentHistory();
-    if (!target && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
+    if (!anchor && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
       if (privateChat) {
         state.jumping = jump;
         stopReplyProgress();
@@ -7818,6 +7882,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             renderSocialMessages(result.body.items, {keepScroll: false});
           }
           target = findTarget();
+          anchor = findAnchor(target);
           if (notice) notice.textContent = '';
         }
       } catch {
@@ -7835,20 +7900,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return false;
     }
-    onLocated?.(target);
-    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    if (!anchor) {
+      if (notice) notice.textContent = uiLabel('原消息中的附件已不可用。请刷新附件结果。', 'The attachment is unavailable. Refresh the attachment results.');
+      return false;
+    }
+    onLocated?.(anchor);
+    anchor.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    anchor.tabIndex = -1; anchor.focus?.({preventScroll: true});
     for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    for (const card of list.querySelectorAll('[data-attachment-jump]')) delete card.dataset.attachmentJump;
     target.dataset.searchJump = 'true';
-    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    if (attachmentPath) anchor.dataset.attachmentJump = 'true';
+    clearTimeout(searchHighlightTimer);
+    searchHighlightTimer = setTimeout(() => {
+      delete target.dataset.searchJump;
+      delete anchor.dataset.attachmentJump;
+    }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
-  async function jumpToSearchHit(messageId, view, button) {
-    if (!currentSearchView(view) || view.jump?.messageId === messageId) return;
+  async function jumpToSearchHit(messageId, view, button, attachmentPath) {
+    if (!currentSearchView(view) || view.jump?.button === button) return;
     const status = view.jump?.status ?? inChatStatus.textContent;
     view.jump?.controller.abort();
     const controller = new AbortController();
-    const jump = {messageId, status, controller};
+    const jump = {button, status, controller};
     view.jump = jump;
     button.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = uiLabel('正在定位消息…', 'Finding the message…');
@@ -7856,16 +7931,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const located = await jumpToMessage(messageId, inChatStatus,
         () => currentSearchView(view) && view.jump === jump, {
           signal: controller.signal,
+          attachmentPath,
           onLocated(target) {
             searchScrollSnapshot = null;
+            if (attachmentPath) {
+              view.selected?.removeAttribute('aria-current');
+              view.selected = button;
+              button.setAttribute('aria-current', 'true');
+            }
             if (globalThis.matchMedia?.('(max-width: 900px)').matches) {
-              closeInChatSearch({restoreScroll: false, focus: false});
+              closeInChatSearch({restoreScroll: false, focus: false, preserveAttachments: Boolean(attachmentPath)});
             } else {
               searchJumpTarget = target;
             }
           },
         });
-      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = status;
+      if (located && currentSearchView(view) && view.jump === jump) inChatStatus.textContent = view.status || status;
     } finally {
       button.removeAttribute('aria-busy');
       if (view.jump === jump) view.jump = null;
@@ -7919,6 +8000,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const inChatStatus = document.getElementById('conversation-search-status');
   const inChatMore = document.getElementById('conversation-search-more');
   const inChatRetry = document.getElementById('conversation-search-retry');
+  const inChatReturn = document.getElementById('conversation-search-return');
   let conversationScope = 'messages';
   let searchedChat = '';
   let inChatView;
@@ -7940,6 +8022,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inChatMore.hidden = true;
     inChatMore.disabled = false;
     inChatRetry.hidden = true;
+    if (inChatReturn) inChatReturn.hidden = true;
   }
 
   function setConversationScope(tab) {
@@ -7965,7 +8048,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     jump.type = 'button';
     jump.className = 'search-hit attachment-search-jump';
     jump.setAttribute('aria-label', '跳到原消息，' + title);
-    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump));
+    jump.addEventListener('click', () => jumpToSearchHit(item.message_id, view, jump, attachment.path));
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -7999,13 +8082,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return li;
   }
 
-  async function searchAttachmentPage(view, {kind, noun, unit}) {
+  async function searchAttachmentPage(view, {kind, noun, unit}, controller) {
     const conversation = currentConversation.id;
     const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
     const params = new URLSearchParams({kind, q: view.query, limit: '20'});
     if (view.cursor) params.set('cursor', view.cursor);
-    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
-    if (!currentSearchView(view)) return;
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, controller.signal);
+    if (!currentSearchView(view) || view.controller !== controller) return;
     if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
     for (const item of result.body.items || []) {
       if (!item.message_id || !item.attachment?.id) continue;
@@ -8016,7 +8099,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const next = result.body.next_cursor;
     view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
-    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+    view.status = inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
       : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
   }
 
@@ -8034,31 +8117,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = CONVERSATION_SCOPES[view.scope];
     const noun = scope.noun || '消息';
     view.loading = true;
-    view.controller = new AbortController();
+    const controller = view.controller = new AbortController();
+    const current = () => currentSearchView(view) && view.controller === controller;
     inChatResults.setAttribute('aria-busy', 'true');
     inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
     inChatMore.disabled = true;
     inChatRetry.hidden = true;
     try {
       if (scope.kind) {
-        await searchAttachmentPage(view, scope);
+        await searchAttachmentPage(view, scope, controller);
       } else {
-        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: view.controller.signal});
-        if (!currentSearchView(view)) return;
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append, signal: controller.signal});
+        if (!current()) return;
         if (state.error) throw new Error(state.error);
         inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
         view.cursor = state.cursor;
         inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
       }
-      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+      if (current()) inChatMore.hidden = !view.cursor;
     } catch {
-      if (!currentSearchView(view)) return;
-      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      if (!current()) return;
+      view.status = inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
       view.retryAppend = append;
       inChatMore.hidden = true;
       inChatRetry.hidden = false;
     } finally {
-      if (currentSearchView(view)) {
+      if (current()) {
         view.loading = false;
         view.controller = null;
         inChatMore.disabled = false;
@@ -8106,7 +8190,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchScrollSnapshot = null;
   let searchJumpTarget = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  inChatOpen?.addEventListener('click', () => {
+  function openInChatSearch() {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
     if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
@@ -8119,15 +8203,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
     inChatPanel.hidden = false;
     inChatOpen.setAttribute('aria-expanded', 'true');
+    if (inChatReturn) inChatReturn.hidden = true;
+    const view = inChatView;
+    if (currentSearchView(view) && view.suspendedScroll !== undefined) {
+      inChatResults.scrollTop = view.suspendedScroll;
+      delete view.suspendedScroll;
+      (view.selected || inChatQuery).focus({preventScroll: true});
+      return;
+    }
     inChatQuery.focus();
     return searchCurrentConversation();
-  });
-  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+  }
+  inChatOpen?.addEventListener('click', openInChatSearch);
+  inChatReturn?.querySelector('button')?.addEventListener('click', openInChatSearch);
+  function closeInChatSearch({restoreScroll = true, focus = true, preserveAttachments = false} = {}) {
     const target = restoreScroll && searchJumpTarget?.isConnected ? searchJumpTarget : null;
     const targetTop = target?.getBoundingClientRect().top;
+    const view = inChatView;
+    const preserve = preserveAttachments && currentSearchView(view) && CONVERSATION_SCOPES[view.scope].kind && view.seen.size;
+    if (preserve) {
+      view.suspendedScroll = inChatResults.scrollTop;
+      view.controller?.abort();
+      view.jump?.controller.abort();
+      view.controller = view.jump = null;
+      if (view.loading) {
+        view.loading = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+        inChatMore.disabled = false;
+        inChatMore.hidden = !view.cursor;
+      }
+      inChatStatus.textContent = view.status ?? '';
+      if (inChatReturn) inChatReturn.hidden = !view.selected;
+    } else {
+      clearConversationSearch();
+    }
     inChatPanel.hidden = true;
     inChatOpen?.setAttribute('aria-expanded', 'false');
-    clearConversationSearch();
     const scroller = document.getElementById('message-scroller');
     if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) scroller.scrollTop = searchScrollSnapshot.top;
     else if (target) scroller.scrollTop += target.getBoundingClientRect().top - targetTop;
@@ -8138,9 +8249,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       opener?.focus();
     }
   }
-  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
+  const closeSearch = () => closeInChatSearch({preserveAttachments: true});
+  document.getElementById('conversation-search-close')?.addEventListener('click', closeSearch);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeSearch();
   });
   document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
     event.preventDefault();
@@ -8347,7 +8459,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const {source, agent, conversation: cid} = button.dataset;
     const session = sessions.find(item => item.id === cid && item.source === source);
     const title = session?.title || uiLabel('会话', 'conversation');
-    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0});
+    await openSessionTarget({source, agent, cid, title, unread: source === 'social' && session?.kind !== 'public' && session?.unread_count > 0}, {resume:true});
   });
 
   for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {

@@ -1055,6 +1055,24 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 }
 .session-transition p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .session-transition button { flex-shrink: 0; min-height: 2rem; padding: .2rem .5rem; }
+#session-opening-view { display: none; }
+@media (min-width: 901px) {
+  #main-panel:has(> #session-opening-view:not([hidden])) > :not(#session-opening-view) { visibility: hidden; }
+  #session-opening-view:not([hidden]) {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    padding: 1rem;
+    border-radius: inherit;
+    background: var(--ot-surface-2);
+    color: var(--ot-muted);
+    font-size: .875rem;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+}
 #conversation-list .avatar {
   display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 50%;
   box-sizing: border-box; font-size: .875rem; font-weight: 600; line-height: 1;
@@ -1660,7 +1678,9 @@ button.group-management-member:hover { background: var(--ot-surface-2); }
   border: 0;
   color: var(--ot-ink);
 }
-.attachment-search-jump.search-hit:hover { background: var(--ot-surface-2); }
+.attachment-search-jump.search-hit:hover,
+.attachment-search-jump.search-hit[aria-current="true"] { background: var(--ot-surface-2); }
+.chat-file[data-attachment-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
 .attachment-search-jump .search-hit-avatar { align-self: center; border-radius: .45rem; }
 .attachment-search-jump .search-hit-head,
 .attachment-search-jump .search-hit-head strong { display: block; }
@@ -2755,6 +2775,23 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
 #main-panel[data-chat-kind="group"] #message-scroller > #message-list { max-width: 54rem; margin-block-start: 0; gap: .65rem; }
 #main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] { border-inline-start: 2px solid var(--ot-accent); }
 #main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] > .role { color: var(--ot-ink); font-weight: 650; }
+#main-panel[data-chat-kind="group"] #message-list > li.group-reply-thinking {
+  width: max-content;
+  max-width: 100%;
+  min-height: 0;
+  padding: .125rem .375rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#message-list > .group-reply-job[hidden],
+#message-list > .group-reply-thinking > :not(.group-reply-state) { display: none; }
+#message-list > .group-reply-thinking > .group-reply-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
 #main-panel[data-chat-kind="group"] #chat-empty:not([hidden]) { margin: clamp(1.1rem, 5vh, 3.5rem) auto 0; }
 .empty-group { display: grid; gap: .35rem; padding: .75rem; font-size: .875rem; }
 .empty-group strong { color: var(--ot-ink); font-size: 1rem; }

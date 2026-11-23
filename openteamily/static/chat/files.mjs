@@ -66,6 +66,7 @@ export function chatFileDownload(document, attachment) {
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
+  if (!pending && attachment.path) card.dataset.chatFilePath = attachment.path;
   const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
