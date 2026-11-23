@@ -1,9 +1,12 @@
+// Ported from runtime/openteamily-web/test/discover-ranking.test.js when #462 moved
+// ranking to Bot Social (Discover candidates are shared state). Same contract:
+// deterministic order, explainable score, workspace isolation, opaque cursor.
 // Deterministic, explainable ranking for Discover works and agents inside this
 // user's DS-Bot (#462). The module is pure: the caller passes the candidates,
 // the current time and the caller's workspace; the same inputs must always give
 // the same order and every result must explain its own score.
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'node:test'
 import {
   DEFAULT_AGENT_WEIGHTS,
   DEFAULT_RECENCY_HALF_LIFE,
@@ -13,12 +16,12 @@ import {
   paginate,
   rankAgents,
   rankWorks,
-} from '../features/discover/ranking.js'
+} from '../src/openteamily/ranking.js'
 
 const NOW = 1800000000
 const WS = 'ws_caller'
 
-const work = (id, author = 'alice', created = NOW, extra = {}) => ({
+const work = (id: string, author = 'alice', created: number = NOW, extra: Record<string, any> = {}) => ({
   id,
   title: id.toUpperCase(),
   author_id: author,
@@ -28,7 +31,7 @@ const work = (id, author = 'alice', created = NOW, extra = {}) => ({
   ...extra,
 })
 
-const agent = (id, creator = 'alice', created = NOW, extra = {}) => ({
+const agent = (id: string, creator = 'alice', created: number = NOW, extra: Record<string, any> = {}) => ({
   id,
   name: id.toUpperCase(),
   creator_id: creator,
@@ -38,9 +41,9 @@ const agent = (id, creator = 'alice', created = NOW, extra = {}) => ({
   ...extra,
 })
 
-const ids = (ranked) => ranked.map((item) => item.id)
-const byId = (ranked) => new Map(ranked.map((item) => [item.id, item]))
-const scores = (ranked) => ranked.map((item) => item.score)
+const ids = (ranked: any[]): string[] => ranked.map((item) => item.id)
+const byId = (ranked: any[]): Map<string, any> => new Map(ranked.map((item) => [item.id, item]))
+const scores = (ranked: any[]): number[] => ranked.map((item) => item.score)
 const zeroWeights = { recency: 0, engagement: 0, follow: 0, seen_penalty: 1, author_cap: 5 }
 
 test('the same fixture ranks identically twice and does not depend on input order', () => {
@@ -183,8 +186,8 @@ test('every result explains its score with components that add up', () => {
     assert.ok(Math.abs(parts.base * parts.seen_penalty - parts.score) < 1e-12)
     assert.ok(Math.abs(parts.score - item.score) < 1e-12)
   }
-  assert.throws(() => explain({ id: 'w' }), (error) => error.code === 'discover/ranking-invalid')
-  assert.throws(() => explain(null), (error) => error.code === 'discover/ranking-invalid')
+  assert.throws(() => explain({ id: 'w' }), (error: any) => error.code === 'discover/ranking-invalid')
+  assert.throws(() => explain(null), (error: any) => error.code === 'discover/ranking-invalid')
 })
 
 test('only this workspace\'s listed works and agents are ranked', () => {
@@ -224,18 +227,18 @@ test('paginate round-trips an opaque cursor and rejects malformed ones', () => {
   assert.deepEqual(ids(paginate(ranked, '', 2).items), ids(first.items))
   assert.deepEqual(paginate([], null, 10), { items: [], next_cursor: null, cursor: null })
   for (const cursor of ['not-a-cursor', '!!!!', '2', 123]) {
-    assert.throws(() => paginate(ranked, cursor, 2), (error) => error.code === 'discover/ranking-invalid')
+    assert.throws(() => paginate(ranked, cursor, 2), (error: any) => error.code === 'discover/ranking-invalid')
   }
   for (const limit of [0, -1, 101, '2', true, null]) {
-    assert.throws(() => paginate(ranked, null, limit), (error) => error.code === 'discover/ranking-invalid')
+    assert.throws(() => paginate(ranked, null, limit), (error: any) => error.code === 'discover/ranking-invalid')
   }
 })
 
 test('invalid limits, weights, items and now are refused', () => {
   const items = [work('w')]
-  const invalid = (options) => assert.throws(
+  const invalid = (options: any) => assert.throws(
     () => rankWorks(items, NOW, { workspaceId: WS, ...options }),
-    (error) => error.code === 'discover/ranking-invalid',
+    (error: any) => error.code === 'discover/ranking-invalid',
   )
   for (const weights of [
     { unknown: 1 },
@@ -251,8 +254,8 @@ test('invalid limits, weights, items and now are refused', () => {
   ]) invalid({ weights })
   for (const limit of [0, -1, 101, '5', true, null]) invalid({ limit })
 
-  assert.throws(() => rankWorks(items, 'now', { workspaceId: WS }), (error) => error.code === 'discover/ranking-invalid')
-  assert.throws(() => rankWorks(items, NOW, {}), (error) => error.code === 'discover/ranking-invalid')
+  assert.throws(() => rankWorks(items, 'now', { workspaceId: WS }), (error: any) => error.code === 'discover/ranking-invalid')
+  assert.throws(() => rankWorks(items, NOW, {}), (error: any) => error.code === 'discover/ranking-invalid')
 
   const badItems = [
     [work('w', 'alice', NOW, { author_id: undefined, creator_id: undefined })],
@@ -260,17 +263,17 @@ test('invalid limits, weights, items and now are refused', () => {
     [{ author_id: 'alice', created: NOW, workspace_id: WS, listed: true }],
     [work(''), work('ok', 'bob')],
     [work('w', '')],
-    [work('w', 'alice', 'now')],
+    [work('w', 'alice', 'now' as any)],
     [work('w'), work('w', 'bob')],
     [null],
     ['not-a-mapping'],
   ]
   for (const list of badItems) {
-    assert.throws(() => rankWorks(list, NOW, { workspaceId: WS }), (error) => error.code === 'discover/ranking-invalid')
+    assert.throws(() => rankWorks(list, NOW, { workspaceId: WS }), (error: any) => error.code === 'discover/ranking-invalid')
   }
 
   assert.throws(() => rankAgents([{ id: 'a', name: 'A', created: NOW, workspace_id: WS, listed: true }], NOW, { workspaceId: WS }),
-    (error) => error.code === 'discover/ranking-invalid')
+    (error: any) => error.code === 'discover/ranking-invalid')
   assert.equal(DEFAULT_WORK_WEIGHTS.author_cap, 3)
   assert.equal(DEFAULT_AGENT_WEIGHTS.author_cap, 3)
   assert.equal(MAX_LIMIT, 100)
