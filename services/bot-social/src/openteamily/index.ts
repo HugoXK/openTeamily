@@ -10,8 +10,11 @@ import { MIGRATE_SCHEMA, registerMigrate } from "./migrate.js";
 import { CALLS_SCHEMA, registerCalls } from "./calls.js";
 
 import { CONTACTS_SCHEMA, registerContacts } from "./contacts.js";
+import { MEETING_SHARES_SCHEMA, registerMeetingShares } from "./meeting-shares.js";
+import { STUDIO_SCHEMA, registerStudio } from "./studio.js";
+import { AGENT_COPY_GRANTS_SCHEMA, registerAgentCopyGrants } from "./agent-copy-grants.js";
 
-export const OT_SCHEMAS = [CORE_SCHEMA, TEAMS_SCHEMA, MESSENGER_SCHEMA, DISCOVER_SCHEMA, SHARES_SCHEMA, MIGRATE_SCHEMA, CALLS_SCHEMA, CONTACTS_SCHEMA];
+export const OT_SCHEMAS = [CORE_SCHEMA, TEAMS_SCHEMA, MESSENGER_SCHEMA, DISCOVER_SCHEMA, SHARES_SCHEMA, MIGRATE_SCHEMA, CALLS_SCHEMA, CONTACTS_SCHEMA, MEETING_SHARES_SCHEMA, STUDIO_SCHEMA, AGENT_COPY_GRANTS_SCHEMA];
 
 export function registerOpenTeamily(app: FastifyInstance, platform: Platform) {
   for (const schema of OT_SCHEMAS) platform.db.exec(schema);
@@ -24,5 +27,8 @@ export function registerOpenTeamily(app: FastifyInstance, platform: Platform) {
   registerDiscover(app, ot);
   registerShares(app, ot);
   registerMigrate(app, ot);
+  registerMeetingShares(app, ot);
+  registerStudio(app, ot);
+  registerAgentCopyGrants(app,ot);
   return ot;
 }
