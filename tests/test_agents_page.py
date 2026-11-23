@@ -74,7 +74,7 @@ class AgentsPageTests(unittest.TestCase):
             self.assertEqual(result['status'], 410, result)
             self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
 
-    def test_directory_search_filters_in_place_and_keeps_open_chat(self):
+    def test_directory_search_filters_in_place_and_preserves_chat_entry(self):
         page = self.raw.call('GET', '/agents')
         html = page['body'].decode()
         self.assertIn('id="agent-search"', html)
@@ -86,7 +86,6 @@ class AgentsPageTests(unittest.TestCase):
         self.assertIn("addEventListener('input', () => renderDirectory())", source)
         self.assertIn('没有匹配的智能体。试试其他关键词。', source)
         self.assertIn("event.key !== 'Escape'", source)
-        self.assertIn("'显示 ' + shown + ' 个智能体'", source)
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             ['node', '--test', 'tests/agents_search.test.mjs'],
@@ -119,7 +118,7 @@ if __name__ == '__main__':
 # The search box is wired in static/agents/app.mjs, so its behaviour cannot be
 # read off the HTML. This harness mounts the real module against a fake document
 # and an injected fetch, then drives the recorded acceptance cases: typing sends
-# no request, the open conversation and its poll survive typing, the empty note
+# no request, the selected agent's chat link survives typing, the empty note
 # distinguishes "no match" from a vacant directory, the count follows the query,
 # and Escape clears the box and keeps focus. It runs under node, which the same
 # CI job already installs for the node --test steps.
@@ -164,12 +163,6 @@ const doc = {
 };
 const el = id => doc.getElementById(id);
 
-const timers = new Map();
-const cleared = [];
-let nextTimer = 1;
-globalThis.setTimeout = fn => { const id = nextTimer++; timers.set(id, fn); return id; };
-globalThis.clearTimeout = id => { cleared.push(id); timers.delete(id); };
-
 const agents = scenario === 'vacant' ? [] : [
   {id: 'a1', name: 'Beta Helper', summary: '写文案', instructions: 'x', revision: 1, homepage: {visibility: 'restricted'}},
   {id: 'a2', name: 'Alpha Desk', summary: '整理邮件', instructions: 'y', revision: 1, homepage: {visibility: 'restricted'}},
@@ -185,14 +178,6 @@ const fetcher = async (path, options) => {
   if (path === '/v1/workspaces/w1/agents?limit=100') return json(200, {items: agents});
   for (const agent of agents) {
     if (path === `/v1/workspaces/w1/agents/${agent.id}`) return json(200, {agent});
-    if (path === `/v1/workspaces/w1/agents/${agent.id}/runtime`) return json(501, {});
-    if (path === `/v1/workspaces/w1/agents/${agent.id}/conversations?limit=100`) {
-      return json(200, {items: [{id: 'c1', title: '第一轮'}]});
-    }
-    if (path === `/v1/workspaces/w1/agents/${agent.id}/conversations/c1`) {
-      return json(200, {conversation: {id: 'c1', title: '第一轮'},
-                        items: [{role: 'assistant', status: 'running', body: ''}]});
-    }
   }
   return json(404, {});
 };
@@ -217,20 +202,19 @@ if (scenario === 'typing') {
 } else if (scenario === 'chat') {
   el('agent-list').handlers.click({target: {closest: () => ({dataset: {id: 'a1'}})}});
   await settle();
-  assert.equal(el('chat-panel').hidden, false, 'the chat panel did not open');
+  assert.equal(el('chat-panel').hidden, false);
   const title = el('chat-title').textContent;
-  assert.equal(timers.size, 1, 'no conversation poll was scheduled');
+  const chatLink = el('open-in-chat').href;
+  assert.match(title, /Beta Helper/);
+  assert.equal(chatLink, '/chat#workspace=w1&agent=a1');
+  assert.equal(requests.some(([path]) => path.includes('/conversations')), false);
   const before = requests.length;
-  await type('be');
-  assert.equal(el('chat-panel').hidden, false, 'typing in the search box closed the chat panel');
-  assert.equal(el('chat-title').textContent, title, 'typing changed the agent under discussion');
-  assert.equal(timers.size, 1, 'typing stopped the conversation poll');
-  assert.equal(requests.length, before, 'typing sent ' + (requests.length - before) + ' request(s)');
-  const [id, poll] = [...timers.entries()][0];
-  timers.delete(id);
-  poll();
-  await settle();
-  assert.ok(requests.some(([path]) => path.endsWith('/conversations/c1')), 'the poll never ran');
+  await type('alpha');
+  assert.equal(el('agent-list').children.length, 1);
+  assert.equal(el('chat-panel').hidden, false);
+  assert.equal(el('chat-title').textContent, title);
+  assert.equal(el('open-in-chat').href, chatLink);
+  assert.equal(requests.length, before);
 } else if (scenario === 'empty') {
   assert.equal(el('agents-empty').hidden, true, 'the empty note shows while agents are listed');
   await type('zzz');
@@ -281,7 +265,7 @@ class AgentsSearchBehaviourTests(unittest.TestCase):
     def test_typing_filters_without_refetching(self):
         self.run_scenario('typing')
 
-    def test_typing_keeps_the_open_conversation_and_its_poll(self):
+    def test_typing_preserves_the_selected_agents_native_chat_link(self):
         self.run_scenario('chat')
 
     def test_empty_note_distinguishes_no_matches_from_a_vacant_directory(self):
