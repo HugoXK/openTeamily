@@ -184,6 +184,7 @@ export function sendSocialAttachmentMessage(view, path, message, file, headers, 
   form.append('file', file);
   if (message.body) form.set('body', message.body);
   if (message.reply_to) form.set('reply_to', message.reply_to);
+  if (message.agent_mentions?.length) form.set('agent_mentions', JSON.stringify(message.agent_mentions));
   return uploadForm(view, path, headers, form, onProgress);
 }
 

@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import { createAgentReplier, replyPrompt } from '../lib/c/agent-replies.js'
+import { createLegacyDispatch } from '../src/dispatch.js'
 import messenger from '../features/messenger/index.js'
 
 const SERVER = 'https://social.example.test'
@@ -454,6 +455,27 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
   const result = await e.v1({method:'POST',path,body:{body:'Question',agent_mentions:targets}})
   assert.equal(result.status, 201)
   assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
+
+  const dispatch = createLegacyDispatch({endpoints:{'messenger/v1':e.v1}})
+  const url = new URL('http://dsbot/api/openteamily/legacy')
+  url.search = new URLSearchParams({feature:'messenger',path})
+  const file = new Blob(['the attachment'], {type:'text/plain'})
+  const form = new FormData()
+  form.set('file',file,'plan.txt')
+  form.set('body','Caption question')
+  form.set('agent_mentions',JSON.stringify(targets))
+  const send = () => dispatch(new Request(url,{method:'POST',body:form,headers:{'Idempotency-Key':'caption-group-fixture'}}))
+  assert.equal((await send()).status,201)
+  assert.deepEqual(f.calls.at(-1).body.agent_mentions,targets)
+  assert.equal(f.calls.at(-1).body.body,'Caption question')
+  assert.equal(f.calls.at(-1).body.attachment.title,'plan.txt')
+
+  const forwarded = f.calls.length
+  form.append('agent_mentions',JSON.stringify(targets))
+  assert.equal((await send()).status,400)
+  form.set('agent_mentions','invalid JSON')
+  assert.equal((await send()).status,400)
+  assert.equal(f.calls.length,forwarded)
 })
 
 test('only exported saved works add version metadata to group attachments and resource results', async () => {

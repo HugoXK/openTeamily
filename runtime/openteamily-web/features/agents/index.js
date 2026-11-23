@@ -600,6 +600,50 @@ export function createAgents({ db, host }) {
     }, accepted)
   }
 
+  function reserveAgent(p, inheritCapabilities, source) {
+    const workspaceId = ws(p)
+    const { name } = p
+    const summary = p.summary ?? ''
+    const instructions = p.instructions ?? ''
+    const category = p.category ?? null
+    const starts = p.quick_starts ?? []
+    if (!validName(name) || !validSummary(summary) || !validInstructions(instructions) || !validCategory(category) || !validQuickStarts(starts)) {
+      fail('invalid', 'Provide a name (≤80), summary (≤500) and instructions (≤16000)', 400)
+    }
+    if (!IDEM.test(String(p.idempotency_key ?? ''))) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
+    const clean = name.trim()
+    const keyHash = sha(p.idempotency_key)
+    const fields = [clean, summary, instructions, category || null, starts.map((s) => s.trim())]
+    if (!inheritCapabilities) fields.push('remix')
+    if (source) fields.push(source)
+    const requestHash = sha(JSON.stringify(fields))
+    const prior = one('SELECT * FROM agents WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (prior) {
+      if (prior.request_hash !== requestHash) fail(source ? 'agent_copy_request_conflict' : 'conflict',
+        'Idempotency key was used for a different request', 409)
+      return {status: 200, row: prior}
+    }
+    if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) {
+      fail(source ? 'name_conflict' : 'conflict', 'An agent with this name already exists', 409)
+    }
+    if (one('SELECT COUNT(*) AS n FROM agents WHERE workspace_id=?', workspaceId).n >= LIMITS.agents) fail('quota', 'Agent capacity reached', 429)
+    const id = newId()
+    const t = now()
+    run(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision,
+      created, updated, archived, key_hash, request_hash, inherit_capabilities, imported_from) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?,?,?)`,
+    id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null,
+    JSON.stringify(starts.map(s => s.trim())), t, t, keyHash, requestHash, Number(inheritCapabilities), source)
+    return {status: 201, row: load(workspaceId, id)}
+  }
+
+  const templateRoleConflict = (roleName) => Object.assign(new Error('Template role is unavailable'),
+    {code: 'agents/template-role-conflict', status: 409, roleName})
+
+  function checkTemplateRoleError(error, roleName) {
+    if (['agents/conflict', 'agents/native-deleted'].includes(error?.code)) throw templateRoleConflict(roleName)
+    throw error
+  }
+
   const endpoints = {
     async 'personal-binding'() { return one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1') || null },
     async 'adopt-personal-chat'(p, materialize = true) {
@@ -689,40 +733,48 @@ export function createAgents({ db, host }) {
       return {items}
     },
     get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
-    create: (p, inheritCapabilities = true, source = null) => native.write(async ({ensure}) => {
+    async createTemplateRoles(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
       const workspaceId = ws(p)
-      const { name } = p
-      const summary = p.summary ?? ''
-      const instructions = p.instructions ?? ''
-      const category = p.category ?? null
-      const starts = p.quick_starts ?? []
-      if (!validName(name) || !validSummary(summary) || !validInstructions(instructions) || !validCategory(category) || !validQuickStarts(starts)) {
-        fail('invalid', 'Provide a name (≤80), summary (≤500) and instructions (≤16000)', 400)
+      const roles = p.roles
+      if (!Array.isArray(roles) || !roles.length || roles.length > 3 ||
+          roles.some(role => !validName(role?.name) || role.name !== role.name.trim()) ||
+          new Set(roles.map(role => role.name.toLowerCase())).size !== roles.length) {
+        fail('invalid', 'Invalid template roles', 400)
       }
-      if (!IDEM.test(String(p.idempotency_key ?? ''))) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
-      const clean = name.trim()
-      const keyHash = sha(p.idempotency_key)
-      const fields = [clean, summary, instructions, category || null, starts.map((s) => s.trim())]
-      if (!inheritCapabilities) fields.push('remix')
-      if (source) fields.push(source)
-      const requestHash = sha(JSON.stringify(fields))
-      const prior = one('SELECT * FROM agents WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-      if (prior) {
-        if (prior.request_hash !== requestHash) fail(source ? 'agent_copy_request_conflict' : 'conflict',
-          'Idempotency key was used for a different request', 409)
-        return { status: 200, agent: view(await ensure(prior)) }
-      }
-      if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) {
-        fail(source ? 'name_conflict' : 'conflict', 'An agent with this name already exists', 409)
-      }
-      if (one('SELECT COUNT(*) AS n FROM agents WHERE workspace_id=?', workspaceId).n >= LIMITS.agents) fail('quota', 'Agent capacity reached', 429)
-      const id = newId()
-      const t = now()
-      run(`INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision,
-        created, updated, archived, key_hash, request_hash, inherit_capabilities, imported_from) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?,?,?)`,
-      id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null,
-      JSON.stringify(starts.map(s => s.trim())), t, t, keyHash, requestHash, Number(inheritCapabilities), source)
-      return { status: 201, agent: view(await ensure(one('SELECT * FROM agents WHERE id=?', id))) }
+      return native.write(async ({ensure}) => {
+        let reservations
+        // Check names, idempotency and quota before opening any native Sessions.
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          reservations = roles.map(role => {
+            try {
+              const {row} = reserveAgent({...role, workspace_id: workspaceId}, true, null)
+              if (row.name !== role.name || row.archived) throw templateRoleConflict(role.name)
+              return row
+            } catch (error) { checkTemplateRoleError(error, role.name) }
+          })
+          db.exec('COMMIT')
+        } catch (error) {
+          db.exec('ROLLBACK')
+          throw error
+        }
+        // The reservations are durable for retry. Keep the roster lock until all
+        // independent native Sessions finish, even if one fails.
+        const settled = await Promise.allSettled(reservations.map(ensure))
+        const items = settled.map((result, index) => {
+          const {name} = roles[index]
+          if (result.status === 'rejected') checkTemplateRoleError(result.reason, name)
+          const agent = result.value
+          if (agent.archived || agent.native_deleted || agent.name !== name) throw templateRoleConflict(name)
+          return {id: agent.id, name: agent.name, category: agent.category}
+        })
+        return {items}
+      })
+    },
+    create: (p, inheritCapabilities = true, source = null) => native.write(async ({ensure}) => {
+      const {status, row} = reserveAgent(p, inheritCapabilities, source)
+      return {status, agent: view(await ensure(row))}
     }),
     update: p => native.write(async ({ensure, update}) => {
       const row = await ensure(load(ws(p), p.id))
@@ -1338,6 +1390,7 @@ export default async function agents(host) {
   wrapped.createRemix = endpoints.createRemix
   wrapped.actionSource = endpoints.actionSource
   wrapped.templateRoles = endpoints.templateRoles
+  wrapped.createTemplateRoles = endpoints.createTemplateRoles
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)

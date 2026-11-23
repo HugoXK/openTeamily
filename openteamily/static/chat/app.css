@@ -470,104 +470,6 @@ body.app-workspace > #status[data-announce-only="true"] {
   font-size: 0.8rem;
 }
 
-#compose-dialog {
-  margin-top: 0.75rem;
-  padding: 0.85rem 0.85rem 0.8rem;
-  border: 1px solid var(--ot-line);
-  border-radius: 1rem;
-  background: var(--ot-surface);
-}
-#compose-dialog h2 { margin: 0 0 0.45rem; font-size: 0.95rem; }
-.compose-intro {
-  margin: 0 0 0.85rem;
-  color: var(--ot-muted);
-  font-size: 0.82rem;
-}
-.compose-mode-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.15rem;
-  margin: 0 0 0.95rem;
-  padding: 0.2rem;
-  border: 1px solid var(--ot-line);
-  border-radius: 999px;
-  background: var(--ot-bg);
-}
-.compose-mode-switch button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  margin: 0;
-  padding: 0.45rem 0.55rem;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ot-muted);
-  font: inherit;
-  cursor: pointer;
-}
-.compose-mode-switch [aria-selected="true"] {
-  background: var(--ot-accent-soft);
-  color: var(--ot-ink);
-  font-weight: 650;
-}
-#compose-title-label {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.7rem;
-  align-items: center;
-  margin: 0 0 0.85rem;
-  font-size: 0.88rem;
-}
-#compose-title-label input {
-  width: 100%;
-  min-width: 0;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--ot-line);
-  border-radius: 0.7rem;
-  background: var(--ot-bg);
-  color: inherit;
-  font: inherit;
-}
-#compose-team-note { margin: 0 0 0.85rem; }
-.compose-member-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(4.8rem, 0.7fr);
-  gap: 0.55rem;
-  margin: 0 0 0.65rem;
-}
-.compose-member-search {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: 0;
-  padding: 0 0.7rem;
-  border: 1px solid var(--ot-line);
-  border-radius: 0.7rem;
-  background: var(--ot-bg);
-}
-.compose-member-search .search-icon { display: inline-flex; color: var(--ot-muted); }
-.compose-member-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  padding: 0.48rem 0;
-  color: inherit;
-  font: inherit;
-}
-.compose-member-search input:focus-visible { outline: none; }
-#compose-selected-count {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  padding: 0.45rem 0.7rem;
-  border: 1px solid var(--ot-line);
-  border-radius: 0.7rem;
-  background: var(--ot-bg);
-  color: var(--ot-muted);
-}
 .member-choices {
   display: grid;
   gap: 0.25rem;
@@ -577,15 +479,6 @@ body.app-workspace > #status[data-announce-only="true"] {
 }
 .member-choices label { display: flex; gap: 0.4rem; align-items: center; }
 .member-choices label[hidden] { display: none; }
-.compose-dialog-actions {
-  display: flex;
-  gap: 0.4rem;
-  justify-content: flex-end;
-}
-#compose-dialog-submit:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
 
 #message-list li.mine { align-self: flex-end; background: var(--ot-accent-soft); }
 #message-list li.other { align-self: flex-start; }
@@ -1069,23 +962,13 @@ a.notification-item { text-decoration: none; }
 .message-tools button:hover, .message-tools button:focus-visible { border-color: var(--ot-line); color: var(--ot-ink); }
 #message-list .body[data-forwarded] { padding-left: .5rem; }
 
-/* #232 surface polish: notification states, reaction counts, template cards. */
+/* Notification states and reaction counts. */
 .notifications-panel { box-shadow: var(--ot-shadow-sm); }
 .notification-item { border-left: 3px solid transparent; transition: background-color .12s ease; }
 .notification-item.is-unread { background: color-mix(in srgb, var(--ot-accent-soft) 55%, transparent); border-left-color: var(--ot-accent); }
 .notification-item time { justify-self: end; }
 .reaction-chip { font-variant-numeric: tabular-nums; transition: border-color .12s ease, background-color .12s ease; }
 .reaction-chip.is-mine { color: var(--ot-accent-hover); font-weight: 600; }
-#team-template-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .5rem; }
-#team-template-choices label {
-  align-items: flex-start;
-  padding: .55rem .7rem;
-  border: 1px solid var(--ot-line);
-  border-radius: var(--ot-radius-sm);
-  background: var(--ot-surface);
-  cursor: pointer;
-}
-#team-template-choices label:has(input:checked) { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
 .message-tools input[type="checkbox"] { accent-color: var(--ot-accent); }
 
 /* ------------------------------------------------------------------
@@ -1414,7 +1297,6 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   body.app-workspace.chat-open > main { border-radius: .875rem; }
 }
 
-/* New-group dialog: centered modal card over a soft scrim (original). */
 .session-pane .workspace-pick { white-space: nowrap; }
 #chat-connection-notice:not([hidden]) {
   display: flex;
@@ -1429,39 +1311,105 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   line-height: 1.4;
 }
 #chat-connection-notice button { flex: 0 0 auto; font: inherit; }
-#compose-dialog:not([hidden]) {
-  position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; margin: 0; padding: 1rem;
-  border: 0; border-radius: 0; background: rgb(16 28 22 / 28%); box-shadow: none; max-height: none;
+#compose-dialog {
+  --compose-padding: 1.375rem;
+  width: min(44rem, calc(100% - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ot-line);
+  border-radius: 1.25rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  box-shadow: var(--ot-shadow-lg);
 }
+#compose-dialog::backdrop { background: rgb(16 28 22 / 38%); }
 #compose-dialog > form {
-  width: min(32rem, 100%); max-height: calc(100dvh - 2rem); overflow-y: auto; box-sizing: border-box;
-  margin: 0; padding: 1.25rem 1.25rem 1rem; border: 0; border-radius: 1rem; background: var(--ot-surface); box-shadow: var(--ot-shadow-lg);
-  display: grid; gap: .75rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100dvh - 2rem - 2px);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
 }
-#compose-dialog h2 { margin: 0; font-size: 1rem; font-weight: 650; }
-#compose-dialog .compose-intro { margin: -.375rem 0 0; color: var(--ot-muted); font-size: .8125rem; }
-#compose-dialog .compose-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem; padding: .25rem; border-radius: .75rem; background: var(--ot-bg-accent); }
-#compose-dialog .compose-mode-switch button { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-height: 2.125rem; border: 0; border-radius: .55rem; background: transparent; box-shadow: none; color: var(--ot-muted); font-size: .8125rem; }
-#compose-dialog .compose-mode-switch button[aria-selected="true"] { background: var(--ot-surface); color: var(--ot-ink); font-weight: 600; box-shadow: var(--ot-shadow-sm); }
-#compose-dialog #compose-title-label { display: grid; gap: .375rem; color: var(--ot-muted); font-size: .75rem; font-weight: 500; }
-#compose-dialog #compose-title-label input { width: 100%; box-sizing: border-box; height: 2.25rem; }
-#compose-member-tools { display: flex; align-items: center; gap: .5rem; }
-#compose-member-tools .compose-member-search { display: flex; flex-wrap: nowrap; align-items: center; gap: .375rem; flex: 1 1 auto; height: 2rem; padding: 0 .625rem; border-radius: 999px; background: var(--ot-bg-accent); border: 0; }
-#compose-member-tools .compose-member-search input { flex: 1 1 auto; min-width: 0; height: 100%; padding: 0; border: 0 !important; background: transparent; box-shadow: none; }
-#compose-selected-count { margin: 0; color: var(--ot-muted); font-size: .75rem; white-space: nowrap; }
-#compose-member-picker fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
-#compose-member-picker legend { padding: 0 0 .25rem; color: var(--ot-muted); font-size: .75rem; font-weight: 500; }
-#compose-dialog .member-choices { display: grid; gap: 1px; max-height: 16rem; overflow-y: auto; }
-#compose-dialog .member-choices label { display: flex; flex-flow: row nowrap; align-items: center; gap: .625rem; min-height: 2.5rem; padding: .25rem .5rem; border-radius: .55rem; font-size: .8125rem; }
+#compose-dialog .compose-dialog-header { display: grid; gap: 1rem; padding: var(--compose-padding) var(--compose-padding) .875rem; }
+#compose-dialog h2 { margin: 0; font-size: 1.25rem; font-weight: 650; }
+#compose-dialog .compose-mode-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem; padding: .25rem; border-radius: .75rem; background: var(--ot-bg-accent); }
+#compose-dialog .compose-mode-switch button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .425rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: .4rem .5rem;
+  border: 1px solid transparent;
+  border-radius: .55rem;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ot-muted);
+  font-size: .875rem;
+  line-height: 1.3;
+  -webkit-tap-highlight-color: transparent;
+}
+#compose-dialog .compose-mode-switch svg { flex: 0 0 auto; }
+#compose-dialog .compose-mode-switch button:hover { color: var(--ot-ink); }
+#compose-dialog .compose-mode-switch button[aria-selected="true"] { border-color: var(--ot-line); background: var(--ot-surface); color: var(--ot-accent); font-weight: 650; box-shadow: var(--ot-shadow-sm); }
+#compose-dialog .compose-dialog-body { overflow: auto; overscroll-behavior: contain; padding: .125rem var(--compose-padding) 1rem; }
+#compose-dialog .compose-dialog-panel { display: grid; gap: .875rem; }
+#compose-dialog .compose-intro { margin: 0; color: var(--ot-muted); font-size: .875rem; line-height: 1.5; }
+#compose-dialog #compose-title-label { display: grid; gap: .375rem; color: var(--ot-ink); font-size: .875rem; font-weight: 550; }
+#compose-dialog #compose-title-label input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem .75rem; border: 1px solid var(--ot-line); border-radius: .65rem; background: var(--ot-surface); color: inherit; font: inherit; }
+#compose-member-tools { display: flex; align-items: center; gap: .75rem; }
+#compose-member-tools .compose-member-search { display: flex; flex-flow: row nowrap; align-items: center; gap: .425rem; flex: 1 1 auto; min-height: 2.75rem; min-width: 0; padding: 0 .625rem; border: 1px solid var(--ot-line); border-radius: .65rem; background: var(--ot-surface); }
+#compose-member-tools .compose-member-search:focus-within { border-color: var(--ot-accent); }
+#compose-member-tools .search-icon { display: flex; color: var(--ot-muted); }
+#compose-member-tools .compose-member-search input { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 2.5rem; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; box-shadow: none; outline: none; }
+#compose-selected-count { margin: 0; color: var(--ot-muted); font-size: .8125rem; white-space: nowrap; }
+#compose-dialog fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+#compose-dialog fieldset > legend { padding: 0; margin: 0 0 .5rem; color: var(--ot-ink); font-size: .875rem; font-weight: 600; }
+#compose-dialog .member-choices { gap: .125rem; max-height: 10rem; overflow-y: auto; margin: .375rem 0 0; }
+#compose-dialog .member-choices label { flex-flow: row nowrap; gap: .625rem; min-height: 2.75rem; padding: .25rem .5rem; border-radius: .5rem; font-size: .875rem; }
 #compose-dialog .member-choices label:hover { background: var(--ot-surface-2); }
-#compose-dialog .member-choices input { flex: 0 0 auto; margin: 0; }
-#compose-dialog .compose-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; padding-top: .5rem; border-top: 1px solid var(--ot-line); }
+#compose-dialog .member-choices .choice-label { flex: 1 1 auto; min-width: 0; }
+#compose-dialog input[type="checkbox"], #compose-dialog input[type="radio"] { flex: 0 0 auto; width: 1rem; height: 1rem; min-width: 0; min-height: 0; margin: 0; accent-color: var(--ot-accent); }
+#compose-dialog .team-template-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .625rem; }
+#compose-dialog .team-template-option { display: flex; flex-flow: row nowrap; align-items: flex-start; gap: .625rem; padding: .75rem; border: 1px solid var(--ot-line); border-radius: .75rem; cursor: pointer; }
+#compose-dialog .team-template-option:not(:has(:checked)):hover { background: var(--ot-surface-2); }
+#compose-dialog .team-template-option:has(:checked) { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
+#compose-dialog .team-template-option:focus-within { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+#compose-dialog .team-template-option input { margin-top: .15rem; }
+#compose-dialog .team-template-content { display: grid; gap: .4rem; min-width: 0; overflow-wrap: anywhere; }
+#compose-dialog .team-template-name { font-size: .9rem; font-weight: 650; }
+#compose-dialog .team-template-summary { color: var(--ot-muted); font-size: .8125rem; line-height: 1.4; }
+#compose-dialog .team-template-roles { display: flex; flex-wrap: wrap; gap: .2rem .65rem; color: var(--ot-muted); font-size: .8125rem; line-height: 1.4; }
+#compose-dialog .team-template-roles > span::before { content: '·'; margin-inline-end: .2rem; }
+#compose-dialog .team-template-feedback { display: flex; align-items: center; gap: .625rem; }
+#compose-dialog .team-template-feedback p { margin: 0; color: var(--ot-muted); font-size: .875rem; }
+#compose-dialog .team-template-feedback p:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+#compose-dialog .team-template-feedback button { min-height: 2.75rem; }
+#compose-dialog .compose-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; padding: .875rem var(--compose-padding) var(--compose-padding); border-top: 1px solid var(--ot-line); }
 #compose-dialog-progress { margin: 0; }
-#compose-dialog-progress:not(:empty) { flex: 1 0 100%; color: var(--ot-muted); font-size: .8125rem; }
+#compose-dialog-progress:not(:empty) { flex: 1 0 100%; color: var(--ot-muted); font-size: .875rem; }
 #compose-dialog-progress:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; }
-#compose-dialog-error { flex: 1 0 100%; box-sizing: border-box; margin: 0; padding: .625rem .75rem; border-radius: .55rem; color: var(--ot-danger); background: var(--ot-danger-bg); font-size: .8125rem; overflow-wrap: anywhere; }
-#compose-dialog .compose-dialog-actions button { min-height: 2.125rem; padding: 0 1rem; border-radius: 999px; }
-#compose-dialog-submit { background: var(--ot-accent); color: var(--ot-on-accent, #fff); border: 0; }
+#compose-dialog-error { flex: 1 0 100%; box-sizing: border-box; margin: 0; padding: .625rem .75rem; border: 1px solid var(--ot-danger); border-radius: .65rem; color: var(--ot-danger); background: var(--ot-danger-bg); font-size: .875rem; overflow-wrap: anywhere; }
+#compose-dialog .compose-dialog-actions button { min-height: 2.75rem; padding: 0 1rem; border-radius: .65rem; }
+#compose-dialog-submit { background: var(--ot-accent); color: var(--ot-on-accent, #fff); border: 1px solid transparent; }
+#compose-dialog-submit:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 700px) {
+  #compose-dialog { --compose-padding: 1rem; width: calc(100% - 1rem); max-height: calc(100dvh - 1rem); }
+  #compose-dialog > form { max-height: calc(100dvh - 1rem - 2px); }
+  #compose-dialog .team-template-choices { grid-template-columns: minmax(0, 1fr); }
+  #compose-dialog .compose-dialog-actions button { flex: 1 1 0; }
+}
 
 /* Second pass against the 2026-11-19 conversation captures. */
 :root { --ot-bubble-mine: #c9e9d5; }
@@ -1475,24 +1423,6 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
   background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 1px 2px rgb(16 32 24 / 5%); border-radius: .875rem;
 }
 #message-scroller { background: linear-gradient(180deg, var(--ot-surface) 0%, var(--ot-surface-2) 100%); }
-@media (min-width: 900px) {
-  #compose-dialog > form {
-    width: min(48rem, 100%);
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-    grid-template-areas: "title title" "intro intro" "mode mode" "note note" "templates templates" "picker name" "actions actions";
-    column-gap: 1rem;
-  }
-  #compose-dialog-title { grid-area: title; }
-  #compose-intro { grid-area: intro; }
-  #compose-mode-switch { grid-area: mode; }
-  #compose-team-note { grid-area: note; }
-  #compose-team-templates { grid-area: templates; }
-  #compose-member-picker { grid-area: picker; min-width: 0; padding: .625rem; border-radius: .75rem; background: var(--ot-surface-2); box-shadow: 0 0 0 1px var(--ot-line); }
-  #compose-dialog #compose-title-label { grid-area: name; align-self: start; padding: .75rem; border-radius: .75rem; box-shadow: 0 0 0 1px var(--ot-line); }
-  #compose-dialog .compose-dialog-actions { grid-area: actions; }
-}
-#compose-dialog .member-choices .choice-label { flex: 1 1 auto; min-width: 0; }
-#compose-dialog input[type="checkbox"], #compose-dialog input[type="radio"] { width: auto; min-width: 0; flex: 0 0 auto; margin: 0; accent-color: var(--ot-accent); }
 #conversation-list .session-row[aria-current="true"], #conversation-list .session-row[aria-current="true"]:hover { box-shadow: none; }
 .chat-header .chat-title, #chat-title { font-size: .875rem; font-weight: 650; }
 /* Recorded Teamily shows no persistent per-message toolbar: actions surface on hover/focus only. */
@@ -1523,7 +1453,6 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
   #message-list li > .saved-agent-work { min-height: 2.75rem; }
 }
 #message-list .body[data-forwarded] { border-left: 0; padding: .375rem .625rem; border-radius: .625rem; background: color-mix(in srgb, var(--ot-ink) 4%, transparent); box-shadow: inset 0 0 0 1px var(--ot-line); }
-#compose-dialog fieldset { padding: .5rem .75rem; }
 
 /* Parity (2026-11-19) group info panel (10c/10d): a floating right-hand card over the thread
    with count line, 群公告, calls and toggles (unconnected ones disabled and labelled), and
@@ -1953,19 +1882,9 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
 }
 .group-agent-sheet[open] { padding-bottom: 0.75rem; }
 
-/* Polish 5: fieldsets inside the new-group dialog and the group-agent panel are
-   plain groups (legend + rows), not boxed cards inside the card. */
-#compose-dialog fieldset,
 #group-agent-form fieldset { margin: 0; padding: 0 .5rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; min-width: 0; }
-#compose-dialog fieldset > legend,
 #group-agent-form fieldset > legend { padding: 0; margin: 0 0 .35rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
 .plus-tag { font-size: .6875rem; }
-@media (min-width: 701px) {
-  /* New-group dialog: the picker and name column are split by a hairline, not
-     two boxed cards inside the dialog card. */
-  #compose-member-picker { padding: 0 1rem 0 0; border-radius: 0; background: transparent; box-shadow: none; border-right: 1px solid var(--ot-line); }
-  #compose-dialog #compose-title-label { padding: 0; border-radius: 0; box-shadow: none; }
-}
 
 #group-agent-action.group-agent-panel { margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--ot-surface); box-shadow: none; flex: none; }
 #group-agent-action .group-agent-sheet { width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }

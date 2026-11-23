@@ -200,7 +200,7 @@ test('composeGroupPayload omits a blank title so the existing API can default it
 });
 
 test('group create chrome keeps the recorded labels and no billing copy', () => {
-  assert.equal(GROUP_CREATE_INTRO, '添加名称，然后邀请好友并添加 AI 智能体。');
+  assert.equal(GROUP_CREATE_INTRO, '选择联系人或智能体加入群组。');
   assert.deepEqual(GROUP_CREATE_MODES, [
     ['custom', '自定义群组'],
     ['team', 'AI 智能体团队'],
@@ -784,7 +784,7 @@ for (const preset of [true,false]) {
       const submit = ()=>fire(el('compose-social-form'),'submit',{preventDefault() {}});
       const createdAttempt = submit();
       await settle();
-      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建会话/ : /Creating the conversation/);
+      assert.match(el('compose-dialog-progress').textContent,preset ? /正在创建产品研发小队/ : /Creating the conversation/);
       assert.equal(el('compose-dialog-submit').disabled,true);
       assert.equal(el('compose-mode-switch').inert,true);
       await fire(el('session-search'),'focus');

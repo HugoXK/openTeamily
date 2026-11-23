@@ -34,6 +34,56 @@ async function answer(actor: Actor, room: string, request: any, job: Job, isolat
   return reply;
 }
 
+test("uploaded captions route only explicit mentions, and every caption reply uses the text-only claim", async () => {
+  const [sender, recipient] = await Promise.all([
+    home(service.base, "caption-sender"), home(service.base, "caption-recipient"),
+  ]);
+  const senderId = await ownerId(sender), recipientId = await ownerId(recipient);
+  const contact = await sender.ok("POST", "/v1/ot/contacts", {handle:recipient.handle});
+  await recipient.ok("POST", "/v1/ot/contacts/" + contact.id, {action:"accept"});
+  const group = await sender.ok("POST", "/v1/ot/conversations", {
+    kind:"group", account_group:true, title:"Attachment captions", members:[recipient.handle], agents:[lead],
+  });
+  const room = roomPath(group), messages = room + "/messages";
+  await sender.ok("PATCH", room + "/agents/" + lead.agent_ref, {auto_reply:true});
+  await recipient.ok("PUT", room + "/agents/" + engineer.agent_ref, {name:engineer.name});
+  const attachment = {title:"@所有人 资料.txt", mime:"text/plain", data:Buffer.from("FILE_BYTES_EXCLUDED").toString("base64")};
+  const send = (body?: string, options = {}) => sender.ok("POST", messages, {attachment, body, direct:true, ...options});
+  const ordinary = await send("Please look at the attached plan");
+  const uncaptioned = await send();
+  const literal = await send("The literal example is `@所有人`.");
+  for (const msg of [ordinary, uncaptioned, literal]) assert.deepEqual(targets(msg), []);
+
+  const typed = await send("@研发工程师助理 请核对标题");
+  assert.deepEqual(targets(typed), [engineer.agent_ref]);
+  const request = {client_key:"exact-caption-mention", agent_mentions:[{owner_id:senderId,agent_id:lead.agent_ref}]};
+  const selected = await send("请核对排期", request);
+  assert.deepEqual(targets(selected), [lead.agent_ref]);
+  const replayed = await send("请核对排期", request);
+  assert.equal(replayed.id, selected.id);
+  assert.deepEqual(replayed.reply_jobs, selected.reply_jobs);
+  const unavailable = await sender.call("POST", messages, {
+    attachment, direct:true, body:"请选择", agent_mentions:[{owner_id:recipientId,agent_id:lead.agent_ref}],
+  });
+  assert.equal(unavailable.status, 400);
+
+  const everyone = await send("@所有人 请核对更新");
+  assert.deepEqual(targets(everyone), [lead.agent_ref, engineer.agent_ref]);
+  const notifications = (await recipient.ok("GET", "/v1/ot/notifications")).notifications;
+  assert.deepEqual(notifications.filter((item: any) => item.kind === "messenger.mention")
+    .map((item: any) => item.data.message_id), [everyone.id]);
+  for (const [actor, message, expectedId] of [[sender, selected, lead.agent_ref], [recipient, typed, engineer.agent_ref]] as const) {
+    const inbox = await actor.ok("GET", queue);
+    assert.equal(inbox.items.length, 0);
+    const entry = inbox.jobs.find((job: any) => job.message.id === message.id);
+    assert.equal(entry.agent_ref, expectedId);
+    assert.equal(entry.group_text_only, true);
+    assert.equal(entry.discretionary, undefined);
+    assert.ok(!JSON.stringify(entry).includes(attachment.data));
+    await answer(actor, room, message, message.reply_jobs[0], true);
+  }
+});
+
 test("an existing single-member agent group answers naturally without creating fake mentions", async () => {
   const owner = await home(service.base, "natural-owner");
   const group = await owner.ok("POST", "/v1/ot/conversations", {

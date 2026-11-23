@@ -246,7 +246,7 @@ export function applySearchMore(node, state) {
   node.disabled = Boolean(state && state.loading);
 }
 
-export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
+export const GROUP_CREATE_INTRO = '选择联系人或智能体加入群组。';
 export const GROUP_CREATE_MODES = [
   ['custom', '自定义群组'],
   ['team', 'AI 智能体团队'],
@@ -1138,24 +1138,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
     const auto = agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
+    let asksAgents = false;
     if (everyone) {
       kind = 'targeted';
-      text = agents.length && !hasFiles ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将提及所有人，并请群内智能体回复', 'Everyone in the group will be mentioned and its agents asked to reply')
         : uiLabel('将提及群内所有成员', 'Everyone in the group will be mentioned');
-    } else if (hasFiles && (mentions?.targets.length || hasGroupAllMention(body))) {
-      kind = 'attention';
-      text = uiLabel('请先移除附件，再请求群内智能体回复。', 'Remove the files before requesting replies from group agents.');
-    } else if (hasFiles && !people) {
-      text = uiLabel('附件将在你发送后分享给会话成员。', 'Send to share the files with this conversation.');
     } else if (hasGroupAllMention(body)) {
       kind = 'targeted';
-      text = agents.length ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
+      asksAgents = agents.length > 0;
+      text = asksAgents ? uiLabel('将请所有群内智能体回复', 'All group agents will be asked to reply')
         : uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
     } else if (mentions?.stale) {
       kind = 'attention';
       text = uiLabel('请移除不可用的智能体后再发送。', 'Remove unavailable agents before sending.');
     } else if (mentions?.targets.length) {
       kind = 'targeted';
+      asksAgents = true;
       const count = mentions.targets.length;
       text = people
         ? uiLabel(`将提及 ${people} 位成员，并请 ${count} 位智能体回复`,
@@ -1164,6 +1163,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (people) {
       kind = 'targeted';
       text = uiLabel(`将提及 ${people} 位群成员`, `${people} group ${people === 1 ? 'member' : 'members'} will be mentioned`);
+    } else if (hasFiles) {
+      text = agents.length
+        ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
+        : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
@@ -1182,6 +1185,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else if (auto) text = uiLabel('开启自动回复的智能体判断是否回复 · 可用 @所有人',
       'Agents with auto-reply enabled decide whether to reply · Use @all to ask all agents');
     else text = uiLabel('由群内智能体按内容决定是否回复 · 可用 @所有人', 'Group agents decide whether to reply · Use @all to ask them all');
+    if (hasFiles && asksAgents) {
+      if (!body.trim()) {
+        kind = 'attention';
+        text = uiLabel('写一段附言，让选中的智能体知道要回复什么。', 'Add a caption for the selected agents to answer.');
+      } else {
+        text += uiLabel(' · 按附言回复', ' · Replies use the caption');
+      }
+    }
     const label = document.getElementById('group-composer-routing-text');
     if (label.textContent !== text) label.textContent = text;
     node.dataset.kind = kind;
@@ -6403,6 +6414,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const cancel = document.getElementById('compose-dialog-cancel');
     const progress = document.getElementById('compose-dialog-progress');
     const busy = Boolean(composePhase);
+    const team = composeMode === 'group' && groupMode === 'team';
+    const template = team ? document.querySelector('#team-template-choices input:checked') : null;
     button.disabled = busy || (!composeReceipt && !composeCreateEnabled({
       composeMode,
       groupMode,
@@ -6410,17 +6423,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       selectedAgentCount: document.querySelectorAll('#member-choices input[name="agent-member"]:checked').length,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
-      templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
+      templateSelected: Boolean(template),
     }));
+    const action = team ? uiLabel('创建团队', 'Create team') : composeMode === 'group'
+      ? uiLabel('创建群组', 'Create group') : uiLabel('开始私聊', 'Start chat');
     button.textContent = composePhase === 'opening' ? uiLabel('打开中…', 'Opening…')
       : busy ? uiLabel('创建中…', 'Creating…')
-        : composeReceipt ? uiLabel('重新打开', 'Reopen') : uiLabel('创建', 'Create');
+        : composeReceipt ? uiLabel('重新打开', 'Reopen') : action;
     cancel.disabled = busy;
     cancel.textContent = composeReceipt ? uiLabel('关闭', 'Close') : uiLabel('取消', 'Cancel');
     progress.textContent = composePhase === 'opening' ? uiLabel('已创建，正在打开会话…', 'Created. Opening the conversation…')
-      : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
+      : busy && template ? uiLabel(`正在创建${template.dataset.templateName}…`, `Creating ${template.dataset.templateName}…`)
+        : busy ? uiLabel('正在创建会话…', 'Creating the conversation…') : '';
     const locked = busy || Boolean(composeReceipt);
-    for (const id of ['compose-mode-switch', 'compose-team-templates', 'compose-title-label', 'compose-member-picker']) {
+    for (const id of ['compose-mode-switch', 'compose-dialog-body']) {
       document.getElementById(id).inert = locked;
     }
   }
@@ -6450,7 +6466,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function syncSelectedCount() {
-    document.getElementById('compose-selected-count').textContent = composeSelectedLabel(selectedMemberCount());
+    const count = selectedMemberCount();
+    document.getElementById('compose-selected-count').textContent = uiLabel(composeSelectedLabel(count), `${count} selected`);
     syncComposeCreate();
   }
 
@@ -6458,43 +6475,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     groupMode = mode === 'team' ? 'team' : 'custom';
     setComposeError();
     for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
-      button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
+      const selected = button.dataset.groupMode === groupMode;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
     }
     const team = composeMode === 'group' && groupMode === 'team';
-    document.getElementById('compose-team-note').hidden = !team;
-    const templates = document.getElementById('compose-team-templates');
-    if (templates) templates.hidden = !team;
-    if (team) loadTeamTemplates();
-    document.getElementById('compose-member-picker').hidden = team;
-    if (composeMode === 'group') {
-      document.getElementById('compose-title-label').hidden = team;
-    }
+    document.getElementById('compose-team-panel').hidden = !team;
+    document.getElementById('compose-custom-panel').hidden = team;
+    document.getElementById('compose-dialog-body').scrollTop = 0;
+    if (team) void loadTeamTemplates();
     syncComposeCreate();
   }
 
-  let teamTemplates = null;
+  let loadingTeamTemplates = false;
   async function loadTeamTemplates() {
     const holder = document.getElementById('team-template-choices');
-    if (!holder) return;
-    if (teamTemplates === null) {
-      let result;
-      try { result = await request('GET', '/v1/team-templates'); } catch { result = {status: 0, body: {}}; }
-      if (result.status !== 200) {
-        document.getElementById('team-templates-empty').hidden = false;
-        return;
-      }
-      teamTemplates = result.body.items || [];
+    if (loadingTeamTemplates || holder.children.length) return;
+    const status = document.getElementById('team-templates-status');
+    const retry = document.getElementById('team-templates-retry');
+    loadingTeamTemplates = true;
+    retry.hidden = true;
+    status.textContent = uiLabel('正在加载团队模板…', 'Loading team templates…');
+    const result = await request('GET', '/v1/team-templates', undefined, undefined, AbortSignal.timeout(10000)).catch(() => null);
+    loadingTeamTemplates = false;
+    if (result?.status !== 200 || !Array.isArray(result.body.items)) {
+      status.textContent = uiLabel('暂时无法读取团队模板。', 'Could not load team templates.');
+      retry.hidden = false;
+      return;
     }
-    if (holder.children.length) return;
-    for (const template of teamTemplates) {
+    for (const template of result.body.items) {
       const label = document.createElement('label');
+      label.className = 'team-template-option';
       const box = document.createElement('input');
-      box.type = 'radio'; box.name = 'team-template'; box.value = template.slug;
-      const text = `${template.name} · ${template.agents.map(agent => agent.name).join('、')}`;
-      label.append(box, document.createTextNode(text));
+      box.type = 'radio';
+      box.name = 'team-template';
+      box.value = template.slug;
+      box.dataset.templateName = template.name;
+      const content = document.createElement('span');
+      content.className = 'team-template-content';
+      const name = document.createElement('span');
+      name.id = `team-template-${template.slug}-name`;
+      name.className = 'team-template-name';
+      name.textContent = template.name;
+      box.setAttribute('aria-labelledby', name.id);
+      content.append(name);
+      if (template.summary) {
+        const summary = document.createElement('span');
+        summary.className = 'team-template-summary';
+        summary.textContent = template.summary;
+        content.append(summary);
+      }
+      const roles = document.createElement('span');
+      roles.id = `team-template-${template.slug}-roles`;
+      roles.className = 'team-template-roles';
+      for (const agent of template.agents) {
+        const role = document.createElement('span');
+        role.textContent = agent.name;
+        roles.append(role);
+      }
+      box.setAttribute('aria-describedby', roles.id);
+      content.append(roles);
+      label.append(box, content);
       holder.append(label);
     }
-    document.getElementById('team-templates-empty').hidden = teamTemplates.length > 0;
+    status.textContent = result.body.items.length ? '' : uiLabel('暂无可用的团队模板。', 'No team templates are available.');
     syncComposeCreate();
   }
 
@@ -6506,7 +6550,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composePhase = '';
     const opener = composeOpener;
     composeOpener = null;
-    document.getElementById('compose-dialog').hidden = true;
+    const dialog = document.getElementById('compose-dialog');
+    if (dialog.open) dialog.close();
+    dialog.hidden = true;
     document.getElementById('compose-social-form').reset();
     setGroupMode('custom');
     applyMemberFilter();
@@ -6560,22 +6606,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composeOpener = document.activeElement || composeMenuButton;
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
-    dialog.hidden = false;
     const isGroup = mode === 'group';
-    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '工作区私聊';
-    document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
-    document.getElementById('compose-intro').hidden = !isGroup;
+    document.getElementById('compose-dialog-title').textContent = isGroup ? uiLabel('新建群组', 'New group') : uiLabel('工作区私聊', 'Workspace chat');
+    document.getElementById('compose-members-legend').textContent = isGroup ? uiLabel('成员', 'Members') : uiLabel('选择一位成员', 'Choose a member');
+    const intro = document.getElementById('compose-intro');
+    intro.hidden = !isGroup;
+    if (isGroup) intro.textContent = inPersonalWorkspace() ? uiLabel(GROUP_CREATE_INTRO, 'Choose contacts or agents for your group.')
+      : uiLabel('至少选择一位工作区成员，也可以添加智能体。', 'Choose at least one workspace member. You can also add agents.');
     document.getElementById('compose-mode-switch').hidden = !isGroup;
     document.getElementById('compose-title-label').hidden = !isGroup;
     document.getElementById('compose-member-tools').hidden = !isGroup;
-    document.getElementById('compose-team-note').hidden = true;
-    document.getElementById('compose-member-picker').hidden = false;
+    const panel = document.getElementById('compose-custom-panel');
+    if (isGroup) {
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', 'compose-mode-custom');
+    } else {
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-labelledby');
+    }
     if (!isGroup) document.getElementById('compose-title').value = '';
     document.getElementById('compose-member-search').value = '';
     setGroupMode('custom');
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal?.();
     if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
-    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-title' : 'compose-dialog-title')
+    document.getElementById(isGroup && (keyboard || !narrowScreen()) ? 'compose-mode-custom' : 'compose-dialog-title')
       .focus({preventScroll: true});
   }
 
@@ -8499,10 +8555,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-dialog-cancel').addEventListener('click', () => {
     if (!composePhase) closeComposeDialog({focus:true});
   });
-  document.getElementById('compose-mode-switch').addEventListener('click', event => {
+  document.getElementById('compose-dialog').addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!composePhase) closeComposeDialog({focus:true});
+  });
+  const groupModeSwitch = document.getElementById('compose-mode-switch');
+  groupModeSwitch.addEventListener('click', event => {
     const button = event.target.closest('[data-group-mode]');
     if (!button || composeMode !== 'group' || composePhase || composeReceipt) return;
     setGroupMode(button.dataset.groupMode);
+  });
+  groupModeSwitch.addEventListener('keydown', event => {
+    if (composePhase || composeReceipt || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const mode = event.key === 'Home' ? 'custom' : event.key === 'End' ? 'team' : groupMode === 'team' ? 'custom' : 'team';
+    setGroupMode(mode);
+    document.getElementById('compose-mode-' + mode).focus({preventScroll:true});
+  });
+  document.getElementById('team-templates-retry').addEventListener('click', () => {
+    document.getElementById('compose-mode-team').focus({preventScroll:true});
+    void loadTeamTemplates();
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('compose-title').addEventListener('input', () => setComposeError());
@@ -8567,6 +8639,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       closeComposeDialog();
+      document.getElementById('chat-title').focus({preventScroll:true});
       void loadSessions();
       show('ok', template ? '智能体团队已创建。' : '会话已创建。');
     } catch {
@@ -8598,7 +8671,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
-    if (social && files.length && (message.agent_mentions?.length ||
+    const groupFiles = social && currentConversation.kind === 'group' && !currentConversation.public_agent;
+    if (groupFiles && files.length && message.agent_mentions?.length && !message.body.trim()) {
+      show('error', uiLabel('先写附言，再请求智能体回复。', 'Add a caption before asking agents to reply.'));
+      return;
+    }
+    if (social && !groupFiles && files.length && (message.agent_mentions?.length ||
         (hasGroupAllMention(message.body) && !hasEveryoneMention(message.body)))) {
       show('error', uiLabel('请先移除附件，再请求智能体回复。', 'Remove the files before requesting agent replies.'));
       return;

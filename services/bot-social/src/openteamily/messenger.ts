@@ -170,7 +170,8 @@ const directRelationship = (a: string, b: string) => `(
 )`;
 
 const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.reply_to AS quoted_message_id, src.retracted, src.seq, src.revision AS current_revision,
-  c.title AS conversation_title, (j.direct_grant_id IS NULL AND src.author_id<>j.owner_id) AS group_text_only,
+  c.title AS conversation_title, (j.direct_grant_id IS NULL AND (src.author_id<>j.owner_id
+    OR EXISTS (SELECT 1 FROM ot_message_attachments caption WHERE caption.message_id=src.id))) AS group_text_only,
   COALESCE(NULLIF(owner.display_name,''),owner.handle,'') AS agent_owner_name,
   (src.retracted=0 AND c.group_archived_at IS NULL AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%'
     AND member.owner_id IS NOT NULL AND requester.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
@@ -1473,17 +1474,24 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const scope = directRequest ? "direct" : groupRequest ? "group" : undefined;
       const roster = ordinaryDm && scope !== "direct" ? [] : conversationAgents(ot, conv.id);
       const selected = Array.isArray(b.agent_mentions) && b.agent_mentions.length === 0 ? undefined : b.agent_mentions;
-      const addressText = conv.kind === "group" ? mentionText(bodyText) : bodyText;
+      const group = ordinaryAgentGroup(conv);
+      const hasCaption = typeof b.body === "string" && b.body.trim().length > 0;
+      const captionCanMentionAgents = Boolean(group && file && !file.resource && !file.sticker && !sourceConversation && hasCaption);
+      if (file && selected !== undefined) {
+        assert(captionCanMentionAgents, 400, "invalid_request", "An attachment can request group agents only through its caption");
+      }
+      const addressText = conv.kind === "group" ? mentionText(file && !hasCaption ? "" : bodyText) : bodyText;
       const parsed = parseMentions(ot, conv, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
       const addressed = selected !== undefined || parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
-      const canQueueGroup = ordinaryAgentGroup(conv) && !voice && !file && !sourceConversation;
-      const allPeople = ordinaryAgentGroup(conv) && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
+      const canQueueGroup = group && !voice && !sourceConversation && (!file || captionCanMentionAgents);
+      const allPeople = group && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(addressText));
-      const unaddressed = canQueueGroup && !studio && !addressed && !explicitlyAll
+      const unaddressed = canQueueGroup && !file && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
       const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
-      const suppressed = canQueueGroup && targets.length === 0 && (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
+      const suppressed = canQueueGroup && !file && targets.length === 0 &&
+        (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
