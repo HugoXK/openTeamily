@@ -17,17 +17,13 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { boot } from './helpers.js'
 import { openStore } from '../featurekit/store.js'
+import { KINDS } from '../features/events/registry.js'
 
-// The kinds Bot Social emits today (services/bot-social/src/openteamily/*.ts):
-// artifact.shared, discover.published|conversation_started, follow.new,
-// meeting.shared, messenger.mention|added|call, team.run_shared|join_request|
-// member_joined|membership_changed|removed|join_decided.
-const S_KINDS = [
-  'artifact.shared', 'discover.conversation_started', 'discover.published', 'follow.new',
-  'meeting.shared', 'messenger.added', 'messenger.call', 'messenger.mention',
-  'team.join_decided', 'team.join_request', 'team.member_joined',
-  'team.membership_changed', 'team.removed', 'team.run_shared',
-]
+// Every registered kind is accepted here. Whether the registry's list matches
+// the kinds Bot Social emits is checked against the shipped notification
+// catalog in test/event-kind-catalog.test.js, so this suite keeps no copy of
+// that list of its own.
+const S_KINDS = [...KINDS]
 
 const ENDPOINT = 'https://hooks.example.test/openteamily/events'
 const call = (bot, op, payload) => bot.endpoint(`events/${op}`, payload)
@@ -157,7 +153,7 @@ test('kinds must come from the kinds Bot Social emits today; unknown kinds are r
   ]) {
     await refused(bot, 'create', { name: 'Bad kinds', endpoint: ENDPOINT, kinds }, 'events/invalid')
   }
-  // All fourteen kinds can be subscribed at once; the stored list cannot be
+  // Every registered kind can be subscribed at once; the stored list cannot be
   // renamed to an unknown kind later.
   assert.equal((await value(bot, 'create', { name: 'All kinds', endpoint: ENDPOINT, kinds: S_KINDS })).subscription.kinds.length, S_KINDS.length)
   const first = (await value(bot, 'list', {})).items[0]

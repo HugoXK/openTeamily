@@ -19,15 +19,21 @@
 import { isIP } from 'node:net'
 import { refuse, newId, nowSeconds, stableJson } from '../../featurekit/http.js'
 
-// The kinds Bot Social emits today (services/bot-social/src/openteamily/*.ts):
+// The kinds Bot Social emits (services/bot-social/src/openteamily/*.ts):
 // artifact.shared, discover.published|conversation_started, follow.new,
 // meeting.shared, messenger.mention|added|call, team.run_shared|join_request|
-// member_joined|membership_changed|removed|join_decided.
+// member_joined|membership_changed|owner_transferred|removed|join_decided.
+//
+// This list is checked against the shipped notification catalog
+// (features/notifications/templates.js `KINDS`) by
+// test/event-kind-catalog.test.js, so a kind Bot Social starts emitting fails
+// that test instead of being silently refused here. Never add a kind on one
+// side only.
 export const KINDS = Object.freeze([
   'artifact.shared', 'discover.conversation_started', 'discover.published', 'follow.new',
   'meeting.shared', 'messenger.added', 'messenger.call', 'messenger.mention',
   'team.join_decided', 'team.join_request', 'team.member_joined',
-  'team.membership_changed', 'team.removed', 'team.run_shared',
+  'team.membership_changed', 'team.owner_transferred', 'team.removed', 'team.run_shared',
 ])
 const KIND_SET = new Set(KINDS)
 
