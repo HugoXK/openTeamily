@@ -1,0 +1,586 @@
+{
+  "tree": "after",
+  "opened": "qa-a-5",
+  "seeds": [
+    {
+      "author": "B",
+      "slug": "qa-b-1"
+    },
+    {
+      "author": "B",
+      "slug": "qa-b-2"
+    },
+    {
+      "author": "B",
+      "slug": "qa-b-3"
+    },
+    {
+      "author": "B",
+      "slug": "qa-b-4"
+    },
+    {
+      "author": "B",
+      "slug": "qa-b-5"
+    },
+    {
+      "author": "A",
+      "slug": "qa-a-1"
+    },
+    {
+      "author": "A",
+      "slug": "qa-a-2"
+    },
+    {
+      "author": "A",
+      "slug": "qa-a-3"
+    },
+    {
+      "author": "A",
+      "slug": "qa-a-4"
+    },
+    {
+      "author": "A",
+      "slug": "qa-a-5"
+    }
+  ],
+  "shots": [
+    {
+      "name": "viewer-1440-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "colorScheme": "light",
+      "theme": "light",
+      "errors": [],
+      "cards": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "onScreen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 216,
+          "scrollHeight": 1116,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": 543,
+          "bottom": 842,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ],
+        "onScreen": [
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ]
+      }
+    },
+    {
+      "name": "viewer-1440-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "colorScheme": "dark",
+      "theme": "dark",
+      "errors": [],
+      "cards": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "onScreen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 220,
+          "scrollHeight": 1120,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": 541,
+          "bottom": 840,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ],
+        "onScreen": [
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ]
+      }
+    },
+    {
+      "name": "viewer-390-light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "colorScheme": "light",
+      "theme": "light",
+      "errors": [],
+      "cards": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "onScreen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2"
+      ],
+      "tail": null
+    },
+    {
+      "name": "viewer-390-dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "colorScheme": "dark",
+      "theme": "dark",
+      "errors": [],
+      "cards": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "onScreen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2"
+      ],
+      "tail": null
+    }
+  ],
+  "feedRequests": [
+    {
+      "shot": "viewer-1440-light",
+      "url": "http://127.0.0.1:43515/discover?sort=popular"
+    },
+    {
+      "shot": "viewer-1440-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.css"
+    },
+    {
+      "shot": "viewer-1440-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.mjs"
+    },
+    {
+      "shot": "viewer-1440-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/shell/discover-link.mjs"
+    },
+    {
+      "shot": "viewer-1440-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/comments.mjs"
+    },
+    {
+      "shot": "viewer-1440-dark",
+      "url": "http://127.0.0.1:43515/discover?sort=popular"
+    },
+    {
+      "shot": "viewer-1440-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.css"
+    },
+    {
+      "shot": "viewer-1440-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.mjs"
+    },
+    {
+      "shot": "viewer-1440-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/shell/discover-link.mjs"
+    },
+    {
+      "shot": "viewer-1440-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/comments.mjs"
+    },
+    {
+      "shot": "viewer-390-light",
+      "url": "http://127.0.0.1:43515/discover?sort=popular"
+    },
+    {
+      "shot": "viewer-390-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.css"
+    },
+    {
+      "shot": "viewer-390-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.mjs"
+    },
+    {
+      "shot": "viewer-390-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/shell/discover-link.mjs"
+    },
+    {
+      "shot": "viewer-390-light",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/comments.mjs"
+    },
+    {
+      "shot": "viewer-390-dark",
+      "url": "http://127.0.0.1:43515/discover?sort=popular"
+    },
+    {
+      "shot": "viewer-390-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.css"
+    },
+    {
+      "shot": "viewer-390-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/app.mjs"
+    },
+    {
+      "shot": "viewer-390-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/shell/discover-link.mjs"
+    },
+    {
+      "shot": "viewer-390-dark",
+      "url": "http://127.0.0.1:43515/chat/assets/0ce7672f73ce461e1a3e5d4f9d2c8f5c/discover/comments.mjs"
+    }
+  ],
+  "viewerFeed": [
+    {
+      "slug": "qa-a-4",
+      "title": "A 作品 4",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-a-3",
+      "title": "A 作品 3",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-a-2",
+      "title": "A 作品 2",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-b-5",
+      "title": "B 作品 5",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-b-4",
+      "title": "B 作品 4",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-b-3",
+      "title": "B 作品 3",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-a-1",
+      "title": "A 作品 1",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-b-2",
+      "title": "B 作品 2",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-b-1",
+      "title": "B 作品 1",
+      "hasExplain": false
+    },
+    {
+      "slug": "qa-a-5",
+      "title": "A 作品 5",
+      "hasExplain": false
+    }
+  ],
+  "explainFeed": [
+    {
+      "slug": "qa-a-4",
+      "seen": 0,
+      "rank": 1,
+      "score": 0,
+      "author_rank": 1,
+      "capped": false
+    },
+    {
+      "slug": "qa-a-3",
+      "seen": 0,
+      "rank": 2,
+      "score": 0,
+      "author_rank": 2,
+      "capped": false
+    },
+    {
+      "slug": "qa-a-2",
+      "seen": 0,
+      "rank": 3,
+      "score": 0,
+      "author_rank": 3,
+      "capped": false
+    },
+    {
+      "slug": "qa-b-5",
+      "seen": 0,
+      "rank": 4,
+      "score": 0,
+      "author_rank": 1,
+      "capped": false
+    },
+    {
+      "slug": "qa-b-4",
+      "seen": 0,
+      "rank": 5,
+      "score": 0,
+      "author_rank": 2,
+      "capped": false
+    },
+    {
+      "slug": "qa-b-3",
+      "seen": 0,
+      "rank": 6,
+      "score": 0,
+      "author_rank": 3,
+      "capped": false
+    },
+    {
+      "slug": "qa-a-1",
+      "seen": 0,
+      "rank": 7,
+      "score": 0,
+      "author_rank": 4,
+      "capped": true
+    },
+    {
+      "slug": "qa-b-2",
+      "seen": 0,
+      "rank": 8,
+      "score": 0,
+      "author_rank": 4,
+      "capped": true
+    },
+    {
+      "slug": "qa-b-1",
+      "seen": 0,
+      "rank": 9,
+      "score": 0,
+      "author_rank": 5,
+      "capped": true
+    },
+    {
+      "slug": "qa-a-5",
+      "seen": 1,
+      "rank": 10,
+      "score": -1,
+      "author_rank": 5,
+      "capped": true
+    }
+  ],
+  "guest": {
+    "pageStatus": 200,
+    "pageUrl": "http://127.0.0.1:43515/login",
+    "feedStatus": 401,
+    "cards": 0,
+    "feedItems": null,
+    "feedHasExplain": null
+  },
+  "order": [
+    {
+      "slug": "qa-a-4",
+      "text": "文档 A 作品 4 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 223,
+      "w": 351,
+      "h": 277,
+      "onScreen": true
+    },
+    {
+      "slug": "qa-a-3",
+      "text": "文档 A 作品 3 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 516,
+      "w": 351,
+      "h": 277,
+      "onScreen": true
+    },
+    {
+      "slug": "qa-a-2",
+      "text": "文档 A 作品 2 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 809,
+      "w": 351,
+      "h": 277,
+      "onScreen": true
+    },
+    {
+      "slug": "qa-b-5",
+      "text": "文档 B 作品 5 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 1102,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-b-4",
+      "text": "文档 B 作品 4 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 1395,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-b-3",
+      "text": "文档 B 作品 3 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 1687,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-a-1",
+      "text": "文档 A 作品 1 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 1980,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-b-2",
+      "text": "文档 B 作品 2 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 2273,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-b-1",
+      "text": "文档 B 作品 1 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 2566,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    },
+    {
+      "slug": "qa-a-5",
+      "text": "文档 A 作品 5 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情",
+      "x": 20,
+      "y": 2859,
+      "w": 351,
+      "h": 277,
+      "onScreen": false
+    }
+  ]
+}
