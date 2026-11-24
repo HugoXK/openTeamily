@@ -79,9 +79,29 @@ def _next_subnet(runner, pool, heartbeat):
     raise ManagerError('runtime_network_capacity')
 
 
+def _require_pooled(network, pool):
+    """An existing project bridge must sit inside the operator's pool as well.
+
+    Labels alone say who owns a bridge, not which addresses it hands out, and
+    ``_next_subnet`` only counts subnets that already overlap the pool, so a
+    bridge Docker created on its own default range stays invisible there. With a
+    pool configured, reusing such a bridge would start the instance on addresses
+    the operator never allocated and let another account overlap it.
+    """
+    if pool is None:
+        return
+    ipam = network.get('IPAM')
+    require(isinstance(ipam, dict), 'runtime_network_ipam')
+    subnets = list(_subnets(ipam.get('Config')))
+    require(subnets and all(subnet.version == 4 and subnet.subnet_of(pool) for subnet in subnets),
+            'runtime_network_owner')
+
+
 def reserve_bridge(registry, runner, iid, heartbeat):
     project = 'ot-' + check_id(iid)
-    if _account_network(runner, project, heartbeat) is not None:
+    network = _account_network(runner, project, heartbeat)
+    if network is not None:
+        _require_pooled(network, registry.runtime_ipv4_pool)
         return
     # The two workers and separate operator invocations share this registry.
     # Keep renewing the caller's lease while another allocation completes.
@@ -97,7 +117,9 @@ def reserve_bridge(registry, runner, iid, heartbeat):
                 require(time.monotonic() < deadline, 'runtime_network_busy')
                 heartbeat()
                 time.sleep(0.05)
-        if _account_network(runner, project, heartbeat) is not None:
+        network = _account_network(runner, project, heartbeat)
+        if network is not None:
+            _require_pooled(network, registry.runtime_ipv4_pool)
             return
         registry.entry(iid)
         subnet = _next_subnet(runner, registry.runtime_ipv4_pool, heartbeat)
