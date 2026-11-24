@@ -66,6 +66,9 @@ function importRows(store, feature, tables, digest) {
       const sql = `INSERT OR REPLACE INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`
       const statement = store.db.prepare(sql)
       for (const row of rows) {
+        // A feature may refuse one row: a link whose ends are not in the bundle
+        // is skipped rather than failing the whole import.
+        if (feature.acceptImportRow && feature.acceptImportRow(table, row, store) === false) continue
         statement.run(...columns.map((column) => {
           const value = row[column]
           if (value === undefined) return null
