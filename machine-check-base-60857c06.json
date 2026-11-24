@@ -1,0 +1,505 @@
+{
+  "artifact": "machine-checkable evidence for openTeamily#23 (discover ranking)",
+  "tree": "base",
+  "commit": "60857c062b1f3fa71cd462aace63f0ca80b92e6a",
+  "commit_short": "60857c06",
+  "fixture": {
+    "authors": {
+      "A": "ci_owner (published second, 5 works)",
+      "B": "ci_peer (published first, 5 works)"
+    },
+    "works": 10,
+    "same_week": true,
+    "likes": 0,
+    "collections": 0,
+    "score_all_zero": true,
+    "viewer": "ci_viewer (third account, not an author)",
+    "viewer_opened_first": "GET /v1/ot/discover/qa-a-5/detail",
+    "then": "/discover?sort=popular",
+    "seeds": [
+      {
+        "author": "B",
+        "slug": "qa-b-1"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-2"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-3"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-4"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-5"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-1"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-2"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-3"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-4"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-5"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "shot_name": "viewer-1440-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "on_screen": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 216,
+          "scrollHeight": 1116,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": -86,
+          "bottom": 213,
+          "fullyVisible": false,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-a-1",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-b-2",
+          "qa-b-1"
+        ],
+        "onScreen": [
+          "qa-a-5",
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-a-1",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-b-2",
+          "qa-b-1"
+        ]
+      }
+    },
+    {
+      "shot_name": "viewer-1440-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "color_scheme": "dark",
+      "theme_resolved": "dark",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "on_screen": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 220,
+          "scrollHeight": 1120,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": -90,
+          "bottom": 209,
+          "fullyVisible": false,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-a-1",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-b-2",
+          "qa-b-1"
+        ],
+        "onScreen": [
+          "qa-a-5",
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-a-1",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-b-2",
+          "qa-b-1"
+        ]
+      }
+    },
+    {
+      "shot_name": "viewer-390-light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "on_screen": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3"
+      ],
+      "tail": null
+    },
+    {
+      "shot_name": "viewer-390-dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_scheme": "dark",
+      "theme_resolved": "dark",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "on_screen": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3"
+      ],
+      "tail": null
+    }
+  ],
+  "card_boxes": {
+    "captured_in_shot": "viewer-390-dark",
+    "note": "per-card boxes were persisted for the last rendered shot only; other shots carry DOM order + measured geometry",
+    "cards": [
+      {
+        "slug": "qa-a-5",
+        "x": 20,
+        "y": 223,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 5 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-4",
+        "x": 20,
+        "y": 516,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 4 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-3",
+        "x": 20,
+        "y": 809,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 3 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-2",
+        "x": 20,
+        "y": 1102,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 A 作品 2 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-1",
+        "x": 20,
+        "y": 1395,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 A 作品 1 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-5",
+        "x": 20,
+        "y": 1687,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 5 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-4",
+        "x": 20,
+        "y": 1980,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 4 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-3",
+        "x": 20,
+        "y": 2273,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 3 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-2",
+        "x": 20,
+        "y": 2566,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 2 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-1",
+        "x": 20,
+        "y": 2859,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 1 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      }
+    ]
+  },
+  "api_explain": {
+    "request": "GET /v1/ot/discover?kind=work&sort=popular&limit=12&explain=1",
+    "auth": "viewer session cookie (ci_viewer)",
+    "raw_body_persisted": false,
+    "gap": "the response body was reduced to the fields below at capture time; the raw JSON envelope was NOT written to disk",
+    "readings": [
+      {
+        "slug": "qa-a-5"
+      },
+      {
+        "slug": "qa-a-4"
+      },
+      {
+        "slug": "qa-a-3"
+      },
+      {
+        "slug": "qa-a-2"
+      },
+      {
+        "slug": "qa-a-1"
+      },
+      {
+        "slug": "qa-b-5"
+      },
+      {
+        "slug": "qa-b-4"
+      },
+      {
+        "slug": "qa-b-3"
+      },
+      {
+        "slug": "qa-b-2"
+      },
+      {
+        "slug": "qa-b-1"
+      }
+    ],
+    "public_feed_has_explain_field": false,
+    "public_feed_reading": [
+      {
+        "slug": "qa-a-5",
+        "title": "A 作品 5",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-4",
+        "title": "A 作品 4",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-3",
+        "title": "A 作品 3",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-2",
+        "title": "A 作品 2",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-1",
+        "title": "A 作品 1",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-5",
+        "title": "B 作品 5",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-4",
+        "title": "B 作品 4",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-3",
+        "title": "B 作品 3",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-2",
+        "title": "B 作品 2",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-1",
+        "title": "B 作品 1",
+        "hasExplain": false
+      }
+    ]
+  },
+  "guest_probe": {
+    "pageStatus": 200,
+    "pageUrl": "http://127.0.0.1:46833/login",
+    "feedStatus": 401,
+    "cards": 0,
+    "feedItems": null,
+    "feedHasExplain": null
+  },
+  "pngs": [
+    {
+      "file": "before-1440-light.png",
+      "bytes": 320739,
+      "sha256": "38b8f11d83578fc623f2462e45acaa7baab99f080a4672be8a6ba7dddc200169"
+    },
+    {
+      "file": "before-1440-dark.png",
+      "bytes": 68075,
+      "sha256": "9a572f890a4e5395bef66a4e9f9bc90f7d6bd5a02c6a3039efd3d97fe5f6aa9e"
+    },
+    {
+      "file": "before-390-light.png",
+      "bytes": 100325,
+      "sha256": "21315175a52e82a0315eab405811a38b379525a7455d17be4bdd0922f366016b"
+    },
+    {
+      "file": "before-390-dark.png",
+      "bytes": 45150,
+      "sha256": "62ddfed0c551e52ca949995d6983c41e5def9271e1cf2cee9768b271cbdd311a"
+    }
+  ],
+  "provenance": "captured by .qa-h23/shoot.mjs from a loopback fixture server started on a detached worktree at the commit above; source data .qa-h23/shots/before/evidence.json",
+  "caveat": "no field here is derived from viewing the PNG; DOM order, bounding boxes and subresource requests come from the live page, the explain readings from the authenticated API"
+}

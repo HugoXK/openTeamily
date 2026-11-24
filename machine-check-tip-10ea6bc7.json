@@ -1,0 +1,565 @@
+{
+  "artifact": "machine-checkable evidence for openTeamily#23 (discover ranking)",
+  "tree": "tip",
+  "commit": "10ea6bc732605ae3fb8bed91f8d6e128d68768b0",
+  "commit_short": "10ea6bc7",
+  "fixture": {
+    "authors": {
+      "A": "ci_owner (published second, 5 works)",
+      "B": "ci_peer (published first, 5 works)"
+    },
+    "works": 10,
+    "same_week": true,
+    "likes": 0,
+    "collections": 0,
+    "score_all_zero": true,
+    "viewer": "ci_viewer (third account, not an author)",
+    "viewer_opened_first": "GET /v1/ot/discover/qa-a-5/detail",
+    "then": "/discover?sort=popular",
+    "seeds": [
+      {
+        "author": "B",
+        "slug": "qa-b-1"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-2"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-3"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-4"
+      },
+      {
+        "author": "B",
+        "slug": "qa-b-5"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-1"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-2"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-3"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-4"
+      },
+      {
+        "author": "A",
+        "slug": "qa-a-5"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "shot_name": "viewer-1440-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "dom_order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "on_screen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 216,
+          "scrollHeight": 1116,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": 543,
+          "bottom": 842,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ],
+        "onScreen": [
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ]
+      }
+    },
+    {
+      "shot_name": "viewer-1440-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "color_scheme": "dark",
+      "theme_resolved": "dark",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "dom_order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "on_screen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "tail": {
+        "scroller": {
+          "selector": "main#main",
+          "scrollTop": 220,
+          "scrollHeight": 1120,
+          "clientHeight": 900
+        },
+        "openedTail": {
+          "slug": "qa-a-5",
+          "top": 541,
+          "bottom": 840,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        "fullyVisible": [
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ],
+        "onScreen": [
+          "qa-a-4",
+          "qa-a-3",
+          "qa-a-2",
+          "qa-b-5",
+          "qa-b-4",
+          "qa-b-3",
+          "qa-a-1",
+          "qa-b-2",
+          "qa-b-1",
+          "qa-a-5"
+        ]
+      }
+    },
+    {
+      "shot_name": "viewer-390-light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "dom_order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "on_screen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2"
+      ],
+      "tail": null
+    },
+    {
+      "shot_name": "viewer-390-dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_scheme": "dark",
+      "theme_resolved": "dark",
+      "console_errors": [],
+      "card_count": 10,
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "dom_order": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-a-1",
+        "qa-b-2",
+        "qa-b-1",
+        "qa-a-5"
+      ],
+      "on_screen": [
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2"
+      ],
+      "tail": null
+    }
+  ],
+  "card_boxes": {
+    "captured_in_shot": "viewer-390-dark",
+    "note": "per-card boxes were persisted for the last rendered shot only; other shots carry DOM order + measured geometry",
+    "cards": [
+      {
+        "slug": "qa-a-4",
+        "x": 20,
+        "y": 223,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 4 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-3",
+        "x": 20,
+        "y": 516,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 3 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-2",
+        "x": 20,
+        "y": 809,
+        "w": 351,
+        "h": 277,
+        "onScreen": true,
+        "text": "文档 A 作品 2 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-5",
+        "x": 20,
+        "y": 1102,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 5 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-4",
+        "x": 20,
+        "y": 1395,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 4 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-3",
+        "x": 20,
+        "y": 1687,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 3 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-1",
+        "x": 20,
+        "y": 1980,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 A 作品 1 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-2",
+        "x": 20,
+        "y": 2273,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 2 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-b-1",
+        "x": 20,
+        "y": 2566,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 B 作品 1 CP ci_peer · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      },
+      {
+        "slug": "qa-a-5",
+        "x": 20,
+        "y": 2859,
+        "w": 351,
+        "h": 277,
+        "onScreen": false,
+        "text": "文档 A 作品 5 CO ci_owner · 2026/11/25 点赞 · 0 收录 关注 评论 详情"
+      }
+    ]
+  },
+  "api_explain": {
+    "request": "GET /v1/ot/discover?kind=work&sort=popular&limit=12&explain=1",
+    "auth": "viewer session cookie (ci_viewer)",
+    "raw_body_persisted": false,
+    "gap": "the response body was reduced to the fields below at capture time; the raw JSON envelope was NOT written to disk",
+    "readings": [
+      {
+        "slug": "qa-a-4",
+        "seen": 0,
+        "rank": 1,
+        "score": 0,
+        "author_rank": 1,
+        "capped": false
+      },
+      {
+        "slug": "qa-a-3",
+        "seen": 0,
+        "rank": 2,
+        "score": 0,
+        "author_rank": 2,
+        "capped": false
+      },
+      {
+        "slug": "qa-a-2",
+        "seen": 0,
+        "rank": 3,
+        "score": 0,
+        "author_rank": 3,
+        "capped": false
+      },
+      {
+        "slug": "qa-b-5",
+        "seen": 0,
+        "rank": 4,
+        "score": 0,
+        "author_rank": 1,
+        "capped": false
+      },
+      {
+        "slug": "qa-b-4",
+        "seen": 0,
+        "rank": 5,
+        "score": 0,
+        "author_rank": 2,
+        "capped": false
+      },
+      {
+        "slug": "qa-b-3",
+        "seen": 0,
+        "rank": 6,
+        "score": 0,
+        "author_rank": 3,
+        "capped": false
+      },
+      {
+        "slug": "qa-a-1",
+        "seen": 0,
+        "rank": 7,
+        "score": 0,
+        "author_rank": 4,
+        "capped": true
+      },
+      {
+        "slug": "qa-b-2",
+        "seen": 0,
+        "rank": 8,
+        "score": 0,
+        "author_rank": 4,
+        "capped": true
+      },
+      {
+        "slug": "qa-b-1",
+        "seen": 0,
+        "rank": 9,
+        "score": 0,
+        "author_rank": 5,
+        "capped": true
+      },
+      {
+        "slug": "qa-a-5",
+        "seen": 1,
+        "rank": 10,
+        "score": -1,
+        "author_rank": 5,
+        "capped": true
+      }
+    ],
+    "public_feed_has_explain_field": false,
+    "public_feed_reading": [
+      {
+        "slug": "qa-a-4",
+        "title": "A 作品 4",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-3",
+        "title": "A 作品 3",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-2",
+        "title": "A 作品 2",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-5",
+        "title": "B 作品 5",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-4",
+        "title": "B 作品 4",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-3",
+        "title": "B 作品 3",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-1",
+        "title": "A 作品 1",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-2",
+        "title": "B 作品 2",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-b-1",
+        "title": "B 作品 1",
+        "hasExplain": false
+      },
+      {
+        "slug": "qa-a-5",
+        "title": "A 作品 5",
+        "hasExplain": false
+      }
+    ]
+  },
+  "guest_probe": {
+    "pageStatus": 200,
+    "pageUrl": "http://127.0.0.1:43515/login",
+    "feedStatus": 401,
+    "cards": 0,
+    "feedItems": null,
+    "feedHasExplain": null
+  },
+  "pngs": [
+    {
+      "file": "after-1440-light.png",
+      "bytes": 324646,
+      "sha256": "1be22e965330611295387ac8a374c4c34933dfb3d0011ba6f5a09a29c4acf001"
+    },
+    {
+      "file": "after-1440-dark.png",
+      "bytes": 69860,
+      "sha256": "28f66a62d96dab4b4dd51df954be0d9845cf3a3aadae4f18342338ed0a4539d2"
+    },
+    {
+      "file": "after-1440-light-tail.png",
+      "bytes": 238509,
+      "sha256": "97bee16c057aa0e38583eb24c1500333597d6d326e9d64c9d89fadc5f3a66641"
+    },
+    {
+      "file": "after-1440-dark-tail.png",
+      "bytes": 79550,
+      "sha256": "ba9583cbe1c081b9ca4b8788fdbafe41ea5382cb55e45761aca6312ecea7feaa"
+    },
+    {
+      "file": "after-390-light.png",
+      "bytes": 99220,
+      "sha256": "93f39660c327c8a3587193e0b26ffe8c2954021378c1698ea24a48b42a322920"
+    },
+    {
+      "file": "after-390-dark.png",
+      "bytes": 45205,
+      "sha256": "f77df86fbf1451897885328919fb43fdf5e0360b0965db47e708af6fe2cb8382"
+    }
+  ],
+  "provenance": "captured by .qa-h23/shoot.mjs from a loopback fixture server started on a detached worktree at the commit above; source data .qa-h23/shots/after/evidence.json",
+  "caveat": "no field here is derived from viewing the PNG; DOM order, bounding boxes and subresource requests come from the live page, the explain readings from the authenticated API"
+}

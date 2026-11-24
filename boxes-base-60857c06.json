@@ -1,0 +1,383 @@
+{
+  "artifact": "per-card bounding boxes, openTeamily#23 (supplements shots/*/evidence.json)",
+  "commit": "60857c062b1f3fa71cd462aace63f0ca80b92e6a",
+  "tree": "base",
+  "captured_at": "2026-11-24T23:43:20.734Z",
+  "fixture": {
+    "authors": {
+      "A": "ci_owner (published second)",
+      "B": "ci_peer (published first)"
+    },
+    "works": 10,
+    "score_all_zero": true,
+    "opened_first": "qa-a-5",
+    "viewer": "ci_viewer (third account, author of nothing)"
+  },
+  "method": "document.querySelectorAll(\"#feed-grid > article.feed-entry\"), one getBoundingClientRect per card, after the grid reached 10 entries; boxes are viewport-relative to a page that has not been scrolled",
+  "boxes_by_viewport": {
+    "viewer-1440-light": {
+      "name": "viewer-1440-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "measured": {
+        "innerWidth": 1440,
+        "innerHeight": 900,
+        "scrollWidth": 1440,
+        "gridColumns": "292px 292px 292px 292px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "cards": [
+        {
+          "index": 0,
+          "slug": "qa-a-5",
+          "left": 140,
+          "right": 432,
+          "top": 130,
+          "bottom": 429,
+          "x": 140,
+          "y": 130,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 1,
+          "slug": "qa-a-4",
+          "left": 448,
+          "right": 740,
+          "top": 130,
+          "bottom": 429,
+          "x": 448,
+          "y": 130,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 2,
+          "slug": "qa-a-3",
+          "left": 756,
+          "right": 1048,
+          "top": 130,
+          "bottom": 429,
+          "x": 756,
+          "y": 130,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 3,
+          "slug": "qa-a-2",
+          "left": 1064,
+          "right": 1356,
+          "top": 130,
+          "bottom": 429,
+          "x": 1064,
+          "y": 130,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 4,
+          "slug": "qa-a-1",
+          "left": 140,
+          "right": 432,
+          "top": 445,
+          "bottom": 743,
+          "x": 140,
+          "y": 445,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 5,
+          "slug": "qa-b-5",
+          "left": 448,
+          "right": 740,
+          "top": 445,
+          "bottom": 743,
+          "x": 448,
+          "y": 445,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 6,
+          "slug": "qa-b-4",
+          "left": 756,
+          "right": 1048,
+          "top": 445,
+          "bottom": 743,
+          "x": 756,
+          "y": 445,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 7,
+          "slug": "qa-b-3",
+          "left": 1064,
+          "right": 1356,
+          "top": 445,
+          "bottom": 743,
+          "x": 1064,
+          "y": 445,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 8,
+          "slug": "qa-b-2",
+          "left": 140,
+          "right": 432,
+          "top": 759,
+          "bottom": 1058,
+          "x": 140,
+          "y": 759,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": false,
+          "onScreen": true
+        },
+        {
+          "index": 9,
+          "slug": "qa-b-1",
+          "left": 448,
+          "right": 740,
+          "top": 759,
+          "bottom": 1058,
+          "x": 448,
+          "y": 759,
+          "width": 292,
+          "height": 299,
+          "fullyVisible": false,
+          "onScreen": true
+        }
+      ]
+    },
+    "viewer-390-light": {
+      "name": "viewer-390-light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_scheme": "light",
+      "theme_resolved": "light",
+      "measured": {
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "gridColumns": "351px"
+      },
+      "dom_order": [
+        "qa-a-5",
+        "qa-a-4",
+        "qa-a-3",
+        "qa-a-2",
+        "qa-a-1",
+        "qa-b-5",
+        "qa-b-4",
+        "qa-b-3",
+        "qa-b-2",
+        "qa-b-1"
+      ],
+      "cards": [
+        {
+          "index": 0,
+          "slug": "qa-a-5",
+          "left": 20,
+          "right": 371,
+          "top": 223,
+          "bottom": 499,
+          "x": 20,
+          "y": 223,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 1,
+          "slug": "qa-a-4",
+          "left": 20,
+          "right": 371,
+          "top": 515,
+          "bottom": 791,
+          "x": 20,
+          "y": 515,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": true,
+          "onScreen": true
+        },
+        {
+          "index": 2,
+          "slug": "qa-a-3",
+          "left": 20,
+          "right": 371,
+          "top": 807,
+          "bottom": 1083,
+          "x": 20,
+          "y": 807,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": true
+        },
+        {
+          "index": 3,
+          "slug": "qa-a-2",
+          "left": 20,
+          "right": 371,
+          "top": 1099,
+          "bottom": 1375,
+          "x": 20,
+          "y": 1099,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 4,
+          "slug": "qa-a-1",
+          "left": 20,
+          "right": 371,
+          "top": 1391,
+          "bottom": 1667,
+          "x": 20,
+          "y": 1391,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 5,
+          "slug": "qa-b-5",
+          "left": 20,
+          "right": 371,
+          "top": 1683,
+          "bottom": 1959,
+          "x": 20,
+          "y": 1683,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 6,
+          "slug": "qa-b-4",
+          "left": 20,
+          "right": 371,
+          "top": 1975,
+          "bottom": 2252,
+          "x": 20,
+          "y": 1975,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 7,
+          "slug": "qa-b-3",
+          "left": 20,
+          "right": 371,
+          "top": 2268,
+          "bottom": 2544,
+          "x": 20,
+          "y": 2268,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 8,
+          "slug": "qa-b-2",
+          "left": 20,
+          "right": 371,
+          "top": 2560,
+          "bottom": 2836,
+          "x": 20,
+          "y": 2560,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        },
+        {
+          "index": 9,
+          "slug": "qa-b-1",
+          "left": 20,
+          "right": 371,
+          "top": 2852,
+          "bottom": 3128,
+          "x": 20,
+          "y": 2852,
+          "width": 351,
+          "height": 276,
+          "fullyVisible": false,
+          "onScreen": false
+        }
+      ]
+    }
+  },
+  "order_by_viewport": {
+    "viewer-1440-light": [
+      "qa-a-5",
+      "qa-a-4",
+      "qa-a-3",
+      "qa-a-2",
+      "qa-a-1",
+      "qa-b-5",
+      "qa-b-4",
+      "qa-b-3",
+      "qa-b-2",
+      "qa-b-1"
+    ],
+    "viewer-390-light": [
+      "qa-a-5",
+      "qa-a-4",
+      "qa-a-3",
+      "qa-a-2",
+      "qa-a-1",
+      "qa-b-5",
+      "qa-b-4",
+      "qa-b-3",
+      "qa-b-2",
+      "qa-b-1"
+    ]
+  }
+}
