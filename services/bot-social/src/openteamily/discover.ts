@@ -49,6 +49,12 @@ CREATE INDEX IF NOT EXISTS ot_likes_profile_recent ON ot_likes(owner_id, created
 CREATE INDEX IF NOT EXISTS ot_collections_profile_recent ON ot_collections(owner_id, created_at, listing_id);
 CREATE INDEX IF NOT EXISTS ot_follows_profile_outgoing ON ot_follows(follower_id, created_at);
 CREATE INDEX IF NOT EXISTS ot_follows_profile_incoming ON ot_follows(creator_id, created_at);
+CREATE TABLE IF NOT EXISTS ot_work_opens (
+  listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, opened_at INTEGER NOT NULL,
+  PRIMARY KEY (listing_id, owner_id)
+);
+CREATE INDEX IF NOT EXISTS ot_work_opens_viewer ON ot_work_opens(owner_id, listing_id);
 ${WORK_COMMENTS_SCHEMA}
 `;
 
@@ -551,33 +557,95 @@ const RANKING_TTL = 10 * 60_000;
 const RANKING_SESSIONS = 128;
 const RANKED_CURSOR = /^([A-Za-z0-9_-]{32})\.([1-9][0-9]{0,2})$/;
 const WEEK = 7 * 86_400_000;
+// One author holds at most this many works in any prefix of the ranked feed, so a single prolific
+// author cannot fill the first page; the positions it gives up go to the next best works by others.
+const AUTHOR_DIVERSITY_CAP = 3;
+// A work the viewer already opened gives up one point: enough to drop below an otherwise equal
+// unseen work, small enough that it never overturns a genuine engagement difference (a like is two).
+const SEEN_PENALTY = 1;
+const RANKING_WEIGHTS = { like: 2, collection: 3, seen: SEEN_PENALTY };
 
-function rankedWorkIds(ot: OtContext, {where, args}: FeedScope) {
+type RankedWork = {
+  id: string;
+  author: string;
+  updated_at: number;
+  likes: number;
+  collections: number;
+  age_weeks: number;
+  seen: 0 | 1;
+  engagement: number;
+  recency: number;
+  seen_penalty: number;
+  follow_boost: number;
+  score: number;
+  rank: number;
+  author_rank: number;
+  diversity_cap: boolean;
+};
+
+function rankedWorks(ot: OtContext, {where, args}: FeedScope, viewer: string | null) {
   const now = ot.now();
   const minimumEngagementTime = now - 8 * WEEK;
-  // Weight recent distinct likes and collections on opted-in works, without
-  // counting an author's own engagement.
-  const rows = ot.all<{id: string}>(`WITH recent AS MATERIALIZED (
+  // Weight recent distinct likes and collections on opted-in works, without counting an author's own
+  // engagement, and read the parts of the score back so a ranked position can be explained.
+  const rows = ot.all<{
+    id: string; author: string; updated_at: number; likes: number; collections: number; age_weeks: number; seen: number;
+  }>(`WITH recent AS MATERIALIZED (
     SELECT l.id, l.owner_id, l.updated_at FROM ot_listings l
     LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
     WHERE l.listed = 1 AND l.kind = 'work' AND ${where}
     ORDER BY l.updated_at DESC, l.id DESC LIMIT ${RANKING_WINDOW}
   )
-  SELECT l.id FROM recent l ORDER BY (
-    2 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
-      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12))
-    + 3 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
-      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8))
-    - MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER)))
-  ) DESC, l.updated_at DESC, l.id DESC`, ...args, minimumEngagementTime, minimumEngagementTime, now);
-  return rows.map(row => row.id);
+  SELECT l.id, l.owner_id AS author, l.updated_at,
+    (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12)) AS likes,
+    (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8)) AS collections,
+    MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER))) AS age_weeks,
+    EXISTS (SELECT 1 FROM ot_work_opens o WHERE o.listing_id = l.id AND o.owner_id = ?) AS seen
+  FROM recent l`, ...args, minimumEngagementTime, minimumEngagementTime, now, viewer ?? "");
+  const entries: RankedWork[] = rows.map(row => {
+    const likes = Number(row.likes);
+    const collections = Number(row.collections);
+    const age_weeks = Number(row.age_weeks);
+    const seen = (Number(row.seen) ? 1 : 0) as 0 | 1;
+    const engagement = RANKING_WEIGHTS.like * likes + RANKING_WEIGHTS.collection * collections;
+    const recency = age_weeks === 0 ? 0 : -age_weeks;
+    const seen_penalty = seen * SEEN_PENALTY;
+    return {id: row.id, author: row.author, updated_at: Number(row.updated_at), likes, collections, age_weeks, seen,
+      engagement, recency, seen_penalty, follow_boost: 0, score: engagement + recency - seen_penalty,
+      rank: 0, author_rank: 0, diversity_cap: false};
+  });
+  // Same order the score used to be computed in SQL with: score, then fresher, then higher id.
+  entries.sort((a, b) => b.score - a.score || b.updated_at - a.updated_at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  const perAuthor = new Map<string, number>();
+  const kept: RankedWork[] = [];
+  const deferred: RankedWork[] = [];
+  for (const entry of entries) {
+    const authorRank = (perAuthor.get(entry.author) ?? 0) + 1;
+    perAuthor.set(entry.author, authorRank);
+    entry.author_rank = authorRank;
+    entry.diversity_cap = authorRank > AUTHOR_DIVERSITY_CAP;
+    (entry.diversity_cap ? deferred : kept).push(entry);
+  }
+  const ranked = kept.concat(deferred);
+  ranked.forEach((entry, index) => { entry.rank = index + 1; });
+  return ranked;
+}
+
+function explainRankedWork(entry: RankedWork) {
+  return { rank: entry.rank, score: entry.score, likes: entry.likes, collections: entry.collections,
+    engagement: entry.engagement, age_weeks: entry.age_weeks, recency: entry.recency, seen: entry.seen,
+    seen_penalty: entry.seen_penalty, follow_boost: entry.follow_boost, weights: RANKING_WEIGHTS,
+    author: entry.author, author_rank: entry.author_rank, diversity_cap: entry.diversity_cap };
 }
 
 function popularWorks(ot: OtContext) {
-  type Ranking = { context: string; keys: string; expires: number };
+  type Ranking = { context: string; keys: string; entries: RankedWork[]; expires: number };
   const rankings = new Map<string, Ranking>();
 
-  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string | null, limit: number, cursor: string | undefined) => {
+  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string | null, limit: number,
+    cursor: string | undefined, explain = false) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
     const now = ot.now();
     let token: string;
@@ -594,7 +662,8 @@ function popularWorks(ot: OtContext) {
       ranking = previous;
     } else {
       token = randomBytes(24).toString("base64url");
-      ranking = {context, keys: JSON.stringify(rankedWorkIds(ot, {where, args})), expires: now + RANKING_TTL};
+      const entries = rankedWorks(ot, {where, args}, viewer);
+      ranking = {context, keys: JSON.stringify(entries.map(entry => entry.id)), entries, expires: now + RANKING_TTL};
     }
 
     // Use the captured order for pagination, but verify current publication
@@ -613,8 +682,13 @@ function popularWorks(ot: OtContext) {
       }
       rankings.set(token, ranking);
     }
-    return { items: rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch)),
-      next_cursor: next ? `${token}.${next.position}` : null };
+    const items = rows.slice(0, limit).map(row => {
+      const card = discoverCard(ot, row, viewer, workSearch);
+      if (!explain) return card;
+      const entry = ranking.entries[Number(row.position)];
+      return entry ? {...card, explain: explainRankedWork(entry)} : card;
+    });
+    return { items, next_cursor: next ? `${token}.${next.position}` : null };
   };
 }
 
@@ -828,9 +902,13 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const cursor = one(q.cursor, "cursor");
     const pagination = one(q.pagination, "pagination");
     const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
+    const explainParam = one(q.explain, "explain");
+    assert(explainParam === undefined || explainParam === "1", 400, "invalid_request", "explain must be 1");
+    const explain = explainParam === "1";
+    assert(!explain || sort === "popular", 400, "invalid_request", "explain applies to the popularity ranking");
     if (sort === "popular") {
       assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
-      return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor);
+      return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor, explain);
     }
     const keyset = (pagination === "keyset" && (kind === "work" || viewer === null)) || sort === "collected";
     assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
@@ -893,16 +971,22 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       work: {...view, ...(remixable ? {remix_available:true} : {})},
       previous: null, next: null,
     };
+    let page = {...detail, ...scopedWorkNeighbors(ot, work, scope)};
     if (scope.sort === "popular") {
-      const ids = rankedWorkIds(ot, scope);
-      const position = ids.indexOf(work.id);
-      if (position === -1) return detail;
-      const neighbor = (id: string | undefined) => id
-        ? ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l WHERE l.id = ? AND ${PUBLIC_WORK_SCOPE.where}`, id) ?? null
-        : null;
-      return {...detail, previous: neighbor(ids[position - 1]), next: neighbor(ids[position + 1])};
+      const entries = rankedWorks(ot, scope, me.ownerId);
+      const position = entries.findIndex(entry => entry.id === work.id);
+      if (position !== -1) {
+        const neighbor = (id: string | undefined) => id
+          ? ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l WHERE l.id = ? AND ${PUBLIC_WORK_SCOPE.where}`, id) ?? null
+          : null;
+        page = {...detail, previous: neighbor(entries[position - 1]?.id), next: neighbor(entries[position + 1]?.id)};
+      }
     }
-    return {...detail, ...scopedWorkNeighbors(ot, work, scope)};
+    // Reading the detail of a published work is how the caller opens it. Keeping that fact lets a
+    // later ranked read demote the work below equally scored unseen ones without dropping it.
+    ot.run(`INSERT INTO ot_work_opens (listing_id, owner_id, opened_at) VALUES (?, ?, ?)
+      ON CONFLICT (listing_id, owner_id) DO UPDATE SET opened_at = excluded.opened_at`, work.id, me.ownerId, ot.now());
+    return page;
   });
   app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
     ot.me(req);
