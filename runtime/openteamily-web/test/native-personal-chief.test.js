@@ -73,3 +73,26 @@ test('a user-driven archive still archives the agent and hides the native Bot', 
   assert.equal(reread.archived, 1)
   assert.equal(reread.instructions, 'X')
 })
+
+test('an archived agent mapped to the Chief keeps refusing startup snapshots after the Chief is unhidden', async () => {
+  const f = fixture()
+  const created = await f.endpoints['conversation-create']({ workspace_id: W, id: AGENT })
+  assert.equal(created.status, 201)
+  const conversationId = created.conversation.id
+  const before = (await f.endpoints.get({ workspace_id: W, id: AGENT })).agent
+  const archived = (await f.endpoints.archive({ workspace_id: W, id: AGENT, archived: true, revision: before.revision })).agent
+  assert.equal(archived.archived, 1)
+  // The archive write hides the native Chief; unhide it again so `hidden` can no
+  // longer stand in for the archived flag. The agent row stays archived.
+  assert.equal(f.bots.main.hidden, true)
+  f.bots.main.hidden = false
+  const reread = (await f.endpoints.get({ workspace_id: W, id: AGENT })).agent
+  assert.equal(reread.archived, 1)
+  const snapshot = await f.endpoints.v1({
+    method: 'GET', path: `/v1/workspaces/${W}/agents/${AGENT}/conversations/${conversationId}?limit=50&snapshot=1`,
+  })
+  assert.equal(snapshot.status, 409)
+  const entry = await f.endpoints.startupEntry(
+    { workspace_id: W, agent_id: AGENT, conversation_id: conversationId }, { internal: true })
+  assert.equal(entry, null)
+})
