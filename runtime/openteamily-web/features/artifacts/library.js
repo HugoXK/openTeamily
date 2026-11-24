@@ -531,6 +531,13 @@ export function duplicateArtifact({store, owner, featureDir}, workspaceId, {arti
     })
     if (kind === 'spreadsheet') attachWorkbook(store,id,structured)
     if (kind === 'media') attachMedia(store,id,snapshot.mime,snapshot.byte_count,snapshot.sha256,snapshot.filename)
+    if (kind === 'document') {
+      // The copy is a sibling of the source: keep the same parent only while
+      // that parent still exists in this workspace, never a dangling link.
+      const parent = store.get(`SELECT rel.parent_id FROM artifact_document_parents rel
+        JOIN artifacts a ON a.id=rel.parent_id WHERE rel.artifact_id=? AND a.workspace_id=?`, source.id, workspaceId)
+      if (parent) store.run('INSERT INTO artifact_document_parents VALUES(?,?)', id, parent.parent_id)
+    }
     return saved(store,workspaceId,id,201)
   })
 }
