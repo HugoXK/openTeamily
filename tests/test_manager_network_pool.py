@@ -120,11 +120,29 @@ class RuntimeNetworkPoolTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original[iid])
             self.assertNotIn('networks', json.loads(path.read_bytes()))
 
-    def test_an_old_owned_bridge_is_reused_even_outside_the_new_pool(self):
-        registry = self.registry('10.12.224.0/28')
+    def test_an_existing_owned_bridge_outside_the_pool_is_refused_before_compose(self):
+        # Docker's own default bridge (172.17.0.0/16) is what a project network
+        # created before the pool existed looks like: _account_network accepts it
+        # on labels alone, so the pool check has to cover the network it finds too.
+        registry = self.registry('10.100.0.0/16')
         engine = ComposeEngine(registry, self.runner)
         project = 'ot-' + self.iid
-        held = self.runner.add(project + '_default', '172.24.0.0/16', project)
+        held = self.runner.add(project + '_default', '172.17.0.0/16', project)
+        original = json.dumps(self.runner.networks[held])
+        document = registry.entry(self.iid)[1]
+        previous = document.read_bytes()
+        with self.assertRaisesRegex(ManagerError, 'runtime_network_owner'):
+            engine.compose(self.iid, 'start')
+        self.assertEqual(self.runner.create_calls, [])
+        self.assertEqual(self.runner.compose_calls, [])
+        self.assertEqual(json.dumps(self.runner.networks[held]), original)
+        self.assertEqual(previous, document.read_bytes())
+
+    def test_an_existing_owned_bridge_inside_the_pool_is_still_reused(self):
+        registry = self.registry('10.12.224.0/20')
+        engine = ComposeEngine(registry, self.runner)
+        project = 'ot-' + self.iid
+        held = self.runner.add(project + '_default', '10.12.224.0/24', project)
         original = json.dumps(self.runner.networks[held])
         document = registry.entry(self.iid)[1]
         previous = document.read_bytes()
@@ -133,6 +151,18 @@ class RuntimeNetworkPoolTests(unittest.TestCase):
         self.assertEqual(json.dumps(self.runner.networks[held]), original)
         self.assertEqual(previous, document.read_bytes())
         self.assertEqual(previous, compose_bytes(json.loads(previous)))
+        self.assertEqual(len(self.runner.compose_calls), 1)
+
+    def test_an_existing_owned_bridge_outside_any_pool_is_still_reused(self):
+        # No operator pool configured: every existing path keeps today's behaviour.
+        registry = self.registry()
+        engine = ComposeEngine(registry, self.runner)
+        project = 'ot-' + self.iid
+        held = self.runner.add(project + '_default', '172.24.0.0/16', project)
+        original = json.dumps(self.runner.networks[held])
+        engine.compose(self.iid, 'start')
+        self.assertEqual(self.runner.create_calls, [])
+        self.assertEqual(json.dumps(self.runner.networks[held]), original)
         self.assertEqual(len(self.runner.compose_calls), 1)
 
     def test_foreign_named_bridge_and_full_pool_fail_before_compose(self):

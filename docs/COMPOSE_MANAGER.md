@@ -123,9 +123,12 @@ manager configuration. An example reserved range is `10.240.240.0/20`.
 
 The manager assigns a separate `/28` bridge to each new account from the pool.
 A `/20` supplies 256 such bridges. Existing account bridges retain their current
-subnets, including bridges for stopped accounts. Account reservations and
-available bridge addresses are separate capacity limits. Size both for the
-number of accounts the host should support.
+subnets, including bridges for stopped accounts, as long as those subnets sit
+inside the pool: a bridge left on a subnet outside it (for example Docker's own
+`172.17.0.0/16` default) is refused with `runtime_network_owner` before the
+runtime starts, instead of handing out addresses the operator never allocated.
+Account reservations and available bridge addresses are separate capacity
+limits. Size both for the number of accounts the host should support.
 
 Install a manager build that supports the setting, apply the private
 configuration, and restart the OpenTeamily manager after current lifecycle jobs
