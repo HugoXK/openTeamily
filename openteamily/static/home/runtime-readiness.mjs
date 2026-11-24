@@ -90,11 +90,16 @@ export function signupDraftScope(view, owner, now = Date.now()) {
   return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
 }
 
-export function personalDraftScope(view, owner, personal) {
+export function personalChatPath(personal) {
+  const workspace = personal?.workspace_id, agent = personal?.agent_id;
+  return validSignupUser(workspace) && validSignupUser(agent) ? '/chat#workspace=' + workspace + '&agent=' + agent : '';
+}
+
+export function personalDraftScope(view, owner, personal, {allowBare = false} = {}) {
   if (!validSignupUser(owner) || view.location.search) return null;
-  const target = signupChatPath.exec('/chat' + view.location.hash);
-  if (!target || target[1] !== personal?.workspace_id || target[2] !== personal.agent_id) return null;
-  return JSON.stringify([owner, target[1], 'agent', target[2], null]);
+  const path = personalChatPath(personal);
+  if (!path || ('/chat' + view.location.hash !== path && !(allowBare && !view.location.hash))) return null;
+  return JSON.stringify([owner, personal.workspace_id, 'agent', personal.agent_id, null]);
 }
 
 export function rememberColdDraftHandoff(view, scope) {
@@ -158,6 +163,8 @@ function chatDraftMentions(value) {
 
 const pendingTextKey = /^[A-Za-z0-9_-]{16,64}$/;
 const pendingSocialId = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/;
+const validPendingTextKey = (key,source) => typeof key === 'string' && pendingTextKey.test(key) &&
+  (source !== 'first-agent' || key.startsWith('chat-'));
 
 function pendingTextScope(scope) {
   try {
@@ -165,6 +172,7 @@ function pendingTextScope(scope) {
     if (!Array.isArray(target) || target.length !== 5) return null;
     const [owner, workspace, source, agent, conversation] = target;
     if (!validSignupUser(owner) || !validSignupUser(workspace)) return null;
+    if (source === 'agent' && validSignupUser(agent) && conversation === null) return {owner,source:'first-agent'};
     if (source === 'agent' && validSignupUser(agent) && validSignupUser(conversation)) return {owner,source};
     if (source === 'social' && agent === null && typeof conversation === 'string' && pendingSocialId.test(conversation)) {
       return {owner,source};
@@ -184,6 +192,9 @@ function pendingTextMessage(value, source) {
   if (typeof value.chat_language === 'string' && value.chat_language.length <= 64) {
     payload.chat_language = value.chat_language;
   }
+  if (source === 'first-agent' && ['off','workspace','workspaces'].includes(value.memory_scope)) {
+    payload.memory_scope = value.memory_scope;
+  }
   if (value.agent_mentions !== undefined) {
     const targets = chatDraftMentions({agentMentions:value.agent_mentions});
     if (!Array.isArray(value.agent_mentions) || targets.length !== value.agent_mentions.length) return null;
@@ -198,7 +209,7 @@ function chatDraftPendingText(value, source) {
   if (!source || !Array.isArray(rows)) return [];
   return rows.flatMap(row => {
     const message = pendingTextMessage(row?.message, source);
-    return message && typeof row.key === 'string' && pendingTextKey.test(row.key) ? [{key:row.key,message}] : [];
+    return message && validPendingTextKey(row.key,source) ? [{key:row.key,message}] : [];
   });
 }
 
@@ -251,7 +262,7 @@ export function readPendingChatText(view, scope) {
 
 export function savePendingChatText(view, scope, key, message) {
   const target = pendingTextScope(scope);
-  if (!target || typeof key !== 'string' || !pendingTextKey.test(key)) return false;
+  if (!target || !validPendingTextKey(key,target.source)) return false;
   const {owner,source} = target;
   const payload = message && pendingTextMessage(message, source);
   if (message && !payload) return false;

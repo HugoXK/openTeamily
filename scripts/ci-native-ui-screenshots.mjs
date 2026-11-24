@@ -57,6 +57,53 @@ async function openNative(page, path, instanceId, selector) {
     sheet.href === new URL(asset,location.href).href),stylesheet),true,path);
 }
 
+async function contactApprovalRecovery(sender, receiver) {
+  const lookup = async (page, account) => {
+    await page.locator('#add-contact').click();
+    await page.locator('#contact-handle').fill('@' + account.profile.handle);
+    await page.locator('#lookup-contact').click();
+    await page.locator('#lookup-handle').getByText('@' + account.profile.handle, {exact:true}).waitFor();
+  };
+  await openNative(sender,'/contacts',fixture.owner.instanceId,'#add-contact');
+  await lookup(sender,fixture.peer);
+  await sender.getByRole('button',{name:'发送申请',exact:true}).click();
+  await sender.locator('#status').getByText('已发送申请。',{exact:true}).waitFor();
+
+  await openNative(receiver,'/contacts',fixture.peer.instanceId,'#add-contact');
+  await lookup(receiver,fixture.owner);
+  const routePath = '**/b/api/openteamily';
+  let approvals = 0;
+  const loseReceipt = async route => {
+    const {endpoint,payload} = route.request().postDataJSON() || {};
+    if (endpoint !== 'social/v1' || payload?.method !== 'POST' || payload.body?.action !== 'accept' ||
+        !/^\/v1\/contacts\/otcpt_/.test(payload.path)) return route.fallback();
+    approvals++;
+    if (approvals !== 1) return route.fallback();
+    const saved = await route.fetch();
+    const result = (await saved.json()).value;
+    assert.equal(result.status,200);
+    assert.equal(result.body.status,'accepted');
+    return route.fulfill({json:{ok:true,value:{status:503,body:{error:{message:'确认结果暂未收到。'}}}}});
+  };
+  await receiver.route(routePath,loseReceipt);
+  try {
+    await receiver.getByRole('button',{name:'接受申请',exact:true}).click();
+    await receiver.locator('#lookup-relationship').getByText('已添加',{exact:true}).waitFor();
+    assert.equal(await receiver.locator('#request-contact').textContent(),'聊天');
+    assert.equal(approvals,1);
+    await screenshot(receiver,'mobile-contact-approval-recovered');
+    await receiver.getByRole('button',{name:'关闭',exact:true}).click();
+  } finally {
+    await receiver.unroute(routePath,loseReceipt);
+  }
+  for (const [page,account] of [[sender,fixture.peer],[receiver,fixture.owner]]) {
+    await page.reload();
+    await page.locator('[data-section=accepted]').click();
+    await page.locator('#contacts-list li').filter({hasText:'@'+account.profile.handle})
+      .getByRole('button',{name:'聊天',exact:true}).waitFor();
+  }
+}
+
 async function chat(page, name, send) {
   const owner = fixture.owner;
   await openNative(page,chatPath(owner),owner.instanceId,'#chat-body');
@@ -198,6 +245,35 @@ async function meetingActionContinuity(page, account, name) {
   await waitForRows(0);
 }
 
+async function agentDraftFromCatalog(page, account, name) {
+  const workspace = account.instanceId;
+  const path = '/v1/workspaces/'+workspace+'/agents';
+  const list = async () => (await account.rpc('agents/v1',{method:'GET',path})).body.items;
+  const before = (await list()).length;
+  await openNative(page,'/discover?tab=agents',workspace,'#catalog-create-agent');
+  await page.locator('#catalog-create-agent').click();
+  const form = page.locator('#create-form');
+  await form.getByLabel('描述你需要的智能体').fill('整理客户访谈，归纳需求和待确认的问题。');
+  await form.getByRole('button',{name:'生成草稿'}).click();
+  await form.getByText('草稿已填入下方设置，请核对后创建。',{exact:true}).waitFor();
+  assert.equal(await form.locator('[name="name"]').inputValue(),'访谈整理员');
+  assert.equal(await form.locator('[name="instructions"]').inputValue(),'按主题归纳访谈，列出待确认问题。');
+  assert.equal((await list()).length,before);
+  await form.getByLabel('头像').selectOption('mint');
+  await form.locator('.agent-portrait-preview .look-avatar[data-color="薄荷绿"]').waitFor();
+  assert.equal(await form.locator('fieldset').evaluate(el=>{
+    const box=el.getBoundingClientRect();
+    const fields = [...el.querySelectorAll('input:not([type="hidden"]), textarea, select')];
+    return box.left >= 0 && box.right <= innerWidth + 1 && fields.every(field=>{
+      const fieldBox = field.getBoundingClientRect();
+      return fieldBox.left >= box.left && fieldBox.right <= box.right + 1;
+    });
+  }),true);
+  await screenshot(page,name);
+  await form.getByRole('button',{name:'取消',exact:true}).click();
+  await form.waitFor({state:'hidden'});
+}
+
 async function agentApiKey(page, account) {
   await openNative(page,'/agents',account.instanceId,'#agent-search');
   const open = page.locator('#agent-list button[data-id="'+account.agent.id+'"]');
@@ -234,10 +310,12 @@ async function spaceCatalogQueryReturn(page, account) {
 
   await openNative(page,'/space?workspace='+workspace,workspace,'#search');
   const search = page.locator('#search');
-  const item = page.locator('#artifact-list').getByRole('button',{name:title,exact:true});
+  const titleButton = page.getByRole('button',{name:title,exact:true});
+  const row = page.locator('#artifact-list .artifact-item').filter({has:titleButton});
+  const item = row.getByRole('button',{name:title,exact:true});
   await search.fill(title);
   await search.press('Enter');
-  await item.click();
+  await row.locator('.artifact-cover').click();
   await page.locator('#editor-title').waitFor();
   assert.equal(await page.locator('#editor-title').inputValue(),title);
   await page.reload({waitUntil:'domcontentloaded'});
@@ -247,6 +325,27 @@ async function spaceCatalogQueryReturn(page, account) {
   assert.equal(await search.inputValue(),title,'a workspace-qualified catalog URL restores its saved search');
   assert.equal(await item.evaluate(el => el === document.activeElement),true);
   assert.deepEqual([...new URL(page.url()).searchParams],[['workspace',workspace]]);
+
+  const grid = page.getByRole('tab',{name:'网格视图'});
+  const list = page.getByRole('tab',{name:'列表视图'});
+  const originalRow = await item.elementHandle();
+  await grid.press('ArrowRight');
+  assert.equal(await list.getAttribute('aria-selected'),'true');
+  assert.equal(await originalRow.evaluate(el => el.isConnected),true);
+  await originalRow.dispose();
+  assert.equal(await row.getByRole('button',{name:'收藏',exact:true}).isVisible(),true);
+  const more = row.getByRole('button',{name:title+'：更多操作'});
+  await more.click();
+  await page.getByRole('menuitem',{name:'发送到聊天'}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await more.evaluate(el => el === document.activeElement),true);
+
+  await search.fill(title+' 未匹配');
+  await search.press('Enter');
+  await page.locator('#reset-artifact-search').click();
+  await item.waitFor();
+  assert.equal(await search.inputValue(),'');
+  assert.equal(await search.evaluate(el => el === document.activeElement),true);
 }
 
 async function memoryGraphReturn(page, account) {
@@ -295,6 +394,45 @@ async function memoryGraphReturn(page, account) {
     assert.equal(await editor.locator('[name="title"]').inputValue(),title);
     await back.click();
   }
+}
+
+async function memoryTableEditing(page, account, name) {
+  const workspace = account.instanceId;
+  const base = '/v1/workspaces/'+workspace+'/memory';
+  const body = '- [x] 核对内容\n\n| 内容 | 状态 |\n| :--- | ---: |\n| 初稿 | 待处理 |';
+  const created = await account.rpc('memory/v1',{method:'POST',path:base,
+    idempotency_key:randomUUID().replaceAll('-',''),body:{title:'记忆表格验收',body}});
+  assert.equal(created.status,201);
+  const pageId = created.body.page.id;
+  await openNative(page,'/memory?workspace='+workspace+'&page='+pageId,workspace,'#editor-rich');
+  const editor = page.locator('#editor-rich');
+  const table = editor.getByRole('table');
+  const actions = page.locator('#editor-table-actions');
+  const summary = actions.locator('summary');
+  const action = label => actions.getByRole('button',{name:label,exact:true});
+  await table.getByRole('cell',{name:'初稿',exact:true}).click();
+  await summary.click();
+  await screenshot(page,name);
+  await action('下方插入行').click();
+  await page.keyboard.insertText('终稿 | 核对');
+  await table.getByRole('cell',{name:'终稿 | 核对',exact:true}).waitFor();
+  await summary.click();
+  await action('右侧插入列').click();
+  await page.keyboard.insertText('已复核');
+  await summary.click();
+  await action('删除当前列').click();
+  assert.equal(await table.getByRole('columnheader').count(),2);
+  await page.locator('[data-rich="undo"]').click();
+  await table.getByRole('cell',{name:'已复核',exact:true}).waitFor();
+  assert.equal(await table.getByRole('columnheader').count(),3);
+  await page.locator('#save-page').click();
+  await page.locator('#editor-meta').getByText(/修订 2/).waitFor();
+  const saved = await account.rpc('memory/v1',{method:'GET',path:base+'/'+pageId});
+  assert.ok(saved.body.page.body.includes('| 终稿 \\| 核对 | 已复核 |'));
+  assert.ok(saved.body.page.body.includes('| :--- | --- | ---: |'));
+  await page.reload();
+  await table.getByRole('cell',{name:'终稿 | 核对',exact:true}).waitFor();
+  assert.equal(await editor.getByRole('checkbox',{name:'核对内容'}).isChecked(),true);
 }
 
 async function memoryHistory(page, account, name) {
@@ -372,7 +510,9 @@ try {
   await agentApiKey(page,fixture.owner);
   await spaceCatalogQueryReturn(page,fixture.owner);
   await memoryGraphReturn(page,fixture.owner);
+  await agentDraftFromCatalog(page,fixture.owner,'desktop-agent-draft');
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
+  await memoryTableEditing(page,fixture.owner,'desktop-memory-table');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
   await openNative(page,'/members#workspace='+fixture.team.workspace_id,fixture.owner.instanceId,'#main-panel');
@@ -414,7 +554,10 @@ try {
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
   await spaceCatalogQueryReturn(peer.page,fixture.peer);
   await memoryGraphReturn(peer.page,fixture.peer);
+  await agentDraftFromCatalog(peer.page,fixture.peer,'mobile-agent-draft');
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
+  await memoryTableEditing(peer.page,fixture.peer,'mobile-memory-table');
+  await contactApprovalRecovery(page,peer.page);
   await peer.context.close();
   await desktop.context.close();
   assert.deepEqual(errors,[]);

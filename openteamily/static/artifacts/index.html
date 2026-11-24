@@ -19,7 +19,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/artifacts/app.mjs"></script>
 </head>
-<body class="app-workspace app-primary">
+<body class="app-workspace app-primary app-space">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -33,6 +33,7 @@
       <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
       <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
       <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/contacts" title="联系人" aria-label="联系人" data-ui-title="shell.contacts" data-ui-label="shell.contacts"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="shell.contacts" class="rail-label">联系人</span></a>
       <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
@@ -95,6 +96,8 @@
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏">展开侧边栏</button>
       <div class="catalog-quick-actions" id="catalog-quick-actions">
         <h1 class="visually-hidden" id="space-title">作品库</h1>
+        <div id="catalog-title-actions" class="catalog-title-actions"></div>
+        <div id="catalog-search-actions" class="catalog-search-actions"></div>
       </div>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
@@ -108,8 +111,8 @@
         <a id="new-meeting-in-space" href="/meetings" hidden>新建会议</a>
         <p id="meetings-caption">这个工作区的会议纪要，最新的在前。</p>
         <div class="meeting-scopes" role="tablist" aria-label="会议范围">
-          <button type="button" data-meeting-scope="joined">我参加的</button>
-          <button type="button" data-meeting-scope="all" aria-current="page">全部</button>
+          <button type="button" id="meeting-scope-joined" role="tab" data-meeting-scope="joined" aria-selected="true" aria-controls="space-results-panel">我参加的</button>
+          <button type="button" id="meeting-scope-all" role="tab" data-meeting-scope="all" aria-selected="false" aria-controls="space-results-panel" tabindex="-1">全部</button>
         </div>
       </div>
       <div class="workspace-picker">
@@ -127,6 +130,7 @@
         </div>
       </div>
       <div class="filter-wrap">
+        <button type="button" id="catalog-document-tree" aria-haspopup="dialog" aria-controls="document-tree" hidden>文档树</button>
         <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
         <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
           <div class="filter-heading">
@@ -144,6 +148,7 @@
                 <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
                 <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
                 <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
+                <label><input type="checkbox" name="file-type" value="文件"> 文件</label>
                 <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
                 <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
                 <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
@@ -188,11 +193,11 @@
         </div>
       </div>
       <div class="layout-toggle" id="layout-toggle" role="tablist" aria-label="排列方式">
-        <button type="button" role="tab" data-layout="grid" aria-selected="true" aria-label="网格视图" title="网格视图">
+        <button type="button" role="tab" data-layout="grid" aria-selected="true" aria-controls="artifact-list" aria-label="网格视图" title="网格视图">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h6v6H5V5zm8 0h6v6h-6V5zM5 13h6v6H5v-6zm8 0h6v6h-6v-6z"/></svg>
           <span class="visually-hidden">网格视图</span>
         </button>
-        <button type="button" role="tab" data-layout="list" aria-selected="false" aria-label="列表视图" title="列表视图">
+        <button type="button" role="tab" data-layout="list" aria-selected="false" aria-controls="artifact-list" aria-label="列表视图" title="列表视图" tabindex="-1">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 6h14v2H5V6zm0 5h14v2H5v-2zm0 5h14v2H5v-2z"/></svg>
           <span class="visually-hidden">列表视图</span>
         </button>
@@ -223,6 +228,7 @@
             <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
+            <button type="button" id="new-agent-document" role="menuitem" hidden>让智能体起草文档</button>
             <button type="button" id="new-agent-website" role="menuitem">让智能体搭建网站</button>
             <button type="button" id="new-save-message" role="menuitem">从对话保存</button>
           </div>
@@ -242,7 +248,7 @@
           <button type="button" data-kind="meetings"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>会议</button>
         </nav>
       </aside>
-      <section class="artifact-main">
+      <section class="artifact-main" id="space-results-panel">
         <div id="artifact-list-status" hidden>
           <span id="artifact-list-note" class="note" role="status"></span>
           <button type="button" id="retry-artifact-list" hidden>重试</button>
@@ -256,9 +262,12 @@
           <p id="artifact-pagination-note" class="note" role="status" hidden></p>
           <button type="button" id="more-artifacts" class="secondary" aria-controls="artifact-list">加载更多作品</button>
         </div>
-        <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
+        <button type="button" id="more-shared-meetings" class="secondary" aria-controls="artifact-list" hidden>加载更多会议</button>
         <div id="list-empty" hidden>
-          <p id="empty-no-match" class="note" hidden>没有找到符合条件的作品。</p>
+          <div id="empty-no-match" hidden>
+            <p class="note" role="status">没有找到符合条件的作品。</p>
+            <button type="button" id="reset-artifact-search" class="secondary">清除条件</button>
+          </div>
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
             <h2>你的资料空间从这里开始</h2>
@@ -321,6 +330,7 @@
           <button type="button" id="retry-meetings" hidden>重新加载</button>
           <p id="meetings-loading" class="note" role="status" hidden>正在加载会议…</p>
           <p id="meetings-no-match" class="note" hidden>没有符合当前条件的会议。</p>
+          <button type="button" id="meetings-show-all" class="secondary" hidden>查看全部会议</button>
           <div id="empty-meetings" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="wave" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 7h2v10h-2V7z"/><path fill="currentColor" d="M8.1 9.2c1.15 1.05 1.15 4.55 0 5.6l-1.25-1.05c.7-.8.7-2.7 0-3.5l1.25-1.05zm7.8 0 1.25 1.05c-.7.8-.7 2.7 0 3.5l-1.25 1.05c-1.15-1.05-1.15-4.55 0-5.6zM5.6 7.3c2.05 1.85 2.05 7.55 0 9.4l-1.35-1.1c1.55-1.55 1.55-5.65 0-7.2l1.35-1.1zm12.8 0 1.35 1.1c-1.55 1.55-1.55 5.65 0 7.2l-1.35 1.1c-2.05-1.85-2.05-7.55 0-9.4z"/></svg></span></div>
             <h2>还没有会议纪要</h2>
@@ -334,6 +344,12 @@
       <p role="status">正在打开作品…</p>
     </div>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
+      <nav id="editor-document-nav" aria-label="文档位置" hidden>
+        <button type="button" id="editor-document-tree" aria-haspopup="dialog" aria-controls="document-tree">文档树</button>
+        <button type="button" id="move-document" aria-haspopup="dialog" aria-controls="document-tree" hidden>移动到…</button>
+        <a id="editor-parent-document" hidden></a>
+        <button type="button" id="new-child-document" hidden>新建子文档</button>
+      </nav>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
       <button type="button" id="studio-copy-open" class="secondary" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
@@ -355,12 +371,28 @@
         </details>
       </section>
       <section id="document-editor" hidden aria-label="文档编辑器">
+        <details id="document-draft" class="document-draft" hidden>
+          <summary>让智能体起草</summary>
+          <div class="document-draft-input">
+            <label for="document-draft-prompt">主题和要点</label>
+            <textarea id="document-draft-prompt" rows="3" maxlength="1600" placeholder="例如：为新成员写一份项目入门指南"></textarea>
+            <button type="button" id="document-draft-generate">生成草稿</button>
+          </div>
+          <p id="document-draft-status" role="status" class="note"></p>
+          <section id="document-draft-preview" aria-labelledby="document-draft-title" hidden>
+            <h3 id="document-draft-title"></h3>
+            <div id="document-draft-body"></div>
+            <button type="button" id="document-draft-apply">采用草稿</button>
+          </section>
+        </details>
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
           <button type="button" data-doc-format="redo" aria-label="重做">↷</button>
+          <button type="button" id="document-find-open" aria-controls="document-find" aria-expanded="false">查找</button>
           <button type="button" data-doc-format="bold" aria-label="加粗">B</button>
           <button type="button" data-doc-format="italic" aria-label="斜体">I</button>
           <button type="button" data-doc-format="strike" aria-label="删除线">S</button>
+          <button type="button" data-doc-format="table" aria-label="插入表格">表格</button>
           <button type="button" data-doc-format="h1">H1</button>
           <button type="button" data-doc-format="h2">H2</button>
           <button type="button" data-doc-format="h3">H3</button>
@@ -372,6 +404,25 @@
           <button type="button" id="document-source-toggle" aria-pressed="false">Markdown</button>
           <button type="submit" id="document-save">保存</button>
         </div>
+        <details id="document-table-actions" hidden>
+          <summary>表格操作</summary>
+          <div class="document-table-buttons">
+            <button type="button" data-doc-table="add-row">下方插入行</button>
+            <button type="button" data-doc-table="add-column">右侧插入列</button>
+            <button type="button" data-doc-table="remove-row">删除这一行</button>
+            <button type="button" data-doc-table="remove-column">删除这一列</button>
+          </div>
+        </details>
+        <div id="document-find" role="search" aria-label="在正文中查找" hidden>
+          <label class="visually-hidden" for="document-find-query">查找正文</label>
+          <input id="document-find-query" type="search" maxlength="80" placeholder="查找正文" autocomplete="off">
+          <div class="document-find-actions">
+            <span id="document-find-status" role="status" aria-live="polite"></span>
+            <button type="button" id="document-find-previous" aria-label="上一处匹配" disabled>↑</button>
+            <button type="button" id="document-find-next" aria-label="下一处匹配" disabled>↓</button>
+            <button type="button" id="document-find-close" aria-label="关闭查找">×</button>
+          </div>
+        </div>
         <div id="document-rich" contenteditable="true" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="开始写作…"></div>
         <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
         <p id="document-length" class="note" hidden></p>
@@ -382,6 +433,7 @@
       <div id="media-editor" hidden>
         <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
         <p id="media-meta" class="note"></p>
+        <a id="media-file-download" hidden>下载原文件</a>
         <img id="media-image" alt="" hidden src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
@@ -513,6 +565,10 @@
           <label for="discover-slug">公开短地址</label>
           <input type="text" id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin" placeholder="my-work" aria-describedby="discover-slug-hint">
           <p id="discover-slug-hint" class="note">3–30 个小写字母、数字或连字符，以字母或数字开头和结尾。</p>
+          <div id="discover-topic-field" hidden>
+            <label for="discover-topic">公开主题</label>
+            <select id="discover-topic"><option value="">不指定主题</option></select>
+          </div>
           <label id="discover-editable-remix-field" hidden>
             <input type="checkbox" id="discover-editable-remix" aria-describedby="discover-editable-remix-note">
             允许复制可编辑版本
@@ -555,6 +611,10 @@
       </div>
       <button type="button" id="work-version-close" autofocus>关闭</button>
     </header>
+    <div class="work-version-view-tools" role="group" aria-label="版本查看方式">
+      <button type="button" id="work-version-source" aria-controls="work-version-preview" aria-pressed="false" hidden>Markdown 原文</button>
+      <button type="button" id="work-version-compare" aria-controls="work-version-preview" aria-pressed="false" hidden>对比当前版本</button>
+    </div>
     <div id="work-version-preview" tabindex="0" aria-label="历史版本内容"></div>
     <p id="work-version-status" class="note" role="status"></p>
     <button type="button" id="work-version-retry" hidden>重试</button>
@@ -588,6 +648,32 @@
       <button type="button" id="shared-work-copy-retry" hidden>重新查看</button>
       <button type="button" id="shared-work-copy-confirm" class="primary" hidden>保存副本</button>
     </div>
+  </dialog>
+  <dialog id="document-tree" class="send-dialog-card" aria-labelledby="document-tree-heading">
+    <header class="document-tree-header">
+      <h2 id="document-tree-heading">文档树</h2>
+      <button type="button" id="close-document-tree" autofocus>关闭</button>
+    </header>
+    <p id="document-tree-status" class="note" role="status"></p>
+    <button type="button" id="retry-document-tree" hidden>重试</button>
+    <ol id="document-tree-list"></ol>
+    <form id="move-document-form" hidden>
+      <label for="move-document-destination">目标位置</label>
+      <select id="move-document-destination" required></select>
+      <div class="space-action-row"><button type="submit" class="primary" id="move-document-submit" disabled>移动文档</button></div>
+    </form>
+  </dialog>
+  <dialog id="rename-artifact-dialog" class="send-dialog-card" aria-labelledby="rename-artifact-heading">
+    <form id="rename-artifact-form">
+      <h2 id="rename-artifact-heading">重命名作品</h2>
+      <label for="rename-artifact-name">作品名称</label>
+      <input id="rename-artifact-name" autocomplete="off" maxlength="80" required autofocus>
+      <p id="rename-artifact-status" class="note" role="status"></p>
+      <div class="space-action-row">
+        <button type="button" id="rename-artifact-cancel">取消</button>
+        <button type="submit" class="primary" id="rename-artifact-submit">保存名称</button>
+      </div>
+    </form>
   </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
@@ -643,6 +729,10 @@
       <button type="button" id="studio-close" class="secondary">关闭</button>
     </header>
     <p id="studio-status" role="status"></p>
+    <div id="studio-open-actions" class="studio-actions" hidden>
+      <button type="button" id="studio-open-back" class="secondary">返回团队文档</button>
+      <button type="button" id="studio-open-retry" class="primary">重试打开</button>
+    </div>
     <section id="studio-catalog">
       <div class="studio-catalog-search">
         <label class="visually-hidden" for="studio-catalog-query">搜索团队文档</label>
@@ -650,21 +740,23 @@
         <input id="studio-catalog-query" type="search" maxlength="80" autocomplete="off" placeholder="搜索团队文档或更新人" aria-controls="studio-list">
         <button type="button" id="studio-catalog-clear" aria-label="清除搜索" hidden>×</button>
       </div>
-      <p id="studio-catalog-no-match" class="note" role="status" hidden>没有匹配的团队文档。</p>
-      <ul id="studio-list"></ul>
-      <div class="studio-actions">
+      <div class="studio-actions studio-catalog-actions">
         <button type="button" id="studio-add">新建团队文档</button>
         <button type="button" id="studio-refresh" class="secondary">刷新列表</button>
       </div>
+      <p id="studio-catalog-no-match" class="note" role="status" hidden>没有匹配的团队文档。</p>
+      <ul id="studio-list"></ul>
     </section>
     <form id="studio-form" hidden>
-      <div class="studio-actions">
-        <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+      <div class="studio-editor-toolbar">
         <div class="studio-actions">
+          <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+          <button type="submit" id="studio-save">保存</button>
+        </div>
+        <div class="studio-actions studio-document-actions">
           <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
           <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
           <button type="button" id="studio-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
-          <button type="submit" id="studio-save">保存</button>
         </div>
       </div>
       <label id="studio-link-wrap" hidden>文档链接<input id="studio-link" readonly></label>
@@ -691,10 +783,12 @@
           </div>
         </details>
       </div>
-      <label for="studio-title">标题</label>
-      <input id="studio-title" maxlength="120" required autocomplete="off">
-      <label for="studio-body">正文</label>
-      <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      <div class="studio-document-fields">
+        <label for="studio-title">标题</label>
+        <input id="studio-title" maxlength="120" required autocomplete="off">
+        <label for="studio-body">正文</label>
+        <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      </div>
       <div class="studio-actions">
         <p id="studio-revision" class="note"></p>
         <button type="button" id="studio-history-open" class="secondary" aria-haspopup="dialog" hidden>版本历史</button>
@@ -751,6 +845,20 @@
       <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
       <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
     </section>
+  </dialog>
+  <dialog id="space-upload-dialog" aria-labelledby="space-upload-title">
+    <form id="space-upload-form">
+      <h2 id="space-upload-title">上传文件</h2>
+      <label for="space-upload-files">选择文件</label>
+      <input type="file" id="space-upload-files" multiple aria-describedby="space-upload-limit">
+      <p id="space-upload-limit" class="note">每个文件最大 2 MB。可在上传前修改作品标题。</p>
+      <ul id="space-upload-rows" aria-label="所选文件"></ul>
+      <p id="space-upload-status" role="status"></p>
+      <div class="space-upload-actions">
+        <button type="button" id="space-upload-close" class="secondary">关闭</button>
+        <button type="submit" id="space-upload-submit" disabled>上传文件</button>
+      </div>
+    </form>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

@@ -35,6 +35,29 @@ async function recipients(req, workspace) {
 
 async function shared(req, workspace) {
   if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
+  if (req.query.has('view')) {
+    const limit = req.query.get('limit') ?? '20'
+    const cursor = req.query.get('cursor')
+    if (!req.ownerUsername || req.query.get('view') !== 'actions' ||
+        [...req.query.keys()].some(key => !['view','limit','cursor'].includes(key) || req.query.getAll(key).length !== 1) ||
+        !/^(?:[1-9]|[1-4][0-9]|50)$/.test(limit) || (cursor !== null && !/^[0-9a-f]{32}\.(?:[0-9]|[1-4][0-9])$/.test(cursor))) {
+      refuse(400, 'invalid', '无效的收到行动项查询。')
+    }
+    const data = await social(req, workspace, 'GET', '/meeting-shares' + qs({view:'actions', owner:req.ownerUsername, limit, cursor}))
+    const actions = Array.isArray(data.items) ? data.items.map(({share_id, revision, action_index}) =>
+      ({share_id, revision, action_index})) : []
+    const saved = actions.length ? await req.host.call('memory/sharedMeetingActions', {
+      workspace_id:workspace, actions,
+    }).catch(() => []) : []
+    const key = ({share_id, revision, action_index}) => `${share_id}.${revision}.${action_index}`
+    const receipts = new Map((Array.isArray(saved) ? saved : []).map(({id, workspace_id, status, action_revision, ...source}) =>
+      [key(source), {id, workspace_id, status, revision:action_revision}]))
+    const items = receipts.size ? data.items.map(item => {
+      const saved_action = receipts.get(key(item))
+      return saved_action ? {...item, saved_action} : item
+    }) : data.items
+    return {body:{...data, items, workspace_id:workspace, viewer_username:req.ownerUsername}}
+  }
   const { limit, cursor } = pagination(req.query, ['sent'])
   const sent = req.query.get('sent') ?? undefined
   if (sent !== undefined && sent !== '1') refuse(400, 'invalid', '无效的分享记录查询。')

@@ -99,6 +99,18 @@ function requestItem(row, workspaceId) {
   }
 }
 
+function conversationAgents(row) {
+  return (row.agents || []).map(a => ({id:a.agent_ref, name:a.name, auto_reply:!!a.auto_reply,
+    mine:a.mine === true, owner_id:a.owner?.owner_id || '', owner_name:a.owner?.display_name || a.owner?.handle || '',
+    owner_handle:a.owner?.handle || ''}))
+}
+
+function agentRosterItem(row, workspaceId) {
+  if (!row?.id || !Array.isArray(row.agents) || typeof row.activity_version !== 'string') return undefined
+  return {id:row.id, workspace_id:workspaceId, activity_version:row.activity_version,
+    agent_members:conversationAgents(row), group_agent_routing:row.group_agent_routing ?? null}
+}
+
 function conversationItem(row, me, env, workspaceId) {
   const management = row.kind === 'group' && !row.public_agent ? row.group_management : null
   const members = (row.members || []).map((m) => ({
@@ -129,9 +141,7 @@ function conversationItem(row, me, env, workspaceId) {
     ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
     ...(row.group_agent_routing ? {group_agent_routing: row.group_agent_routing} : {}),
     ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
-      mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
-      owner_handle: a.owner?.handle || '' })),
+    agent_members: conversationAgents(row),
   }
 }
 
@@ -310,6 +320,18 @@ function parseQuery(query) {
 
 function client(host) {
   return sharedBotSocial(host)
+}
+
+function nativeWorkingBots(host, conversationId) {
+  const rt = host.currentRuntime?.()?.rt
+  if (typeof rt?.workingInRoom !== 'function') return []
+  const room = Object.values(rt.state?.rooms || {}).find(room =>
+    room.openteamily?.conversation_id === conversationId && room.openteamily.native_exchange)
+  if (!room) return []
+  return rt.workingInRoom(room).flatMap(({bot}) =>
+    typeof bot?.id === 'string' && GROUP_AGENT_ID.test(bot.id) && typeof bot.name === 'string' && bot.name
+      ? [{id:bot.id, name:bot.name}]
+      : [])
 }
 
 function membersRoutes(host) {
@@ -1355,6 +1377,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const conversation = scope.conversation || await bs.get(conv(match[2]))
+          if (!scope.personal && conversation.kind === 'group' && conversation.team_id !== scope.team.id) {
+            throw new Fault(404,'not_found','该群聊不在当前工作区。')
+          }
           const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 10) : []
           if (!ids.length) throw new Fault(400, 'invalid', 'Provide agent_ids')
           let workspace = match[1]
@@ -1364,16 +1389,18 @@ function messengerExtraRoutes(host, wakeReplies) {
             workspace = (await host.call('agents/personal-binding', {}))?.workspace_id
             if (!workspace) throw new Fault(503,'unavailable','无法加载个人智能体。')
           }
+          let saved
           for (const id of ids) {
             const { agent } = await host.call('agents/get', { id, workspace_id:workspace })
             if (direct && (agent.archived || agent.native_deleted)) throw new Fault(404,'not_found','该个人智能体不可用。')
-            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
+            saved = await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
               {
                 name:String(agent.name).slice(0,40), ...(!direct ? {auto_reply:false} : {}),
                 ...(direct && !scope.personal ? {workspace:match[1]} : {}),
               })
           }
-          return [201, { added: ids.length }]
+          const roster = agentRosterItem(saved, match[1])
+          return [201, {added:ids.length, ...(roster ? {roster} : {})}]
         })
       },
     },
@@ -1395,6 +1422,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const conversation = scope.conversation || await bs.get(conv(match[2]))
+          if (!scope.personal && conversation.kind === 'group' && conversation.team_id !== scope.team.id) {
+            throw new Fault(404,'not_found','该群聊不在当前工作区。')
+          }
           let owner = ''
           if (conversation.kind === 'dm') {
             if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法移除智能体。')
@@ -1403,8 +1433,9 @@ function messengerExtraRoutes(host, wakeReplies) {
             }
             owner = qs({owner_id:body.owner_id, ...(!scope.personal ? {workspace:match[1]} : {})})
           }
-          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
-          return [200, { removed: true }]
+          const saved = await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
+          const roster = agentRosterItem(saved, match[1])
+          return [200, {removed:true, ...(roster ? {roster} : {})}]
         })
       },
     },
@@ -1417,7 +1448,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const binding = await host.call('agents/personal-binding', {})
           const path = binding?.workspace_id === workspace ? conv(conversation)
             : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
-          return [200, await client(host).get(path + '/reply-progress')]
+          const progress = await client(host).get(path + '/reply-progress')
+          const working = progress.working_bots?.length ? progress.working_bots : nativeWorkingBots(host, conversation)
+          return [200, working.length ? {...progress, working_bots:working} : progress]
         })
       },
     },
@@ -1517,21 +1550,27 @@ function discoverRoutes(host) {
     const bs = client(host)
     const q = parseQuery(query)
     const sort = q.get('sort')
-    if (q.getAll('sort').length > 1 || (sort !== null && sort !== 'latest' && sort !== 'popular')) {
+    if (q.getAll('sort').length > 1 || (sort !== null && !['latest', 'popular', 'collected'].includes(sort))) {
       throw new Fault(400, 'invalid', '无效的发现排序。')
     }
     const popular = sort === 'popular'
+    const collected = sort === 'collected'
+    if (collected && (kind !== 'work' || q.get('tab') !== 'collected' || q.getAll('tab').length !== 1)) {
+      throw new Fault(400, 'invalid', '收录时间排序仅用于已收录作品。')
+    }
     const cursor = q.get('cursor')
     if (q.getAll('cursor').length > 1) throw new Fault(400, 'invalid', '无效的发现分页。')
     if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
       throw new Fault(400, 'invalid', '无效的热门作品请求。')
     }
-    const keyset = kind === 'work' && !popular && (cursor === null || cursor.startsWith('l.'))
+    const keyset = kind === 'work' && !popular && (collected || cursor === null || cursor.startsWith('l.'))
     const position = cursor && keyset ? LATEST_WORK_CURSOR.exec(cursor) : null
     if (cursor !== null && !popular && (keyset ? !position || !Number.isSafeInteger(Number(position[1])) : !/^[0-9]{1,16}$/.test(cursor))) {
       throw new Fault(400, 'invalid', '无效的发现分页。')
     }
-    const pagination = popular ? {sort, cursor} : keyset ? {pagination: 'keyset', cursor} : {before: cursor}
+    const pagination = popular ? {sort, cursor}
+      : keyset ? {pagination: 'keyset', cursor, ...(collected ? {sort} : {})}
+        : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
@@ -1543,12 +1582,13 @@ function discoverRoutes(host) {
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(row.category ? {category:row.category} : {}),
     ...(Number.isSafeInteger(row.source_revision) && row.source_revision > 0 ? {published_revision:row.source_revision} : {}),
     ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
       method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
-      async handle({ match, query }) {
+      async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           const notices = match[1] === 'follow-work'
@@ -1556,9 +1596,14 @@ function discoverRoutes(host) {
           if ([...q.keys()].some(key => !keys.includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的主页列表请求。')
           }
-          return [200, await client(host).get('/v1/ot/profile/social' + qs({
+          const result = await client(host).get('/v1/ot/profile/social' + qs({
             view: notices ? 'work-notices' : q.get('view'), q: q.get('q'), cursor: q.get('cursor'), limit: q.get('limit'),
-          }))]
+          }))
+          if (!notices && q.get('view') === 'following') {
+            const {items, next_cursor} = result
+            return [200, {items, next_cursor, ...platformViewer(call)}]
+          }
+          return [200, result]
         })
       },
     },
@@ -1642,6 +1687,7 @@ function discoverRoutes(host) {
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
+            category: body?.category === undefined ? prior?.category : body.category,
             ...(Number.isSafeInteger(artifact.revision) && artifact.revision > 0 ? {source_revision:artifact.revision} : {}),
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
@@ -1725,10 +1771,11 @@ function discoverRoutes(host) {
       async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
-          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator'].includes(key) || q.getAll(key).length !== 1)) {
+          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator', 'category'].includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的作品浏览请求。')
           }
-          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'), creator: q.get('creator')}
+          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'),
+            creator: q.get('creator'), category: q.get('category')}
           const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null

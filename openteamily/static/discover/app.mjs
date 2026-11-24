@@ -1,4 +1,5 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
+import { appendWorkTopics, isWorkTopic } from '../shell/work-topics.mjs';
 import { csrfCookie } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
 import { discoverLoginHref } from '../shell/discover-link.mjs';
@@ -87,17 +88,18 @@ export const FEED_KINDS = [
   '', 'website', 'document', 'image', 'audio', 'slides', 'video', 'model3d', 'whiteboard', 'dashboard', 'spreadsheet',
 ];
 
-export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '') {
+export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '', topic = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
-  if (sort === 'popular') params.set('sort', sort);
+  if (sort === 'popular' || sort === 'collected') params.set('sort', sort);
   if (creator) params.set('creator', creator);
+  if (isWorkTopic(topic)) params.set('category', topic);
   return params.toString();
 }
 
-// The feed tab, category, sort and search live in the URL so a filtered feed can be
+// The feed tab, type, topic, sort and search live in the URL so a filtered feed can be
 // shared and survives a refresh. `?tab=agents` stays the catalog switch, and the
 // default 动态 feed keeps an empty query string.
 export function feedStateFromSearch(search) {
@@ -108,12 +110,15 @@ export function feedStateFromSearch(search) {
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
   const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
+  const topic = params.get('topic');
   return {
     tab,
     kind,
-    sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
+    sort: tab === 'collected' && params.get('sort') === 'collected' ? 'collected'
+      : tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
     query: (params.get('q') || '').slice(0, 80).trim(),
     ...(creator ? {creator} : {}),
+    ...(params.getAll('topic').length === 1 && isWorkTopic(topic) ? {topic} : {}),
   };
 }
 
@@ -123,8 +128,10 @@ export function feedSearchText(state) {
   if (tab === 'following' || tab === 'collected') params.set('feed', tab);
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
+  if (tab === 'collected' && state.sort === 'collected') params.set('sort', 'collected');
   if (state && state.query) params.set('q', state.query);
   if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
+  if (isWorkTopic(state?.topic)) params.set('topic', state.topic);
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -152,6 +159,11 @@ function workDetailQuery(state) {
   if (tab) {
     params.delete('feed');
     params.set('tab', tab);
+  }
+  const topic = params.get('topic');
+  if (topic) {
+    params.delete('topic');
+    params.set('category', topic);
   }
   return params.size ? '?' + params : '';
 }
@@ -491,6 +503,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let remix = null;
   let manageRequest = 0;
   let catalogRequest = 0;
+  let catalogReader;
   let activeTeamQuery = '';
   const joiningTeams = new Set();
   const directoryItems = new Map();
@@ -508,6 +521,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const catalogSearch = document.getElementById('catalog-query');
+  const catalogEmptyReset = document.getElementById('catalog-empty-reset');
   if (catalogView) catalogSearch.value = (manageParams.get('q') || '').trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
 
   function saveCatalogQuery() {
@@ -520,7 +534,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     syncLoginLink();
   }
 
+  function clearCatalogSearch({allFilters = false} = {}) {
+    catalogSearch.value = '';
+    if (allFilters && agentsView) {
+      activeCategory = 'all';
+      activeCreator = null;
+      const params = new URLSearchParams(location?.search);
+      for (const key of ['q', 'category', 'creator']) params.delete(key);
+      history?.replaceState?.(null, '', '/discover?' + params.toString());
+      syncLoginLink();
+    } else saveCatalogQuery();
+    catalogSearch.focus?.({preventScroll:true});
+    return agentsView ? loadCatalog() : loadTeams();
+  }
+
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
+  if (!nativeCatalog && initialFeed.sort === 'collected') initialFeed.sort = 'latest';
   const feedSections = document.getElementById('feed-sections');
   const directoryTabs = document.getElementById('discover-tabs');
   if (!catalogView && feedSections && directoryTabs) {
@@ -649,6 +678,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const panel = document.getElementById('catalog-panel');
     if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
     const seq = ++catalogRequest;
+    const scope = sessionRequest;
     const user = currentUser;
     const empty = document.getElementById('discover-empty');
     const error = document.getElementById('catalog-error');
@@ -657,6 +687,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const more = document.getElementById('catalog-more');
     const shouldFocus = append && (document.activeElement === more || document.activeElement === retry);
     if (!append) {
+      catalogReader?.abort();
+      catalogReader = new AbortController();
       activeTeamQuery = catalogSearch.value.trim().slice(0, TEAM_SEARCH_LIMIT);
       directoryItems.clear();
       directoryRows.clear();
@@ -670,21 +702,28 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     more.disabled = true;
     more.textContent = '加载更多';
     empty.hidden = true;
+    catalogEmptyReset.hidden = true;
     error.hidden = true;
     retry.hidden = true;
     if (!user) {
-      panel.setAttribute('aria-busy', 'false');
-      count.textContent = '';
-      empty.textContent = '登录后可查看并申请加入公开团队。';
-      empty.hidden = false;
+      panel.setAttribute('aria-busy', String(Boolean(sessionPending)));
+      count.textContent = sessionPending ? '正在确认登录状态…' : '';
+      if (sessionState === 'failed') {
+        error.textContent = '暂时无法确认登录状态。';
+        error.hidden = false;
+        retry.hidden = false;
+      } else if (!sessionPending) {
+        empty.textContent = '登录后可查看并申请加入公开团队。';
+        empty.hidden = false;
+      }
       return;
     }
     panel.setAttribute('aria-busy', 'true');
     count.textContent = append ? '正在加载更多团队…' : '正在加载团队…';
     const requested = cursor;
-    const isCurrent = () => seq === catalogRequest && user === currentUser;
+    const isCurrent = () => seq === catalogRequest && scope === sessionRequest && user === currentUser;
     try {
-      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested));
+      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested), undefined, undefined, catalogReader.signal);
       if (!isCurrent()) return;
       if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
       let firstAdded;
@@ -717,6 +756,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       empty.textContent = activeTeamQuery ? '没有匹配的团队。'
         : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
       empty.hidden = directoryItems.size > 0;
+      catalogEmptyReset.hidden = empty.hidden || !activeTeamQuery;
       return seq;
     } catch (failure) {
       if (!isCurrent()) return;
@@ -750,6 +790,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
+  const followedCreators = document.getElementById('feed-followed-creators');
+  const collectedSortField = document.getElementById('feed-collected-sort-field');
+  const collectedSort = document.getElementById('feed-collected-sort');
+  let followedCreatorPicker;
+  let followedCreatorSetup;
   let feedRequest = 0;
   let feedReader;
   let feedViewer;
@@ -764,15 +809,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const commentButtons = new Map();
   const workTriggers = new Map();
   const searchInput = document.getElementById('feed-query');
+  const topicFilter = document.getElementById('feed-topic');
+  appendWorkTopics(document, topicFilter);
   const clearSearch = document.getElementById('feed-clear');
   const resetEmptyFeed = document.getElementById('feed-empty-reset');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
     'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
-    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
+    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next', 'library', 'library-saved', 'library-author',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
     .map(name => [name, document.getElementById('work-share-' + name)]));
+  const chatSharePanel = document.getElementById('work-chat-share-panel');
+  chatSharePanel.hidden = true;
+  let chatShareReady;
   const workRemix = Object.fromEntries(['dialog','form','source','name','name-field','status','close','refresh','submit','open']
     .map(name => [name,document.getElementById('work-remix-'+name)]));
   const detailPanel = document.getElementById('work-detail');
@@ -799,6 +849,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function setWorkView(open) {
+    if (open) followedCreatorPicker?.close();
     detailPanel.hidden = !open;
     document.getElementById('feed-panel').hidden = open;
     document.getElementById('discover-title').hidden = open;
@@ -833,6 +884,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function closeWorkDetail({restore = true} = {}) {
     if (!activeWork) return;
+    activeWork.controller.abort();
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
@@ -910,11 +962,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       syncLoginLink();
     }
 
+    existing?.controller.abort();
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
     closeWorkRemix();
-    const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading'};
+    const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading', controller: new AbortController()};
     activeWork = entry;
     setWorkView(true);
     initialView.scrollTop = 0;
@@ -933,7 +986,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.title.focus?.({preventScroll: true});
 
     const checkingSession = sessionPending;
-    const publicRead = !currentUser ? loadPublicWork(entry) : null;
+    const signedFeedCard = nativeCatalog && item?.slug === intent.slug && matchesFeedViewer(feedViewer);
+    // The public preview can paint while the owner plugin checks signed actions.
+    const publicRead = !currentUser || signedFeedCard
+      ? loadPublicWork(entry, {includeNeighbors: !currentUser}) : null;
+    const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
+    const readScopedWork = () => request('GET', path, undefined, {}, entry.controller.signal).catch(() => ({status: 0}));
+    const earlyScoped = nativeCatalog && checkingSession ? readScopedWork() : null;
     if (checkingSession) await checkingSession;
     if (!activeWorkEntry(entry)) return;
     const viewer = currentUser;
@@ -945,14 +1004,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     showWorkRemixRecovery(entry);
 
-    const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
-    const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
     const wrongViewer = result => nativeCatalog && result.status === 200 &&
       !matchesNativeViewer(result.body?.viewer_username, viewer);
-    let result = await readScopedWork();
+    let result = await (earlyScoped || readScopedWork());
     if (!activeWorkEntry(entry) || currentUser !== viewer) return;
-    // The scoped request can have used a different account while the session was changing.
-    if (wrongViewer(result)) result = await readScopedWork();
+    // Only reuse a speculative read if it identifies this work and the verified viewer.
+    if (wrongViewer(result) || (earlyScoped && (result.status !== 200 || result.body?.work?.slug !== entry.slug))) {
+      result = await readScopedWork();
+    }
     if (!activeWorkEntry(entry) || currentUser !== viewer) return;
     if (result.status === 404) return failWorkDetail(entry, 404);
     if (result.status !== 200 || result.body?.work?.slug !== entry.slug || wrongViewer(result)) {
@@ -965,15 +1024,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return finishWorkDetail(entry, viewer, result.body);
   }
 
-  async function loadPublicWork(entry) {
+  async function loadPublicWork(entry, {includeNeighbors}) {
     const scope = feedSearchText(feedState);
-    const useNeighbors = feedState.tab === 'activity' && feedState.sort === 'latest' &&
+    const useNeighbors = includeNeighbors && feedState.tab === 'activity' && feedState.sort === 'latest' &&
       (feedViewer !== null || !feedState.items.some(item => item.slug === entry.slug));
     const parameters = new URLSearchParams(useNeighbors ? scope : '');
     parameters.set('view', 'preview');
     if (useNeighbors) parameters.set('nav', 'latest');
     const path = '/w/' + entry.slug + '?' + parameters;
-    const result = await request('GET', path).catch(() => ({status: 0}));
+    const result = await request('GET', path, undefined, {}, entry.controller.signal).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
     if (result.status !== 200 || work?.slug !== entry.slug ||
@@ -1039,6 +1098,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     } else syncGuestWorkNavigation(entry);
     if (entry.intent.comments) return Promise.all([entry.preview, workComments.open(entry.item, detail.comments)]);
     if (entry.intent.share) openWorkShare();
+    else if (share.dialog.open) syncWorkChatShare(entry);
     return entry.preview;
   }
 
@@ -1060,6 +1120,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
+    const verified = entry.ready && canEngage;
+    const handle = verified && entry.item.following && creatorHandle(entry.item);
+    const saved = detail['library-saved'];
+    const author = detail['library-author'];
+    saved.hidden = !verified || entry.item.collected !== true;
+    author.hidden = !handle;
+    detail.library.hidden = saved.hidden && author.hidden;
+    saved.href = '/discover' + feedSearchText({tab: 'collected', sort: nativeCatalog ? 'collected' : 'latest'});
+    author.href = '/discover' + feedSearchText({tab: 'following', creator: handle || ''});
     const recoverable = showWorkRemixRecovery(entry);
     if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage ||
       entry.item?.remix_available !== true || recoverable;
@@ -1319,6 +1388,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setWorkEngagement(entry);
   }
 
+  async function syncWorkChatShare(entry) {
+    const viewer = currentUser;
+    if (!nativeCatalog || !viewer?.id || !entry.ready || entry.viewer !== viewer) return;
+    const url = share.url.value;
+    const isCurrent = () => activeWorkEntry(entry) && currentUser === viewer;
+    try {
+      chatShareReady ??= import('./work-chat-share.mjs')
+        .then(({mountWorkChatShare}) => mountWorkChatShare(document, share.dialog, request));
+      const controller = await chatShareReady;
+      if (share.dialog.open && isCurrent()) controller.prepare({viewer, url, isCurrent});
+    } catch {
+      chatShareReady = null;
+      if (share.dialog.open && isCurrent()) share.status.textContent = '无法加载聊天分享，可复制链接。';
+    }
+  }
+
   function openWorkShare() {
     if (!activeWork?.item) return;
     const slug = activeWork.slug;
@@ -1328,6 +1413,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const navigator = window?.navigator;
     share.native.hidden = !navigator?.share || (navigator.canShare && !navigator.canShare({url: share.url.value}));
     if (!share.dialog.open) share.dialog.showModal();
+    return syncWorkChatShare(activeWork);
   }
 
   async function copyWorkShare() {
@@ -1379,6 +1465,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const [action, flag] of engagement) {
     detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
   }
+  for (const link of [detail['library-saved'], detail['library-author']]) {
+    link.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+          !history?.pushState || link.hidden || !activeWork?.ready || activeWork.viewer !== currentUser) return;
+      event.preventDefault();
+      const next = feedStateFromSearch(new URL(link.href).search);
+      if (feedSearchText(next) === feedSearchText(feedState)) return detail.back.click();
+      const loading = applyFeedFilters({creator: '', topic: '', ...next});
+      closeWorkDetail({restore: false});
+      return loading;
+    });
+  }
   share.close.addEventListener('click', () => share.dialog.close());
   share.copy.addEventListener('click', copyWorkShare);
   share.native.addEventListener('click', async () => {
@@ -1392,6 +1490,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function applyFeedChrome({restoreQuery = false} = {}) {
+    if (collectedSortField && collectedSort) {
+      collectedSortField.hidden = !nativeCatalog || !currentUser || feedState.tab !== 'collected';
+      collectedSort.value = feedState.sort === 'collected' ? 'collected' : 'latest';
+    }
+    if (followedCreators) {
+      followedCreators.hidden = !nativeCatalog || !currentUser || feedState.tab !== 'following';
+      if (followedCreators.hidden) followedCreatorPicker?.close();
+    }
     for (const name of FEED_TABS) {
       const button = document.getElementById('feed-tab-' + name);
       if (!button) continue;
@@ -1426,7 +1532,36 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (chip?.left < strip.left) filters.scrollLeft += chip.left - strip.left;
     }
     if (restoreQuery && searchInput) searchInput.value = feedState.query;
+    if (topicFilter) topicFilter.value = feedState.topic || '';
     if (clearSearch) clearSearch.hidden = !searchInput?.value;
+  }
+
+  async function openFollowedCreators() {
+    const viewer = currentUser;
+    const scope = sessionRequest;
+    const current = () => currentUser === viewer && scope === sessionRequest && feedState.tab === 'following' && !activeWork;
+    if (!nativeCatalog || !viewer || !current()) return;
+    followedCreators.disabled = true;
+    try {
+      followedCreatorSetup ??= import('./followed-creators.mjs').then(({mountFollowedCreators}) => {
+        followedCreatorPicker = mountFollowedCreators(document, {
+          initial:catalogInitial,
+          read:(method, path, signal) => request(method, path, undefined, undefined,
+            AbortSignal.any([signal, AbortSignal.timeout(8000)])),
+        });
+        return followedCreatorPicker;
+      });
+      const picker = await followedCreatorSetup;
+      if (current()) return picker.open({
+        current, creator:feedState.creator, matchesViewer:name => matchesNativeViewer(name, viewer),
+        select:creator => applyFeedFilters({creator, query:searchText()}),
+      });
+    } catch {
+      followedCreatorSetup = null;
+      if (current()) setFeedError('无法打开已关注作者，请重试。', openFollowedCreators);
+    } finally {
+      followedCreators.disabled = false;
+    }
   }
 
   function setFeedCategory(button, current) {
@@ -1557,16 +1692,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('pagehide', () => { if (!activeWork) rememberFeedPosition(undefined, {persist: true}); });
     window.addEventListener('popstate', () => {
+      followedCreatorPicker?.close();
       syncLoginLink();
       cancelSearch();
       const next = feedStateFromSearch(location?.search);
+      if (!nativeCatalog && next.sort === 'collected') next.sort = 'latest';
       const nextKey = feedSearchText(next);
       const feedChanged = nextKey !== feedSearchText(feedState);
       if (feedChanged) {
         rememberFeedPosition();
         feedRestore = null;
       }
-      Object.assign(feedState, {creator: '', ...next});
+      Object.assign(feedState, {creator: '', topic: '', ...next});
       applyFeedChrome({restoreQuery: true});
       const intent = workDetailFromSearch(location?.search);
       if (feedChanged || !intent) {
@@ -1592,7 +1729,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    const filtered = Boolean(feedState.query || feedState.kind || feedState.creator);
+    const filtered = Boolean(feedState.query || feedState.kind || feedState.creator || feedState.topic);
     const empty = !feedState.items.length && !feedState.loading && !feedRestore && !feedFailure;
     if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !filtered && empty);
     if (resetEmptyFeed) resetEmptyFeed.hidden = !(empty && filtered && (currentUser || feedState.tab === 'activity'));
@@ -1604,7 +1741,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
-    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.topic && !feedState.items.length)
       note.textContent = '该作者还没有公开作品。';
     else if (filtered && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
@@ -1946,7 +2083,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return !sessionPending && viewer !== null;
   }
 
-  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false} = {}) {
+  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false, overlapSession = false} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     const scope = sessionRequest;
@@ -1959,24 +2096,37 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     const needsViewer = feedState.tab !== 'activity';
     const waitingForViewer = needsViewer && !currentUser;
+    const checkingViewer = waitingForViewer && nativeCatalog && overlapSession ? sessionPending : null;
     feedState.loading = !waitingForViewer || Boolean(sessionPending);
     feedState.refreshing = refresh;
     setFeedError('');
     if (append || retainItems || refresh) updateFeedStatus();
     else renderFeed();
-    if (waitingForViewer) return;
+    if (waitingForViewer && !checkingViewer) return;
     // The native all-works route includes the same viewer state as /me/works?tab=all.
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
-    const sort = needsViewer ? 'latest' : feedState.sort;
-    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
+    const sort = feedState.sort;
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator, feedState.topic);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     const reader = {controller:new AbortController(), changes:new Map()};
     feedReader = reader;
-    let result;
-    try { result = await request('GET', path, undefined, undefined, reader.controller.signal); }
-    catch { result = {status: 0, body: {}}; }
+    const response = request('GET', path, undefined, undefined, reader.controller.signal).catch(() => ({status: 0, body: {}}));
+    if (checkingViewer) {
+      // Keep the private response out of the feed until the session resolves.
+      await checkingViewer;
+      if (seq !== feedRequest || scope !== sessionRequest) return;
+      if (!currentUser) {
+        reader.controller.abort();
+        feedReader = null;
+        feedState.loading = false;
+        feedState.refreshing = false;
+        updateFeedStatus();
+        return;
+      }
+    }
+    const result = await response;
     if (seq !== feedRequest || scope !== sessionRequest) return;
     feedReader = null;
     feedState.loading = false;
@@ -1985,6 +2135,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return loadFeed();
     }
     if (result.status !== 200) {
+      if (checkingViewer && result.status === 401 && retryViewer) return loadFeed({retryViewer: false});
       const message = result.body?.error?.message || '无法加载公开作品。';
       const restoring = feedRestore;
       const retry = restoring
@@ -2347,9 +2498,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function confirmCatalogViewer(page) {
     if (page.session) await page.session;
     const viewer = currentUser;
-    if (!viewer || page.scope !== sessionRequest || page.catalog !== catalog ||
+    if (!viewer || page.signal.aborted || page.scope !== sessionRequest || page.catalog !== catalog ||
         matchesNativeViewer(page.viewer, viewer) || !matchesNativeViewer(viewer.username, viewer)) return;
-    const response = await request('GET', page.path).catch(() => ({status: 0}));
+    const response = await request('GET', page.path, undefined, undefined, page.signal).catch(() => ({status: 0}));
     if (viewer !== currentUser || page.scope !== sessionRequest || page.catalog !== catalog ||
         response.status !== 200 || !matchesNativeViewer(response.body?.viewer_username, viewer)) return;
     const verified = new Map(catalogItems(response.body).filter(item => validSlug(item?.slug)).map(item => [item.slug, item]));
@@ -2470,34 +2621,50 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadCatalog(append = false) {
+    const panel = document.getElementById('catalog-panel');
+    if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
     const seq = ++catalogRequest;
     const scope = sessionRequest;
     const checkingSession = sessionPending;
+    const empty = document.getElementById('discover-empty');
+    const retry = document.getElementById('teams-retry');
+    const more = document.getElementById('catalog-more');
+    const count = document.getElementById('catalog-count');
+    const error = document.getElementById('catalog-error');
+    const shouldFocus = append && document.activeElement === more;
     if (!append) {
+      catalogReader?.abort();
+      catalogReader = new AbortController();
       applyCatalogFilters();
-      activeQuery = document.getElementById('catalog-query').value.trim();
+      activeQuery = catalogSearch.value.trim().slice(0, 80);
       catalog = [];
       cursor = '';
       catalogPages = 0;
       catalogDeparture = null;
       renderCatalog([]);
-      document.getElementById('discover-empty').hidden = true;
+      empty.hidden = true;
+      more.hidden = true;
     }
-    const more = document.getElementById('catalog-more');
-    const count = document.getElementById('catalog-count');
-    const error = document.getElementById('catalog-error');
     error.hidden = true;
+    retry.hidden = true;
+    catalogEmptyReset.hidden = true;
     more.disabled = true;
-    count.textContent = append ? '正在加载更多…' : '正在加载…';
-    document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
+    more.textContent = '加载更多';
+    count.textContent = append ? '正在加载更多智能体…' : '正在加载智能体…';
+    panel.setAttribute('aria-busy', 'true');
+    const signal = catalogReader.signal;
+    const requested = cursor;
+    const isCurrent = () => seq === catalogRequest && scope === sessionRequest && !signal.aborted;
     try {
-      const path = catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle);
-      const listed = await request('GET', path);
-      if (seq !== catalogRequest || scope !== sessionRequest) return;
+      const path = catalogQuery(activeQuery, requested, activeCategory, activeCreator?.handle);
+      const fetchCatalog = () => request('GET', path, undefined, undefined, signal);
+      let listed = await fetchCatalog();
+      if (!isCurrent()) return;
       if (listed.status === 401 && checkingSession) {
         await checkingSession;
-        if (seq !== catalogRequest || scope !== sessionRequest) return;
-        if (currentUser) return loadCatalog(append);
+        if (!isCurrent()) return;
+        if (currentUser) listed = await fetchCatalog();
+        if (!isCurrent()) return;
       }
       if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
       const viewer = nativeCatalog ? listed.body.viewer_username : scope;
@@ -2509,7 +2676,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalogViewers.set(item, viewer);
         catalog.push(item);
       }
-      cursor = listed.body.cursor || '';
+      const next = listed.body.cursor;
+      const nextCursor = typeof next === 'string' || (Number.isSafeInteger(next) && next > 0) ? String(next) : '';
+      cursor = nextCursor === requested ? '' : nextCursor;
       catalogPages += 1;
       if (activeCreator) {
         const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
@@ -2520,24 +2689,34 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       renderCatalog(catalog, start);
       more.hidden = !cursor;
-      document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
-        ? '没有匹配的智能体。' : '暂无公开智能体。';
-      count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
+      const filtered = activeQuery || activeCategory !== 'all' || activeCreator;
+      empty.textContent = filtered ? '没有匹配的智能体。' : '暂无公开智能体。';
+      catalogEmptyReset.hidden = empty.hidden || !filtered;
+      count.textContent = catalog.length ? '已显示 ' + catalog.length + ' 个智能体' : '';
+      if (shouldFocus && [document.body, more].includes(document.activeElement)) {
+        const first = catalog[start]?.slug;
+        const last = !cursor && catalog.at(-1)?.slug;
+        const slug = first || last;
+        if (validSlug(slug)) document.querySelector(`#discover-list [data-catalog-slug="${slug}"] .catalog-profile`)?.focus();
+      }
       if (nativeCatalog && catalog.length > start) {
-        void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start)});
+        void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start), signal});
       }
       return seq;
     } catch (failure) {
-      if (seq !== catalogRequest) return;
+      if (!isCurrent()) return;
       error.hidden = false;
       error.textContent = failure.message || '无法加载公共目录。';
-      count.textContent = '目录加载失败，请重试搜索。';
+      count.textContent = catalog.length ? '已显示 ' + catalog.length + ' 个智能体' : '';
+      retry.hidden = append;
       more.hidden = !cursor;
-      document.getElementById('discover-empty').hidden = true;
+      if (append) more.textContent = '重试加载更多';
+      empty.hidden = true;
     } finally {
-      if (seq === catalogRequest) {
+      if (isCurrent()) {
         more.disabled = false;
-        document.getElementById('catalog-panel').setAttribute('aria-busy', 'false');
+        panel.setAttribute('aria-busy', 'false');
+        if (shouldFocus && append && !error.hidden && document.activeElement === document.body) more.focus({preventScroll:true});
       }
     }
   }
@@ -2742,6 +2921,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    followedCreatorPicker?.close();
     engagementPending.clear();
     sessionState = 'pending';
     cancelSearch();
@@ -2780,9 +2960,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     sessionPending = sessionLoad;
     const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
-    if (!teamsView) mainPanel.hidden = false;
+    mainPanel.hidden = false;
     if (!catalogView) applyFeedChrome({restoreQuery: true});
-    const feedLoad = catalogView ? null : loadFeed();
+    if (teamsView) void loadTeams();
+    const overlapSession = nativeCatalog && attempt === 1;
+    const feedLoad = catalogView ? null : loadFeed({overlapSession});
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
     const directoryReturn = directoryLoad && sessionLoad.then(() => {
@@ -2797,7 +2979,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       let loadedFeed = feedRequest === initialFeedRequest ? feedLoad : null;
       if (feedState.tab !== 'activity') {
         applyFeedChrome();
-        loadedFeed = loadFeed();
+        if (!overlapSession || !loadedFeed) loadedFeed = loadFeed();
       } else if (currentUser && !nativeCatalog) loadedFeed = loadFeed({retainItems: true});
       else if (nativeCatalog && feedViewer !== undefined) {
         if (mismatchedNativeFeed(feedViewer)) loadedFeed = loadFeed({retainItems: true, retryViewer: false});
@@ -2897,12 +3079,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
-    catalogSearch.value = '';
-    saveCatalogQuery();
-    if (agentsView) return loadCatalog();
-    if (teamsView) return loadTeams();
+    if (catalogView) return clearCatalogSearch();
   });
-  document.getElementById('teams-retry').addEventListener('click', () => cursor ? loadMoreTeams() : loadTeams());
+  catalogSearch.addEventListener('keydown', event => {
+    if (!catalogView || event.key !== 'Escape' || event.isComposing ||
+        (!catalogSearch.value && !activeQuery && !activeTeamQuery)) return;
+    event.preventDefault();
+    return clearCatalogSearch();
+  });
+  catalogEmptyReset.addEventListener('click', () => {
+    if (catalogView) return clearCatalogSearch({allFilters:true});
+  });
+  document.getElementById('teams-retry').addEventListener('click', () => {
+    catalogSearch.focus?.({preventScroll:true});
+    if (agentsView) return loadCatalog();
+    if (teamsView) return sessionState === 'failed' ? load() : loadTeams();
+  });
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
     if (teamsView) return loadMoreTeams();
@@ -2910,7 +3102,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
-    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}, {refresh: true}));
+    button.addEventListener('click', () => applyFeedFilters({kind,
+      sort:feedState.tab === 'collected' ? feedState.sort : 'latest', query:searchText()}, {refresh:true}));
   }
   document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
     if (feedState.tab !== 'activity') return;
@@ -2921,6 +3114,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('feed-tab-' + feedState.tab)?.focus?.();
     return loaded;
   });
+  topicFilter?.addEventListener('change', () => applyFeedFilters({topic:topicFilter.value, query:searchText()}));
+  collectedSort?.addEventListener('change', () => {
+    if (nativeCatalog && currentUser && feedState.tab === 'collected') {
+      return applyFeedFilters({sort:collectedSort.value === 'collected' ? 'collected' : 'latest', query:searchText()});
+    }
+  });
+  followedCreators?.addEventListener('click', openFollowedCreators);
   document.getElementById('feed-search')?.addEventListener('submit', event => {
     event.preventDefault();
     if (composingQuery) return;
@@ -2943,7 +3143,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   clearSearch?.addEventListener('click', clearFeedSearch);
   resetEmptyFeed?.addEventListener('click', () => {
     searchInput?.focus?.({preventScroll: true});
-    return applyFeedFilters({query: '', kind: '', creator: '', sort: 'latest'});
+    return applyFeedFilters({query:'', kind:'', creator:'', topic:'', sort:feedState.tab === 'collected' ? feedState.sort : 'latest'});
   });
   retryFeed?.addEventListener('click', () => {
     const retry = feedFailure;
@@ -2963,7 +3163,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     });
   }
   const selectFeedTab = tab => applyFeedFilters({
-    tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText(),
+    tab, sort: tab === feedState.tab ? feedState.sort : 'latest', query: searchText(),
   }, {resume: true});
   for (const [index, tab] of FEED_TABS.entries()) {
     const button = document.getElementById('feed-tab-' + tab);

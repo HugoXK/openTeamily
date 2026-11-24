@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
+import {mountSharedStudio} from '../openteamily/static/artifacts/shared-studio.mjs';
 import {studioDiscussionContext} from '../openteamily/static/artifacts/studio-discussion.mjs';
 import {sharedWorkCopyToken} from '../openteamily/static/artifacts/shared-work-copy.mjs';
 import {
@@ -61,7 +62,7 @@ test('listQuery encodes search and omits empty q', () => {
   ]);
 });
 
-test('native Space shows title, body and filename matches as safe text', async () => {
+test('native Space shows safe excerpts and opens a body match in the document Find panel', async () => {
   const title = '蓝图🌱提纲';
   const text = '会议正文 <img src=x onerror=alert(1)> 蓝图🌱 交付计划';
   const filename = '附件蓝图🌱.png';
@@ -72,6 +73,9 @@ test('native Space shows title, body and filename matches as safe text', async (
   };
   const item = (id, title, match) => ({id, title, match, kind: 'document'});
   const page = await openArtifactsPage({native: true, extraRequest(path) {
+    if (path === '/v1/workspaces/w1/artifacts/body') {
+      return reply({body:{artifact:{...item('body','周会备忘'),body:text,revision:1}}});
+    }
     if (path === '/v1/workspaces/w1/artifacts?q=' + encodeURIComponent(needle) + '&order=recent') {
       return reply({body: {items: [
         item('title', title, hit('title', title)),
@@ -97,6 +101,10 @@ test('native Space shows title, body and filename matches as safe text', async (
       [needle, needle]);
     assert.equal(contexts[2], undefined, 'an offset splitting a surrogate is discarded');
     assert.equal(page.created.some(node => node.tagName === 'IMG'), false, 'stored text never becomes HTML');
+    await rows[1].children[0].dispatch('click');
+    assert.equal(page.elements.get('document-find').hidden, false);
+    assert.equal(page.elements.get('document-find-query').value, needle);
+    assert.equal(page.form.elements.body.value, text);
   } finally { page.close(); }
 });
 
@@ -544,6 +552,40 @@ function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
 
+test('Studio retries the exact document after a temporary read failure', async () => {
+  const {doc} = fakeDocument();
+  const get = id => doc.getElementById('studio-' + id);
+  const dialog = get('dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; };
+  doc.visibilityState = 'hidden';
+  doc.defaultView = {location:{origin:'https://test.example'}, addEventListener() {}, clearTimeout() {},
+    sessionStorage:{getItem:() => null, removeItem() {}}};
+  const workspace = 'a'.repeat(32), id = 'b'.repeat(32);
+  const paths = [];
+  const opened = [];
+  const studio = mountSharedStudio(doc, {
+    onDocument: (_workspace, documentId) => { opened.push(documentId); },
+    async request(method, path) {
+      assert.equal(method, 'GET');
+      paths.push(path);
+      return paths.length === 1 ? {status:503, body:{}}
+        : {status:200, body:{document:{id,title:'协作方案',body:'已保存的正文',revision:1}}};
+    },
+  });
+  studio.setWorkspace({id:workspace, name:'团队', kind:'team', role:'member'}, 'account');
+  await studio.open(id);
+  assert.equal(get('catalog').hidden, true);
+  assert.equal(get('status').textContent, '暂时无法打开团队文档。');
+  assert.equal(doc.activeElement, get('open-retry'));
+  await get('open-retry').dispatch('click');
+  await new Promise(setImmediate);
+  assert.deepEqual(paths, Array(2).fill(`/v1/workspaces/${workspace}/studio/documents/${id}`));
+  assert.deepEqual(opened, [id]);
+  assert.equal(get('open-actions').hidden, true);
+  assert.equal(get('body').value, '已保存的正文');
+});
+
 const noticeWorkspace = 'a'.repeat(32);
 const noticeConversation = 'otc_' + 'B'.repeat(26);
 const noticeMessage = 'otm_' + 'C'.repeat(26);
@@ -684,7 +726,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     const order = native ? '?order=recent' : '';
     if (path === '/v1/workspaces/w2/artifacts' + order) return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts' + order) return reply({body: {items: listed}});
-    if (path === '/v1/workspaces/w1/meetings?limit=100') {
+    if (path === '/v1/workspaces/w1/meetings' + (native ? '?limit=24&order=recent' : '?limit=100')) {
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
     }
@@ -736,7 +778,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
       assert.ok(button, `scope button ${scope} must exist`);
       await button.dispatch('click');
     },
-    meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=100'); },
+    meetingCalls() { return calls.filter(call => call.path.startsWith('/v1/workspaces/w1/meetings?')); },
     removeCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/artifacts/a1/remove'); },
     alertdialog() { return created.filter(node => node.getAttribute('role') === 'alertdialog' && node.parentNode); },
     close() {
@@ -1236,13 +1278,14 @@ test('meetingsForScope keeps the workspace list unless the joined scope is selec
 });
 
 test('the Space meetings list keeps local notes and pages received read-only copies separately', async () => {
-  const sent = query => ({id: query, title: '收到的 ' + query, shared: true, organizer: '会议主持人',
+  const [local, first, second] = ['a', 'b', 'c'].map(value => value.repeat(32));
+  const sent = (id, title) => ({id, title, shared: true, organizer: '会议主持人',
     started_at: 1710000000, action_count: 1, done_count: 1});
   const page = await openArtifactsPage({withKinds: true, native: true,
-    meetings: [{id: 'local', title: '本人纪要', started_at: 1700000000}],
+    meetings: [{id: local, title: '本人纪要', started_at: 1700000000, created_by: 'owner'}],
     extraRequest(path) {
-      if (path.endsWith('/meetings/shared?limit=100')) return reply({body: {items: [sent('first')], cursor: 'second-page'}});
-      if (path.endsWith('/meetings/shared?limit=100&cursor=second-page')) return reply({body: {items: [sent('second')], cursor: null}});
+      if (path.endsWith('/meetings/shared?limit=24')) return reply({body: {items: [sent(first, '第一份纪要')], cursor: first}});
+      if (path.endsWith('/meetings/shared?limit=24&cursor=' + first)) return reply({body: {items: [sent(second, '第二份纪要')], cursor: null}});
     },
   });
   try {
@@ -1250,10 +1293,11 @@ test('the Space meetings list keeps local notes and pages received read-only cop
     const list = page.elements.get('artifact-list');
     const more = page.elements.get('more-shared-meetings');
     assert.deepEqual(list.children.map(row => row.children[0].href), [
-      '/meetings#workspace=w1&shared=first', '/meetings#workspace=w1&meeting=local',
+      '/meetings#workspace=w1&shared=' + first + '&library=joined',
+      '/meetings#workspace=w1&meeting=' + local + '&library=joined',
     ]);
     assert.equal(list.children[0].dataset.meetingShared, 'true');
-    assert.match(list.children[0].textContent, /收到的 first共享纪要.*会议主持人/);
+    assert.match(list.children[0].textContent, /第一份纪要共享纪要.*会议主持人/);
     assert.equal(more.hidden, false);
     await more.dispatch('click');
     assert.equal(list.children.length, 3);
@@ -1262,10 +1306,70 @@ test('the Space meetings list keeps local notes and pages received read-only cop
   } finally { page.close(); }
 });
 
+test('Space retries both meeting cursors when a shared page fails before either advances', async () => {
+  const [owned, shared, nextOwned, nextShared] = ['a', 'b', 'c', 'd'].map(value => value.repeat(32));
+  const note = id => ({id, title: id, started_at: 1710000000, created_by: 'owner'});
+  const pageBody = (id, cursor = null) => reply({body: {items: [note(id)], cursor}});
+  let sharedAttempts = 0;
+  const page = await openArtifactsPage({withKinds: true, native: true, extraRequest(path) {
+    if (path.endsWith('/meetings?limit=24&order=recent')) return pageBody(owned, owned);
+    if (path.endsWith('/meetings/shared?limit=24')) return pageBody(shared, shared);
+    if (path.endsWith('/meetings?limit=24&order=recent&cursor=' + owned)) return pageBody(nextOwned);
+    if (path.endsWith('/meetings/shared?limit=24&cursor=' + shared)) {
+      return ++sharedAttempts === 1 ? reply({status: 503, body: {}}) : pageBody(nextShared);
+    }
+  }});
+  try {
+    await page.openKind('meetings');
+    const list = page.elements.get('artifact-list');
+    const more = page.elements.get('more-shared-meetings');
+    const retry = page.elements.get('retry-meetings');
+    await more.dispatch('click');
+    assert.equal(list.children.length, 2);
+    assert.equal(more.disabled, true);
+    assert.equal(retry.hidden, false);
+    await retry.dispatch('click');
+    assert.equal(list.children.length, 4);
+    assert.equal(page.meetingCalls().filter(call => call.path.endsWith('&cursor=' + owned)).length, 2);
+    assert.equal(more.hidden, true);
+    assert.equal(retry.hidden, true);
+  } finally { page.close(); }
+});
+
+test('Space searches older meetings on demand without increasing the first read', async () => {
+  const [recent, older] = ['a', 'b'].map(value => value.repeat(32));
+  const note = (id, title) => ({id, title, started_at: 1710000000, created_by: 'owner'});
+  const page = await openArtifactsPage({withKinds: true, native: true, extraRequest(path) {
+    if (path.endsWith('/meetings?limit=24&order=recent')) {
+      return reply({body:{items:[note(recent, '本周会议')], cursor:recent}});
+    }
+    if (path.endsWith('/meetings/shared?limit=24')) return reply({body:{items:[]}});
+    if (path.endsWith('/meetings?limit=76&order=recent&cursor=' + recent)) {
+      return reply({body:{items:[note(older, '旧发布复盘')]}});
+    }
+  }});
+  try {
+    const search = page.elements.get('search');
+    const list = page.elements.get('artifact-list');
+    await page.openKind('meetings');
+    assert.equal(page.meetingCalls().length, 1);
+    assert.doesNotMatch(list.textContent, /旧发布复盘/);
+    search.value = '旧发布';
+    await search.dispatch('input');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(page.meetingCalls().length, 2);
+    assert.match(list.textContent, /旧发布复盘/);
+    assert.doesNotMatch(list.textContent, /本周会议/);
+    search.value = '发布';
+    await search.dispatch('input');
+    assert.equal(page.meetingCalls().length, 2, 'typing a second query reuses the expanded list');
+  } finally { page.close(); }
+});
+
 test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
   const page = await openArtifactsPage({withKinds: true, meetings: [
-    {id: 'm1', title: '设计周会', started_at: 1700000000, action_count: 2, done_count: 0},
-    {id: 'm2', title: '发布复盘', started_at: 1700007200, action_count: 1, done_count: 1},
+    {id: 'm1', title: '设计周会', started_at: 1700000000, action_count: 2, done_count: 0, created_by: 'u1'},
+    {id: 'm2', title: '发布复盘', started_at: 1700007200, action_count: 1, done_count: 1, attendees: ['alice']},
   ]});
   try {
     await page.openKind('meetings');
@@ -1852,6 +1956,24 @@ test('an authorized direct link opens editable content with the catalog and opti
   directory.finish(reply({body: {items: [linkedRecord]}}));
   await nextTask();
   assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
+});
+
+test('Space opens a saved Markdown table in the document editor without changing its source', async () => {
+  const markdown = '原始内容\n\n| 事项 |  进展 |\n| :--- | ---: |\n| **初稿** | 待核对 |';
+  const page = linkFixture(path => {
+    if (path === linkedDetail) return reply({body:{artifact:{...linkedRecord,body:markdown}}});
+    if (path === linkedCatalog) return reply({body:{items:[]}});
+  });
+  await page.mounted;
+  const rich = page.elements.get('document-rich');
+  const table = rich.children.find(child => child.className === 'chat-markdown-table-scroll').children[0];
+  const [head, body] = table.children;
+  assert.equal(table.tagName,'TABLE');
+  assert.equal(head.children[0].children[1].getAttribute('data-align'),'right');
+  assert.equal(body.children[0].children[0].children[0].tagName,'STRONG');
+  assert.equal(page.form.elements.body.value,markdown);
+  await page.elements.get('document-source-toggle').dispatch('click');
+  assert.equal(page.elements.get('document-source').value,markdown);
 });
 
 test('Space follows a saved revision while idle and keeps an edit typed during the next read', async () => {

@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/discover/app.mjs"></script>
 </head>
-<body class="app-workspace app-primary">
+<body class="app-workspace app-primary discover-page">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -86,20 +86,34 @@
             </button>
           </form>
         </header>
-        <div class="feed-filters" id="feed-filters" role="group" aria-label="内容分类">
-          <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>
-          <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示全部已公开作品。">全部</button>
-          <button type="button" id="feed-sort-popular" aria-current="false">热门</button>
-          <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
-          <button type="button" id="feed-kind-document" aria-current="false">文档</button>
-          <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
-          <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
-          <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
-          <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
-          <button type="button" id="feed-kind-model3d" aria-current="false">3D 作品</button>
-          <button type="button" id="feed-kind-whiteboard" aria-current="false">白板</button>
-          <button type="button" id="feed-kind-dashboard" aria-current="false">看板</button>
-          <button type="button" id="feed-kind-spreadsheet" aria-current="false">电子表格</button>
+        <div class="feed-filter-line">
+          <button type="button" id="feed-followed-creators" aria-haspopup="dialog" aria-controls="followed-creators-dialog" hidden>选择作者</button>
+          <div class="feed-topic-field" id="feed-collected-sort-field" hidden>
+            <label for="feed-collected-sort" class="visually-hidden">已收录作品排序</label>
+            <select id="feed-collected-sort">
+              <option value="latest">最近更新</option>
+              <option value="collected">最近收录</option>
+            </select>
+          </div>
+          <div class="feed-topic-field">
+            <label for="feed-topic" class="visually-hidden">作品主题</label>
+            <select id="feed-topic"><option value="">全部主题</option></select>
+          </div>
+          <div class="feed-filters" id="feed-filters" role="group" aria-label="内容分类">
+            <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>
+            <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示所有作品类型。">全部</button>
+            <button type="button" id="feed-sort-popular" aria-current="false">热门</button>
+            <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
+            <button type="button" id="feed-kind-document" aria-current="false">文档</button>
+            <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
+            <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
+            <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
+            <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
+            <button type="button" id="feed-kind-model3d" aria-current="false">3D 作品</button>
+            <button type="button" id="feed-kind-whiteboard" aria-current="false">白板</button>
+            <button type="button" id="feed-kind-dashboard" aria-current="false">看板</button>
+            <button type="button" id="feed-kind-spreadsheet" aria-current="false">电子表格</button>
+          </div>
         </div>
         <div class="feed-feedback">
           <p id="feed-error" role="alert" hidden></p>
@@ -147,6 +161,10 @@
           <button type="button" id="work-detail-collect" aria-pressed="false" hidden>收录</button>
           <button type="button" id="work-detail-follow" aria-pressed="false" hidden>关注作者</button>
         </div>
+        <nav id="work-detail-library" aria-label="继续在发现中浏览" hidden>
+          <a id="work-detail-library-saved" href="/discover?feed=collected" hidden>查看已收录</a>
+          <a id="work-detail-library-author" href="/discover?feed=following" hidden>查看该作者的动态</a>
+        </nav>
       </article>
     </section>
     <section id="catalog-view" hidden>
@@ -157,9 +175,11 @@
         <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
         <button type="button" id="catalog-clear">清除</button>
       </form>
-      <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建智能体</a>
-      <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
-      <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
+      <div class="catalog-toolbar-actions">
+        <a class="catalog-create" id="catalog-create-agent" href="/agents?new=1" hidden>+ 创建智能体</a>
+        <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
+        <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
+      </div>
     </header>
     <div id="catalog-filters" class="catalog-filters" aria-label="分类">
       <div class="catalog-filter-scroll">
@@ -197,12 +217,13 @@
       <ul id="received-agent-shares-list"></ul>
       <button type="button" id="received-agent-shares-more" hidden>加载更多</button>
     </details>
-    <section aria-label="公共目录" id="catalog-panel">
+    <section aria-labelledby="catalog-heading" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
       <p id="catalog-error" role="alert" hidden></p>
-      <button type="button" id="teams-retry" hidden>重试</button>
+      <button type="button" id="teams-retry" aria-describedby="catalog-error" hidden>重试</button>
       <p id="discover-empty" class="note" hidden>暂无公开智能体。</p>
+      <button type="button" id="catalog-empty-reset" hidden>清除筛选</button>
       <ul id="discover-list" class="catalog"></ul>
       <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
@@ -233,6 +254,23 @@
       </div>
     </form>
   </dialog>
+  <dialog class="catalog-dialog followed-creators-dialog" id="followed-creators-dialog" aria-labelledby="followed-creators-title">
+    <header>
+      <h2 id="followed-creators-title">关注的作者</h2>
+      <button type="button" id="followed-creators-close">关闭</button>
+    </header>
+    <form id="followed-creators-form" role="search">
+      <label class="visually-hidden" for="followed-creators-query">搜索已关注作者</label>
+      <input type="search" id="followed-creators-query" autocomplete="off" maxlength="80" placeholder="搜索作者名称或账号" autofocus>
+    </form>
+    <button type="button" id="followed-creators-all" aria-pressed="false">所有关注作者</button>
+    <ul id="followed-creators-list" aria-label="已关注作者" hidden></ul>
+    <p id="followed-creators-status" role="status"></p>
+    <div class="catalog-dialog-actions">
+      <button type="button" id="followed-creators-retry" hidden>重试</button>
+      <button type="button" id="followed-creators-more" hidden>加载更多</button>
+    </div>
+  </dialog>
   <dialog class="catalog-dialog work-share-dialog" id="work-share-dialog" aria-labelledby="work-share-title">
     <h2 id="work-share-title">分享作品</h2>
     <label>公开链接 <input type="url" id="work-share-url" readonly></label>
@@ -242,6 +280,25 @@
       <button type="button" id="work-share-native" hidden>更多分享方式</button>
       <button type="button" id="work-share-copy" autofocus>复制链接</button>
     </div>
+    <details id="work-chat-share-panel" hidden>
+      <summary>分享到聊天</summary>
+      <form id="work-chat-share-form">
+        <div>
+          <label for="work-chat-share-workspace">工作区</label>
+          <select id="work-chat-share-workspace" required disabled></select>
+        </div>
+        <div>
+          <label for="work-chat-share-conversation">接收会话</label>
+          <select id="work-chat-share-conversation" required disabled></select>
+        </div>
+        <p id="work-chat-share-status" role="status"></p>
+        <div class="catalog-dialog-actions">
+          <button type="button" id="work-chat-share-retry" hidden>重试</button>
+          <a id="work-chat-share-receipt" hidden>在聊天中查看</a>
+          <button type="submit" id="work-chat-share-send" disabled>发送链接</button>
+        </div>
+      </form>
+    </details>
   </dialog>
   <dialog id="feed-comments-dialog" class="feed-comments-dialog" aria-labelledby="feed-comments-title">
     <header class="feed-comments-header">

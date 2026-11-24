@@ -188,9 +188,10 @@ class SettingsPageTests(unittest.TestCase):
     def test_discover_page_accepts_supported_filtered_links(self):
         for kind in ('document', 'whiteboard', 'dashboard', 'spreadsheet'):
             with self.subTest(kind=kind):
-                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&work=public-preview'
+                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&topic=education&work=public-preview'
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
-        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home'):
+        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home',
+                      'topic=../education', 'topic=education&topic=travel'):
             with self.subTest(query=query):
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
 
@@ -219,7 +220,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertGreater(len(asset['body']), 256 * 1024)
 
     def test_discover_reader_modules_load_without_a_session(self):
-        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs'):
+        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs', '/shell/work-topics.mjs'):
             with self.subTest(path=path):
                 asset = self.raw.call('GET', path)
                 self.assertEqual(asset['status'], 200)
@@ -250,8 +251,8 @@ class SettingsPageTests(unittest.TestCase):
         light, dark, auto, system = (html.find(f'value="{name}"') for name in ('light', 'dark', 'auto', 'system'))
         self.assertTrue(-1 < light < dark < auto < system)
         self.assertLess(html.find('始终使用浅色主题。'), html.find('始终使用深色主题。'))
-        self.assertIn('没有使用实际日出日落时刻', html)
-        self.assertIn('暂按 22:00 至次日 06:00 为夜间', html)
+        self.assertIn('默认夜间时段', html)
+        self.assertIn('22:00 至次日 06:00 使用深色主题。', html)
         self.assertNotIn('会等你停止操作约 1 分钟再切换', html)
         self.assertIn('legend class="visually-hidden"', html)
         self.assertIn('settings-card-title', html)
@@ -370,7 +371,7 @@ class SettingsPageTests(unittest.TestCase):
             self.assertIn(f'<title>{label} · OpenTeamily</title>', body)
             self.assertIn(f'<h1>{label}</h1>', body)
 
-    def test_channel_agent_api_and_connectors_pages_use_recorded_empty_states(self):
+    def test_channel_agent_api_and_connectors_pages_explain_available_actions(self):
         html = self.raw.call('GET', '/settings/channels')['body'].decode()
         self.assertIn('data-settings-page="channels"', html)
         self.assertIn('WeChat Official Account', html)
@@ -388,9 +389,9 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('disabled', html)
         self.assertNotIn('Teamily Agent', html)
         agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
-        self.assertIn('你的 agent 还没有向本实例之外开放。', agent)
-        self.assertIn('没有已授权的 AI 客户端。', agent)
-        self.assertIn('Claude Code', agent)
+        self.assertIn('href="/agents">前往智能体管理密钥</a>', agent)
+        self.assertIn('在「外部 API 访问」中查看有效密钥、生成新密钥或撤销已有密钥。', agent)
+        self.assertNotIn('你的 agent 还没有向本实例之外开放。', agent)
         connectors = self.raw.call('GET', '/settings/connectors')['body'].decode()
         self.assertIn('placeholder="搜索应用…"', connectors)
         self.assertIn('+ 添加 MCP 服务器', connectors)
@@ -409,9 +410,10 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
         # Rows start disabled until the user's own Composio key is loaded.
-        self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
+        self.assertEqual(connectors.count('data-state="loading">正在读取…<'), 31)
+        self.assertIn('id="composio-retry" class="secondary" hidden>重试读取状态</button>', connectors)
         self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
-        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('disabled title="正在读取连接配置。">+ 连接'), 31)
         self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
         self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)
@@ -434,8 +436,8 @@ class SettingsPageTests(unittest.TestCase):
     def test_preference_subpages_follow_recorded_copy(self):
         html = self.raw.call('GET', '/settings/appearance')['body'].decode()
         self.assertIn('settings-card-title">自动切换', html)
-        self.assertIn('暂按 22:00 至次日 06:00 为夜间', html)
-        self.assertIn('可选用「自定义时段」', html)
+        self.assertIn('22:00 至次日 06:00 使用深色主题。', html)
+        self.assertIn('自定义时段<span class="hint">在你设定的时间切换。', html)
         self.assertIn('id="appearance-status"', html)
         self.assertIn('class="settings-appearance-status"', html)
         self.assertIn('白天浅色、夜间深色。按下面的时段或你设定的时间切换。', html)
