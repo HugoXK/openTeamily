@@ -18,12 +18,26 @@ const PARENTS = 'artifact_document_parents'
 
 // The platform exports the bundle; this fixture builds one database with a
 // parent document, one child and one loose document, and prints its bundle.
+// The interpreter is discovered, not assumed: CI images carry python3, not
+// python3.11, and a missing one must say so instead of throwing undefined.
+const PYTHON = (process.env.OPENTEAMILY_PYTHON ? [process.env.OPENTEAMILY_PYTHON] : [])
+  .concat(['python3', 'python3.11', 'python'])
+  .find((name) => spawnSync(name, ['-c', 'pass'], { encoding: 'utf8' }).status === 0)
+
 function exported() {
-  const run = spawnSync('python3.11', [join(HERE, 'fixtures', 'document_tree_bundle.py')], {
+  assert.ok(PYTHON, 'no python interpreter found to export the platform bundle')
+  const run = spawnSync(PYTHON, [join(HERE, 'fixtures', 'document_tree_bundle.py')], {
     cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, PYTHONPATH: REPO_ROOT },
+    env: { ...process.env, PYTHONPATH: REPO_ROOT, PYTHONDONTWRITEBYTECODE: '1' },
   })
-  if (run.status !== 0) throw new Error('export fixture failed: ' + String(run.stderr).slice(-2000))
+  if (run.status !== 0) {
+    const detail = [
+      run.error?.message,
+      run.signal && `signal ${run.signal}`,
+      String(run.stderr ?? '').trim().slice(-2000),
+    ].filter(Boolean).join(' | ')
+    throw new Error(`export fixture failed (status ${run.status}): ${detail}`)
+  }
   return JSON.parse(run.stdout)
 }
 
