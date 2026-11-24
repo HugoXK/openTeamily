@@ -128,6 +128,12 @@ CREATE TABLE artifact_restores (
   UNIQUE (artifact_id, request_key),
   FOREIGN KEY (artifact_id, revision) REFERENCES artifact_versions(artifact_id, revision) ON DELETE CASCADE);
 `, `
+CREATE TABLE artifact_document_parents (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  parent_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  CHECK (artifact_id <> parent_id));
+CREATE INDEX artifact_document_parent ON artifact_document_parents(parent_id);
+`, `
 -- Artifact annotation threads (retried from the retired openteamily/annotations.py).
 -- The artifact row is the parent: threads and comments are dropped with the
 -- artifact, and the workspace column keeps every query scoped to one workspace.

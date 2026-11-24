@@ -18,9 +18,11 @@
   <link rel="modulepreload" href="/chat/public-draft.mjs">
   <link rel="modulepreload" href="/chat/utilities.mjs">
   <link rel="modulepreload" href="/chat/dsbot.mjs">
+  <link rel="modulepreload" href="/chat/workspace-invite.mjs">
   <link rel="modulepreload" href="/shell/meeting-link.mjs">
   <link rel="modulepreload" href="/shell/work-notification.mjs">
   <link rel="modulepreload" href="/shell/studio-link.mjs">
+  <link rel="modulepreload" href="/shell/team-invite-link.mjs">
   <link rel="modulepreload" href="/shell/public-agent-link.mjs">
   <link rel="modulepreload" href="/shell/chat-utils.mjs">
   <link rel="modulepreload" href="/shell/action-menu.mjs">
@@ -221,6 +223,7 @@
           </div>
           <div id="compose-team-panel" class="compose-dialog-panel" role="tabpanel" aria-labelledby="compose-mode-team" hidden>
             <p class="compose-intro" data-ui-text="chat.group.team_template_info">使用模板创建三个智能体，同名智能体会复用。仅工作区所有者和管理员可创建。</p>
+            <label id="compose-team-title-label"><span data-ui-text="chat.group.name">群组名称</span> <input id="compose-team-title" maxlength="80" autocomplete="off" placeholder="输入群组名称（可选）" data-ui-placeholder="chat.group.name_optional"></label>
             <fieldset id="compose-team-templates">
               <legend data-ui-text="chat.group.team_templates">选择团队模板</legend>
               <div id="team-template-choices" class="team-template-choices"></div>
@@ -240,6 +243,8 @@
       </form>
     </dialog>
   </section>
+  <div id="session-resize" role="separator" tabindex="0" aria-orientation="vertical"
+    aria-controls="session-pane" aria-label="调整会话列表宽度" data-ui-label="chat.sessions.resize" hidden></div>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
   <p id="status" role="status"></p>
   <main id="main">
@@ -262,6 +267,7 @@
       </div>
       <div class="chat-actions">
         <button type="button" id="chat-call" hidden aria-label="通话" aria-haspopup="dialog" title="语音或视频通话" data-ui-title="chat.call.audio_or_video" data-ui-label="chat.call.call"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h3l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v3a3 3 0 0 1-3 3C9 20 4 15 3 6a3 3 0 0 1 3-3Z"/></svg><span class="sr-only" data-ui-text="chat.call.call">通话</span></button>
+        <button type="button" id="group-reply-shortcut" class="icon-action" aria-label="谁来回复" data-ui-label="chat.group.reply_policy" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11h6m-6-3h4M20 12a7 7 0 0 1-7 7h-1l-4 2v-3a7 7 0 0 1 4-13h1a7 7 0 0 1 7 7Z"/><path d="M19 3v4m-2-2h4"/></svg></button>
         <button type="button" id="group-info-toggle" class="icon-action" hidden aria-expanded="false" aria-controls="group-info-panel" title="群信息" aria-label="群信息" data-ui-title="chat.group.info" data-ui-label="chat.group.info"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M15 5v14"/></svg><span class="sr-only" data-ui-text="chat.group.info">群信息</span></button>
         <button type="button" id="chat-more" class="icon-action" aria-label="更多会话操作" aria-expanded="false" aria-controls="chat-extra-actions" data-ui-label="chat.sessions.more_actions"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
         <div id="chat-extra-actions">
@@ -309,14 +315,7 @@
           <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
           <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
         </div>
-        <section id="group-reply-policy" aria-labelledby="group-reply-policy-title" hidden>
-          <div class="group-reply-policy-copy">
-            <h4 id="group-reply-policy-title" data-ui-text="chat.group.reply_policy">谁来回复</h4>
-            <p id="group-reply-policy-summary" class="note"></p>
-          </div>
-          <button type="button" id="group-management-reply-policy" class="group-info-link" aria-haspopup="dialog" aria-controls="group-management-dialog" data-ui-text="chat.group.edit_reply_policy" hidden>调整规则</button>
-        </section>
-        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
+        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help" hidden>跟随群组默认时，这里决定哪些智能体可以主动回复。每个群每小时最多自动回复 3 次。</p>
         <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
         <button type="button" class="group-info-link" id="group-info-add-agent" aria-haspopup="dialog" aria-controls="group-info-add-agent-dialog" data-ui-text="chat.group.add_agent" hidden>添加我的智能体</button>
         <p id="group-info-add-agent-feedback" class="note" role="status" hidden></p>
@@ -329,6 +328,10 @@
         <button type="button" class="group-info-row" id="group-call-audio" data-ui-text="chat.call.audio">语音通话</button>
       </section>
       <section class="group-info-card group-info-list" aria-label="群设置" data-ui-label="chat.group.settings">
+        <section class="group-info-toggle-row" id="group-reply-policy" aria-labelledby="group-reply-policy-title" tabindex="-1" hidden>
+          <span><strong id="group-reply-policy-title" data-ui-text="chat.group.reply_policy">谁来回复</strong><small id="group-reply-policy-summary"></small></span>
+          <button type="button" id="group-management-reply-policy" class="group-info-link" aria-haspopup="dialog" aria-controls="group-management-dialog" data-ui-text="chat.group.edit_reply_policy" hidden>调整规则</button>
+        </section>
         <div class="group-info-toggle-row">
           <span><strong data-ui-text="chat.translate.auto">自动翻译</strong><small data-ui-text="chat.translate.private">使用你配置的模型，译文仅自己可见。</small></span>
           <button type="button" role="switch" id="group-translate" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译" data-ui-label="chat.translate.auto"></button>
@@ -356,6 +359,7 @@
           <label><span data-ui-text="chat.group.reply_policy">谁来回复</span>
             <select id="group-management-reply-mode">
               <option value="default" data-ui-text="chat.group.reply_default">跟随群组默认</option>
+              <option value="mentions" data-ui-text="chat.group.reply_mentions">仅在被 @ 时回复</option>
               <option value="everyone" data-ui-text="chat.group.reply_everyone">由所有群内智能体判断</option>
               <option value="lead" data-ui-text="chat.group.reply_lead">指定智能体优先</option>
             </select>
@@ -504,6 +508,7 @@
         <select id="forward-target"></select>
         <button type="button" id="forward-submit" disabled data-ui-text="chat.forward">转发</button>
       </div>
+      <p id="forward-status" role="status"></p>
     </section>
     <dialog id="message-selection-hide-dialog" aria-labelledby="message-selection-hide-heading" aria-describedby="message-selection-hide-description">
       <form id="message-selection-hide-form" novalidate>
@@ -815,7 +820,9 @@
       <button type="button" id="public-draft-recovery-clear" data-ui-text="chat.draft.clear_homepage">清除首页草稿</button>
     </details>
     <form id="chat-form" method="post" action="/v1/workspaces" novalidate>
+      <p id="group-bot-activity" role="status" aria-atomic="true"></p>
       <div class="composer">
+        <div id="composer-file-drop" class="composer-file-drop" hidden aria-hidden="true" data-ui-text="chat.files.drop">松开鼠标，将文件添加到当前消息</div>
         <div id="chat-reply-preview" class="composer-reply" hidden>
           <div class="composer-reply-copy" aria-live="polite">
             <strong id="chat-reply-author"></strong>
@@ -884,6 +891,10 @@
             </div>
           </details>
           <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1" aria-label="输入消息" aria-controls="chat-agent-mention-options" aria-autocomplete="list" data-ui-label="chat.compose.placeholder" data-ui-placeholder="chat.compose.placeholder"></textarea>
+          <div class="composer-turn-actions">
+            <button id="chat-reply-stop" type="button" aria-label="停止生成" title="停止生成" hidden data-ui-title="chat.reply.stop" data-ui-label="chat.reply.stop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+            <button id="chat-send" type="submit" class="composer-send" aria-label="发送" title="发送" data-ui-title="chat.send" data-ui-label="chat.send"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
+          </div>
         </div>
         <div id="chat-agent-mention-options" class="chat-agent-mention-options" role="listbox" aria-label="提及群智能体" hidden data-ui-label="chat.group.mention_agents"></div>
         <div id="chat-agent-mentions" class="chat-agent-mentions" aria-label="将提及的智能体" hidden data-ui-label="chat.group.agents_to_mention"></div>
@@ -920,8 +931,6 @@
               <option value="workspaces" data-ui-text="chat.memory.all_workspaces">记忆 · 跨工作区</option>
               <option value="off" data-ui-text="chat.memory.disabled">记忆 · 关闭</option>
             </select>
-            <button id="chat-reply-stop" type="button" aria-label="停止生成" title="停止生成" hidden data-ui-title="chat.reply.stop" data-ui-label="chat.reply.stop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
-            <button id="chat-send" type="submit" class="composer-send" aria-label="发送" title="发送" data-ui-title="chat.send" data-ui-label="chat.send"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
           </div>
         </div>
       </div>

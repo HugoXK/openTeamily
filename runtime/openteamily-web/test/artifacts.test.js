@@ -18,6 +18,76 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
+test('document trees keep retry receipts, descendants and parent links inside the same workspace', async () => {
+  let bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const create = (title, parent_id, workspace = WS, receipt = key()) => call('POST', base('', workspace),
+    {title, body:'文档内容', ...(parent_id ? {parent_id} : {})}, receipt)
+  const parent = (await create('父文档')).body.artifact
+  const otherWorkspace = 'b'.repeat(32)
+  const unrelated = (await create('其他工作区文档', null, otherWorkspace)).body.artifact
+  assert.equal((await create('越过工作区', unrelated.id)).status, 404)
+  const receipt = key()
+  const child = await create('子文档', parent.id, WS, receipt)
+  assert.equal(child.status, 201)
+  const id = child.body.artifact.id
+  assert.deepEqual(child.body.artifact.parent, {id:parent.id,title:parent.title})
+  assert.equal((await create('子文档', parent.id, WS, receipt)).body.artifact.id, id)
+  assert.equal((await create('子文档', null, WS, receipt)).status, 409)
+  const nested = (await create('孙文档', id)).body.artifact
+  const site = await call('POST', base(), {title:'网站作品',kind:'website',body:'<h1>Hello</h1>'}, key())
+  assert.equal((await create('网页下的子文档', site.body.artifact.id)).status, 404)
+
+  bot = await boot(bot.vol)
+  const tree = base('/document-tree')
+  const items = (await call('GET', tree)).body.items
+  assert.deepEqual(new Map(items.map(row => [row.id,row.parent_id])), new Map([[parent.id,null],[id,parent.id],[nested.id,id]]))
+  assert.ok(items.every(row => !Object.hasOwn(row,'body')))
+  assert.deepEqual((await call('GET', base('/document-tree',otherWorkspace))).body.items.map(row=>row.id), [unrelated.id])
+  const outsider = await boot()
+  assert.deepEqual((await outsider.call('artifacts','GET',tree)).body.items, [])
+  const update = await call('POST', base('/'+id), {revision:1,changes:{body:'文档内容'}})
+  assert.equal(update.body.artifact.parent.id, parent.id)
+  await call('POST', base('/'+parent.id+'/remove'), {})
+  assert.equal((await call('GET', base('/'+id))).body.artifact.parent, undefined)
+  assert.equal((await call('GET', base('/'+nested.id))).body.artifact.parent.id, id)
+  assert.equal((await call('GET', tree)).body.items.find(row=>row.id===id).parent_id, null)
+})
+
+test('moving an existing document preserves its descendants, content revision and account scope', async () => {
+  let bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const create = async (title, workspace = WS, parentId = null) => (await call('POST', base('', workspace), {
+    title, body: '移入项目的现有内容', ...(parentId && {parent_id: parentId}),
+  }, key())).body.artifact
+  const tree = base('/document-tree')
+  const move = (id, parent, expected) => call('POST', tree, {artifact_id:id,parent_id:parent,expected_parent_id:expected})
+  const project = await create('项目')
+  const other = await create('另一个项目')
+  const existing = await create('现有文档')
+  const child = await create('现有文档的子文档', WS, existing.id)
+  const foreign = await create('其他工作区', 'b'.repeat(32))
+
+  assert.equal((await move(existing.id, existing.id, null)).body.error.code,'document_tree_cycle')
+  assert.equal((await move(existing.id, child.id, null)).body.error.code,'document_tree_cycle')
+  assert.equal((await move(existing.id, foreign.id, null)).status,404)
+  assert.equal((await move(foreign.id, project.id, null)).status,404)
+  assert.equal((await call('POST', tree, {artifact_id:existing.id,parent_id:project.id})).status,400)
+  assert.deepEqual((await move(existing.id, project.id, null)).body,{id:existing.id,parent:{id:project.id,title:project.title}})
+  assert.equal((await move(existing.id, other.id, null)).body.error.code,'document_tree_changed')
+  assert.equal((await move(existing.id, project.id, null)).status,200)
+  bot = await boot(bot.vol)
+  assert.deepEqual((await call('GET', base('/' + existing.id))).body.artifact,
+    {...existing,parent:{id:project.id,title:project.title}})
+  assert.equal((await call('GET', base('/' + child.id))).body.artifact.parent.id,existing.id)
+  const outsider = await boot()
+  assert.equal((await outsider.call('artifacts','POST',tree,
+    {artifact_id:existing.id,parent_id:null,expected_parent_id:project.id})).status,404)
+  assert.deepEqual((await move(existing.id, null, project.id)).body,{id:existing.id,parent:null})
+  assert.equal((await call('GET', base('/' + existing.id))).body.artifact.parent,undefined)
+  assert.equal((await call('GET', base('/' + child.id))).body.artifact.parent.id,existing.id)
+})
+
 test('restoring a reviewed version preserves history and replays an exact native receipt after restart', async () => {
   let bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
@@ -509,6 +579,34 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   assert.equal(viaSearch.body.items[0].id, item.id)
   const all = await bot.endpoint('search/all', { q: '封面' })
   assert.equal(all.value.items[0].kind, 'artifact')
+})
+
+test('ordinary uploads remain scoped download-only files and retry from the original receipt', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const raw = Buffer.from('<h1>Saved source file</h1>')
+  const input = {
+    _multipart: true,
+    fields: {title:'附加参考', kind:'media', allow_file:'1'},
+    files: {file:{filename:'参考说明.html', content_type:'text/html', data:raw.toString('base64')}},
+  }
+  const requestKey = key()
+  const created = await call('POST', base(), input, requestKey)
+  assert.equal(created.status, 201)
+  const item = created.body.artifact
+  assert.equal(item.media.mime, 'application/octet-stream')
+  const retried = await call('POST', base(), input, requestKey)
+  assert.equal(retried.status, 200)
+  assert.equal(retried.body.artifact.id, item.id)
+  const download = await call('GET', base(`/${item.id}/file`))
+  assert.equal(download.download.content_type, 'application/octet-stream')
+  assert.equal(download.download.filename, '参考说明.html')
+  assert.ok(!download.download.inline)
+  assert.deepEqual(Buffer.from(download.download.data, 'base64'), raw)
+  assert.deepEqual((await call('GET', base() + '?type=file')).body.items.map(row=>row.id), [item.id])
+  assert.deepEqual((await call('GET', base() + '?type=image')).body.items, [])
+  const outsider = await boot()
+  assert.equal((await outsider.call('artifacts', 'GET', base(`/${item.id}/file`))).status, 404)
 })
 
 test('artifact data stays in this volume; another DS-Bot never sees it', async () => {

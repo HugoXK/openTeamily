@@ -1,8 +1,13 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
+import { meetingArchiveDepth, meetingArchiveHref, meetingArchiveLocation, saveMeetingArchive } from '../shell/meeting-link.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
+import { appendWorkTopics, isWorkTopic } from '../shell/work-topics.mjs';
 import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
+import { artifactTargetFromSearch, startSavedArtifactReads, takeSpaceStartup } from './startup.mjs';
+
+export { artifactTargetFromSearch };
 
 function studioTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -14,22 +19,6 @@ function studioTargetFromSearch(search) {
   return studioDocumentFromSearch(search) || {invalid:true};
 }
 
-// A workspace-only link opens its catalog; a saved-result link also opens the record.
-export function artifactTargetFromSearch(search) {
-  const params = new URLSearchParams(search || '');
-  if (!params.has('workspace') && !params.has('artifact') && !params.has('revision')) return null;
-  const id = /^[0-9a-f]{32}$/;
-  const workspace = params.get('workspace');
-  const artifact = params.get('artifact');
-  const revision = params.get('revision');
-  if ([...params.keys()].some(key => !['workspace', 'artifact', 'revision'].includes(key))
-    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
-    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))
-    || (revision !== null && (!artifact || params.getAll('revision').length !== 1 || !/^[1-9][0-9]{0,7}$/.test(revision)))) return {invalid: true};
-  if (revision !== null) return {workspace, artifact, revision:Number(revision)};
-  return artifact ? {workspace, artifact} : {workspace};
-}
-
 import { mountArtifactNotifications } from './notifications.mjs';
 import {
   artifactKindLabel as kindLabel, renderThumb,
@@ -39,7 +28,7 @@ import {
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
-const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board'};
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board', media: 'new-media'};
 export function newKindFromSearch(search) {
   const value = new URLSearchParams(search || '').get('new') || '';
   return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
@@ -65,6 +54,7 @@ const CATALOG_PAGE_SIZE = 20;
 const CATALOG_READ_LIMIT = 100;
 const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
 const CATALOG_SEARCH_DELAY = 180;
+const MEETING_SEARCH_WINDOW = 100;
 
 const FILE_TYPES = {
   云文档: 'document',
@@ -74,6 +64,7 @@ const FILE_TYPES = {
   网页: 'website',
   图片: 'image',
   视频: 'video',
+  文件: 'file',
   音频: 'audio',
   '3D 模型': 'model3d',
   白板: 'whiteboard',
@@ -100,6 +91,7 @@ export function listQuery(search, {
 }
 
 const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
+const isGeneralFile = item => item?.kind === 'media' && item.media?.mime === 'application/octet-stream';
 
 export function artifactMatchesType(item, type) {
   const mime = String((item && item.media && item.media.mime) || '');
@@ -107,6 +99,7 @@ export function artifactMatchesType(item, type) {
   if (type === '网页') return item.kind === 'website';
   if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
+  if (type === '文件') return isGeneralFile(item);
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
   if (type === '3D 模型') return isModel3d(item);
   if (type === '白板') return item.kind === 'whiteboard';
@@ -371,8 +364,9 @@ export function applyDirectoryCollapsed(root, collapsed) {
 function bindCatalogToolbar(document, closePopovers) {
   const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
   const panel = document.getElementById('main-panel');
-  const toolbar = document.getElementById('catalog-quick-actions');
   const title = document.getElementById('space-title');
+  const titleActions = document.getElementById('catalog-title-actions');
+  const searchActions = document.getElementById('catalog-search-actions');
   const directory = document.getElementById('artifact-dir');
   const catalog = document.getElementById('list-panel');
   const newMenu = document.getElementById('new-menu-button')?.parentElement;
@@ -381,7 +375,8 @@ function bindCatalogToolbar(document, closePopovers) {
   const filter = document.getElementById('filter-button')?.parentElement;
   const layout = document.getElementById('layout-toggle');
   const controls = [layout, newMenu, notify, search, filter];
-  if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
+  if (!viewport || !panel || !title || !titleActions || !searchActions || !directory || !catalog ||
+      controls.some(control => !control?.parentElement)) {
     return () => {};
   }
   // Move the original controls so focus order follows their visual order and
@@ -401,10 +396,12 @@ function bindCatalogToolbar(document, closePopovers) {
     closePopovers();
     const focus = document.activeElement;
     const restoreFocus = controls.some(node => node.contains(focus));
-    if (compact) toolbar.append(...controls);
-    else {
+    if (compact) {
+      titleActions.append(layout, newMenu, notify);
+      searchActions.append(search, filter);
+    } else {
       for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
-      if (active) toolbar.append(search);
+      if (active) searchActions.append(search, notify);
     }
     panel.classList.toggle('is-compact-catalog', compact);
     title.classList.toggle('visually-hidden', !active);
@@ -570,9 +567,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const listPanel = document.getElementById('list-panel');
   const editorLoading = document.getElementById('editor-loading');
   const main = document.getElementById('main');
+  const catalogScrollers = [main, listPanel, listPanel.querySelector?.('.artifact-main')];
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
+  let fileUpload;
+  let fileUploadModule;
+  let artifactRename;
+  let artifactRenameModule;
   const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
@@ -583,6 +585,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const liveCompare = document.getElementById('artifact-live-compare');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
+  const treeOpen = document.getElementById('catalog-document-tree');
+  const treeDialog = document.getElementById('document-tree');
+  const treeHeading = document.getElementById('document-tree-heading');
+  const treeList = document.getElementById('document-tree-list');
+  const treeStatus = document.getElementById('document-tree-status');
+  const treeRetry = document.getElementById('retry-document-tree');
+  const editorDocumentNav = document.getElementById('editor-document-nav');
+  const editorParentDocument = document.getElementById('editor-parent-document');
+  const newChildDocument = document.getElementById('new-child-document');
+  const moveDocument = document.getElementById('move-document');
+  const moveDocumentForm = document.getElementById('move-document-form');
+  const moveDestination = document.getElementById('move-document-destination');
+  const moveSubmit = document.getElementById('move-document-submit');
+  let treeRead;
+  let documentMove;
+  const discoverTopic = document.getElementById('discover-topic');
+  const discoverTopicField = document.getElementById('discover-topic-field');
   const discoverEditable = document.getElementById('discover-editable-remix');
   const discoverEditableField = document.getElementById('discover-editable-remix-field');
   const discoverEditableNote = document.getElementById('discover-editable-remix-note');
@@ -602,13 +621,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const workspaceSelect = document.getElementById('workspace');
   const workspacePending = document.getElementById('workspace-pending');
   const createButtons = [newMenuButton, ...[
-    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    ...Object.values(NEW_KIND_BUTTONS), 'new-agent-document', 'new-agent-website', 'new-save-message',
     'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
     'resume-draft-document', 'resume-draft-website',
   ].map(id => document.getElementById(id))].filter(Boolean);
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('clear-artifact-search');
+  const resetArtifactSearch = document.getElementById('reset-artifact-search');
   const nativeCatalog = servedByDsBot(document);
+  if (nativeCatalog && discoverTopicField) {
+    discoverTopicField.hidden = false;
+    appendWorkTopics(document, discoverTopic);
+  }
   const pageMore = document.getElementById('more-artifacts');
   const pageFooter = document.getElementById('artifact-pagination');
   const pageNote = document.getElementById('artifact-pagination-note');
@@ -640,7 +664,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let catalogKind = 'all';
   let catalogScope = 'all';
   let catalogLayout = 'grid';
-  let meetingScope = 'all';
+  const meetingTabs = [...document.querySelectorAll('.meeting-scopes [data-meeting-scope]')];
+  const resultsPanel = document.getElementById('space-results-panel');
+  let meetingScope = 'joined';
   let filterTypes = [];
   let filterUpdated = {};
   let filterCreators = [];
@@ -652,7 +678,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let meetingLoadedFor = '';
   let meetingLoading = false;
   let meetingRequest = 0;
-  let meetingSharedCursor = '';
+  let meetingCursors = {meeting: '', shared: ''};
+  let meetingVersion;
+  let meetingDepth = 0;
+  let meetingRetryLimit = 0;
+  let focusedMeeting = '';
   let bookmarkRevision = 0;
   const pendingBookmarks = new Set();
   // A delete question is bound to the workspace and artifact it was asked about;
@@ -698,7 +728,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function syncWorkspaceCreation() {
     const enabled = canCreateInWorkspace();
     for (const button of createButtons) button.disabled = !enabled;
-    if (!enabled) newMenu.close();
+    syncDocumentTreeAction();
+    if (!enabled) {
+      newMenu.close();
+      fileUpload?.close();
+      artifactRename?.close();
+      closeDocumentTree();
+    }
   }
 
   const notifications = mountArtifactNotifications(document, {
@@ -1198,6 +1234,101 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
     return bindDocumentEditor(document, form);
   });
+  const documentDraftPanel = document.getElementById('document-draft');
+  const documentDraftPrompt = document.getElementById('document-draft-prompt');
+  const documentDraftStatus = document.getElementById('document-draft-status');
+  const documentDraftGenerate = document.getElementById('document-draft-generate');
+  const documentDraftPreview = document.getElementById('document-draft-preview');
+  let documentDraftRequest;
+  let documentDraftResult;
+
+  function resetDocumentDraft(enabled = false) {
+    documentDraftRequest?.abort();
+    documentDraftRequest = documentDraftResult = null;
+    if (!documentDraftPanel) return;
+    documentDraftPanel.hidden = !enabled;
+    documentDraftPanel.open = false;
+    documentDraftPrompt.value = documentDraftStatus.textContent = '';
+    documentDraftGenerate.disabled = false;
+    documentDraftPreview.hidden = true;
+    document.getElementById('document-draft-body').replaceChildren();
+  }
+
+  function acceptsDocumentDraft(selection) {
+    return nativeCatalog && activeEditor(selection) && current?.kind === 'document' && !current.id && !form.hidden && !form.inert;
+  }
+
+  documentDraftPrompt?.addEventListener('input', () => {
+    if (!documentDraftResult) return;
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftStatus.textContent = '描述已修改，请重新生成。';
+  });
+
+  documentDraftGenerate?.addEventListener('click', async () => {
+    const selection = editor;
+    if (!acceptsDocumentDraft(selection) || documentDraftRequest) return;
+    const prompt = documentDraftPrompt.value.trim();
+    if (!prompt) {
+      documentDraftStatus.textContent = '请填写主题或要点。';
+      documentDraftPrompt.focus();
+      return;
+    }
+    const controller = documentDraftRequest = new AbortController();
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftGenerate.disabled = true;
+    documentDraftStatus.textContent = '正在起草文档…';
+    const active = () => documentDraftRequest === controller && acceptsDocumentDraft(selection);
+    try {
+      const signal = AbortSignal.any([controller.signal, selection.controller.signal, AbortSignal.timeout(45000)]);
+      const result = await request('POST', `/v1/workspaces/${selection.workspace}/artifacts/document/draft`, {prompt}, undefined, signal);
+      if (!active()) return;
+      const {title, document: markdown} = result.body;
+      if (result.status !== 200 || typeof title !== 'string' || title.length > 80 ||
+          typeof markdown !== 'string' || !markdown.trim() || markdown.length > 8000) {
+        throw new Error(messageFor(result.body.error, '无法生成草稿，请重试。'));
+      }
+      const [{renderMarkdown}, {tableMarkdownOptions}] = await Promise.all([
+        import('../shell/markdown.mjs'), import('../shell/markdown-table.mjs'),
+      ]);
+      if (!active()) return;
+      if (prompt !== documentDraftPrompt.value.trim()) {
+        documentDraftStatus.textContent = '描述已修改，请重新生成。';
+        return;
+      }
+      documentDraftResult = {selection, title, markdown};
+      document.getElementById('document-draft-title').textContent = title;
+      renderMarkdown(document, document.getElementById('document-draft-body'), markdown, tableMarkdownOptions);
+      documentDraftPreview.hidden = false;
+      documentDraftStatus.textContent = '草稿已生成，可以预览并采用。';
+    } catch (error) {
+      if (active()) documentDraftStatus.textContent = error.name === 'Error' ? error.message : '无法生成草稿，请重试。';
+    } finally {
+      if (documentDraftRequest === controller) {
+        documentDraftRequest = null;
+        documentDraftGenerate.disabled = false;
+      }
+    }
+  });
+
+  document.getElementById('document-draft-apply')?.addEventListener('click', () => {
+    const preview = documentDraftResult;
+    if (!preview || !acceptsDocumentDraft(preview.selection) || !richDocument.instance) return;
+    richDocument.instance.flush();
+    if (form.elements.body.value.trim()) {
+      documentDraftStatus.textContent = '已保留你的正文。清空正文后可以采用预览，也可以复制其中需要的部分。';
+      return;
+    }
+    if (!form.elements.title.value.trim()) form.elements.title.value = preview.title;
+    form.elements.body.value = preview.markdown;
+    richDocument.instance.load(preview.markdown, true);
+    persistDraft();
+    resetDocumentDraft(true);
+    document.getElementById('document-rich').focus();
+    show('ok', '已采用草稿，可以编辑后保存。');
+  });
+
   const spreadsheet = lazyEditor(async () => {
     const { mountSpreadsheet } = await import('./spreadsheet.mjs');
     return mountSpreadsheet(document, {
@@ -1281,6 +1412,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     richDocument.instance?.load(form.elements.body.value, kind === 'document');
+    resetDocumentDraft(nativeCatalog && kind === 'document' && !item?.id);
     updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
@@ -1328,7 +1460,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const mediaMeta = document.getElementById('media-meta');
     const model3d = Boolean(item?.id && isModel3d(item));
     const picker = document.getElementById('media-file-picker');
-    if (picker) picker.hidden = model3d;
+    const download = document.getElementById('media-file-download');
+    const generalFile = isGeneralFile(item);
+    if (picker) picker.hidden = model3d || generalFile;
+    if (download) {
+      download.hidden = !generalFile;
+      if (generalFile) download.href = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+      else download.removeAttribute('href');
+    }
     if (kind === 'media') document.getElementById('media-file').value = '';
     if (model3dPanel) model3dPanel.hidden = !model3d;
     let model3dSource = '';
@@ -1336,7 +1475,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
     if (kind === 'media') {
       if (item && item.id && item.media) {
-        mediaMeta.textContent = `${item.media.filename || ''} · ${item.media.mime || ''} · ${item.media.bytes || 0} 字节`;
+        const fileType = generalFile ? '' : ` · ${item.media.mime || ''}`;
+        mediaMeta.textContent = `${item.media.filename || ''}${fileType} · ${item.media.bytes || 0} 字节`;
         const src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
         if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
         else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
@@ -1425,14 +1565,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!view || !view.history || !view.history.replaceState) return;
     const fragment = /^[0-9a-f]{32}$/.test(workspaceId())
       ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
-    const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
+    const url = catalogKind === 'meetings' ? meetingArchiveHref(workspaceId(), {scope: meetingScope})
+      : worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     writeSpaceAddress(url);
+  }
+
+  function syncMeetingScope() {
+    for (const tab of meetingTabs) {
+      const selected = tab.dataset.meetingScope === meetingScope;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    if (catalogKind === 'meetings') {
+      resultsPanel?.setAttribute('role', 'tabpanel');
+      resultsPanel?.setAttribute('aria-labelledby', 'meeting-scope-' + meetingScope);
+    } else {
+      resultsPanel?.removeAttribute('role');
+      resultsPanel?.removeAttribute('aria-labelledby');
+    }
   }
 
   function applyView(kind, scope, {sync = true} = {}) {
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
-    if (catalogKind === 'meetings') catalogScope = 'all';
+    if (catalogKind === 'meetings') {
+      catalogScope = 'all';
+      meetingScope = sync ? 'joined' : meetingArchiveLocation(document.defaultView?.location?.hash).scope;
+    }
+    syncMeetingScope();
+    syncDocumentTreeAction();
     catalogToolbar(catalogKind !== 'meetings');
     const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
     search.placeholder = searchLabel;
@@ -1492,6 +1653,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterSessions = [];
     filterUpdated = {};
     readFilterDates();
+    renderFilterControls();
+  }
+
+  function restoreCatalogFilters({filters}) {
+    if (!filters) return;
+    search.value = filters.query;
+    if (clearSearch) clearSearch.hidden = !search.value;
+    filterTypes = filters.types;
+    filterCreators = filters.creators;
+    filterSessions = filters.sessions;
+    for (const input of document.querySelectorAll('#filter-panel input[name="file-type"]')) {
+      input.checked = filterTypes.includes(input.value);
+    }
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) {
+      input.checked = input.value === filters.dateMode;
+    }
+    if (dateStart) dateStart.value = filters.start;
+    if (dateEnd) dateEnd.value = filters.end;
+    readFilterDates();
+    // Keep the applied range shown before the work opened, including an
+    // already-applied range while the user was typing the next date.
+    filterUpdated = filters.updated;
     renderFilterControls();
   }
 
@@ -1588,47 +1771,111 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderFilterChoices();
   }
 
-  async function loadMeetings({appendShared = false} = {}) {
-    const id = workspaceId();
-    if (!id || (appendShared ? !meetingSharedCursor || meetingLoading : meetingLoadedFor === id)) return;
+  function resetMeetings() {
+    meetingRequest += 1;
+    meetingLoadedFor = '';
+    meetingItems = [];
+    meetingCursors = {meeting:'', shared:''};
+    meetingVersion = undefined;
+    meetingDepth = 0;
+    meetingError = '';
+    meetingLoading = false;
+    meetingRetryLimit = 0;
+    focusedMeeting = '';
+  }
+
+  function moreMeetings() {
+    return Boolean(meetingCursors.meeting || meetingCursors.shared);
+  }
+
+  async function loadMeetings({append = false, limit = 24} = {}) {
+    const id = workspaceId(), account = currentUser;
+    if (!id || (append ? !moreMeetings() || meetingLoading : meetingLoadedFor === id)) return;
     const seq = ++meetingRequest;
-    if (!appendShared) {
+    if (!append) {
       meetingItems = [];
-      meetingSharedCursor = '';
+      meetingCursors = {meeting:'', shared:''};
+      meetingDepth = 0;
+      meetingVersion = undefined;
     }
     meetingError = '';
     meetingLoadedFor = id;
     meetingLoading = true;
     renderCatalog();
     const base = `/v1/workspaces/${id}/meetings`;
-    const get = path => request('GET', path).catch(() => ({status: 0, body: {}}));
-    const query = new URLSearchParams({limit: '100'});
-    if (appendShared) query.set('cursor', meetingSharedCursor);
-    const [listed, shared] = await Promise.all([
-      appendShared ? null : get(base + '?limit=100'),
-      servedByDsBot(document) ? get(base + '/shared?' + query) : null,
-    ]);
-    if (seq !== meetingRequest || workspaceId() !== id) return;
+    const read = kind => {
+      const cursor = meetingCursors[kind];
+      if (append && !cursor) return null;
+      const query = new URLSearchParams({limit: nativeCatalog ? limit : 100});
+      if (kind === 'meeting' && nativeCatalog) query.set('order', 'recent');
+      if (cursor) query.set('cursor', cursor);
+      return request('GET', base + (kind === 'shared' ? '/shared?' : '?') + query)
+        .catch(() => ({status: 0, body: {}}));
+    };
+    const [listed, shared] = await Promise.all([read('meeting'), nativeCatalog ? read('shared') : null]);
+    if (seq !== meetingRequest || workspaceId() !== id || currentUser !== account) return;
     meetingLoading = false;
-    if (listed?.status === 200) {
-      meetingItems = listed.body.items || [];
-    } else if (listed) {
-      meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
-    }
-    if (shared?.status === 200) {
-      const ids = new Set(meetingItems.filter(item => item.shared === true).map(item => item.id));
-      for (const item of shared.body.items || []) {
-        if (ids.has(item.id)) continue;
-        meetingItems.push({...item, shared: true});
-        ids.add(item.id);
+    const results = [['meeting', listed], ['shared', shared]].filter(([, result]) => result);
+    for (const [kind, result] of results) {
+      if (result.status !== 200 || !Array.isArray(result.body?.items)) {
+        meetingError ||= messageFor(result.body?.error, kind === 'shared' ? '无法读取共享纪要，请重试。' : '无法读取会议纪要，请重试。');
       }
-      const cursor = shared.body.cursor;
-      meetingSharedCursor = typeof cursor === 'string' && cursor !== meetingSharedCursor ? cursor : '';
-    } else if (shared && !meetingError) {
-      meetingError = appendShared ? '无法加载更多共享纪要，请重试。' : '无法读取收到的共享纪要。';
+    }
+    meetingRetryLimit = 0;
+    if (append && meetingError) {
+      meetingRetryLimit = limit;
+      if (catalogKind === 'meetings') renderCatalog();
+      return;
+    }
+    const version = listed?.body?.activity_version;
+    if (append && listed?.status === 200 && meetingVersion !== undefined && version !== undefined && version !== meetingVersion) {
+      meetingLoadedFor = '';
+      return loadMeetings({limit: Math.min(100, meetingDepth + limit)});
+    }
+    if (listed?.status === 200) meetingVersion = version;
+    for (const [kind, result] of results) {
+      if (result.status !== 200 || !Array.isArray(result.body?.items)) continue;
+      const keys = new Set(meetingItems.filter(item => Boolean(item.shared) === (kind === 'shared')).map(item => item.id));
+      for (const item of result.body.items) {
+        if (!item?.id || (nativeCatalog && !CATALOG_CURSOR.test(item.id)) || keys.has(item.id)) continue;
+        meetingItems.push({...item, shared: kind === 'shared'});
+        keys.add(item.id);
+      }
+      const cursor = result.body.cursor;
+      meetingCursors[kind] = nativeCatalog && CATALOG_CURSOR.test(cursor || '') && cursor !== meetingCursors[kind] ? cursor : '';
     }
     if (meetingError) meetingLoadedFor = '';
-    if (catalogKind === 'meetings') renderCatalog();
+    if (!meetingError) meetingDepth += limit;
+    if (catalogKind === 'meetings') {
+      renderCatalog();
+      return expandMeetingSearch();
+    }
+  }
+
+  function expandMeetingSearch() {
+    const remaining = MEETING_SEARCH_WINDOW - meetingDepth;
+    if (!nativeCatalog || !search.value.trim() || !moreMeetings() || remaining <= 0 || meetingError || meetingLoading) return;
+    return loadMeetings({append:true, limit:remaining});
+  }
+
+  async function openMeetingArchive() {
+    const view = document.defaultView;
+    const account = currentUser, workspace = workspaceId();
+    const {focus} = meetingArchiveLocation(view?.location?.hash);
+    const context = {owner:account?.id, workspace, scope:meetingScope, focus};
+    const depth = meetingArchiveDepth(view, context);
+    await loadMeetings({limit:Math.max(24, Math.min(100, depth))});
+    if (!focus || focusedMeeting === focus) return;
+    const current = () => catalogKind === 'meetings' && currentUser === account && workspaceId() === workspace &&
+      meetingScope === context.scope && meetingArchiveLocation(view?.location?.hash).focus === focus;
+    const find = () => document.querySelector(`#artifact-list [data-meeting-key="${focus}"]`);
+    while (current() && !find() && !meetingError && !meetingLoading && moreMeetings() && meetingDepth < depth) {
+      await loadMeetings({append:true, limit:Math.min(100, depth - meetingDepth)});
+    }
+    if (current() && find()) {
+      focusedMeeting = focus;
+      find().focus();
+    }
   }
 
   function renderMeetings() {
@@ -1660,17 +1907,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const waiting = document.getElementById('meetings-loading');
     if (waiting) waiting.hidden = !meetingLoading;
     const noMatch = document.getElementById('meetings-no-match');
-    const filtered = Boolean(needle) || meetingScope === 'joined';
+    const filtered = Boolean(needle) || (meetingScope === 'joined' && meetingItems.length > 0);
     if (noMatch) noMatch.hidden = !filtered || Boolean(meetingError) || meetingLoading || rows.length > 0;
+    if (noMatch) noMatch.textContent = moreMeetings() ? '已加载的会议里暂无符合条件的记录。' : '没有符合当前条件的会议。';
+    const showAll = document.getElementById('meetings-show-all');
+    if (showAll) showAll.hidden = !noMatch || noMatch.hidden || meetingScope !== 'joined' || Boolean(needle);
     if (emptyMeetings) emptyMeetings.hidden = filtered || Boolean(meetingError) || rows.length > 0 || meetingLoading || !workspaceId();
     if (empty) empty.hidden = !meetingError && rows.length > 0;
     const retry = document.getElementById('retry-meetings');
     if (retry) retry.hidden = !meetingError;
     const more = document.getElementById('more-shared-meetings');
     if (more) {
-      more.hidden = !meetingSharedCursor;
-      more.disabled = meetingLoading;
-      more.textContent = meetingLoading ? '正在加载…' : '加载更多共享纪要';
+      more.hidden = !moreMeetings();
+      more.disabled = meetingLoading || Boolean(meetingError);
+      more.textContent = meetingLoading ? '正在加载…' : '加载更多会议';
     }
     const create = document.getElementById('new-meeting-in-space');
     if (create) {
@@ -1682,7 +1932,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
       const link = document.createElement('a');
-      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), [row.shared ? 'shared' : 'meeting']: row.id});
+      const kind = row.shared ? 'shared' : 'meeting';
+      const focus = kind + ':' + row.id;
+      link.dataset.meetingKey = focus;
+      const params = new URLSearchParams({workspace: workspaceId(), [kind]: row.id});
+      if (nativeCatalog) params.set('library', meetingScope);
+      link.href = '/meetings#' + params;
+      link.addEventListener('click', event => {
+        if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const workspace = workspaceId();
+        const context = {scope:meetingScope, focus};
+        saveMeetingArchive(document.defaultView, {
+          owner:currentUser?.id, workspace, ...context, depth:meetingDepth,
+        });
+        writeSpaceAddress(meetingArchiveHref(workspace, context));
+      });
       const title = document.createElement('span');
       title.className = 'meeting-title';
       title.append(document.createTextNode(row.title));
@@ -1761,6 +2025,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (emptyAutomation) emptyAutomation.hidden = !showAutomation;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
     if (emptyMatches) emptyMatches.hidden = !noMatches;
+    if (resetArtifactSearch && noMatches) {
+      resetArtifactSearch.textContent = search.value.trim()
+        ? appliedFilters() ? '清除搜索和筛选' : '清除搜索'
+        : '清除筛选';
+    }
     if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showAutomation || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
@@ -2000,6 +2269,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (itemMenuOpen()) actionMenus.close();
   }
 
+  async function renameFromCatalog(item, trigger, inScope) {
+    closeItemMenu();
+    const scope = () => canCreateInWorkspace() ? {owner:currentUser.id,workspace:workspaceId()} : null;
+    try {
+      artifactRenameModule ??= import('./rename.mjs');
+      const {mountArtifactRename} = await artifactRenameModule;
+      if (!inScope() || listPanel.hidden || !scope()) return;
+      artifactRename ??= mountArtifactRename(document, {
+        scope,
+        request: (method, path, data, signal) => request(method,path,data,undefined,signal),
+        updated(saved) {
+          allItems = allItems.map(row => row.id === saved.id && row.revision < saved.revision
+            ? {...row,title:saved.title,revision:saved.revision,updated:saved.updated,updated_by:saved.updated_by,
+              match:row.match?.kind === 'title' ? null : row.match}
+            : row);
+          renderCatalog({preserve:true});
+          show('ok', '已更新作品名称。');
+          void loadList({background:true});
+        },
+      });
+      artifactRename.open(item,trigger.id);
+    } catch {
+      artifactRenameModule = null;
+      if (inScope()) show('error', '暂时无法打开重命名窗口，请重试。');
+    }
+  }
+
   function canDuplicate(item) {
     return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
       Number.isSafeInteger(item.revision) && item.revision > 0;
@@ -2124,8 +2420,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     rename.type = 'button';
     rename.setAttribute('role', 'menuitem');
     rename.textContent = '重命名';
-    rename.title = '打开文档并编辑标题';
     rename.addEventListener('click', async () => {
+      if (nativeCatalog && /^[0-9a-f]{32}$/.test(item.id || '') &&
+          Number.isSafeInteger(item.revision) && item.revision > 0) {
+        if (inScope()) await renameFromCatalog(item, button, inScope);
+        return;
+      }
       if (await onOpen(item)) {
         const title = form.elements.title;
         title?.focus();
@@ -2198,7 +2498,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const workspace = workspaceId();
     const account = currentUser;
     const inScope = () => !!account && currentUser === account && workspaceId() === workspace;
-    const onOpen = item => inScope() && openEditor(item, {workspace});
+    const onOpen = (item, findText) => inScope() && openEditor(item, {workspace, findText});
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     const previousRows = preserve ? [...list.children] : [];
@@ -2228,7 +2528,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         head = document.createElement('li');
         head.className = 'artifact-list-head';
         head.setAttribute('aria-hidden', 'true');
-        for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+        for (const label of ['标题', '来源', '创建时间', '最近动态', '操作']) {
           const cell = document.createElement('span');
           cell.textContent = label;
           head.append(cell);
@@ -2256,7 +2556,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const titleMatch = match?.kind === 'title' && match.text === item.title && match.start < 16;
       if (titleMatch) appendArtifactHighlight(document, open, match);
       else open.textContent = item.title;
-      open.addEventListener('click', () => onOpen(item));
+      open.addEventListener('click', () => onOpen(item,
+        item.kind === 'document' && match?.kind === 'body' ? match.text.slice(match.start, match.end) : ''));
       const meta = document.createElement('span');
       meta.className = 'note';
       const origin = artifactOrigin(item, workspace);
@@ -2277,6 +2578,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const cover = document.createElement('span');
       cover.className = 'artifact-cover';
       cover.setAttribute('aria-hidden', 'true');
+      cover.addEventListener('click', () => {
+        // The title remains the single keyboard target for opening this work.
+        open.focus({preventScroll: true});
+        open.click();
+      });
       const mime = item.media && item.media.mime ? String(item.media.mime) : '';
       const thumb = item.preview ? renderThumb(document, item.preview) : null;
       if (thumb) {
@@ -2386,7 +2692,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const actor = selection?.account?.id;
     if (!actor || selection.account !== currentUser || !selection.workspace ||
         !['document', 'website'].includes(item?.kind)) return '';
-    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, item.id || null]);
+    const draftId = item.id || (item.parent?.id ? 'child:' + item.parent.id : null);
+    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, draftId]);
   }
 
   function readDraft(key) {
@@ -2554,10 +2861,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+    syncDocumentLocation();
     syncStudioCopy();
   }
 
   function hideEditor() {
+    closeDocumentTree();
+    artifactRename?.close();
+    richDocument.instance?.closeFind();
+    resetDocumentDraft();
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
@@ -2608,12 +2920,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.getElementById('create-share').disabled = false;
     document.getElementById('share-expires').value = '';
     discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
+    if (discoverTopic) discoverTopic.value = '';
     if (discoverEditable) discoverEditable.checked = false;
     const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
     if (discoverEditableField) discoverEditableField.hidden = !canReleaseEditable;
     if (discoverEditableNote) discoverEditableNote.hidden = !canReleaseEditable;
     if (editor) {
       editor.discoverSlugEdited = false;
+      editor.discoverTopicEdited = false;
       editor.discoverEditableEdited = false;
       editor.discoverListing = null;
     }
@@ -2628,12 +2942,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog({preserve});
   }
 
-  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
+  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false, findText} = {}) {
     if (!canCreateInWorkspace() || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
     const catalogView = !listPanel.hidden && !target?.artifact ? {
-      workspace, kind:catalogKind, scope:catalogScope, scroll:main?.scrollTop ?? 0, focus:item?.id,
+      account:currentUser.id, workspace, kind:catalogKind, scope:catalogScope,
+      scroll:catalogScrollers.map(node => node?.scrollTop ?? 0), focus:item?.id,
+      depth:sameSelection(catalog) ? catalog.depth : CATALOG_PAGE_SIZE,
+      filters:{query:search.value, types:filterTypes, creators:filterCreators, sessions:filterSessions,
+        dateMode:dateMode(), start:dateStart?.value || '', end:dateEnd?.value || '', updated:filterUpdated},
     } : null;
     hideEditor();
     closeNewMenu();
@@ -2686,11 +3004,176 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (current?.id) recordEditorAddress(selection, current);
     if (notice) show(notice.kind, notice.text);
     if (focusTitle) form.elements.title?.focus({preventScroll: true});
+    if (current?.kind === 'document' && findText) richDocument.instance?.find(findText);
     return true;
   }
 
   function editorPath(selection, id = current.id) {
     return `/v1/workspaces/${selection.workspace}/artifacts/${id}`;
+  }
+
+  function syncDocumentTreeAction() {
+    if (treeOpen) treeOpen.hidden = !nativeCatalog || !canCreateInWorkspace() || catalogKind === 'meetings';
+  }
+
+  function documentHref(workspace, id) {
+    return worksPath() + '?' + new URLSearchParams({workspace, artifact:id});
+  }
+
+  function syncDocumentLocation() {
+    if (!editorDocumentNav) return;
+    editorDocumentNav.hidden = !nativeCatalog || current?.kind !== 'document';
+    newChildDocument.hidden = !current?.id;
+    if (moveDocument) moveDocument.hidden = !current?.id;
+    const parent = current?.parent;
+    editorParentDocument.hidden = !CATALOG_CURSOR.test(parent?.id || '');
+    editorParentDocument.textContent = parent ? '上级 · ' + parent.title : '';
+    if (!editorParentDocument.hidden) editorParentDocument.href = documentHref(workspaceId(), parent.id);
+    else editorParentDocument.removeAttribute('href');
+  }
+
+  function discardDocumentTree() {
+    treeRead?.abort();
+    treeRead = null;
+    documentMove = null;
+    treeList?.replaceChildren();
+    if (treeStatus) treeStatus.textContent = '';
+  }
+
+  function closeDocumentTree() {
+    discardDocumentTree();
+    if (treeDialog?.open) treeDialog.close();
+  }
+
+  function documentClick(event) {
+    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  }
+
+  function openTreeDocument(item) {
+    if (current?.id === item.id) return closeDocumentTree();
+    return openEditor({id:item.id, kind:'document'});
+  }
+
+  function startChildDocument({id, title}) {
+    return openEditor({kind:'document', parent:{id, title}}, {focusTitle:true});
+  }
+
+  async function showDocumentTree({move = false} = {}) {
+    if (!treeDialog || !nativeCatalog || !canCreateInWorkspace()) return;
+    const workspace = workspaceId(), account = currentUser;
+    const itemToMove = move && current?.kind === 'document' && current.id ? current : null;
+    discardDocumentTree();
+    const controller = new AbortController();
+    treeRead = controller;
+    if (itemToMove) documentMove = {item: itemToMove, workspace, account, controller};
+    if (treeHeading) treeHeading.textContent = itemToMove ? `移动「${itemToMove.title}」` : '文档树';
+    if (moveDocumentForm) moveDocumentForm.hidden = true;
+    treeList.hidden = Boolean(itemToMove);
+    treeStatus.textContent = '正在读取文档…';
+    treeRetry.hidden = true;
+    if (!treeDialog.open) treeDialog.showModal();
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts/document-tree`, undefined, undefined,
+      AbortSignal.any([controller.signal, AbortSignal.timeout(8000)])).catch(() => ({status:0}));
+    if (treeRead !== controller || !treeDialog.open || workspaceId() !== workspace || currentUser !== account) return;
+    if (result.status !== 200 || !Array.isArray(result.body?.items)) {
+      treeStatus.textContent = '无法读取文档树。';
+      treeRetry.hidden = false;
+      return;
+    }
+    const items = result.body.items.filter(item => CATALOG_CURSOR.test(item?.id || '') && typeof item.title === 'string');
+    const ids = new Set(items.map(item => item.id));
+    const children = new Map();
+    for (const item of items) {
+      const parent = ids.has(item.parent_id) ? item.parent_id : null;
+      const list = children.get(parent) || [];
+      list.push(item);
+      children.set(parent, list);
+    }
+    if (itemToMove) {
+      const row = items.find(item => item.id === itemToMove.id);
+      if (!row) {
+        treeStatus.textContent = '这份文档已不在当前工作区。';
+        return;
+      }
+      documentMove.expectedParent = row.parent_id;
+      const destinationOption = (value, text) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        return option;
+      };
+      moveDestination.replaceChildren(destinationOption('', '请选择位置'));
+      if (row.parent_id !== null) moveDestination.append(destinationOption('root', '资料空间根目录'));
+      const addDestinations = (parent, depth) => {
+        for (const item of children.get(parent) || []) {
+          if (item.id === row.id) continue;
+          if (item.id !== row.parent_id) {
+            moveDestination.append(destinationOption(item.id, ' '.repeat(Math.min(depth, 6)) + item.title));
+          }
+          addDestinations(item.id, depth + 1);
+        }
+      };
+      addDestinations(null, 0);
+      const available = moveDestination.options.length > 1;
+      treeStatus.textContent = available ? '' : '当前没有其他可选位置。';
+      moveDocumentForm.hidden = !available;
+      moveDestination.value = '';
+      moveDestination.disabled = false;
+      moveSubmit.disabled = true;
+      if (available) moveDestination.focus({preventScroll: true});
+      return;
+    }
+    treeStatus.textContent = items.length ? '' : '这个工作区还没有云文档。';
+    const addRows = (parent, depth) => {
+      for (const item of children.get(parent) || []) {
+        const row = document.createElement('li');
+        row.className = 'document-tree-row';
+        row.style.setProperty('--document-depth', String(Math.min(depth, 6)));
+        const link = document.createElement('a');
+        link.href = documentHref(workspace, item.id);
+        link.textContent = item.title;
+        if (current?.id === item.id) link.setAttribute('aria-current', 'page');
+        link.addEventListener('click', event => {
+          if (!documentClick(event)) return;
+          event.preventDefault();
+          void openTreeDocument(item);
+        });
+        const child = document.createElement('button');
+        child.type = 'button';
+        child.textContent = '新建子文档';
+        child.setAttribute('aria-label', `在「${item.title}」下新建子文档`);
+        child.addEventListener('click', () => void startChildDocument(item));
+        row.append(link, child);
+        treeList.append(row);
+        addRows(item.id, depth + 1);
+      }
+    };
+    addRows(null, 0);
+  }
+
+  async function submitDocumentMove(event) {
+    event.preventDefault();
+    const move = documentMove;
+    const target = moveDestination.value;
+    if (!move || moveSubmit.disabled || (target !== 'root' && !CATALOG_CURSOR.test(target))) return;
+    const parentId = target === 'root' ? null : target;
+    moveSubmit.disabled = moveDestination.disabled = true;
+    treeStatus.textContent = '正在移动文档…';
+    const result = await request('POST', `/v1/workspaces/${move.workspace}/artifacts/document-tree`, {
+      artifact_id: move.item.id, parent_id: parentId, expected_parent_id: move.expectedParent,
+    }, undefined, AbortSignal.any([move.controller.signal, AbortSignal.timeout(8000)])).catch(() => ({status:0}));
+    if (documentMove !== move || currentUser !== move.account || workspaceId() !== move.workspace || current?.id !== move.item.id) return;
+    const parent = result.body?.parent;
+    if (result.status !== 200 || result.body?.id !== move.item.id || (parent?.id ?? null) !== parentId) {
+      treeStatus.textContent = messageFor(result.body?.error, '无法确认文档位置，请刷新后重试。');
+      treeRetry.hidden = false;
+      return;
+    }
+    if (parent) current.parent = parent;
+    else delete current.parent;
+    syncDocumentLocation();
+    closeDocumentTree();
+    show('success', '文档已移动。');
   }
 
   function panelStatus(name, text) {
@@ -2723,6 +3206,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (publishDiscover) publishDiscover.disabled = pending;
     if (revokeDiscover) revokeDiscover.disabled = pending;
     if (discoverSlug) discoverSlug.disabled = pending;
+    if (discoverTopic) discoverTopic.disabled = pending;
     if (discoverEditable) discoverEditable.disabled = pending;
   }
 
@@ -2746,6 +3230,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (editor) editor.discoverListing = listed ? row : null;
     syncSharingRevisions(current?.revision);
     if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
+    if (discoverTopic && !editor?.discoverTopicEdited) {
+      discoverTopic.value = listed && isWorkTopic(row.category) ? row.category : '';
+    }
     if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
     if (revokeDiscover) revokeDiscover.hidden = !listed;
     if (publishDiscover) publishDiscover.textContent = listed ? '更新公开版本' : '发布到发现页';
@@ -2779,35 +3266,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     selection.reads.delete('discover');
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
-    const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
+    const id = current.id;
+    const path = editorPath(selection, id) + '/discover';
     const payload = publish ? {slug,revision:current.revision} : {};
+    if (publish && nativeCatalog && discoverTopic && (discoverTopic.value || selection.discoverTopicEdited)) {
+      payload.category = discoverTopic.value || null;
+    }
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
       payload.allow_editable_remix = discoverEditable.checked;
     }
-    const result = await request('POST', path, payload, undefined, selection.controller.signal)
-      .catch(() => ({status: 0, body: {}}));
-    if (!activeEditor(selection)) return;
-    selection.discoverWrite = false;
-    setDiscoverPending(false);
-    if (result.status === 200 || (publish && result.status === 201)) {
+    const isCurrent = () => activeEditor(selection) && current?.id === id;
+    const validListing = row => row?.listed === false ||
+      (row?.listed === true && typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug));
+    const topicMatches = row => payload.category === undefined || (row.category ?? null) === payload.category;
+    const showConfirmed = row => {
       if (publish) selection.discoverSlugEdited = false;
+      selection.discoverTopicEdited = false;
       selection.discoverEditableEdited = false;
-      if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
-      else await loadDiscover();
-      if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
-      return;
-    }
-    const error = result.body?.error;
-    const messages = {
-      forbidden: '只有所有者或管理员可以将作品发布到发现页。',
-      conflict: '这个短地址已经在用。',
-      invalid: '请输入符合要求的公开短地址。',
-      attachment_type_blocked: '这个文件格式无法公开发布。',
+      renderDiscoverListing(row, !selection.discoverSlugEdited);
+      if (!publish) panelStatus('discover', '已从发现页撤回。');
     };
-    const code = typeof error === 'string' ? error : error?.code;
-    if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
-    const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
-    panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+
+    try {
+      const result = await request('POST', path + (publish ? '' : '/revoke'), payload, undefined,
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(15000)]))
+        .catch(() => ({status: 0}));
+      if (!isCurrent()) return;
+      const accepted = result.status === 200 || (publish && result.status === 201);
+      const received = result.body?.discover;
+      if (accepted && validListing(received) && received.listed === publish &&
+          (!publish || (received.slug === slug && topicMatches(received)))) {
+        showConfirmed(received);
+        return;
+      }
+
+      const action = publish ? '发布' : '撤回';
+      if (accepted || !result.status || result.status === 408 || result.status >= 500) {
+        panelStatus('discover', '正在核对公开状态…');
+        const check = await request('GET', path, undefined, undefined,
+          AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+          .catch(() => ({status: 0}));
+        if (!isCurrent()) return;
+        const observed = check.body?.discover;
+        if (check.status !== 200 || !validListing(observed)) {
+          panelStatus('discover', `未能确认${action}结果。重新展开此面板可查询公开状态。`);
+          return;
+        }
+        const matches = publish ? observed.listed && observed.slug === slug && observed.published_revision === payload.revision &&
+          Boolean(observed.editable_remix) === Boolean(payload.allow_editable_remix) && topicMatches(observed) : observed.listed === false;
+        if (matches) showConfirmed(observed);
+        else {
+          renderDiscoverListing(observed, !selection.discoverSlugEdited);
+          panelStatus('discover', `当前公开状态与本次${action}请求不一致。请核对后重试。`);
+        }
+        return;
+      }
+
+      const error = result.body?.error;
+      const messages = {
+        forbidden: '只有所有者或管理员可以将作品发布到发现页。',
+        conflict: '这个短地址已经在用。',
+        invalid: '请输入符合要求的公开短地址。',
+        attachment_type_blocked: '这个文件格式无法公开发布。',
+      };
+      const code = typeof error === 'string' ? error : error?.code;
+      if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
+      const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
+      panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+    } finally {
+      selection.discoverWrite = false;
+      if (isCurrent()) setDiscoverPending(false);
+    }
   }
 
   function clearCreatedShare() {
@@ -2981,6 +3510,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const canRestore = () => nativeCatalog && currentSelection() && current.revision !== revision;
     workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
       path:editorPath(selection,artifact.id) + '/versions/' + revision,
+      latestPath:editorPath(selection,artifact.id),
       canRestore,
       reviewRestore: () => restoreReviewMessage(selection) || {revision:current.revision, key:idempotencyKey()},
       submitRestore: review => restoreWorkVersion(selection, artifact.id, revision, review),
@@ -3407,7 +3937,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
   }
 
-  async function loadList({reuse = false, background = false, signal, initial} = {}) {
+  async function loadList({reuse = false, background = false, signal, initial, minDepth = CATALOG_PAGE_SIZE} = {}) {
     if (background && searchTimer !== null) return 'defer';
     if (!background) cancelScheduledSearch();
     if (catalogKind === 'meetings') {
@@ -3416,7 +3946,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (catalog) catalog.more = null;
       listStatus();
       activity.setScope('');
-      await loadMeetings();
+      await openMeetingArchive();
       return;
     }
     const workspace = workspaceId();
@@ -3424,7 +3954,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     activity.setScope(workspace);
     const query = catalogQuery();
     const sameCatalog = sameSelection(catalog);
-    if (reuse && sameCatalog && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
+    if (reuse && sameCatalog && catalog.depth >= minDepth && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
       listStatus(catalog.message, catalog.state === 'error');
       if (!listPanel.hidden) showCatalog();
       return;
@@ -3437,7 +3967,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const bookmarkBefore = bookmarkRevision;
     if (!sameCatalog) allItems = [];
-    const depth = sameCatalog ? before.depth : CATALOG_PAGE_SIZE;
+    const depth = Math.max(minDepth, sameCatalog ? before.depth : CATALOG_PAGE_SIZE);
     const loading = {
       workspace, account: currentUser, query, depth, controller, state: 'loading',
       message: search.value.trim() ? '正在搜索作品…' : '正在加载资料…',
@@ -3525,7 +4055,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
-    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const startup = nativeCatalog ? takeSpaceStartup(document) ||
+      (requested?.artifact ? startSavedArtifactReads(path => request('GET', path), requested.workspace) : null) : null;
+    const sessionRequest = startup?.sessionRequest || request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sharedPath = '/v1/workspaces?limit=100';
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const studioDirectory = namedStudio ? request('GET', sharedPath)
+      .catch(() => ({status: 0, body: {}})).then(initial => ({initial, supplemental: null})) : null;
+    const linkedDirectory = studioDirectory || startup?.linkedDirectory;
     const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
     const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
@@ -3539,6 +4076,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspacePending.hidden = true;
       hideEditor();
       currentUser = null;
+      resetMeetings();
       syncStudioWorkspace();
       catalog = null;
       facets = null;
@@ -3556,6 +4094,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
+    if (currentUser?.id !== session.body.user.id) resetMeetings();
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
@@ -3564,7 +4103,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     whoami.textContent = currentUser.username;
     // The native Studio GET checks team membership itself. Start it alongside
     // the workspace directory, and use it only for the verified selected team.
-    const namedStudio = nativeCatalog && linkedStudio?.workspace;
     const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
     if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
@@ -3576,10 +4114,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    const sharedPath = '/v1/workspaces?limit=100';
-    let {initial: space, supplemental} = namedStudio
-      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
-      : await readWorkspaceChoices(request, sharedPath, personalRequest);
+    let {initial: space, supplemental} = await (linkedDirectory || readWorkspaceChoices(request, sharedPath, personalRequest));
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -3653,7 +4188,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       catalog?.more?.abort();
       catalog = null;
       allItems = [];
-      meetingItems = [];
+      resetMeetings();
       meetingError = catalogKind === 'meetings' ? '无法打开此工作区的会议资料。请选择其他工作区。' : '';
       listStatus();
       showCatalog();
@@ -3681,6 +4216,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       params.delete('new');
       const rest = params.toString();
       document.getElementById(newKindButtonId(newKind))?.click();
+      if (newKind === 'media' && nativeCatalog) void loadList();
       const conversation = fragment.get('conversation');
       if (current?.kind === newKind && linkedWorkspace && workspaceId() === linkedWorkspace && /^[A-Za-z0-9_-]{1,128}$/.test(conversation || '')) {
         artifactSendOrigin = {wid: linkedWorkspace, conversation, item: current, allowed: false};
@@ -3720,11 +4256,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncStudioWorkspace();
     hideEditor();
     show('', '');
-    meetingLoadedFor = '';
-    meetingSharedCursor = '';
-    meetingItems = [];
-    meetingError = '';
-    meetingLoading = false;
+    resetMeetings();
     facets = null;
     filterCreators = [];
     filterSessions = [];
@@ -3742,7 +4274,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (clearSearch) clearSearch.hidden = !search.value;
     if (catalogKind === 'meetings') {
       renderMeetings();
-      return;
+      return expandMeetingSearch();
     }
     if (immediate || !search.value.trim() || sameSelection(catalog)) {
       return loadList({reuse: !immediate || catalog?.state !== 'error'});
@@ -3769,6 +4301,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return updateSearch(true);
   }
   clearSearch?.addEventListener('click', resetSearch);
+  resetArtifactSearch?.addEventListener('click', () => {
+    clearFilters();
+    return resetSearch();
+  });
   search.addEventListener('keydown', event => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape' && search.value) {
@@ -3783,8 +4319,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   });
   document.getElementById('retry-artifact-list').addEventListener('click', () => loadList());
   pageMore?.addEventListener('click', loadMoreArtifacts);
-  document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
-  document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
+  document.getElementById('retry-meetings')?.addEventListener('click', () =>
+    loadMeetings({append: meetingRetryLimit > 0, limit: meetingRetryLimit || undefined}));
+  document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({append:true}));
 
   document.getElementById('new-website').addEventListener('click', () => {
     draftKind = 'website';
@@ -3829,12 +4366,68 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     });
   }
 
+  treeOpen?.addEventListener('click', showDocumentTree);
+  document.getElementById('editor-document-tree')?.addEventListener('click', showDocumentTree);
+  moveDocument?.addEventListener('click', () => void showDocumentTree({move:true}));
+  moveDestination?.addEventListener('change', () => { moveSubmit.disabled = !moveDestination.value; });
+  moveDocumentForm?.addEventListener('submit', submitDocumentMove);
+  document.getElementById('close-document-tree')?.addEventListener('click', closeDocumentTree);
+  treeRetry?.addEventListener('click', () => void showDocumentTree({move:Boolean(documentMove)}));
+  treeDialog?.addEventListener('close', () => { if (!treeDialog.open) discardDocumentTree(); });
+  editorParentDocument?.addEventListener('click', event => {
+    if (!documentClick(event) || !current?.parent) return;
+    event.preventDefault();
+    void openTreeDocument(current.parent);
+  });
+  newChildDocument?.addEventListener('click', () => {
+    if (current?.id && current.kind === 'document') void startChildDocument(current);
+  });
+
   for (const [id, kind] of [
     ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
-    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
+    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'],
   ]) bindCreate(id, event => {
     draftKind = kind;
     void openEditor({kind}, {focusTitle: event.isTrusted && event.detail === 0});
+  });
+
+  const uploadScope = () => canCreateInWorkspace() ? {owner:currentUser.id, workspace:workspaceId()} : null;
+  bindCreate('new-media', async event => {
+    if (!nativeCatalog) {
+      draftKind = 'media';
+      void openEditor({kind:'media'}, {focusTitle:event.isTrusted && event.detail === 0});
+      return;
+    }
+    const requested = uploadScope();
+    if (!requested || !canLeaveEditor()) return;
+    closeNewMenu();
+    const sameScope = () => {
+      const live = uploadScope();
+      return live?.owner === requested.owner && live.workspace === requested.workspace;
+    };
+    try {
+      fileUploadModule ??= import('./upload-files.mjs');
+      const {mountSpaceFileUpload} = await fileUploadModule;
+      if (!sameScope()) return;
+      fileUpload ??= mountSpaceFileUpload(document, {
+        scope: uploadScope,
+        key: idempotencyKey,
+        refresh: () => void loadList({background:true}),
+        save(workspace, file, attempt, signal) {
+          const formData = new FormData();
+          formData.append('title', attempt.title);
+          formData.append('kind', 'media');
+          formData.append('allow_file', '1');
+          formData.append('file', file);
+          return sendFile(`/v1/workspaces/${workspace}/artifacts`, formData, attempt.key,
+            AbortSignal.any([signal, AbortSignal.timeout(30000)]));
+        },
+      });
+      fileUpload.open();
+    } catch {
+      fileUploadModule = null;
+      if (sameScope()) show('error', '无法打开上传窗口，请重试。');
+    }
   });
 
   bindCreate('empty-new-document', () => {
@@ -3847,6 +4440,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  const createAgentDocument = document.getElementById('new-agent-document');
+  if (createAgentDocument) createAgentDocument.hidden = !nativeCatalog;
+  bindCreate('new-agent-document', async () => {
+    if (await openEditor({kind:'document'}) && acceptsDocumentDraft(editor)) {
+      documentDraftPanel.open = true;
+      documentDraftPrompt.focus();
+    }
+  });
   bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
   bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
@@ -3874,27 +4475,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       await loadList({reuse: true});
     });
   }
-  for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
-    button.addEventListener('click', () => {
-      meetingScope = button.getAttribute('data-meeting-scope') || 'all';
-      for (const item of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
-        if (item.getAttribute('data-meeting-scope') === meetingScope) item.setAttribute('aria-current', 'page');
-        else item.removeAttribute('aria-current');
-      }
-      renderCatalog();
-    });
+  function selectMeetingScope(scope) {
+    meetingScope = scope;
+    focusedMeeting = '';
+    syncMeetingScope();
+    syncViewUrl();
+    renderCatalog();
   }
-  for (const button of document.querySelectorAll('#layout-toggle [data-layout]')) {
-    button.addEventListener('click', () => {
-      catalogLayout = button.getAttribute('data-layout') || 'grid';
-      for (const item of document.querySelectorAll('#layout-toggle [data-layout]')) {
-        const selected = item.getAttribute('data-layout') === catalogLayout;
-        item.setAttribute('aria-selected', selected ? 'true' : 'false');
-        item.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  meetingTabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectMeetingScope(tab.dataset.meetingScope));
+    tab.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      let next;
+      if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = meetingTabs.length - 1;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        const direction = event.key === 'ArrowLeft' ? -1 : 1;
+        next = (index + direction + meetingTabs.length) % meetingTabs.length;
       }
-      renderCatalog();
+      else return;
+      event.preventDefault();
+      selectMeetingScope(meetingTabs[next].dataset.meetingScope);
+      meetingTabs[next].focus();
     });
+  });
+  document.getElementById('meetings-show-all')?.addEventListener('click', () => {
+    selectMeetingScope('all');
+    meetingTabs.find(tab => tab.dataset.meetingScope === 'all')?.focus();
+  });
+  const layoutTabs = [...document.querySelectorAll('#layout-toggle [data-layout]')];
+  function selectLayout(button) {
+    catalogLayout = applyArtifactLayout(document.getElementById('artifact-list'), button.dataset.layout);
+    for (const tab of layoutTabs) {
+      const selected = tab === button;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
   }
+  layoutTabs.forEach((button, index) => {
+    button.addEventListener('click', () => selectLayout(button));
+    button.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const last = layoutTabs.length - 1;
+      let next;
+      switch (event.key) {
+        case 'Home': next = 0; break;
+        case 'End': next = last; break;
+        case 'ArrowLeft': next = index === 0 ? last : index - 1; break;
+        case 'ArrowRight': next = index === last ? 0 : index + 1; break;
+        default: return;
+      }
+      event.preventDefault();
+      selectLayout(layoutTabs[next]);
+      layoutTabs[next].focus();
+    });
+  });
   const collapseButton = document.getElementById('dir-collapse');
   const expandButton = document.getElementById('dir-expand');
   if (collapseButton) {
@@ -4005,6 +4640,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (returnToCatalog()) document.getElementById('new-menu-button')?.focus?.({preventScroll: true});
   });
 
+  async function sendFile(path, body, key, signal) {
+    const headers = {'Accept':'application/json', 'X-CSRF-Token':csrfCookie(document.cookie)};
+    if (key) headers['Idempotency-Key'] = key;
+    const response = await fetcher(path, {method:'POST', headers, credentials:'same-origin', body, signal});
+    return {status:response.status, body:await response.json().catch(() => ({}))};
+  }
+
   async function uploadMedia(path, extraFields) {
     const file = document.getElementById('media-file').files[0];
     const title = form.elements.title.value.trim();
@@ -4025,12 +4667,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     body.append('kind', 'media');
     body.append('file', file);
     if (extraFields) Object.entries(extraFields).forEach(([key, value]) => body.append(key, value));
-    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
-    if (!(current && current.id)) headers['Idempotency-Key'] = idempotencyKey();
-    const response = await fetcher(path, {method: 'POST', headers, credentials: 'same-origin', body});
-    let parsed = {};
-    try { parsed = await response.json(); } catch { parsed = {}; }
-    return {status: response.status, body: parsed};
+    return sendFile(path, body, current?.id ? null : idempotencyKey());
   }
 
   form.addEventListener('submit', async event => {
@@ -4140,9 +4777,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                              {revision: current.revision, changes: {title, body}});
     } else {
+      const payload = {title, body, kind};
+      if (current?.parent) payload.parent_id = current.parent.id;
+      const fingerprint = JSON.stringify(payload);
+      if (selection.createReceipt?.fingerprint !== fingerprint) {
+        selection.createReceipt = {fingerprint, key:idempotencyKey()};
+      }
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
-                             {title, body, kind},
-                             {'Idempotency-Key': idempotencyKey()});
+                             payload, {'Idempotency-Key':selection.createReceipt.key});
     }
     if (result.status === 200 || result.status === 201) {
       if (catalog?.workspace === selection.workspace && catalog.account === selection.account) {
@@ -4692,6 +5334,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   discoverSlug?.addEventListener('input', () => {
     if (activeEditor(editor)) editor.discoverSlugEdited = true;
   });
+  discoverTopic?.addEventListener('change', () => {
+    if (activeEditor(editor)) editor.discoverTopicEdited = true;
+  });
   discoverEditable?.addEventListener('change', () => {
     if (activeEditor(editor)) editor.discoverEditableEdited = true;
   });
@@ -4744,8 +5389,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     facets = null;
     clearFilters();
     allItems = [];
-    meetingItems = [];
-    meetingLoadedFor = '';
+    resetMeetings();
     activity.setScope('');
     mainPanel.hidden = true;
     await load();
@@ -4786,7 +5430,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       sharedWorkCopy.instance?.close();
       studio.instance?.leaveForNavigation();
       show('', '');
-      const catalogView = tracked ? next.catalogView : null;
+      const catalogView = tracked && currentUser?.id && next.catalogView?.account === currentUser.id
+        ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
       const studioTarget = studioTargetFromSearch(view.location.search);
@@ -4794,12 +5439,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
         return;
       }
-      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
+      const requested = artifactTargetFromSearch(view.location.search);
+      if (studioTarget || requested?.artifact || requested?.invalid ||
           newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
       }
-      const targetWorkspace = catalogView?.workspace || workspaceFromFragment(view.location.hash);
+      const targetWorkspace = requested?.workspace || catalogView?.workspace || workspaceFromFragment(view.location.hash);
       if (targetWorkspace && ![...workspaceSelect.options].some(option => option.value === targetWorkspace)) {
         void load();
         return;
@@ -4809,9 +5455,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         notifications.setWorkspace(workspaceId());
         syncStudioWorkspace();
       }
-      await loadList({reuse: true});
-      if (catalogView && main && spaceAddress === address && !listPanel.hidden) {
-        main.scrollTop = catalogView.scroll;
+      const returningToCatalog = catalogView?.workspace === workspaceId();
+      if (returningToCatalog) restoreCatalogFilters(catalogView);
+      await loadList({reuse: true, minDepth:returningToCatalog ? catalogView.depth : undefined});
+      if (returningToCatalog && spaceAddress === address && !listPanel.hidden) {
+        catalogScrollers.forEach((node, index) => {
+          if (node) node.scrollTop = catalogView.scroll[index];
+        });
         const rows = document.getElementById('artifact-list').children;
         const row = [...rows].find(node => node.dataset.artifactId === catalogView.focus);
         row?.firstElementChild?.focus?.({preventScroll: true});

@@ -11,6 +11,20 @@ const coldDraftHandoffKey = 'openteamily.cold-chat-draft';
 const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
 const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
+export function runtimeHoldNotice(state) {
+  if (state === 'capacity') {
+    return {
+      title: '专属智能体名额已满',
+      detail: '你的账户已登录。请联系管理员处理容量，容量恢复后点击重新检查即可继续。',
+    };
+  }
+  if (state === 'parked') {
+    return {
+      title: '专属智能体已暂停',
+      detail: '你的数据仍保留。请联系管理员恢复，恢复后点击重新检查即可继续。',
+    };
+  }
+}
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
 const workspacePage = /^\/(?:agents|artifacts|automations|chat|contacts|meetings|members|memory|messenger|onboarding|profile|settings|skills|team|team-runs)\/?$/;
@@ -76,11 +90,16 @@ export function signupDraftScope(view, owner, now = Date.now()) {
   return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
 }
 
-export function personalDraftScope(view, owner, personal) {
+export function personalChatPath(personal) {
+  const workspace = personal?.workspace_id, agent = personal?.agent_id;
+  return validSignupUser(workspace) && validSignupUser(agent) ? '/chat#workspace=' + workspace + '&agent=' + agent : '';
+}
+
+export function personalDraftScope(view, owner, personal, {allowBare = false} = {}) {
   if (!validSignupUser(owner) || view.location.search) return null;
-  const target = signupChatPath.exec('/chat' + view.location.hash);
-  if (!target || target[1] !== personal?.workspace_id || target[2] !== personal.agent_id) return null;
-  return JSON.stringify([owner, target[1], 'agent', target[2], null]);
+  const path = personalChatPath(personal);
+  if (!path || ('/chat' + view.location.hash !== path && !(allowBare && !view.location.hash))) return null;
+  return JSON.stringify([owner, personal.workspace_id, 'agent', personal.agent_id, null]);
 }
 
 export function rememberColdDraftHandoff(view, scope) {
@@ -142,28 +161,61 @@ function chatDraftMentions(value) {
     .map(({owner_id, agent_id}) => ({owner_id, agent_id})) : [];
 }
 
-const privateTextKey = /^[A-Za-z0-9_-]{16,64}$/;
+const pendingTextKey = /^[A-Za-z0-9_-]{16,64}$/;
+const pendingSocialId = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/;
+const validPendingTextKey = (key,source) => typeof key === 'string' && pendingTextKey.test(key) &&
+  (source !== 'first-agent' || key.startsWith('chat-'));
 
-function privateTextOwner(scope) {
+function pendingTextScope(scope) {
   try {
-    const [owner, workspace, source, agent, conversation] = JSON.parse(scope);
-    return source === 'agent' && [owner, workspace, agent, conversation].every(validSignupUser) ? owner : null;
+    const target = JSON.parse(scope);
+    if (!Array.isArray(target) || target.length !== 5) return null;
+    const [owner, workspace, source, agent, conversation] = target;
+    if (!validSignupUser(owner) || !validSignupUser(workspace)) return null;
+    if (source === 'agent' && validSignupUser(agent) && conversation === null) return {owner,source:'first-agent'};
+    if (source === 'agent' && validSignupUser(agent) && validSignupUser(conversation)) return {owner,source};
+    if (source === 'social' && agent === null && typeof conversation === 'string' && pendingSocialId.test(conversation)) {
+      return {owner,source};
+    }
+    return null;
   } catch { return null; }
 }
 
-function chatDraftPendingText(value) {
-  if (!Array.isArray(value?.pendingPrivateText)) return [];
-  return value.pendingPrivateText.flatMap(row => {
-    const body = chatDraftBody(row?.message);
-    if (!body.trim() || typeof row.key !== 'string' || !privateTextKey.test(row.key)) return [];
-    const language = row.message.chat_language;
-    return [{key:row.key, message:{body, ...(typeof language === 'string' && language.length <= 64 ? {chat_language:language} : {})}}];
+function pendingTextMessage(value, source) {
+  const body = chatDraftBody(value);
+  if (!body.trim() || typeof value !== 'object' || value.sticker_id) return null;
+  const payload = {body};
+  if (value.reply_to !== undefined) {
+    if (source !== 'social' || typeof value.reply_to !== 'string' || !pendingSocialId.test(value.reply_to)) return null;
+    payload.reply_to = value.reply_to;
+  }
+  if (typeof value.chat_language === 'string' && value.chat_language.length <= 64) {
+    payload.chat_language = value.chat_language;
+  }
+  if (source === 'first-agent' && ['off','workspace','workspaces'].includes(value.memory_scope)) {
+    payload.memory_scope = value.memory_scope;
+  }
+  if (value.agent_mentions !== undefined) {
+    const targets = chatDraftMentions({agentMentions:value.agent_mentions});
+    if (!Array.isArray(value.agent_mentions) || targets.length !== value.agent_mentions.length) return null;
+    payload.agent_mentions = targets;
+  }
+  if (value.direct_agent_request === true && payload.agent_mentions?.length) payload.direct_agent_request = true;
+  return payload;
+}
+
+function chatDraftPendingText(value, source) {
+  const rows = value?.pendingText ?? value?.pendingPrivateText;
+  if (!source || !Array.isArray(rows)) return [];
+  return rows.flatMap(row => {
+    const message = pendingTextMessage(row?.message, source);
+    return message && validPendingTextKey(row.key,source) ? [{key:row.key,message}] : [];
   });
 }
 
-function chatDraftRecord(body, agentMentions, pendingPrivateText) {
-  if (!agentMentions.length && !pendingPrivateText.length) return body;
-  return {body, ...(agentMentions.length ? {agentMentions} : {}), ...(pendingPrivateText.length ? {pendingPrivateText} : {})};
+function chatDraftRecord(body, agentMentions, pendingText) {
+  if (!agentMentions.length && !pendingText.length) return body;
+  return {body, ...(agentMentions.length ? {agentMentions} : {}), ...(pendingText.length ? {pendingText} : {})};
 }
 
 export function readChatDrafts(view, owner) {
@@ -179,9 +231,9 @@ export function writeChatDrafts(view, owner, drafts) {
   const records = new Map(drafts);
   for (const [scope, value] of storedChatDrafts(view, owner)) {
     const agentMentions = chatDraftMentions(value);
-    const pendingPrivateText = chatDraftPendingText(value);
-    if (agentMentions.length || pendingPrivateText.length) {
-      records.set(scope, chatDraftRecord(records.get(scope) || '', agentMentions, pendingPrivateText));
+    const pendingText = chatDraftPendingText(value, pendingTextScope(scope)?.source);
+    if (agentMentions.length || pendingText.length) {
+      records.set(scope, chatDraftRecord(records.get(scope) || '', agentMentions, pendingText));
     }
   }
   return saveChatDrafts(view, owner, records);
@@ -196,24 +248,28 @@ export function writeChatDraftMentions(view, scope, agentMentions) {
   if (!owner) return;
   const drafts = storedChatDrafts(view, owner);
   const previous = drafts.get(scope);
-  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions, chatDraftPendingText(previous));
+  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions,
+    chatDraftPendingText(previous, pendingTextScope(scope)?.source));
   if (updated) drafts.set(scope, updated);
   else drafts.delete(scope);
   saveChatDrafts(view, owner, drafts);
 }
 
-export function readPendingPrivateText(view, scope) {
-  const owner = privateTextOwner(scope);
-  return owner ? chatDraftPendingText(storedChatDrafts(view, owner).get(scope)) : [];
+export function readPendingChatText(view, scope) {
+  const target = pendingTextScope(scope);
+  return target ? chatDraftPendingText(storedChatDrafts(view, target.owner).get(scope), target.source) : [];
 }
 
-export function savePendingPrivateText(view, scope, key, message) {
-  const owner = privateTextOwner(scope);
-  if (!owner || typeof key !== 'string' || !privateTextKey.test(key) || (message && !chatDraftBody(message).trim())) return false;
+export function savePendingChatText(view, scope, key, message) {
+  const target = pendingTextScope(scope);
+  if (!target || !validPendingTextKey(key,target.source)) return false;
+  const {owner,source} = target;
+  const payload = message && pendingTextMessage(message, source);
+  if (message && !payload) return false;
   const drafts = storedChatDrafts(view, owner);
   const previous = drafts.get(scope);
-  const rows = new Map(chatDraftPendingText(previous).map(row => [row.key, row]));
-  if (message) rows.set(key, {key,message});
+  const rows = new Map(chatDraftPendingText(previous, source).map(row => [row.key, row]));
+  if (payload) rows.set(key, {key,message:payload});
   else if (!rows.delete(key)) return true;
   const updated = chatDraftRecord(chatDraftBody(previous), chatDraftMentions(previous), [...rows.values()]);
   if (updated) drafts.set(scope, updated);
@@ -247,7 +303,7 @@ export async function waitForRuntime(read, {
       if (!validSignupUser(user)) continue;
       if (user !== expectedUser) return 'signup-mismatch';
     }
-    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped'].includes(state)) return state;
+    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped', 'capacity', 'parked'].includes(state)) return state;
   }
   return 'timeout';
 }

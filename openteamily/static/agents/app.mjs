@@ -1,6 +1,6 @@
-import { createLookAvatar } from '../look/app.mjs';
+import { AGENT_PORTRAITS, agentPortraitLook, createLookAvatar } from '../look/app.mjs';
 import { AGENT_CATEGORIES, AGENT_CATEGORY_SLUGS, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
-import { csrfCookie, canManage, idempotencyKey } from '../shell/chat-utils.mjs';
+import { chatPathId, csrfCookie, canManage, idempotencyKey } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
 
 export { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
@@ -30,7 +30,8 @@ export function searchWithCategory(search, slug) {
 }
 
 const directoryId = /^[0-9a-f]{32}$/;
-const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80};
+const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80, portrait:16};
+const portraitIds = new Set(AGENT_PORTRAITS.map(item => item.id));
 const editFields = Object.keys(editLimits);
 
 function directoryTarget(hash) {
@@ -53,11 +54,13 @@ export function teamDirectoryLink(search) {
 export function readAgentForm(form) {
   const data = new FormData(form);
   const quickStarts = data.get('quick_starts');
+  const portrait = data.get('portrait');
   return {
     name: (data.get('name') || '').trim(),
     summary: (data.get('summary') || '').trim(),
     instructions: data.get('instructions') || '',
     category: AGENT_CATEGORY_SLUGS.has(data.get('category')) ? data.get('category') : null,
+    ...(typeof portrait === 'string' ? {portrait: portraitIds.has(portrait) ? portrait : null} : {}),
     ...(typeof quickStarts === 'string' ? {quick_starts: quickStarts.split(/\r?\n/).map(line => line.trim()).filter(Boolean)} : {}),
   };
 }
@@ -126,17 +129,20 @@ export function templateAgentText(template) {
   return names.length ? '含 ' + names.length + ' 个智能体：' + names.join('、') : '';
 }
 
-function teamTemplateKey() {
-  const bytes = new Uint8Array(18);
-  globalThis.crypto.getRandomValues(bytes);
-  let text = '';
-  for (const value of bytes) text += String.fromCharCode(value);
-  return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
+}
+
+function validCreateReceipt(attempt) {
+  const {values, key} = attempt || {};
+  return typeof key === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(key) &&
+    values && typeof values.name === 'string' && values.name.trim() &&
+    ['name', 'summary', 'instructions'].every(field => typeof values[field] === 'string' && values[field].length <= editLimits[field]) &&
+    (values.category === null || AGENT_CATEGORY_SLUGS.has(values.category)) &&
+    (values.portrait == null || portraitIds.has(values.portrait)) &&
+    (values.quick_starts === undefined || (Array.isArray(values.quick_starts) && values.quick_starts.length <= 5 &&
+      values.quick_starts.every(line => typeof line === 'string' && line.length <= 80)));
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
@@ -145,6 +151,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   const createForm = document.getElementById('create-form');
+  const createStatus = document.getElementById('agent-create-status');
+  const draftAssist = document.getElementById('agent-draft-assist');
+  const draftPrompt = document.getElementById('agent-draft-prompt');
+  const draftGenerate = document.getElementById('agent-draft-generate');
+  const draftProgress = document.getElementById('agent-draft-status');
+  let activeDraftGeneration;
+  const cancelCreate = document.getElementById('cancel-create');
   const editForm = document.getElementById('edit-form');
   const editConflict = document.getElementById('agent-edit-conflict');
   const reloadSettings = document.getElementById('reload-agent-settings');
@@ -154,6 +167,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const clearDraft = document.getElementById('discard-agent-draft');
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
+  const apiKeyOutput = document.getElementById('api-key-token');
+  const apiKeyValue = document.getElementById('api-key-value');
   const openCreate = document.getElementById('open-create');
   const openSharing = document.getElementById('agent-share-open');
   const openAccess = document.getElementById('agent-access-open');
@@ -168,6 +183,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
+  let revealedApiKey = '';
   let draftKey = '', originalEdits, waitingDraft;
   let personalIdentity = null;
   let agentSelection = 0;
@@ -175,8 +191,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaceLoad = 0;
   let loadedWorkspace = '';
   let directoryLoaded = false;
+  const createAttempts = new Map();
   fillCategoryOptions(createForm.elements.category, document);
   fillCategoryOptions(editForm.elements.category, document);
+  for (const form of [createForm, editForm]) {
+    const select = form.elements.portrait;
+    const field = form.querySelector('.agent-portrait-field');
+    if (nativeSharing && field && select) {
+      field.hidden = false;
+      for (const preset of AGENT_PORTRAITS) {
+        const option = document.createElement('option');
+        option.value = preset.id;
+        option.textContent = preset.label;
+        select.append(option);
+      }
+      select.addEventListener('change', () => paintPortraitPreview(form));
+    }
+  }
+
+  function paintPortraitPreview(form) {
+    const preview = form.querySelector('.agent-portrait-preview');
+    if (!preview || !nativeSharing) return;
+    const agent = form === editForm ? currentAgent : null;
+    const personal = agent && agent.id === personalIdentity?.agentId && personalIdentity.workspaceId === workspaceId();
+    const look = agentPortraitLook(agent?.id, form.elements.portrait?.value, personal ? personalIdentity.look : null);
+    const image = createLookAvatar(look, document);
+    preview.replaceChildren(...(image ? [image] : []));
+    preview.hidden = !image;
+  }
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
   const creatorFilter = document.getElementById('creator-filter');
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
@@ -184,11 +226,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let memberNames = new Map();
   let teamTemplates = [];
   let teamTemplatesLoaded = false;
+  let loadingTemplates;
+  let teamDraft;
+  const teamReceipts = new Map();
+  const templateSearch = document.getElementById('team-template-search');
+  const templateCategory = document.getElementById('team-template-category');
+  const templateStatus = document.getElementById('teams-status');
+  const templateReload = document.getElementById('team-template-reload');
+  const teamDialog = document.getElementById('team-template-dialog');
+  const teamName = document.getElementById('team-template-name');
+  const teamFeedback = document.getElementById('team-template-feedback');
+  const teamSubmit = document.getElementById('team-template-create');
   const directorySearch = globalThis.location?.search || '';
   let teamsTabSelected = teamDirectoryLink(directorySearch);
   let focusTemplates = directorySearch === '?tab=teams&new=1';
 
+  function clearApiKeyToken() {
+    revealedApiKey = '';
+    if (apiKeyOutput) apiKeyOutput.hidden = true;
+    if (apiKeyValue) apiKeyValue.textContent = '';
+  }
+
+  function clearDraftGeneration() {
+    activeDraftGeneration?.controller.abort();
+    activeDraftGeneration = null;
+    if (draftGenerate) draftGenerate.removeAttribute('aria-busy');
+    if (draftProgress) draftProgress.hidden = true;
+  }
+
   function hideDrawer() {
+    clearDraftGeneration();
     sharing?.close();
     currentAgent = null;
     draftKey = '';
@@ -196,12 +263,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentSelection += 1;
     createForm.hidden = editForm.hidden = chatPanel.hidden = true;
     if (drawer) drawer.hidden = true;
-    for (const id of ['homepage-panel', 'api-key-panel', 'api-key-token']) {
+    for (const id of ['homepage-panel', 'api-key-panel']) {
       const control = document.getElementById(id);
       if (control) control.hidden = true;
     }
-    const token = document.getElementById('api-key-token');
-    if (token) token.textContent = '';
+    clearApiKeyToken();
+  }
+
+  function closeTeamTemplate() {
+    if (teamDialog?.open) teamDialog.close();
+    teamDraft = null;
   }
 
   function renderCategoryFilter() {
@@ -225,24 +296,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   for (const button of categoryButtons) {
     button.addEventListener('click', () => selectCategory(button.dataset.category, true));
   }
-  if (globalThis.addEventListener) {
-    globalThis.addEventListener('popstate', () => {
-      selectedCategory = categoryFromSearch(globalThis.location.search);
-      renderCategoryFilter();
-      if (currentUser && workspaces.length) return restoreDirectory();
-    });
-  }
-
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
   }
 
-  async function request(method, path, body, extra) {
+  async function request(method, path, body, extra, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -276,13 +339,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderTeamTemplates() {
     const list = document.getElementById('team-template-list');
-    const empty = document.getElementById('teams-empty');
     if (!list) return;
+    const terms = templateSearch?.value.trim().toLowerCase().split(/\s+/).filter(Boolean) || [];
+    const category = templateCategory?.value;
+    const visible = teamTemplates.filter(template => {
+      if (category && category !== template.category) return false;
+      const searchable = [template.name, template.summary, categoryLabel(template.category),
+        ...template.agents.flatMap(agent => [agent.name, agent.summary])].join(' ').toLowerCase();
+      return terms.every(term => searchable.includes(term));
+    });
     list.replaceChildren();
-    for (const template of teamTemplates) {
+    for (const template of visible) {
       const card = document.createElement('li');
       card.className = 'team-template-card';
       card.dataset.slug = template.slug;
+      const label = document.createElement('span');
+      label.className = 'category-tag';
+      label.textContent = categoryLabel(template.category);
       const name = document.createElement('h3');
       name.textContent = template.name || template.slug;
       const summary = document.createElement('p');
@@ -294,64 +367,192 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const apply = document.createElement('button');
       apply.type = 'button';
       apply.className = 'primary';
-      apply.textContent = '用这个模板建团队';
+      apply.textContent = '使用模板';
       apply.dataset.slug = template.slug;
       if (!canManage(actor)) {
         apply.disabled = true;
         apply.title = '只有工作区所有者或管理员可以创建 AI 团队';
       }
-      apply.addEventListener('click', () => applyTeamTemplate(template, apply));
-      card.append(name, summary, members, apply);
+      apply.addEventListener('click', () => openTeamTemplate(template));
+      card.append(label, name, summary, members, apply);
       list.append(card);
     }
-    if (empty) empty.hidden = teamTemplates.length > 0;
+    if (templateStatus) templateStatus.textContent = visible.length
+      ? visible.length + ' 个团队模板' : '没有匹配的团队模板。';
   }
 
   async function loadTeamTemplates() {
     if (teamTemplatesLoaded) return;
-    const listed = await request('GET', '/v1/team-templates');
-    if (listed.status !== 200) {
-      const empty = document.getElementById('teams-empty');
-      if (empty) {
-        empty.hidden = false;
-        empty.textContent = '模板列表没有加载出来：' + messageFor(listed.body.error, '服务端没有返回模板。');
+    if (loadingTemplates) return loadingTemplates;
+    if (templateStatus) templateStatus.textContent = '正在加载团队模板…';
+    if (templateReload) templateReload.hidden = true;
+    loadingTemplates = (async () => {
+      try {
+        const {status, body} = await request('GET', '/v1/team-templates', undefined, undefined, AbortSignal.timeout(10000));
+        if (status !== 200 || !Array.isArray(body.items)) throw new Error();
+        teamTemplates = body.items;
+        teamTemplatesLoaded = true;
+        if (templateCategory) {
+          const categories = new Set(teamTemplates.map(template => template.category));
+          for (const {slug, label} of AGENT_CATEGORIES.filter(item => categories.has(item.slug))) {
+            const option = document.createElement('option');
+            option.value = slug;
+            option.textContent = label;
+            templateCategory.append(option);
+          }
+        }
+        renderTeamTemplates();
+      } catch {
+        if (templateStatus) templateStatus.textContent = '无法加载团队模板。';
+        if (templateReload) templateReload.hidden = false;
       }
-      return;
-    }
-    teamTemplates = listed.body.items || [];
-    teamTemplatesLoaded = true;
-    renderTeamTemplates();
+    })();
+    try { await loadingTemplates; } finally { loadingTemplates = null; }
+  }
+  templateSearch?.addEventListener('input', () => {
+    if (teamTemplatesLoaded) renderTeamTemplates();
+  });
+  templateCategory?.addEventListener('change', () => {
+    if (teamTemplatesLoaded) renderTeamTemplates();
+  });
+  templateReload?.addEventListener('click', loadTeamTemplates);
+
+  function readTeamReceipt(scope) {
+    if (teamReceipts.has(scope)) return teamReceipts.get(scope);
+    try {
+      const receipt = JSON.parse(document.defaultView.sessionStorage.getItem(scope));
+      if (/^[A-Za-z0-9_-]{16,64}$/.test(receipt?.key || '') &&
+          typeof receipt.title === 'string' && receipt.title.trim() && receipt.title.length <= 80) {
+        teamReceipts.set(scope, receipt);
+        return receipt;
+      }
+    } catch { /* Retry in this page even when sessionStorage is unavailable. */ }
   }
 
-  async function applyTeamTemplate(template, button) {
-    if (!canManage(actor) || button.disabled) return;
+  function saveTeamReceipt(scope, receipt) {
+    if (receipt) teamReceipts.set(scope, receipt);
+    else teamReceipts.delete(scope);
+    try {
+      const storage = document.defaultView.sessionStorage;
+      if (receipt) storage.setItem(scope, JSON.stringify(receipt));
+      else storage.removeItem(scope);
+    } catch { /* The in-memory receipt is sufficient until navigation. */ }
+  }
+
+  function teamCreateStatus(text, busy = false) {
+    const receipt = readTeamReceipt(teamDraft.scope);
+    teamName.readOnly = Boolean(receipt);
+    teamSubmit.disabled = busy;
+    teamSubmit.textContent = busy ? '正在创建…' : receipt ? '重试创建' : '创建群组';
+    teamFeedback.hidden = !text;
+    teamFeedback.textContent = text;
+  }
+
+  function openTeamTemplate(template) {
+    if (!canManage(actor) || teamDialog?.open || !currentUser?.id) return;
     const id = workspaceId();
-    if (!id) {
-      show('error', '先选择一个工作区，再用模板建团队。');
+    if (!id || !teamDialog) return;
+    const scope = 'ot-team-create:' + JSON.stringify([currentUser.id, id, template.slug]);
+    teamDraft = {template, id, user:currentUser.id, scope, busy:false};
+    const receipt = readTeamReceipt(scope);
+    teamName.value = receipt?.title ?? template.name;
+    const space = workspaces.find(item => item.id === id);
+    document.getElementById('team-template-context').textContent = (space?.name ? space.name + ' · ' : '') + template.name;
+    const roles = document.getElementById('team-template-roles');
+    roles.replaceChildren();
+    for (const agent of template.agents) {
+      const row = document.createElement('li');
+      const name = document.createElement('strong');
+      name.textContent = agent.name;
+      const description = document.createElement('span');
+      description.className = 'note';
+      description.textContent = agent.summary;
+      row.append(name, description);
+      roles.append(row);
+    }
+    teamCreateStatus(receipt ? '上次创建的结果待确认，重试会继续同一次请求。' : '');
+    teamDialog.showModal();
+    teamName.focus();
+  }
+
+  async function applyTeamTemplate(event) {
+    event.preventDefault();
+    const draft = teamDraft;
+    if (!draft || draft.busy || !canManage(actor) || draft.id !== workspaceId() || draft.user !== currentUser?.id) return;
+    const {scope, template, id} = draft;
+    const title = teamName.value.trim();
+    if (!title || title.length > 80) {
+      teamCreateStatus('请输入 1 至 80 字的群组名称。');
+      teamName.focus();
       return;
     }
-    button.disabled = true;
-    const previous = button.textContent;
-    button.textContent = '正在建团队…';
+    const receipt = readTeamReceipt(scope) ?? {title, key:idempotencyKey('team-template-')};
+    saveTeamReceipt(scope, receipt);
+    draft.busy = true;
+    teamCreateStatus('正在准备群组和团队智能体。', true);
+    const stillOpen = () => teamDialog.open && teamDraft === draft && id === workspaceId() && draft.user === currentUser?.id;
     try {
-      const result = await request('POST', `/v1/workspaces/${id}/team-templates/${template.slug}`, {},
-        {'Idempotency-Key': teamTemplateKey()});
-      if ((result.status !== 200 && result.status !== 201) || !result.body.conversation) {
-        show('error', teamTemplateFailure(result.status, result.body));
+      const result = await request('POST', `/v1/workspaces/${id}/team-templates/${template.slug}`, {title:receipt.title},
+        {'Idempotency-Key': receipt.key}, AbortSignal.timeout(60000));
+      if (result.status !== 200 && result.status !== 201) {
+        if ([400, 403, 404, 409].includes(result.status)) saveTeamReceipt(scope, null);
+        if (stillOpen()) teamCreateStatus(teamTemplateFailure(result.status, result.body));
         return;
       }
-      const href = '/chat#workspace=' + encodeURIComponent(id) + '&social=' + encodeURIComponent(result.body.conversation.id);
-      show('ok', '团队已建好，正在打开群会话。');
-      if (globalThis.location && typeof globalThis.location.assign === 'function') globalThis.location.assign(href);
-      else if (globalThis.location) globalThis.location.href = href;
+      const group = result.body.conversation;
+      if (group?.workspace_id !== id || !chatPathId(group.id)) throw new Error();
+      if (!stillOpen()) return;
+      saveTeamReceipt(scope, null);
+      teamCreateStatus('群组已创建，正在打开。', true);
+      globalThis.location.assign('/chat#' + new URLSearchParams({workspace:id, social:group.id}));
+    } catch {
+      if (stillOpen()) teamCreateStatus('未收到创建结果。重试会继续同一次请求。');
     } finally {
-      button.disabled = false;
-      button.textContent = previous;
+      draft.busy = false;
     }
   }
+  document.getElementById('team-template-form')?.addEventListener('submit', applyTeamTemplate);
+  document.getElementById('team-template-close')?.addEventListener('click', closeTeamTemplate);
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function createScope() {
+    const user = currentUser?.id, workspace = workspaceId();
+    return directoryId.test(user || '') && directoryId.test(workspace) ? `ot-agent-create:${user}:${workspace}` : '';
+  }
+
+  function readCreateReceipt(scope) {
+    const active = createAttempts.get(scope);
+    if (active || !scope) return active;
+    try {
+      const saved = JSON.parse(document.defaultView.sessionStorage.getItem(scope));
+      if (!validCreateReceipt(saved)) return;
+      const attempt = {key:saved.key, values:saved.values, saved:true};
+      createAttempts.set(scope, attempt);
+      return attempt;
+    } catch { return; }
+  }
+
+  function paintCreateControls(attempt) {
+    if (openCreate) openCreate.textContent = attempt ? '继续创建智能体' : '创建我的智能体';
+    if (createForm.hidden) return;
+    if (draftAssist) draftAssist.hidden = !nativeSharing || Boolean(attempt);
+    if (draftGenerate) draftGenerate.disabled = Boolean(attempt || activeDraftGeneration);
+    for (const field of editFields) {
+      if (createForm.elements[field]) createForm.elements[field].disabled = Boolean(attempt) || (field === 'portrait' && !nativeSharing);
+    }
+    const submit = createForm.querySelector('button[type="submit"]');
+    submit.disabled = Boolean(attempt?.sending);
+    submit.textContent = attempt?.sending ? '创建中…' : attempt ? '核对创建结果' : '创建';
+    if (cancelCreate) cancelCreate.textContent = attempt ? '关闭' : '取消';
+    if (createStatus) {
+      createStatus.hidden = !attempt;
+      createStatus.textContent = attempt?.sending ? '正在创建智能体…' : attempt?.saved
+        ? '暂时无法确认创建结果。可核对原请求，智能体只会创建一次。'
+        : attempt ? '暂时无法确认创建结果。浏览器无法保留记录，请在此页重试。' : '';
+    }
   }
 
   function writeDirectoryTarget(agent, {push = false} = {}) {
@@ -389,6 +590,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       directoryAgents = [];
       loadedWorkspace = '';
       hideDrawer();
+      closeTeamTemplate();
       if (openCreate) openCreate.hidden = true;
       syncDirectoryStatus();
       fillCreatorOptions(creatorFilter, [], memberNames, document);
@@ -406,9 +608,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     workspaceSelect.value = workspace;
     archivedOnly = target.archived;
     syncTeamRunLink();
-    if (!directoryLoaded || loadedWorkspace !== workspace || loadedArchived !== archivedOnly) {
-      if (!await loadWorkspace({directoryOnly: true}) || globalThis.location?.hash !== hash) return;
-    } else {
+    const loadAgents = !teamsTabSelected || Boolean(target.agent);
+    if (loadedWorkspace !== workspace || (loadAgents && (!directoryLoaded || loadedArchived !== archivedOnly))) {
+      if (!await loadWorkspace({directoryOnly:true, loadAgents}) || globalThis.location?.hash !== hash) return;
+    } else if (loadAgents) {
       renderDirectory();
     }
     if (target.agent && target.agent !== currentAgent?.id) {
@@ -428,6 +631,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = ++sessionLoad;
     workspaceLoad += 1;
     hideDrawer();
+    closeTeamTemplate();
     if (openCreate) openCreate.hidden = true;
     const unavailable = {status: 0, body: {}};
     const session = await request('GET', '/v1/auth/session').catch(() => unavailable);
@@ -451,6 +655,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     archivedOnly = false;
     if (directoryStatus) directoryStatus.value = 'active';
     document.getElementById('agent-list').replaceChildren();
+    if (teamsTabSelected) void loadTeamTemplates();
     const personalPath = nativeSharing ? '/v1/workspaces?scope=personal&include=personal-agent' : '/v1/personal-agent';
     void request('GET', personalPath).catch(() => unavailable).then(personal => {
       if (seq !== sessionLoad || personal.status !== 200) return;
@@ -500,6 +705,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await restoreDirectory();
+    if (seq === sessionLoad && directorySearch === '?new=1' && directoryLoaded && !currentAgent && !openCreate?.hidden) {
+      openCreate?.click?.();
+    }
     if (seq !== sessionLoad || !teamsTabSelected) return;
     await loadTeamTemplates();
     if (seq === sessionLoad && teamsTabSelected && focusTemplates) {
@@ -532,7 +740,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = document.createElement('li');
       li.className = 'agent-card';
       const isPersonal = item.id === personalIdentity?.agentId && (!personalIdentity.workspaceId || personalIdentity.workspaceId === id);
-      const lookAvatar = isPersonal ? createLookAvatar(personalIdentity.look, document) : null;
+      const lookAvatar = createLookAvatar(agentPortraitLook(item.id, item.portrait, isPersonal ? personalIdentity.look : null), document);
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
@@ -595,21 +803,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (count) count.textContent = '显示 ' + shown + (archivedOnly ? ' 个已归档的智能体' : ' 个智能体');
   }
 
+  document.getElementById('api-key-copy')?.addEventListener('click', async () => {
+    const key = revealedApiKey;
+    if (!key || apiKeyOutput.hidden) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(apiKeyValue.textContent);
+      if (key === revealedApiKey) show('ok', '密钥已复制。');
+    } catch {
+      if (key === revealedApiKey) show('error', '无法访问剪贴板，请选中密钥手动复制。');
+    }
+  });
+
   const apiKeyForm = document.getElementById('api-key-form');
   if (apiKeyForm) apiKeyForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!currentAgent) return;
-    const agent = currentAgent, wid = workspaceId();
-    const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
-      name: document.getElementById('api-key-name').value,
-      rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
-    });
-    if (result.status !== 201) { show('error', messageFor(result.body.error, '无法生成密钥。')); return; }
-    const out = document.getElementById('api-key-token');
-    out.hidden = false;
-    out.textContent = `密钥只显示一次：${result.body.token}`;
-    document.getElementById('api-key-name').value = '';
-    loadApiKeys(agent, true);
+    const submit = apiKeyForm.querySelector('button[type="submit"]');
+    if (!currentAgent || submit.disabled) return;
+    const agent = currentAgent, wid = workspaceId(), owner = currentUser?.id, selection = agentSelection;
+    const nameInput = document.getElementById('api-key-name');
+    const sameSelection = () => workspaceId() === wid && currentUser?.id === owner &&
+      currentAgent?.id === agent.id && agentSelection === selection;
+    submit.disabled = true;
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
+        name: nameInput.value,
+        rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
+      });
+      if (!sameSelection()) return;
+      const {token, key} = result.body;
+      if (result.status !== 201 || !key?.id || !token) {
+        show('error', messageFor(result.body.error, '无法生成密钥。'));
+        return;
+      }
+      revealedApiKey = key.id;
+      apiKeyValue.textContent = token;
+      apiKeyOutput.hidden = false;
+      nameInput.value = '';
+      show('ok', '密钥已生成，请复制。');
+      void loadApiKeys(agent, true);
+    } catch {
+      if (sameSelection()) {
+        show('error', '未收到新密钥，请先检查密钥列表。');
+        void loadApiKeys(agent, true);
+      }
+    } finally {
+      submit.disabled = false;
+    }
   });
 
   async function listAgents(base, archived) {
@@ -622,7 +861,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: 200, body: {items: [...(first.body.items || []), ...(next.body.items || [])]}};
   }
 
-  async function loadWorkspace({directoryOnly = false} = {}) {
+  async function loadWorkspace({directoryOnly = false, loadAgents = !teamsTabSelected} = {}) {
     const id = workspaceId();
     if (!id) return false;
     const seq = ++workspaceLoad;
@@ -630,6 +869,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let archived = archivedOnly;
     const includeWorkspace = !directoryOnly || id !== loadedWorkspace;
     hideDrawer();
+    if (includeWorkspace) closeTeamTemplate();
     if (includeWorkspace) {
       actor = null;
       syncDirectoryStatus();
@@ -642,17 +882,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('agent-list').replaceChildren();
       document.getElementById('agents-empty').hidden = true;
       if (includeWorkspace) document.getElementById('role-note').textContent = '';
-      show('loading', '正在加载智能体…');
+      show('loading', loadAgents ? '正在加载智能体…' : '正在加载工作区…');
     }
     const unavailable = {status: 0, body: {}};
     const base = `/v1/workspaces/${id}`;
     const nativeWorkspace = nativeSharing ? workspaces.find(space => space.id === id) : null;
     const readList = status => listAgents(base, status).catch(() => unavailable);
     const stillCurrent = () => seq === workspaceLoad && id === workspaceId() && user === currentUser?.id;
-    const [detail, members, active] = await Promise.all([
+    const active = loadAgents && !archived ? readList(false) : null;
+    const [detail, members] = await Promise.all([
       includeWorkspace && !nativeSharing ? request('GET', base).catch(() => unavailable) : null,
       includeWorkspace ? request('GET', base + '/members').catch(() => unavailable) : null,
-      archived ? null : readList(false),
     ]);
     if (!stillCurrent()) return false;
     if (includeWorkspace) {
@@ -673,6 +913,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
+      loadedWorkspace = id;
       if (teamTemplatesLoaded) renderTeamTemplates();
     }
     if (archived && !canManage(actor)) {
@@ -680,13 +921,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       writeDirectoryTarget(null);
     }
     syncDirectoryStatus();
-    const listed = active ?? await readList(archived);
+    if (!loadAgents) {
+      show('', '');
+      return true;
+    }
+    const listed = await (active ?? readList(archived));
     if (!stillCurrent()) return false;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return false;
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
+    paintCreateControls(archived || !canManage(actor) ? null : readCreateReceipt(createScope()));
     directoryAgents = listed.body.items || [];
     loadedWorkspace = id;
     loadedArchived = archived;
@@ -707,6 +953,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const [field, value] of Object.entries(values)) {
       if (editForm.elements[field]) editForm.elements[field].value = value;
     }
+    paintPortraitPreview(editForm);
   }
 
   function readEditDraft() {
@@ -716,7 +963,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!Number.isSafeInteger(draft?.revision) || !draft.values) return null;
       const values = Object.fromEntries(editFields.filter(field => typeof draft.values[field] === 'string' &&
         draft.values[field].length <= editLimits[field] &&
-        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])))
+        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])) &&
+        (field !== 'portrait' || !draft.values[field] || portraitIds.has(draft.values[field])))
         .map(field => [field,draft.values[field]]));
       for (const field of Object.keys(values)) {
         if (values[field] === originalEdits[field]) delete values[field];
@@ -744,13 +992,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setEditFieldsEnabled(enabled) {
     for (const field of editFields) {
-      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled;
+      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled || (field === 'portrait' && !nativeSharing);
     }
     editForm.querySelector('button[type="submit"]').disabled = !enabled;
   }
 
   function fillEdit(agent) {
     sharing?.close();
+    clearApiKeyToken();
     if (editConflict) editConflict.hidden = true;
     if (reloadSettings) reloadSettings.hidden = true;
     createForm.hidden = true;
@@ -764,6 +1013,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (editForm.elements.category) {
       editForm.elements.category.value = AGENT_CATEGORY_SLUGS.has(agent.category) ? agent.category : '';
     }
+    if (editForm.elements.portrait) editForm.elements.portrait.value = portraitIds.has(agent.portrait) ? agent.portrait : '';
     const starts = editForm.elements.quick_starts;
     if (starts) starts.value = (agent.quick_starts || []).join('\n');
     const active = !agent.archived && !agent.native_deleted;
@@ -781,6 +1031,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (draftKey) storeEditDraft();
     else if (draftNotice) draftNotice.hidden = true;
     setEditFieldsEnabled(writable && !waitingDraft);
+    paintPortraitPreview(editForm);
     document.getElementById('archive-button').hidden = !writable;
     if (openSharing) {
       openSharing.hidden = !nativeSharing || !canManage(actor);
@@ -820,7 +1071,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('api-key-panel');
     if (!panel) return;
     panel.hidden = !writable || Boolean(agent.archived);
-    document.getElementById('api-key-token').hidden = true;
     if (panel.hidden) return;
     const wid = workspaceId();
     let listed;
@@ -845,8 +1095,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         revoke.addEventListener('click', async () => {
           const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys/${key.id}/revoke`, {});
           if (result.status !== 200) { show('error', messageFor(result.body.error, '无法撤销密钥。')); return; }
+          if (workspaceId() !== wid || currentAgent?.id !== agent.id) return;
+          if (revealedApiKey === key.id) clearApiKeyToken();
           show('ok', '已撤销密钥。');
-          loadApiKeys(agent, writable);
+          void loadApiKeys(agent, writable);
         });
         li.append(revoke);
       }
@@ -923,30 +1175,107 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  draftGenerate?.addEventListener('click', async () => {
+    const scope = createScope();
+    if (!scope || !nativeSharing || createForm.hidden || !canManage(actor) || archivedOnly ||
+        activeDraftGeneration || readCreateReceipt(scope)) return;
+    const prompt = draftPrompt.value.trim();
+    if (!prompt) {
+      draftProgress.textContent = '先描述想让智能体做什么。';
+      draftProgress.hidden = false;
+      draftPrompt.focus();
+      return;
+    }
+    const fields = ['name', 'summary', 'instructions', 'quick_starts'];
+    const before = Object.fromEntries(fields.map(key => [key, createForm.elements[key].value]));
+    const controller = new AbortController();
+    const generation = {controller};
+    activeDraftGeneration = generation;
+    draftGenerate.disabled = true;
+    draftGenerate.setAttribute('aria-busy', 'true');
+    draftProgress.textContent = '正在生成草稿…';
+    draftProgress.hidden = false;
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/agents/draft`, {prompt}, {},
+      AbortSignal.any([controller.signal, AbortSignal.timeout(120000)])).catch(() => ({status:0}));
+    if (activeDraftGeneration !== generation || scope !== createScope() || createForm.hidden) return;
+    activeDraftGeneration = null;
+    draftGenerate.disabled = false;
+    draftGenerate.removeAttribute('aria-busy');
+    const draft = result.body?.draft;
+    if (result.status !== 200 || !draft || !['name', 'summary', 'instructions'].every(key =>
+      typeof draft[key] === 'string' && draft[key].length <= editLimits[key]) ||
+      !Array.isArray(draft.quick_starts) || draft.quick_starts.length > 5 ||
+      draft.quick_starts.some(line => typeof line !== 'string' || line.length > 80)) {
+      draftProgress.textContent = messageFor(result.body?.error, '无法生成草稿，可以重试或手动填写。');
+      return;
+    }
+    if (draftPrompt.value.trim() !== prompt) {
+      draftProgress.textContent = '描述已修改，请生成新的草稿。';
+      return;
+    }
+    let keptEdits = false;
+    for (const key of fields) {
+      const element = createForm.elements[key];
+      if (element.value !== before[key]) keptEdits = true;
+      else element.value = key === 'quick_starts' ? draft[key].join('\n') : draft[key];
+    }
+    draftProgress.textContent = keptEdits ? '已填入草稿，并保留你刚刚修改的字段。' : '草稿已填入下方设置，请核对后创建。';
+  });
+
   createForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!canManage(actor) || archivedOnly) return;
+    if (createForm.hidden || !canManage(actor) || archivedOnly) return;
     const id = workspaceId();
-    const user = currentUser?.id;
-    const form = event.currentTarget;
-    const values = readAgentForm(form);
-    if (invalidQuickStarts(values.quick_starts)) return;
-    if (!values.name) {
-      show('error', '请填写名称。');
+    const scope = createScope();
+    if (!scope) return;
+    let attempt = readCreateReceipt(scope);
+    if (attempt?.sending) return;
+    if (!attempt) {
+      const values = readAgentForm(createForm);
+      if (invalidQuickStarts(values.quick_starts)) return;
+      if (!values.name) {
+        show('error', '请填写名称。');
+        return;
+      }
+      attempt = {key:idempotencyKey('agent-create-'), values, saved:false};
+      createAttempts.set(scope, attempt);
+      try {
+        document.defaultView.sessionStorage.setItem(scope, JSON.stringify({key:attempt.key, values}));
+        attempt.saved = true;
+      } catch {}
+    }
+    clearDraftGeneration();
+    attempt.sending = true;
+    paintCreateControls(attempt);
+    const result = await request('POST', `/v1/workspaces/${id}/agents`, attempt.values,
+      {'Idempotency-Key': attempt.key}, AbortSignal.timeout(20000)).catch(() => ({status:0, body:{}}));
+    attempt.sending = false;
+    const agent = result.body?.agent;
+    const accepted = [200, 201].includes(result.status) && directoryId.test(agent?.id || '') && agent.workspace_id === id;
+    const certainFailure = [400, 401, 403, 404, 409, 413, 422].includes(result.status) || result.body?.error?.code === 'quota';
+    const sameDirectory = scope === createScope() && loadedWorkspace === id && directoryLoaded && !archivedOnly && canManage(actor);
+    if (!accepted && !certainFailure) {
+      if (sameDirectory) paintCreateControls(attempt);
       return;
     }
-    const result = await request('POST', `/v1/workspaces/${id}/agents`, values, {
-      'Idempotency-Key': idempotencyKey(),
-    });
-    if (id !== workspaceId() || user !== currentUser?.id || archivedOnly) return;
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法创建智能体。'));
+    createAttempts.delete(scope);
+    try { document.defaultView.sessionStorage.removeItem(scope); } catch {}
+    if (!sameDirectory) return;
+    paintCreateControls(null);
+    if (!accepted) {
+      if (!createForm.hidden && createStatus) {
+        createStatus.hidden = false;
+        createStatus.textContent = messageFor(result.body?.error, '无法创建智能体。');
+      }
       return;
     }
-    form.reset();
-    if (await loadWorkspace({directoryOnly: true}) && result.body.agent) {
-      fillEdit(result.body.agent);
-      writeDirectoryTarget(result.body.agent.id, {push: true});
+    directoryAgents = [agent, ...directoryAgents.filter(item => item.id !== agent.id)];
+    fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
+    renderDirectory();
+    if (!createForm.hidden) {
+      createForm.reset();
+      fillEdit(agent);
+      writeDirectoryTarget(agent.id, {push: true});
       show('ok', '已创建智能体。');
     }
   });
@@ -1026,7 +1355,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     hideDrawer();
     writeDirectoryTarget(null);
   });
-  document.getElementById('cancel-create')?.addEventListener('click', () => {
+  cancelCreate?.addEventListener('click', () => {
     hideDrawer();
     openCreate?.focus?.();
   });
@@ -1042,7 +1371,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   openCreate?.addEventListener('click', () => {
-    if (!canManage(actor) || archivedOnly) return;
+    if (!canManage(actor) || archivedOnly || !createForm.hidden) return;
     hideDrawer();
     writeDirectoryTarget(null);
     if (drawer) {
@@ -1050,7 +1379,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       drawer.scrollTop = 0;
     }
     createForm.hidden = false;
-    createForm.elements.name.focus?.();
+    createForm.reset?.();
+    const attempt = readCreateReceipt(createScope());
+    if (attempt) {
+      const {values} = attempt;
+      for (const field of ['name', 'summary', 'instructions', 'category', 'portrait']) {
+        if (createForm.elements[field]) createForm.elements[field].value = values[field] ?? '';
+      }
+      if (createForm.elements.quick_starts) createForm.elements.quick_starts.value = (values.quick_starts || []).join('\n');
+    }
+    paintCreateControls(attempt);
+    paintPortraitPreview(createForm);
+    if (attempt) createForm.querySelector('button[type="submit"]').focus?.();
+    else if (nativeSharing && draftPrompt) draftPrompt.focus();
+    else createForm.elements.name.focus?.();
   });
   directoryStatus?.addEventListener('change', () => {
     if (!canManage(actor)) return;
@@ -1075,24 +1417,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
-  if (tabAgents && tabTeams) {
-    function selectDirectoryTab(teams) {
-      teamsTabSelected = teams;
-      tabAgents.setAttribute('aria-selected', String(!teams));
-      tabTeams.setAttribute('aria-selected', String(teams));
-      document.getElementById('list-panel').hidden = teams;
-      document.getElementById('teams-panel').hidden = !teams;
-    }
-    tabAgents.addEventListener('click', () => {
-      focusTemplates = false;
-      selectDirectoryTab(false);
-    });
-    tabTeams.addEventListener('click', async () => {
-      selectDirectoryTab(true);
-      await loadTeamTemplates();
-    });
-    if (teamsTabSelected) selectDirectoryTab(true);
+  function selectDirectoryTab(teams) {
+    teamsTabSelected = teams;
+    tabAgents?.setAttribute('aria-selected', String(!teams));
+    tabTeams?.setAttribute('aria-selected', String(teams));
+    document.getElementById('list-panel').hidden = teams;
+    document.getElementById('teams-panel').hidden = !teams;
+    if (teams) hideDrawer();
+    else closeTeamTemplate();
   }
+
+  function visitDirectoryTab(teams) {
+    if (teams === teamsTabSelected) {
+      if (teams) return loadTeamTemplates();
+      return;
+    }
+    focusTemplates = false;
+    selectDirectoryTab(teams);
+    const {location, history} = globalThis;
+    const search = teams ? '?tab=teams' : searchWithCategory('', selectedCategory);
+    const id = workspaceId();
+    const hash = directoryId.test(id) ? '#'+new URLSearchParams({workspace:id}) : '';
+    history?.pushState(null, '', location.pathname + search + hash);
+    if (teams) return loadTeamTemplates();
+    if (currentUser && workspaces.length) return restoreDirectory();
+  }
+  tabAgents?.addEventListener('click', () => visitDirectoryTab(false));
+  tabTeams?.addEventListener('click', () => visitDirectoryTab(true));
+  if (teamsTabSelected) selectDirectoryTab(true);
+  globalThis.addEventListener?.('popstate', () => {
+    const search = globalThis.location.search;
+    selectDirectoryTab(teamDirectoryLink(search));
+    selectedCategory = categoryFromSearch(search);
+    renderCategoryFilter();
+    if (teamsTabSelected) void loadTeamTemplates();
+    if (currentUser && workspaces.length) return restoreDirectory();
+  });
 
   return load();
 }

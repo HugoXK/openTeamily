@@ -15,7 +15,7 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/home/app.mjs"></script>
 </head>
-<body class="app-workspace home-page">
+<body class="app-workspace app-primary home-page">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -29,6 +29,7 @@
       <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
       <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
       <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/contacts" title="联系人" aria-label="联系人" data-ui-title="shell.contacts" data-ui-label="shell.contacts"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="shell.contacts" class="rail-label">联系人</span></a>
       <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
@@ -97,9 +98,12 @@
       <div>
         <h1 id="home-greeting">欢迎回来</h1>
       </div>
-      <label class="home-workspace">工作区
-        <select id="home-workspace" disabled></select>
-      </label>
+      <div class="home-workspace-actions">
+        <label class="home-workspace">工作区
+          <select id="home-workspace" disabled></select>
+        </label>
+        <button type="button" id="home-create" class="home-primary" aria-haspopup="dialog" disabled>新建</button>
+      </div>
     </header>
     <p id="home-status" role="status"></p>
     <section id="home-personal" class="home-personal" aria-labelledby="home-personal-title" hidden>
@@ -130,6 +134,35 @@
       <a href="/skills"><strong>技能</strong><span>浏览技能库</span></a>
       <a href="/discover"><strong>发现</strong><span>浏览公开目录</span></a>
     </nav>
+
+    <dialog id="home-create-dialog" aria-labelledby="home-create-title" aria-describedby="home-create-workspace">
+      <header class="home-create-head">
+        <div>
+          <h2 id="home-create-title">新建</h2>
+          <p id="home-create-workspace" class="note"></p>
+        </div>
+        <form method="dialog"><button type="submit" class="home-secondary">关闭</button></form>
+      </header>
+      <section aria-labelledby="home-create-work-title">
+        <h3 id="home-create-work-title">作品</h3>
+        <div class="home-create-options">
+          <a data-home-create-path="/space?new=document" autofocus>文档</a>
+          <a data-home-create-path="/space?new=slides">幻灯片</a>
+          <a data-home-create-path="/space?new=spreadsheet">电子表格</a>
+          <a data-home-create-path="/space?new=dashboard">看板</a>
+          <a data-home-create-path="/space?new=website">网页</a>
+          <a data-home-create-path="/space?new=whiteboard">白板</a>
+          <a data-home-create-path="/space?new=media">上传文件</a>
+        </div>
+      </section>
+      <section id="home-create-agents" aria-labelledby="home-create-agent-title" hidden>
+        <h3 id="home-create-agent-title">智能体与团队</h3>
+        <div class="home-create-options">
+          <a data-home-create-path="/agents?new=1">创建智能体</a>
+          <a data-home-create-path="/agents?tab=teams&amp;new=1">从模板创建 AI 团队</a>
+        </div>
+      </section>
+    </dialog>
 
     <div class="home-columns">
       <section class="home-card" aria-labelledby="home-conversations-title">

@@ -18,7 +18,16 @@ function recordVersion(store, workspaceId, pageId, revision, title, body, now, u
 }
 
 const directoryText = text => String(text ?? '').trim().replace(/\s+/gu, ' ')
-const directoryCursor = /^(-?\d{1,16})\.([0-9a-f]{32})\.([0-9a-f]{24})$/
+const directoryCursor = /^([01])\.(-?\d{1,16})\.([0-9a-f]{32})\.([0-9a-f]{24})$/
+const pageReadJoin = ' LEFT JOIN memory_page_reads r ON r.page_id=memory_pages.id AND r.user_id=?'
+const pagePinJoin = ' LEFT JOIN memory_page_pins p ON p.page_id=memory_pages.id AND p.user_id=?'
+const pinnedRank = '(p.page_id IS NOT NULL)'
+const unreadPage = 'memory_pages.revision>COALESCE(r.revision,0)'
+
+function unreadTotal(store, workspace, owner) {
+  return store.get(`SELECT COUNT(*) AS count FROM memory_pages ${pageReadJoin} WHERE workspace_id=? AND ${unreadPage}`,
+    owner, workspace).count
+}
 
 function unfoldedRange(text, from, to) {
   let offset = 0
@@ -68,32 +77,42 @@ function searchMatch(row, topics, needle) {
   return directoryMatch('body', row.body, needle)
 }
 
+function isPinned(store, pageId, owner) {
+  return Boolean(store.get('SELECT 1 FROM memory_page_pins WHERE page_id=? AND user_id=?', pageId, owner))
+}
+
 function listRecent(req, workspaceId) {
   const args = new URLSearchParams(req.query)
   const cursor = args.get('cursor')
   if (args.getAll('cursor').length > 1) refuse(400, 'invalid', 'Invalid memory cursor')
   args.delete('cursor')
-  const { limit } = pagination(args, ['order', 'q', 'topic', 'updated_after'])
+  const { limit } = pagination(args, ['order', 'q', 'topic', 'updated_after', 'unread', 'pinned'])
   const needle = casefold(directoryText(args.get('q')))
   const topic = (args.get('topic') ?? '').trim()
   const after = args.get('updated_after')
   const updatedAfter = after === null ? null : Number(after)
+  const unread = args.get('unread')
+  const pinned = args.get('pinned')
   if (needle.length > 80 || CONTROL.test(needle) || topic.length > TOPIC_MAX || CONTROL.test(topic) ||
+      args.getAll('unread').length > 1 || (unread !== null && unread !== '1') ||
+      args.getAll('pinned').length > 1 || (pinned !== null && pinned !== '1') ||
       (after !== null && (!/^\d{1,16}$/.test(after) || !Number.isSafeInteger(updatedAfter)))) {
     refuse(400, 'invalid', 'Invalid memory request')
   }
 
   const topicHash = topic ? digest(casefold(topic)) : null
-  const scope = digest(stableJson([workspaceId, needle, topicHash, updatedAfter])).slice(0, 24)
+  const owner = actor(req)
+  const scope = digest(stableJson([workspaceId, owner, needle, topicHash, updatedAfter, unread, pinned])).slice(0, 24)
   const parsed = cursor ? directoryCursor.exec(cursor) : null
-  const anchor = parsed ? { updated: Number(parsed[1]), id: parsed[2] } : null
-  if (cursor && (!anchor || !Number.isSafeInteger(anchor.updated) || parsed[3] !== scope)) {
+  const anchor = parsed ? { pinned: Number(parsed[1]), updated: Number(parsed[2]), id: parsed[3] } : null
+  if (cursor && (!anchor || !Number.isSafeInteger(anchor.updated) || parsed[4] !== scope)) {
     refuse(400, 'invalid', 'Invalid memory cursor')
   }
 
   const store = req.store
-  let where = 'WHERE workspace_id=?'
-  const values = [workspaceId]
+  let where = 'workspace_id=?'
+  const values = [owner, owner, workspaceId]
+  if (unread) where += ' AND ' + unreadPage
   if (topicHash) {
     where += ' AND EXISTS (SELECT 1 FROM memory_page_topics t WHERE t.page_id=memory_pages.id AND t.workspace_id=memory_pages.workspace_id AND t.name_hash=?)'
     values.push(topicHash)
@@ -103,11 +122,14 @@ function listRecent(req, workspaceId) {
     values.push(updatedAfter)
   }
   const recent = ' ORDER BY updated DESC,id'
-  const select = 'SELECT * FROM memory_pages ' + where
+  const scopedRows = onlyPinned => onlyPinned
+    ? ' FROM memory_page_pins p CROSS JOIN memory_pages ON p.page_id=memory_pages.id' + pageReadJoin + ' WHERE p.user_id=? AND ' + where
+    : ' FROM memory_pages' + pageReadJoin + pagePinJoin + ' WHERE ' + where
+  const select = `SELECT memory_pages.*, COALESCE(r.revision,0) AS read_revision, ${pinnedRank} AS pin_rank`
   let total, rows, topics
   const matches = new Map()
   if (needle) {
-    const candidates = store.all(select + recent, ...values)
+    const candidates = store.all(select + scopedRows(pinned) + ' ORDER BY pin_rank DESC,updated DESC,id', ...values)
     topics = topicsFor(store, candidates.map(row => row.id), workspaceId)
     rows = []
     total = 0
@@ -115,18 +137,23 @@ function listRecent(req, workspaceId) {
       const match = searchMatch(row, topics[row.id], needle)
       if (!match) continue
       total += 1
-      if (rows.length > limit || (anchor && (row.updated > anchor.updated ||
-          (row.updated === anchor.updated && row.id <= anchor.id)))) continue
+      if (rows.length > limit || (anchor && (row.pin_rank > anchor.pinned ||
+          (row.pin_rank === anchor.pinned && (row.updated > anchor.updated ||
+            (row.updated === anchor.updated && row.id <= anchor.id)))))) continue
       rows.push(row)
       matches.set(row.id, match)
     }
   } else {
-    total = store.get('SELECT COUNT(*) AS count FROM memory_pages ' + where, ...values).count
-    if (anchor) {
-      where += ' AND (updated<? OR (updated=? AND id>?))'
-      values.push(anchor.updated, anchor.updated, anchor.id)
+    total = store.get('SELECT COUNT(*) AS count' + scopedRows(pinned), ...values).count
+    // Seek within each pin bucket in recent order, without sorting the entire workspace by pin state.
+    const readBucket = (rank, size) => {
+      const bucket = rank ? '' : ' AND p.page_id IS NULL'
+      const seek = anchor?.pinned === rank ? ' AND (updated<? OR (updated=? AND id>?))' : ''
+      const boundary = seek ? [anchor.updated, anchor.updated, anchor.id] : []
+      return store.all(select + scopedRows(rank) + bucket + seek + recent + ' LIMIT ?', ...values, ...boundary, size)
     }
-    rows = store.all('SELECT * FROM memory_pages ' + where + recent + ' LIMIT ?', ...values, limit + 1)
+    rows = anchor?.pinned === 0 ? [] : readBucket(1, limit + 1)
+    if (!pinned && rows.length <= limit) rows.push(...readBucket(0, limit + 1 - rows.length))
   }
 
   const page = rows.slice(0, limit)
@@ -134,11 +161,43 @@ function listRecent(req, workspaceId) {
   const user = usernames(store)
   const items = page.map(row => {
     const item = pageView(store, row, { includeBody: false, topics: topics[row.id], user })
+    item.unread = row.revision > row.read_revision
+    item.pinned = Boolean(row.pin_rank)
     if (needle) item.match = matches.get(row.id)
     return item
   })
   const tail = page.at(-1)
-  return { body: { items, cursor: rows.length > limit ? `${tail.updated}.${tail.id}.${scope}` : null, total } }
+  return { body: { items, cursor: rows.length > limit ? `${tail.pin_rank}.${tail.updated}.${tail.id}.${scope}` : null, total,
+    unread_total: unreadTotal(store, workspaceId, owner) } }
+}
+
+async function pinPage(req, workspace, pageId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
+  const { pinned } = requireBodyKeys(await req.json(), ['pinned'])
+  if (typeof pinned !== 'boolean') refuse(400, 'invalid', 'Invalid memory pin')
+  const owner = actor(req)
+  return req.store.transaction(store => {
+    if (!loadPage(store, workspace, pageId)) refuse(404, 'not_found', 'Memory page not found')
+    if (pinned) store.run('INSERT OR IGNORE INTO memory_page_pins(page_id,user_id) VALUES(?,?)', pageId, owner)
+    else store.run('DELETE FROM memory_page_pins WHERE page_id=? AND user_id=?', pageId, owner)
+    return {body:{page_id:pageId, workspace_id:workspace, pinned}}
+  })
+}
+
+async function readPage(req, workspace, pageId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
+  const { revision } = requireBodyKeys(await req.json(), ['revision'])
+  if (!Number.isInteger(revision) || revision < 1 || revision > 2 ** 31) refuse(400, 'invalid', 'Invalid memory revision')
+  const owner = actor(req)
+  return req.store.transaction(store => {
+    const page = loadPage(store, workspace, pageId)
+    if (!page) refuse(404, 'not_found', 'Memory page not found')
+    if (revision > page.revision) refuse(409, 'conflict', 'Memory revision is unavailable')
+    store.run(`INSERT INTO memory_page_reads(page_id,user_id,revision) VALUES(?,?,?)
+      ON CONFLICT(page_id,user_id) DO UPDATE SET revision=MAX(memory_page_reads.revision,excluded.revision)`, pageId, owner, revision)
+    const seen = store.get('SELECT revision FROM memory_page_reads WHERE page_id=? AND user_id=?', pageId, owner).revision
+    return { body: { page_id: pageId, read_revision: seen, unread_total: unreadTotal(store, workspace, owner) } }
+  })
 }
 
 async function list(req, workspaceId) {
@@ -244,7 +303,9 @@ async function dispatch(req, workspaceId, targetId, removing) {
     req.store.run('DELETE FROM memory_pages WHERE id=?', row.id)
     return { body: { removed } }
   }
-  if (req.method === 'GET' && !req.queryString) return { body: { page: pageView(req.store, row) } }
+  if (req.method === 'GET' && !req.queryString) {
+    return { body: { page: {...pageView(req.store, row), pinned:isPinned(req.store, row.id, actor(req))} } }
+  }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
   return update(req, workspaceId, row.id)
 }
@@ -258,11 +319,18 @@ async function versions(req, workspaceId, pageId, revision, restoring) {
   const number = revision ? Number(revision) : null
   const user = usernames(req.store)
   const loadVersion = (n) => req.store.get('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision=?', workspaceId, pageId, n)
-  if (req.method === 'GET' && !restoring && !req.queryString) {
+  if (req.method === 'GET' && !restoring) {
     if (number === null) {
-      const rows = req.store.all('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision<? ORDER BY revision DESC LIMIT ?', workspaceId, pageId, row.revision, 20)
-      return { body: { current: row.revision, items: rows.map((item) => versionView(item, user)) } }
+      const cursor = req.query.get('cursor')
+      if ([...req.query.keys()].some((name) => name !== 'cursor') || req.query.getAll('cursor').length > 1 ||
+          (cursor !== null && !/^[1-9]\d{0,7}$/.test(cursor))) refuse(400, 'invalid', 'Invalid version history cursor')
+      const before = cursor === null ? row.revision : Math.min(Number(cursor), row.revision)
+      const size = 20
+      const rows = req.store.all('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision<? ORDER BY revision DESC LIMIT ?', workspaceId, pageId, before, size + 1)
+      return { body: { current: row.revision, items: rows.slice(0, size).map((item) => versionView(item, user)),
+        cursor: rows.length > size ? rows[size - 1].revision : null } }
     }
+    if (req.queryString) refuse(400, 'invalid', 'Invalid version request')
     const seen = loadVersion(number) ?? (number === row.revision
       ? {...row, created:row.updated, created_by:row.updated_by} : null)
     if (!seen) refuse(404, 'not_found', 'Version not found')
@@ -390,6 +458,8 @@ async function dream(req, workspaceId, pageId, suggestionId) {
 }
 
 export const routes = [
+  { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/pin$`), handle: pinPage },
+  { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/read$`), handle: readPage },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/dream(?:/${W})?$`.replace(/\//g, '\\/')), handle: dream },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/export$`.replace(/\//g, '\\/')), handle: exportPage },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/versions(?:/(\\d{1,8})(?:/(restore))?)?$`.replace(/\//g, '\\/')), handle: versions },

@@ -1,6 +1,7 @@
 import { markdownToBlocks, renderMarkdown, renderMarkdownBlocks } from '../shell/markdown.mjs';
 import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { renderChatCodeBlock } from './code-block.mjs';
+import { richPreviewButton } from './rich-preview.mjs';
 
 let flowchartModule;
 const streamingBlocks = new WeakMap();
@@ -25,45 +26,80 @@ function renderCode(document, block) {
   queueMicrotask(() => {
     if (!container.isConnected) return;
     const fold = container.closest('details:not([open])');
-    if (!fold) void showFlowchart(document, container, code, block.text, english);
+    if (!fold) void showFlowchart(document, container, code, block.text);
     else fold.addEventListener('toggle', function onOpen() {
       if (!fold.open) return;
       fold.removeEventListener('toggle', onOpen);
-      void showFlowchart(document, container, code, block.text, english);
+      void showFlowchart(document, container, code, block.text);
     });
   });
   return container;
 }
 
-async function showFlowchart(document, container, code, text, english) {
-  flowchartModule ??= import('./flowchart.mjs').catch(() => {
+async function showFlowchart(document, container, code, text) {
+  flowchartModule ??= import('../shell/flowchart.mjs').catch(() => {
     flowchartModule = undefined;
     return null;
   });
   try {
     const module = await flowchartModule;
-    if (!container.isConnected || !module) return;
-    const diagram = await module.renderMermaidDiagram(document, text);
-    if (!container.isConnected) return;
-    if (!diagram) return;
-    const scroller = container.closest('#message-scroller');
-    const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
-    const source = document.createElement('details');
-    const summary = document.createElement('summary');
-    const focused = code.contains(document.activeElement) ? document.activeElement : null;
-    source.className = 'chat-diagram-source';
-    source.open = Boolean(focused);
-    summary.textContent = english ? 'Diagram source' : '图表源码';
-    source.append(summary, code);
-    container.replaceChildren(diagram, source);
-    focused?.focus({preventScroll:true});
-    if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+    const diagram = await module?.replaceMermaidSource(document, container, code, text);
+    if (diagram?.firstElementChild && container.isConnected) {
+      const english = document.documentElement?.lang === 'en';
+      const name = diagram.getAttribute('aria-label') || (english ? 'Diagram' : '图表');
+      const actions = document.createElement('div');
+      actions.className = 'chat-diagram-actions';
+      actions.append(richPreviewButton(document, 'diagram', () => diagram.firstElementChild, name));
+      container.append(actions);
+    }
   } catch {
     // Leave the original code visible if the chart renderer fails.
   }
 }
 
-const markdownOptions = {readTable:readMarkdownTable, renderTable:renderMarkdownTable, renderCode};
+function renderChatTable(document, block, appendCell) {
+  const english = document.documentElement?.lang === 'en';
+  const label = (zh,en) => english ? en : zh;
+  const card = document.createElement('div');
+  card.className = 'chat-table-block';
+  const region = renderMarkdownTable(document, block, appendCell);
+  const toolbar = document.createElement('div');
+  toolbar.className = 'chat-table-toolbar';
+  const status = document.createElement('span');
+  status.className = 'chat-table-status';
+  status.setAttribute('role', 'status');
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'chat-table-copy';
+  copy.textContent = label('复制表格', 'Copy table');
+  copy.addEventListener('click', async () => {
+    const table = region.firstElementChild;
+    const view = document.defaultView;
+    const text = Array.from(table.rows, row => Array.from(row.cells, cell =>
+      (cell.innerText ?? cell.textContent ?? '').replace(/[\r\n\t]+/g, ' ').trim()).join('\t')).join('\n');
+    try {
+      await view.navigator.clipboard.writeText(text);
+      status.textContent = label('表格已复制。', 'Table copied.');
+    } catch {
+      if (!region.isConnected) return;
+      const selection = view?.getSelection?.();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(region.firstElementChild);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      status.textContent = selection ? label('已选中表格，请手动复制。', 'Table selected. Copy it manually.')
+        : label('无法访问剪贴板。', 'Clipboard unavailable.');
+    }
+  });
+  const preview = richPreviewButton(document, 'table', () => region.firstElementChild, label('表格', 'Table'));
+  toolbar.append(status, copy, preview);
+  card.append(toolbar, region);
+  return card;
+}
+
+const markdownOptions = {readTable:readMarkdownTable, renderTable:renderChatTable, renderCode};
 
 export function renderChatMarkdown(document, node, source) {
   node.className = 'chat-markdown';
@@ -87,15 +123,17 @@ export function renderStreamingMarkdown(document, node, source, {complete = fals
   while (unchanged < signatures.length && previous[unchanged] === signatures[unchanged]) unchanged += 1;
 
   const tail = node.children[unchanged];
-  const table = blocks[unchanged]?.type === 'table' && tail?.classList.contains('chat-markdown-table-scroll') ? tail : null;
-  const keep = table ? unchanged + 1 : unchanged;
+  const region = blocks[unchanged]?.type === 'table' && tail?.classList.contains('chat-table-block')
+    ? tail.querySelector('.chat-markdown-table-scroll') : null;
+  const keep = region ? unchanged + 1 : unchanged;
   while (node.children.length > keep) node.children[node.children.length - 1].remove();
-  if (table) {
+  if (region) {
     const replacement = document.createElement('div');
-    renderMarkdownBlocks(document, replacement, [blocks[unchanged]], markdownOptions);
-    const left = table.scrollLeft;
-    table.replaceChildren(...replacement.firstChild.children);
-    table.scrollLeft = left;
+    renderMarkdownBlocks(document, replacement, [blocks[unchanged]], {...markdownOptions, renderTable:renderMarkdownTable});
+    const left = region.scrollLeft;
+    region.replaceChildren(...replacement.firstElementChild.children);
+    region.scrollLeft = left;
+    tail.querySelector('.chat-table-status').textContent = '';
   }
   renderMarkdownBlocks(document, node, blocks.slice(keep), complete ? markdownOptions : {...markdownOptions, renderCode:renderStreamingCode});
   streamingBlocks.set(node, signatures);

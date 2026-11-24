@@ -88,6 +88,42 @@ test("guest Discover pages only contain opted-in records and carry no viewer sta
   await read("/v1/ot/discover",401);
 });
 
+test("work topics scope both directories, pagination and neighbors", async () => {
+  const [publisher, reader] = await Promise.all([home(S.base, "topic-publisher"), home(S.base, "topic-reader")]);
+  const path = "/v1/ot/listings";
+  const publish = (slug: string, category: string) => publisher.ok("PUT", path, {
+    kind:"work", work_kind:"document", ref:slug, slug, title:"Topic fixture " + slug, category,
+  });
+  const first = await publish("topic-fixture-first", "travel");
+  await publish("topic-fixture-other", "education");
+  const last = await publish("topic-fixture-last", "travel");
+  assert.equal(first.category, "travel");
+  assert.equal((await publisher.call("PUT", path, {kind:"agent", ref:"topic-agent", slug:"topic-fixture-agent",
+    title:"Agent with invalid work topic", category:"travel"})).status, 400);
+
+  const guest = "/v1/ot/public/discover/works?kind=document&category=travel&q=Topic+fixture&limit=1";
+  const read = async (id: string) => {
+    const response = await fetch(S.base + id, {headers:{accept:"application/json"}});
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const page = await read(guest);
+  assert.equal(page.items.length, 1);
+  assert.ok(page.cursor);
+  const rest = await read(guest + "&cursor=" + encodeURIComponent(page.cursor));
+  assert.deepEqual([page.items[0].slug, rest.items[0].slug].sort(), [first.slug, last.slug].sort());
+  assert.equal(rest.cursor, null);
+  const wrongTopic = guest.replace("category=travel", "category=education");
+  assert.equal((await fetch(S.base + wrongTopic + "&cursor=" + encodeURIComponent(page.cursor))).status, 400);
+
+  const signed = await reader.ok("GET", "/v1/ot/discover?kind=work&work_kind=document&category=travel&q=Topic+fixture");
+  assert.deepEqual(signed.items.map((item: {slug: string}) => item.slug).sort(), [first.slug, last.slug].sort());
+  const detail = await reader.ok("GET", `/v1/ot/discover/${first.slug}/detail?category=travel&q=Topic+fixture`);
+  const preview = await read(`/w/${first.slug}?view=preview&nav=latest&topic=travel&q=Topic+fixture`);
+  assert.deepEqual([detail.previous?.slug, detail.next?.slug].filter(Boolean), [last.slug]);
+  assert.deepEqual([preview.previous?.slug, preview.next?.slug].filter(Boolean), [last.slug]);
+});
+
 test("work remix yields only exact listed document or website snapshots", async () => {
   const author = await home(S.base,"remix-author");
   const reader = await home(S.base,"remix-reader");
@@ -1062,6 +1098,56 @@ test("latest works use a compound scope-bound cursor across timestamp ties", asy
   assert.equal(legacy.next_before, now);
   const prior = await reader.ok("GET", feed + "&before=" + legacy.next_before);
   assert.deepEqual(prior.items.map((item: any) => item.id), [oldest.id]);
+});
+
+test("collected works order and navigate by the signed reader's collection times", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const [author, reader, other] = await Promise.all([
+    home(server.base, "collect-sort-author"), home(server.base, "collect-sort-reader"), home(server.base, "collect-sort-other"),
+  ]);
+  const publish = (slug: string, category = "technology") => {
+    now += 1_000;
+    return author.ok("PUT", "/v1/ot/listings", {
+      kind: "work", work_kind: "document", ref: slug, slug, title: "Collected example", category, snapshot: "Shared body keyword",
+    });
+  };
+  const oldest = await publish("collect-sort-oldest");
+  const middle = await publish("collect-sort-middle");
+  const newest = await publish("collect-sort-newest");
+  const outside = await publish("collect-sort-outside", "education");
+  const collect = (account: typeof reader, item: {id: string}) => account.ok("POST", `/v1/ot/listings/${item.id}/collect`, {on: true});
+  await collect(reader, middle);
+  await collect(reader, newest);
+  now += 1_000;
+  await collect(reader, oldest);
+  await collect(reader, outside);
+  await collect(other, newest);
+
+  const filters = "tab=collected&category=technology&q=keyword&work_kind=document";
+  const latest = "/v1/ot/discover?kind=work&" + filters;
+  const recent = latest + "&sort=collected&limit=1";
+  assert.deepEqual((await reader.ok("GET", latest)).items.map((item: any) => item.id), [newest.id, middle.id, oldest.id]);
+  const first = await reader.ok("GET", recent);
+  assert.deepEqual(first.items.map((item: any) => item.id), [oldest.id]);
+  assert.equal(first.items[0].feed_at, undefined);
+  const cursor = "&cursor=" + encodeURIComponent(first.next_cursor);
+  assert.equal((await other.call("GET", recent + cursor)).status, 400);
+  assert.equal((await reader.call("GET", latest + "&pagination=keyset" + cursor)).status, 400);
+  assert.equal((await reader.call("GET", recent + "&before=1")).status, 400);
+  assert.equal((await reader.call("GET", "/v1/ot/public/discover/works?sort=collected")).status, 400);
+  assert.equal((await reader.call("GET", "/v1/ot/discover?kind=work&tab=following&sort=collected")).status, 400);
+  const peers = [middle, newest].sort((left, right) => right.id.localeCompare(left.id));
+  const second = await reader.ok("GET", recent + cursor);
+  assert.deepEqual(second.items.map((item: any) => item.id), [peers[0].id]);
+  const third = await reader.ok("GET", recent + "&cursor=" + encodeURIComponent(second.next_cursor));
+  assert.deepEqual(third.items.map((item: any) => item.id), [peers[1].id]);
+  assert.equal(third.next_cursor, null);
+  const detail = `/v1/ot/discover/${oldest.slug}/detail?${filters}&sort=collected`;
+  assert.equal((await reader.ok("GET", detail)).next.slug, peers[0].slug);
+  const unrelatedDetail = await other.ok("GET", detail);
+  assert.deepEqual([unrelatedDetail.previous, unrelatedDetail.next], [null,null]);
 });
 
 test("work search backfills only existing public rows when opening a legacy database", async (t) => {
