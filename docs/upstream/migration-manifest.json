@@ -1924,8 +1924,8 @@
       "path": "src/openteamily/discover.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "42de0bbb6321f350da9c477ddea9d83a0bf67b3f4e450d6ae971cff8f09d7b07",
-      "bytes": 72019
+      "new_sha256": "fac8ebf49257b4314ee41620bc733b52b046bd7e67c8f2d6fb57709cb4702f24",
+      "bytes": 76515
     },
     "services/bot-social/test/openteamily_discover.test.ts": {
       "destination": "services/bot-social",
@@ -2258,6 +2258,14 @@
       "license_notice": "MIT (Bot Social snapshot)",
       "new_sha256": "4615ca87569da9332ce5ba1ed242f5f054653b4ae9e80e64a655ca9b3bf78443",
       "bytes": 5233
+    },
+    "services/bot-social/test/openteamily_discover_ranking.test.ts": {
+      "destination": "services/bot-social",
+      "path": "test/openteamily_discover_ranking.test.ts",
+      "reason": "OpenTeamily-authored tests for ranked-position transparency, seen demotion and the one-author-per-page rule on the Discover works feed.",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "485f58e9d3c31f966e35fb7e0b0b11039a835f74bfd9f90ddda5e6865bc26644",
+      "bytes": 5775
     }
   },
   "core_fork_removed": {
