@@ -138,6 +138,8 @@ CREATE INDEX artifact_document_parent ON artifact_document_parents(parent_id);
 export const IMPORT_TABLES = {
   ot_users: ['id', 'username', 'is_owner'],
   artifacts: ['id', 'workspace_id', 'title', 'title_hash', 'kind', 'body', 'revision', 'created', 'updated', 'created_by', 'updated_by', 'key_hash', 'request_hash'],
+  // The document tree rides right after the works it links.
+  artifact_document_parents: ['artifact_id', 'parent_id'],
   artifact_favorites: ['artifact_id', 'user_id', 'created'],
   artifact_meta: ['artifact_id', 'render'],
   artifact_sources: ['artifact_id', 'workspace_id', 'source_kind', 'source_id', 'automation_id', 'automation_title', 'task_kind', 'created'],

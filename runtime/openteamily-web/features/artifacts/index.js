@@ -39,6 +39,16 @@ export default defineFeature({
   pages: ['artifacts'],
   migrations: MIGRATIONS,
   importTables: IMPORT_TABLES,
+  // A Space that moved without the parent document still brings the child in,
+  // at the root: a link whose ends are not both in the bundle is dropped.
+  acceptImportRow(table, row, store) {
+    if (table !== 'artifact_document_parents') return true
+    const id = row?.artifact_id
+    const parent = row?.parent_id
+    if (typeof id !== 'string' || typeof parent !== 'string') return false
+    return Boolean(store.get('SELECT 1 AS ok FROM artifacts WHERE id=?', id)
+      && store.get('SELECT 1 AS ok FROM artifacts WHERE id=?', parent))
+  },
   afterImport: importMedia,
   routes,
   search,

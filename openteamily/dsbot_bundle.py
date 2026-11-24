@@ -88,6 +88,7 @@ FEATURE_TABLES = {
     'artifacts': [
         ('ot_users', _ARTIFACT_USERS),
         ('artifacts', _scoped('artifacts')),
+        ('artifact_document_parents', _via_artifact('artifact_document_parents', 'x.artifact_id, x.parent_id')),
         ('artifact_favorites', _via_artifact('artifact_favorites', 'x.artifact_id, x.user_id')),
         ('artifact_meta', _via_artifact('artifact_meta', 'x.artifact_id')),
         ('artifact_sources', _scoped('artifact_sources', 'artifact_id')),
@@ -192,9 +193,15 @@ def build(db, user_id, feature, now=None, data_dir=None):
         raise ValueError('user id required')
     tables, manifest = {}, {}
     for table, sql in FEATURE_TABLES[feature]:
-        cursor = db.execute(sql, (user_id,) * sql.count('?'))
-        names = [column[0] for column in cursor.description]
-        rows = [dict(zip(names, tuple(row))) for row in cursor.fetchall()]
+        # A platform database that predates the document tree has no such
+        # table; it exports flat, the way an older bundle does.
+        if table == 'artifact_document_parents' and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is None:
+            rows = []
+        else:
+            cursor = db.execute(sql, (user_id,) * sql.count('?'))
+            names = [column[0] for column in cursor.description]
+            rows = [dict(zip(names, tuple(row))) for row in cursor.fetchall()]
         text = canonical(rows)
         tables[table] = text
         manifest[table] = {'rows': len(rows), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
