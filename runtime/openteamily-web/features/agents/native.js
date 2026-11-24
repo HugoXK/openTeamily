@@ -154,14 +154,20 @@ export function nativeAgents({ host, db }) {
     if (!mapping) run('INSERT OR IGNORE INTO native_agent_objects VALUES(?,?,?)', row.id, bot.id, bot.name)
     const lastName = mapping?.last_name || bot.name
     const nextName = bot.name !== lastName ? bot.name : row.name
-    const instructions = bot.instructions || ''
-    const changed = nextName !== row.name || instructions !== row.instructions || Number(!!bot.hidden) !== row.archived
+    // The Personal Agent's Chief mapping mirrors the conversation and its name
+    // only: the native Chief is the user's main assistant, so its instructions
+    // and hidden flag are not a source for this agent's saved data. Other agents
+    // still reconcile native edits as before.
+    const boundToChief = chief && bot.id === chief.id
+    const instructions = boundToChief ? row.instructions : bot.instructions || ''
+    const archived = boundToChief ? row.archived : Number(!!bot.hidden)
+    const changed = nextName !== row.name || instructions !== row.instructions || archived !== row.archived
     if (changed) {
       const hash = createHash('sha256').update(nextName.toLowerCase()).digest('hex')
       const collision = one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=? AND id<>?', row.workspace_id, hash, row.id)
       if (collision) throw Object.assign(new Error('Native Bot rename conflicts with workspace agent name'), { status: 409, code: 'agents/conflict' })
       // name_hash updated by the caller with the shared hashing rule.
-      run('UPDATE agents SET name=?,name_hash=?,instructions=?,archived=?,revision=revision+1,updated=? WHERE id=?', nextName, hash, instructions, Number(!!bot.hidden), Math.floor(Date.now()/1000), row.id)
+      run('UPDATE agents SET name=?,name_hash=?,instructions=?,archived=?,revision=revision+1,updated=? WHERE id=?', nextName, hash, instructions, archived, Math.floor(Date.now()/1000), row.id)
     }
     run('UPDATE native_agent_objects SET last_name=? WHERE agent_id=?', bot.name, row.id)
     const current = one('SELECT * FROM agents WHERE id=?', row.id)

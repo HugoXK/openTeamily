@@ -33,6 +33,8 @@ const createRuntime = () => {
   let sessions = 0
   const rt = {
     state:{bots}, botOf:id => bots[id], chatOwners:new Map(), save:async () => {},
+    updateBot:async (id,fields) => Object.assign(bots[id],fields),
+    setFlags:async (id,flags) => Object.assign(bots[id],flags),
     createBot:async ({name,instructions}) => (bots.agent = {id:'agent',name,instructions,capabilities:[]}),
     createSession:async () => ++sessions === 1 ? 'native-session' : 'native-session-' + sessions,
     workDirOf:() => '/fixture',
@@ -116,7 +118,7 @@ test('a private sticker appears as soon as staged and its message survives libra
   assert.deepEqual(Buffer.from(await file.arrayBuffer()),data)
 })
 
-test('startup snapshots are bounded, scoped and cannot materialize native conversations', async t => {
+test('startup snapshots are bounded, scoped, and a genuinely archived agent still refuses them', async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
   const runtime = createRuntime()
@@ -124,7 +126,12 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   let profileReads = 0
   const {endpoints} = createAgents({db,host:{
     currentRuntime: () => runtime,
-    call: async () => { profileReads++; return {recall: 'all'} },
+    call: async name => {
+      if (name === 'agents/personal-binding') return {workspace_id: workspace}
+      if (name === 'teams/activeWorkspaces') return [{id: workspace, role: 'owner'}]
+      profileReads++
+      return {recall: 'all'}
+    },
     runtime: async () => {
       assert.ok(allowRuntime, 'A snapshot must not start the native runtime')
       return runtime
@@ -169,10 +176,27 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   for (const value of ['snapshot=0','snapshot=1&snapshot=1','snapshot=1&limit=51', `snapshot=1&around=${body.cursor}`]) {
     assert.equal((await request(path(mapped.id),{},value)).status,400,value)
   }
+  // This fixture's Personal Agent is not mapped to the native Chief, so the old
+  // projection still applies to it: a hidden Bot projects as archived and the
+  // snapshot gate stays closed.
   runtime.rt.botOf(body.agent.native_bot_id).hidden = true
   assert.equal((await request(path(mapped.id),{},query)).status,409)
   assert.equal(await endpoints.startupEntry(entry, {internal:true}), null)
   runtime.rt.botOf(body.agent.native_bot_id).hidden = false
+  // A real user archive still closes the same snapshot gate: 409 and no entry.
+  db.exec('PRAGMA query_only=OFF')
+  allowRuntime = true
+  const archived = await endpoints.archive({workspace_id:workspace,id:agent.id,archived:true})
+  assert.equal(archived.agent.archived,1)
+  allowRuntime = false
+  db.exec('PRAGMA query_only=ON')
+  assert.equal((await request(path(mapped.id),{},query)).status,409)
+  assert.equal(await endpoints.startupEntry(entry, {internal:true}), null)
+  db.exec('PRAGMA query_only=OFF')
+  allowRuntime = true
+  assert.equal((await endpoints.archive({workspace_id:workspace,id:agent.id,archived:false})).agent.archived,0)
+  allowRuntime = false
+  db.exec('PRAGMA query_only=ON')
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,1)
 
   db.exec('PRAGMA query_only=OFF')
