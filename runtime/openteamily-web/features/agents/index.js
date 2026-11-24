@@ -269,10 +269,17 @@ export function createAgents({ db, host }) {
   }
 
   function observeAgent(row, bot, rosterAttached) {
-    if (bot) return {...row,
-      name: row.native_name && bot.name !== row.native_name ? bot.name : row.name,
-      instructions: bot.instructions || '', archived: Number(Boolean(bot.hidden)),
-      native_bot_id: bot.id, native_name: bot.name}
+    if (bot) {
+      // The Personal Agent's native Chief is the user's main assistant; its
+      // instructions and hidden flag are not this agent's saved data. Other
+      // agents keep reflecting native edits.
+      const chiefMapping = row.id && row.workspace_id && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?',
+        row.id, row.workspace_id)
+      return {...row,
+        name: row.native_name && bot.name !== row.native_name ? bot.name : row.name,
+        ...(chiefMapping ? {} : {instructions: bot.instructions || '', archived: Number(Boolean(bot.hidden))}),
+        native_bot_id: bot.id, native_name: bot.name}
+    }
     if (rosterAttached && row.native_bot_id) return {...row, archived: 1, native_name: null, native_deleted: true}
     return row
   }
@@ -932,7 +939,7 @@ export function createAgents({ db, host }) {
       const attached = typeof rt?.botOf === 'function'
       const conversations = rows.map(row => {
         if (!items.has(row.agent_id)) {
-          const agent = observeAgent({name:row.agent_name,archived:row.agent_archived,
+          const agent = observeAgent({id:row.agent_id,workspace_id:workspaceId,name:row.agent_name,archived:row.agent_archived,
             native_bot_id:row.native_bot_id,native_name:row.native_name}, row.native_bot_id && rt?.botOf?.(row.native_bot_id), attached)
           items.set(row.agent_id,{id:row.agent_id,workspace_id:workspaceId,name:agent.name,
             archived:agent.archived ? 1 : 0,native_deleted:!!agent.native_deleted,served_by:'ds-bot'})

@@ -169,9 +169,11 @@ test('startup snapshots are bounded, scoped and cannot materialize native conver
   for (const value of ['snapshot=0','snapshot=1&snapshot=1','snapshot=1&limit=51', `snapshot=1&around=${body.cursor}`]) {
     assert.equal((await request(path(mapped.id),{},value)).status,400,value)
   }
+  // A hidden native Chief is not this personal agent's archive state: the
+  // snapshot stays readable and still never materializes a native conversation.
   runtime.rt.botOf(body.agent.native_bot_id).hidden = true
-  assert.equal((await request(path(mapped.id),{},query)).status,409)
-  assert.equal(await endpoints.startupEntry(entry, {internal:true}), null)
+  assert.equal((await request(path(mapped.id),{},query)).status,200)
+  assert.deepEqual(await endpoints.startupEntry(entry, {internal:true}), body)
   runtime.rt.botOf(body.agent.native_bot_id).hidden = false
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM native_agent_sessions').get().count,1)
 
