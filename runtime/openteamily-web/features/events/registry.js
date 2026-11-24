@@ -201,6 +201,22 @@ export function validateSecretRef(value) {
   if (!SECRET_REF.test(reference)) {
     invalid('secret_ref must be an opaque scheme:// reference, never a plaintext secret')
   }
+  // Hard rule 2 covers the reference itself: a pointer that embeds userinfo, a
+  // query or a fragment carries secret material in plaintext, would be stored
+  // verbatim and echoed back by view(). A pointer names where the secret lives,
+  // it never carries it.
+  let url
+  try {
+    url = new URL(reference)
+  } catch {
+    invalid('secret_ref must be an opaque scheme:// reference, never a plaintext secret')
+  }
+  if (url.username !== '' || url.password !== '') {
+    invalid('secret_ref must not embed credentials; store a pointer to the secret instead')
+  }
+  if (url.search !== '' || url.hash !== '') {
+    invalid('secret_ref must not carry a query or fragment; store a pointer to the secret instead')
+  }
   return reference
 }
 

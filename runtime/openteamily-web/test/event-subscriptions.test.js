@@ -229,6 +229,36 @@ test('secret_ref is an opaque reference: no plaintext secret is accepted, stored
   assert.equal((await value(bot, 'update', { id: created.id, changes: { secret_ref: null } })).subscription.secret_ref, null)
 })
 
+test('a secret_ref that carries credentials or a token query is refused, not stored and not echoed', async () => {
+  const bot = await boot()
+  const created = (await value(bot, 'create', {
+    name: 'Credential hook', endpoint: ENDPOINT, kinds: ['meeting.shared'],
+    secret_ref: 'vault://ot/workspaces/w/hooks/2',
+  })).subscription
+  // Hard rule 2 covers the reference itself: a pointer that embeds userinfo or
+  // a secret-carrying query would be stored verbatim and echoed by view().
+  const embedded = [
+    'https://user:pass@vault.example.test/x',
+    'vault://user:pass@vault/x',
+    's3://AKIAIOSFODNN7EXAMPLE:wJalrXUtnFEMI@bucket/x',
+    'https://vault.example.test/x?token=ghp_0123456789abcdefghij',
+    'vault://ot/hooks/x?password=hunter2',
+    'vault://ot/hooks/x#hunter2',
+  ]
+  for (const secret_ref of embedded) {
+    await refused(bot, 'create', { name: 'Embedded', endpoint: ENDPOINT, kinds: ['meeting.shared'], secret_ref }, 'events/invalid')
+    await refused(bot, 'update', { id: created.id, changes: { secret_ref } }, 'events/invalid')
+  }
+  // The pointer itself is unchanged by those refusals and nothing was inserted.
+  assert.equal((await value(bot, 'get', { id: created.id })).subscription.secret_ref, 'vault://ot/workspaces/w/hooks/2')
+  assert.deepEqual(rows(bot).map((row) => row.secret_ref), ['vault://ot/workspaces/w/hooks/2'])
+  // A plain pointer keeps working.
+  assert.equal(
+    (await value(bot, 'update', { id: created.id, changes: { secret_ref: 'vault://ot/hooks/x' } })).subscription.secret_ref,
+    'vault://ot/hooks/x',
+  )
+})
+
 test('matching intersects kind and filters, excludes disabled rows and never leaks another owner', async () => {
   const bot = await boot()
   const filtered = (await value(bot, 'create', {
