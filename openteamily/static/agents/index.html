@@ -122,20 +122,41 @@
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
     <section id="teams-panel" tabindex="-1" aria-labelledby="tab-teams" hidden>
-      <p class="note">模板来自服务端：选一个模板会在当前工作区创建（或复用同名的）三个智能体，并建一个群会话。只有工作区所有者或管理员可以建团队。</p>
-      <ul id="team-template-list" class="card-grid" aria-live="polite"></ul>
-      <p id="teams-empty" class="note" hidden>模板列表没有加载出来；可以稍后重试。</p>
+      <div class="team-template-filters">
+        <label>搜索团队模板 <input id="team-template-search" type="search" placeholder="团队、角色或用途" autocomplete="off"></label>
+        <div class="team-template-category">
+          <label for="team-template-category">分类</label>
+          <select id="team-template-category"><option value="">全部分类</option></select>
+        </div>
+      </div>
+      <p id="teams-status" class="note" role="status"></p>
+      <button type="button" id="team-template-reload" hidden>重新加载</button>
+      <ul id="team-template-list" class="card-grid"></ul>
     </section>
     <aside id="manage-drawer" hidden>
       <form id="create-form" method="post" action="/v1/workspaces" hidden>
         <fieldset>
           <legend>新建智能体</legend>
+          <section id="agent-draft-assist" class="agent-draft-assist" hidden>
+            <label class="stack" for="agent-draft-prompt">描述你需要的智能体
+              <textarea id="agent-draft-prompt" rows="3" maxlength="1600" placeholder="如：整理客户访谈，提取需求并列出待确认的问题"></textarea>
+            </label>
+            <button type="button" id="agent-draft-generate">生成草稿</button>
+            <p id="agent-draft-status" class="note" role="status" hidden></p>
+          </section>
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="new-agent-quick-starts-help"></textarea></label>
           <p class="note" id="new-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
+          <div class="agent-portrait-field" hidden>
+            <label>头像
+              <select name="portrait"><option value="">自动</option></select>
+            </label>
+            <span class="agent-portrait-preview" aria-hidden="true"></span>
+          </div>
+          <p class="note" id="agent-create-status" role="status" hidden></p>
           <div class="actions">
             <button type="submit">创建</button>
             <button type="button" id="cancel-create">取消</button>
@@ -153,6 +174,12 @@
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="edit-agent-quick-starts-help"></textarea></label>
           <p class="note" id="edit-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
+          <div class="agent-portrait-field" hidden>
+            <label>头像
+              <select name="portrait"><option value="">自动</option></select>
+            </label>
+            <span class="agent-portrait-preview" aria-hidden="true"></span>
+          </div>
           <p class="note" id="agent-edit-conflict" role="status" hidden>设置已在别处更新。载入最新设置后，可以核对并恢复草稿。</p>
           <div id="agent-edit-draft" hidden>
             <p class="note" id="agent-edit-draft-note" role="status"></p>
@@ -184,7 +211,11 @@
           <label>每分钟上限 <input id="api-key-rate" type="number" min="1" max="60" value="10"></label>
           <button type="submit">生成密钥</button>
         </form>
-        <p id="api-key-token" class="note" hidden></p>
+        <div id="api-key-token" class="note" hidden>
+          <p>密钥只显示一次，请先复制并妥善保管。</p>
+          <code id="api-key-value"></code>
+          <button id="api-key-copy" type="button">复制密钥</button>
+        </div>
         <ul id="api-key-list"></ul>
       </section>
       <section id="chat-panel" hidden>
@@ -194,6 +225,20 @@
     </aside>
   </section>
   </main>
+  <dialog id="team-template-dialog" aria-labelledby="team-template-title">
+    <h2 id="team-template-title">创建 AI 团队</h2>
+    <p id="team-template-context" class="note"></p>
+    <form id="team-template-form">
+      <label>群组名称 <input id="team-template-name" required maxlength="80" autocomplete="off"></label>
+      <h3>团队智能体</h3>
+      <ul id="team-template-roles"></ul>
+      <p id="team-template-feedback" class="note" role="status" hidden></p>
+      <div class="team-template-actions">
+        <button type="button" id="team-template-close">关闭</button>
+        <button type="submit" id="team-template-create" class="primary">创建群组</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="agent-share-dialog" aria-labelledby="agent-share-title">
     <h2 id="agent-share-title">私下分享智能体</h2>
     <p id="agent-share-name" class="note"></p>

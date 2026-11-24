@@ -65,7 +65,7 @@ export function runStatusLabel(run) {
   if (run.status === 'succeeded') return '已完成';
   if (run.status === 'queued' && run.error_code === 'no_agent') return '等待已连接的代理';
   if (run.status === 'queued') return '已排队';
-  if (run.status === 'running') return '运行中';
+  if (run.status === 'running') return run.stop_requested === true ? '正在停止' : '运行中';
   if (run.status === 'cancelled') return '已取消';
   if (run.status === 'timeout') return '已超时';
   if (run.status === 'skipped') return '已跳过';
@@ -83,7 +83,7 @@ function scopedActiveRun(run, workspace, automation) {
     ? run : null;
 }
 
-// A run that ended can be asked for again; a queued run is cancelled instead,
+// A run that ended can be asked for again; an active run is stopped first,
 // and a finished success has nothing to re-run.
 export function retryAllowed(run) {
   if (!run) return false;
@@ -125,11 +125,11 @@ export function runErrorReason(run) {
   return '';
 }
 
-export function runDetailFields(run) {
+export function runDetailFields(run, {includeResult = true} = {}) {
   const fields = [];
   if (!run) return fields;
   const text = runResultText(run);
-  if (text) fields.push({label: '摘要', value: text});
+  if (includeResult && text) fields.push({label: '摘要', value: text});
   const code = typeof run.error_code === 'string' ? run.error_code : '';
   const reason = runErrorReason(run);
   if (code) fields.push({label: '状态码', value: code});
@@ -152,7 +152,14 @@ export function runDetailFields(run) {
   return fields;
 }
 
-// The two destructive controls on this page ask before they act. The wording is
+function formatRunResult(document, output, text) {
+  if (!output || output.dataset.rendered) return;
+  void import('./result-markdown.mjs').then(({renderRunMarkdown}) => {
+    if (output.isConnected && !output.dataset.rendered) renderRunMarkdown(document, output, text);
+  }).catch(() => { /* Keep the original result readable if formatting is unavailable. */ });
+}
+
+// Destructive controls on this page ask before they act. The wording is
 // a pure function so it can be asserted without a DOM; it stays generic on
 // purpose and never echoes a user-supplied title, which could make the question
 // look like a different action.
@@ -161,6 +168,7 @@ export function deletePrompt(item) {
 }
 
 export function cancellationPrompt(run) {
+  if (run?.status === 'running') return {question: '停止这次运行？', confirmLabel: '确认停止'};
   return {question: '取消这次运行？', confirmLabel: '确认取消'};
 }
 
@@ -198,6 +206,26 @@ function draftFields(values) {
     .map(([field]) => [field, values[field]]));
   if (typeof values?.enabled === 'boolean') fields.enabled = values.enabled;
   return fields;
+}
+
+function editorChanges(fields, baseline) {
+  return Object.fromEntries(Object.entries(fields).filter(([field, value]) => value !== baseline[field]));
+}
+
+function matchesAutomationUpdate(saved, item, workspace, changes) {
+  if (saved?.id !== item.id || saved.workspace_id !== workspace || saved.revision !== item.revision + 1) return false;
+  return Object.entries(changes).every(([field, expected]) => {
+    const actual = saved[field];
+    if (Array.isArray(expected)) {
+      return Array.isArray(actual) && actual.length === expected.length &&
+        expected.every((value, index) => (field === 'participants' ? actual[index]?.username : actual[index]) === value);
+    }
+    if (field === 'schedule') {
+      return actual && Object.keys(actual).length === Object.keys(expected).length &&
+        Object.entries(expected).every(([key, value]) => actual[key] === value);
+    }
+    return actual === expected;
+  });
 }
 
 function exactRunForTarget(run, target) {
@@ -254,10 +282,10 @@ function ownedPersonalCatalogue(result, user) {
 
 function meetingSourceFromResponse(body, target, username) {
   const {meeting, action, viewer_username: viewer} = body || {};
-  if (viewer !== undefined && viewer !== username) return null;
+  if (viewer !== username) return null;
   if (meeting?.id !== target.meeting || meeting.workspace_id !== target.workspace ||
       meeting.revision !== target.revision || typeof meeting.title !== 'string' || !meeting.title.trim() ||
-      action?.done !== false || typeof action.text !== 'string' || !action.text.trim()) return null;
+      action?.index !== target.action || action.done !== false || typeof action.text !== 'string' || !action.text.trim()) return null;
   return {target, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : ''};
 }
 
@@ -431,6 +459,22 @@ function oneTimeScheduleLabel(state) {
   return '';
 }
 
+function clockChangeLabel(change) {
+  return change === 'forward' ? '时钟跳转后顺延' : change === 'first' ? '按第一次出现的时间运行' : '';
+}
+
+export function upcomingAutomations(items, workspace) {
+  return items.filter(item => {
+    if (item?.workspace_id !== workspace || item.enabled !== true) return false;
+    const status = item.schedule_status;
+    return status?.state === 'due' || (status?.state === 'scheduled' && Number.isSafeInteger(status.at) && status.at > 0);
+  }).sort((first, second) => {
+    const a = first.schedule_status, b = second.schedule_status;
+    const atA = a.state === 'due' ? 0 : a.at, atB = b.state === 'due' ? 0 : b.at;
+    return atA - atB || first.title.localeCompare(second.title);
+  });
+}
+
 function renderNextRun(node, item) {
   const status = item?.schedule_status;
   node.textContent = '';
@@ -438,8 +482,7 @@ function renderNextRun(node, item) {
   if (!status) return;
   if (status.state === 'due') node.textContent = '已到计划运行时间';
   if (oneTimeScheduleLabel(status.state)) node.textContent = oneTimeScheduleLabel(status.state);
-  const clockChange = status.clock_change === 'forward' ? '时钟跳转后顺延'
-    : status.clock_change === 'first' ? '按第一次出现的时间运行' : '';
+  const clockChange = clockChangeLabel(status.clock_change);
   const pausedPreview = status.state === 'paused' && clockChange;
   if ((status.state === 'scheduled' || pausedPreview) && Number.isSafeInteger(status.at) && status.at > 0) {
     const zone = item.schedule?.time_zone;
@@ -513,7 +556,7 @@ function monogram(name) {
   return {label, tone: (tone % 6) + 1};
 }
 
-function renderList(items, list, empty, onOpen, onToggle, togglePending) {
+function renderList(items, list, empty, onOpen, onToggle, togglePending, upcoming) {
   list.textContent = '';
   list.classList.remove('template-catalog');
   setBusy(list, false);
@@ -538,13 +581,16 @@ function renderList(items, list, empty, onOpen, onToggle, togglePending) {
     const title = document.createElement('strong');
     title.className = 'item-title';
     title.textContent = item.title;
-    const meta = document.createElement('span');
-    meta.className = 'item-schedule';
-    meta.id = 'automation-schedule-' + item.id;
-    const description = [meta.id];
-    meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
+    const description = [];
     copy.appendChild(title);
-    copy.appendChild(meta);
+    if (!upcoming || item.schedule?.kind !== 'once' || item.schedule_status?.state === 'due') {
+      const meta = document.createElement('span');
+      meta.className = 'item-schedule';
+      meta.id = 'automation-schedule-' + item.id;
+      description.push(meta.id);
+      meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
+      copy.appendChild(meta);
+    }
     const running = scopedActiveRun(item.active_run, item.workspace_id, item.id);
     if (running) {
       const pill = document.createElement('span');
@@ -570,27 +616,29 @@ function renderList(items, list, empty, onOpen, onToggle, togglePending) {
       && RECURRING_KINDS.has(item.schedule?.kind) && /^[0-9a-f]{32}$/.test(item.id)
       && ['paused', 'scheduled', 'due'].includes(item.schedule_status?.state)
       && Number.isSafeInteger(item.revision) && item.revision > 0;
-    const state = document.createElement(canToggle ? 'button' : 'span');
-    state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
-    state.id = 'automation-state-' + item.id;
-    state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
-    if (canToggle) {
-      state.type = 'button';
-      state.dataset.automationToggle = item.id;
-      state.setAttribute('role', 'switch');
-      state.setAttribute('aria-label', item.title + '自动运行');
-      state.setAttribute('aria-checked', String(Boolean(item.enabled)));
-      state.disabled = togglePending(item);
-      setBusy(state, state.disabled);
-      state.addEventListener('click', () => onToggle(item, state));
-    } else {
-      description.push(state.id);
+    row.appendChild(open);
+    if (canToggle || !upcoming) {
+      const state = document.createElement(canToggle ? 'button' : 'span');
+      state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
+      state.id = 'automation-state-' + item.id;
+      state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
+      if (canToggle) {
+        state.type = 'button';
+        state.dataset.automationToggle = item.id;
+        state.setAttribute('role', 'switch');
+        state.setAttribute('aria-label', item.title + '自动运行');
+        state.setAttribute('aria-checked', String(Boolean(item.enabled)));
+        state.disabled = togglePending(item);
+        setBusy(state, state.disabled);
+        state.addEventListener('click', () => onToggle(item, state));
+      } else {
+        description.push(state.id);
+      }
+      row.appendChild(state);
     }
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
     open.appendChild(copy);
-    row.appendChild(open);
-    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -626,9 +674,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const mainPanel = document.getElementById('main-panel');
   const main = document.getElementById('main');
   const form = document.getElementById('editor-form');
+  const taskDraftPanel = document.getElementById('automation-draft-assist');
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
+  const clearSearch = document.getElementById('automation-search-clear');
+  const upcomingControl = document.getElementById('automation-upcoming');
   const runButton = document.getElementById('tick-automation');
   const runHistoryButton = document.getElementById('show-run-history');
   const runPanel = document.getElementById('run-panel');
@@ -662,6 +713,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const templateRetry = document.getElementById('automation-template-retry');
   const editorOptions = document.getElementById('automation-editor-options');
   const nextRun = document.getElementById('automation-next-run');
+  const previewScheduleButton = document.getElementById('preview-automation-schedule');
+  const schedulePreview = document.getElementById('automation-schedule-preview');
+  const schedulePreviewStatus = document.getElementById('automation-schedule-preview-status');
+  const schedulePreviewSlots = document.getElementById('automation-schedule-preview-slots');
+  const schedulePreviewHint = document.getElementById('automation-schedule-preview-hint');
   const scheduleSettings = document.getElementById('automation-schedule-settings');
   const native = servedByDsBot(document);
   document.getElementById('automation-notification-settings').hidden = !native;
@@ -675,6 +731,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let draftSave = null;
   let editorDraft = null;
   let category = 'mine';
+  let upcoming = false;
   let runTimer = 0;
   let runRequest = 0;
   let listRequest = 0;
@@ -689,6 +746,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let nextRunCursor = '';
   let activeRun = false;
   let runSettingsChanged = false;
+  let scheduleReview;
   let editorRequest = 0;
   let editorInitial = '';
   let runIntent = 0;
@@ -696,6 +754,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const savedRunResults = new Map();
   const savingRunResults = new Set();
   const runSubmissions = new Map();
+  const tabDrafts = new Map();
   const watchedRuns = new Map();
   const cancellingRuns = new Set();
   const pendingScheduleSwitches = new Set();
@@ -708,6 +767,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const teamNames = new Map();
   const canShareToStudio = typeof document.getElementById('automation-studio-dialog')?.showModal === 'function';
   let studioShareLoad;
+  let taskDraftAssistant;
+
+  function taskDraftScope() {
+    const workspace = workspaceId();
+    const username = currentUser?.username;
+    if (!native || !username || !EDITOR_ID.test(workspace) || form.hidden || taskDraftPanel.hidden ||
+        current?.id || current?.edition || followupSource) return null;
+    return {workspace, username, key:JSON.stringify([currentUser.id || username, workspace, editorRequest])};
+  }
+
+  function resetTaskDraft(available = false) {
+    if (!taskDraftPanel) return;
+    taskDraftPanel.hidden = !available;
+    taskDraftPanel.open = false;
+    taskDraftAssistant?.reset();
+  }
+
+  taskDraftPanel?.addEventListener('toggle', async () => {
+    if (!taskDraftPanel.open || taskDraftAssistant || !taskDraftScope()) return;
+    try {
+      const {mountAutomationDraftAssist} = await import('./draft-assist.mjs');
+      if (taskDraftPanel.open && taskDraftScope() && !taskDraftAssistant) {
+        taskDraftAssistant = mountAutomationDraftAssist(document, {form, request, scope:taskDraftScope,
+          onApply:rememberChanges});
+      }
+    } catch {
+      if (taskDraftPanel.open && taskDraftScope()) {
+        document.getElementById('automation-task-draft-status').textContent = '暂时无法打开草稿工具，可以手动填写。';
+      }
+    }
+  });
 
   async function openStudioShare(trigger, target, run, team) {
     if (!currentRunScope(target) || trigger.disabled) return;
@@ -746,7 +836,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (filter !== 'all') params.set('runs', filter);
     const text = params.size ? '?' + params : '';
     if ((view.location.search || '') === text) return;
-    view.history.pushState({runs: filter}, '', text ? base + text : base);
+    const state = catalogueEditorState();
+    if (state.automationDepth) state.automationDepth += 1;
+    view.history.pushState({...state, runs: filter}, '', text ? base + text : base);
   }
 
   function clearEditorLink() {
@@ -759,10 +851,45 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function writeWorkspaceLink() {
     if (!view?.location || !view?.history?.replaceState) return;
+    const catalogue = snapshotCatalogue();
+    view.history.replaceState({runs:runFilter, ...(catalogue && {automationCatalogue: catalogue})}, '', catalogueAddress());
+  }
+
+  function catalogueAddress() {
     const workspace = workspaceId();
     const fragment = /^[a-f0-9]{32}$/.test(workspace) ? '#workspace=' + workspace : '';
-    view.history.replaceState({runs:runFilter}, '',
-      (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment);
+    return (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment;
+  }
+
+  function catalogueState(workspace = workspaceId()) {
+    const saved = view?.history?.state?.automationCatalogue;
+    return native && EDITOR_ID.test(currentUser?.id || '') && saved?.owner === currentUser.id &&
+      saved.workspace === workspace && EDITOR_ID.test(saved.workspace) ? saved : null;
+  }
+
+  function snapshotCatalogue(automation, scroll = main.scrollTop || 0) {
+    const owner = currentUser?.id, workspace = workspaceId();
+    return native && EDITOR_ID.test(owner || '') && EDITOR_ID.test(workspace)
+      ? {owner, workspace, automation, category, query: search.value, scroll, ...(upcoming && {upcoming:true})} : null;
+  }
+
+  function catalogueEditorState() {
+    const catalogue = catalogueState();
+    const depth = view?.history?.state?.automationDepth;
+    return catalogue?.automation === current?.id && Number.isSafeInteger(depth) && depth > 0
+      ? {automationCatalogue: catalogue, automationDepth: depth} : {};
+  }
+
+  function restoreCatalogue(catalogue) {
+    search.value = typeof catalogue.query === 'string' ? catalogue.query.slice(0, 80) : '';
+    upcoming = catalogue.upcoming === true;
+    selectCategory(tabCategory(catalogue.category));
+  }
+
+  function rememberCatalogue() {
+    if (!view?.history?.replaceState || listPanel.hidden || editorTargetFromSearch(readSearch())) return;
+    const catalogue = snapshotCatalogue(catalogueState()?.automation);
+    if (catalogue) view.history.replaceState({...view.history.state, automationCatalogue: catalogue}, '', catalogueAddress());
   }
 
   function syncRunFilters() {
@@ -988,7 +1115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function readEditorDraft(key) {
     if (!key) return null;
     try {
-      const saved = JSON.parse(view.sessionStorage.getItem(key) || 'null');
+      const saved = tabDrafts.get(key) || JSON.parse(view.sessionStorage.getItem(key) || 'null');
       if (!saved?.values || (saved.revision !== null && !Number.isSafeInteger(saved.revision))) return null;
       const attempt = saved.attempt;
       return {values:draftFields(saved.values), revision:saved.revision, edition:saved.edition === true,
@@ -1008,6 +1135,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function forgetEditorDraft(key = editorDraft?.key) {
     if (!key) return;
+    tabDrafts.delete(key);
     try { view.sessionStorage.removeItem(key); } catch {}
     if (editorDraft?.key === key) editorDraft = null;
   }
@@ -1016,17 +1144,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!editorDraft || editorDraft.stale || form.hidden || mainPanel.hidden) return;
     const {key, revision, base} = editorDraft;
     const values = snapshotDraft();
-    const patch = Object.fromEntries(Object.entries(values).filter(([field, value]) => value !== base[field]));
+    const patch = editorChanges(values, base);
     const fresh = !current?.id && !followupSource;
     const changed = Boolean(draftSave || (fresh && current?.edition) || Object.keys(patch).length);
+    const saved = {revision, values:fresh ? values : patch, edition:current?.edition === true, attempt:draftSave};
     editorDraft.stored = false;
+    tabDrafts.delete(key);
     try {
-      if (changed) view.sessionStorage.setItem(key, JSON.stringify({
-        revision, values:fresh ? values : patch, edition:current?.edition === true, attempt:draftSave,
-      }));
+      if (changed) view.sessionStorage.setItem(key, JSON.stringify(saved));
       else view.sessionStorage.removeItem(key);
       editorDraft.stored = true;
-    } catch {}
+    } catch {
+      if (changed) tabDrafts.set(key, saved);
+    }
     showDraftStatus(draftSave ? '上次保存尚未确认，可以用原内容确认。'
       : changed ? editorDraft.stored ? '草稿已保存在此标签页。' : '有未保存的修改。' : '');
   }
@@ -1309,7 +1439,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const detail = document.createElement('div');
       detail.className = 'run-detail';
       detail.hidden = !open;
-      const fields = runDetailFields(item);
+      const text = runResultText(item);
+      let output;
+      if (text) {
+        const result = document.createElement('section');
+        result.className = 'run-output';
+        const heading = document.createElement('h3');
+        heading.textContent = '运行结果';
+        output = document.createElement('div');
+        output.className = 'run-output-text';
+        output.textContent = text;
+        result.appendChild(heading);
+        result.appendChild(output);
+        detail.appendChild(result);
+      }
+      const fields = runDetailFields(item, {includeResult: false});
       if (fields.length) {
         const terms = document.createElement('dl');
         for (const field of fields) {
@@ -1321,7 +1465,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           terms.appendChild(value);
         }
         detail.appendChild(terms);
-      } else {
+      } else if (!output) {
         const note = document.createElement('p');
         note.className = 'note';
         note.textContent = runActive(item) ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
@@ -1334,7 +1478,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           nextFocus = [...related.children].find(control => control.dataset.runControl === focusedControl) || nextFocus;
         }
       }
-      if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
+      if (item.status === 'succeeded' && text.trim() && current?.id) {
         if (native && exactRunForTarget(item, target)) {
           const exports = resultExportControls(item, target);
           if (restore && focusRow.dataset.runId === item.id) {
@@ -1400,14 +1544,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         detail.hidden = !next;
         toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        if (next) formatRunResult(document, output, text);
       });
       head.appendChild(toggle);
-      if (item.status === 'queued' && current && current.id) {
+      if ((item.status === 'queued' || (native && item.status === 'running')) && current?.id) {
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.dataset.runControl = 'cancel';
-        cancel.disabled = cancellingRuns.has(`${target.key}/${item.id}`);
-        cancel.textContent = cancel.disabled ? '正在取消…' : '取消这次运行';
+        cancel.disabled = item.stop_requested === true || cancellingRuns.has(`${target.key}/${item.id}`);
+        cancel.textContent = item.status === 'running'
+          ? (cancel.disabled ? '正在停止…' : '停止这次运行')
+          : (cancel.disabled ? '正在取消…' : '取消这次运行');
         if (restore && focusRow.dataset.runId === item.id && focusedControl === 'cancel' && !cancel.disabled) nextFocus = cancel;
         cancel.addEventListener('click', () => {
           openConfirm({
@@ -1448,6 +1595,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       row.appendChild(head);
       row.appendChild(detail);
       list.appendChild(row);
+      if (open) formatRunResult(document, output, text);
     }
     nextFocus?.focus({preventScroll: true});
   }
@@ -1460,29 +1608,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentRunScope(target)) renderRuns(recentRuns);
     const path = `${runPath(target)}/runs/${target.run}`;
     const isCancelled = item => item?.id === target.run && item.status === 'cancelled' && exactRunForTarget(item, target);
+    const isStopping = item => item?.id === target.run && item.status === 'running' &&
+      item.stop_requested === true && exactRunForTarget(item, target);
     try {
       const result = await runRequestWithTimeout('POST', path + '/cancel', {});
       if (!currentRunScope(target)) return;
       let item = result.body.run;
-      let confirmed = result.status === 200 && (!native || isCancelled(item));
-      if (!confirmed && native && ([0, 200, 408, 409].includes(result.status) || result.status >= 500)) {
-        show('loading', '正在确认是否已取消…');
+      let confirmed = (result.status === 200 && (!native || isCancelled(item))) || (result.status === 202 && isStopping(item));
+      if (!confirmed && native && ([0, 200, 202, 408, 409].includes(result.status) || result.status >= 500)) {
+        show('loading', '正在确认运行状态…');
         const checked = await runRequestWithTimeout('GET', path);
         if (!currentRunScope(target)) return;
         item = checked.body.run;
-        confirmed = checked.status === 200 && isCancelled(item);
+        confirmed = checked.status === 200 && (isCancelled(item) || isStopping(item));
       }
       if (!confirmed) {
-        show('error', result.status === 409 ? '运行状态已改变，无法取消。'
+        show('error', result.status === 409 ? '运行状态已改变，请查看最新记录。'
           : messageFor(result.body.error, '暂时无法确认已取消，正在更新运行状态。'));
         return;
       }
-      if (isCancelled(item)) {
+      if (isCancelled(item) || isStopping(item)) {
         if (watchedRuns.get(target.key)?.id === item.id) watchedRuns.set(target.key, item);
         if (selectedRun?.id === item.id) selectedRun = item;
         recentRuns = recentRuns.map(run => run.id === item.id ? item : run);
       }
-      show('ok', '已取消。');
+      show('ok', isStopping(item) ? '已请求停止。' : '已取消。');
     } finally {
       cancellingRuns.delete(key);
       if (currentRunScope(target)) {
@@ -1754,8 +1904,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     owner.hidden = !source?.owner;
     owner.textContent = source?.owner ? '原负责人：' + source.owner : '';
     if (source) {
-      const {workspace, meeting} = source.target;
-      link.href = '/meetings#' + new URLSearchParams({workspace, meeting});
+      const {workspace, meeting, action, revision} = source.target;
+      link.href = '/meetings#' + new URLSearchParams({workspace, meeting, action, revision});
     } else link.removeAttribute?.('href');
   }
 
@@ -1792,6 +1942,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item, source = null, opener = null, run = null, draftEntry) {
+    resetSchedulePreview();
     listReturn = opener && {opener, workspace: workspaceId(), category, query: search.value, scroll: main.scrollTop || 0};
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
@@ -1832,6 +1983,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
+    resetTaskDraft(native && !item?.id && !source && !item?.edition);
     mainPanel.classList.add('is-editing');
     fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
@@ -1873,6 +2025,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       sampleButton.hidden = !native || Boolean(current?.id || followupSource) || !RECURRING_KINDS.has(form.elements.kind.value);
       sampleButton.disabled = saveButton.disabled;
     }
+    if (previewScheduleButton) {
+      previewScheduleButton.hidden = !native || !RECURRING_KINDS.has(form.elements.kind.value);
+      if (scheduleReview && schedulePreviewScope()?.key !== scheduleReview.key) resetSchedulePreview();
+    }
     if (!nextRun) return;
     if (!current?.schedule_status || !current.schedule) {
       renderNextRun(nextRun);
@@ -1884,6 +2040,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (key === 'kind' && saved.kind === 'later' ? 'once' : saved[key]) === shown[key]);
     renderNextRun(nextRun, unchanged ? current : null);
   }
+
+  function schedulePreviewScope() {
+    const workspace = workspaceId(), username = currentUser?.username;
+    if (!native || !username || !EDITOR_ID.test(workspace) || form.hidden ||
+        !RECURRING_KINDS.has(form.elements.kind.value)) return null;
+    const schedule = scheduleFromForm(new FormData(form));
+    return {schedule, workspace, username,
+      key:JSON.stringify([currentUser.id || username, workspace, editorRequest, current?.id, current?.revision, schedule])};
+  }
+
+  function resetSchedulePreview() {
+    scheduleReview?.controller.abort();
+    scheduleReview = undefined;
+    if (previewScheduleButton) previewScheduleButton.disabled = false;
+    if (schedulePreview) schedulePreview.hidden = true;
+    if (schedulePreviewStatus) schedulePreviewStatus.textContent = '';
+    if (schedulePreviewSlots) schedulePreviewSlots.textContent = '';
+    if (schedulePreviewHint) schedulePreviewHint.hidden = true;
+  }
+
+  previewScheduleButton?.addEventListener('click', async () => {
+    const target = schedulePreviewScope();
+    if (!target || !schedulePreview || !schedulePreviewStatus || !schedulePreviewSlots || !schedulePreviewHint) return;
+    resetSchedulePreview();
+    const controller = new AbortController();
+    const pending = scheduleReview = {...target, controller};
+    previewScheduleButton.disabled = true;
+    schedulePreview.hidden = false;
+    schedulePreviewStatus.textContent = '正在预览运行时间…';
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/schedule-preview`,
+      {schedule:target.schedule}, undefined, signal).catch(() => ({}));
+    if (scheduleReview !== pending || schedulePreviewScope()?.key !== target.key) return;
+    previewScheduleButton.disabled = false;
+    const {slots, time_zone, workspace_id, viewer_username} = result.body || {};
+    if (result.status !== 200 || workspace_id !== target.workspace || viewer_username !== target.username ||
+        time_zone !== target.schedule.time_zone || !Array.isArray(slots) || slots.length !== 3 ||
+        !slots.every((slot, index) => Number.isSafeInteger(slot?.at) && slot.at > (slots[index - 1]?.at || 0) &&
+          Number.isInteger(slot.weekday) && slot.weekday >= 1 && slot.weekday <= 7 &&
+          /^\d{4}-\d{2}-\d{2}$/.test(slot.date) && /^\d{2}:\d{2}$/.test(slot.time))) {
+      schedulePreviewStatus.textContent = result.body?.error?.message || '暂时无法预览运行时间，请重试。';
+      return;
+    }
+    schedulePreviewStatus.textContent = '时区 ' + time_zone;
+    schedulePreviewHint.hidden = target.schedule.kind !== 'monthly' || target.schedule.day <= 28;
+    for (const slot of slots) {
+      const row = document.createElement('li');
+      const time = document.createElement('time');
+      time.dateTime = new Date(slot.at * 1000).toISOString();
+      time.textContent = `${slot.date} 周${WEEKDAY_NAMES[slot.weekday - 1]} ${slot.time}`;
+      row.appendChild(time);
+      const clockChange = clockChangeLabel(slot.clock_change);
+      if (clockChange) {
+        const label = document.createElement('span');
+        label.className = 'note';
+        label.textContent = clockChange;
+        row.appendChild(label);
+      }
+      schedulePreviewSlots.appendChild(row);
+    }
+  });
 
   function readLinkedAutomation(target) {
     const path = runPath(target);
@@ -1948,14 +2165,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function readMeetingSource(target) {
-    const query = new URLSearchParams({index: target.action, revision: target.revision});
-    return request('GET', `/v1/workspaces/${target.workspace}/meetings/${target.meeting}/action?${query}`)
-      .catch(() => ({status: 0, body: {}}));
-  }
-
   function showMeetingSourceError(status) {
-    const obsolete = [200, 403, 404, 409].includes(status);
+    const obsolete = [200, 401, 403, 404, 409].includes(status);
     show('error', obsolete ? '行动项已更新、已完成或不可访问。请返回会议重新选择。' : '暂时无法读取会议行动项，请重试。');
     return obsolete;
   }
@@ -1964,16 +2175,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = ++editorRequest;
     const user = currentUser;
     show('', '正在读取会议行动项…');
-    const isCurrent = () => seq === editorRequest && loadSeq === loadRequest && currentUser === user &&
-      workspaceId() === target.workspace && form.hidden;
-    const sourceQuery = new URLSearchParams({meeting: target.meeting, revision: target.revision, action: target.action});
-    const sourceRequest = readMeetingSource(target);
-    const existing = await request('GET', `/v1/workspaces/${target.workspace}/automations?${sourceQuery}`)
-      .catch(() => ({status: 0, body: {}}));
-    if (!isCurrent()) return;
-    const item = existing.body?.automation;
+    const query = new URLSearchParams({meeting: target.meeting, revision: target.revision, action: target.action});
+    const result = await runRequestWithTimeout('GET', `/v1/workspaces/${target.workspace}/automations?${query}`);
+    if (seq !== editorRequest || loadSeq !== loadRequest || currentUser !== user ||
+        workspaceId() !== target.workspace || !form.hidden) return;
+    const item = result.body?.automation;
     const saved = savedMeetingSource(item);
-    if (existing.status === 200 && existing.body.viewer_username === user.username && /^[0-9a-f]{32}$/.test(item?.id || '') &&
+    if (result.status === 200 && result.body.viewer_username === user.username && /^[0-9a-f]{32}$/.test(item?.id || '') &&
         saved?.target.workspace === target.workspace && saved.target.meeting === target.meeting &&
         saved.target.action === target.action && saved.target.revision === target.revision) {
       show('', '');
@@ -1981,8 +2189,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       openEditor(item);
       return true;
     }
-    const result = await sourceRequest;
-    if (!isCurrent()) return;
     const source = result.status === 200 ? meetingSourceFromResponse(result.body, target, user.username) : null;
     if (source) {
       show('', '');
@@ -2036,11 +2242,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function replaceAutomationLink(item, run = null) {
+  function replaceAutomationLink(item, run = null, fromCatalogue = false) {
     const params = new URLSearchParams({workspace: item.workspace_id, automation: item.id});
     if (run) params.set('run', run.id);
     if (runFilter !== 'all') params.set('runs', runFilter);
-    view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + '?' + params);
+    if (!view?.history?.replaceState || !view.location) return;
+    const url = (view.location.pathname || '/automations') + '?' + params;
+    const catalogue = fromCatalogue && view.history.pushState && snapshotCatalogue(item.id, listReturn?.scroll || 0);
+    if (catalogue) {
+      view.history.replaceState({runs: runFilter, automationCatalogue: catalogue}, '', catalogueAddress());
+      view.history.pushState({runs: runFilter, automationCatalogue: catalogue, automationDepth: 1}, '', url);
+      return;
+    }
+    view.history.replaceState({...catalogueEditorState(), runs: runFilter}, '', url);
   }
 
   function selectCategory(value) {
@@ -2048,39 +2262,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const tab of tabs) {
       tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
     }
+    const name = category === 'mine' ? '搜索我的自动化' : '搜索自动化模板';
+    search.placeholder = name + '…';
+    search.setAttribute('aria-label', name);
   }
 
   async function loadList({startup, quiet = false} = {}) {
     globalThis.clearTimeout(listTimer);
+    if (clearSearch) clearSearch.hidden = !search.value;
     const id = workspaceId();
+    const supportsUpcoming = native && Boolean(id) && category === 'mine';
+    if (upcomingControl) {
+      upcomingControl.hidden = !supportsUpcoming;
+      upcomingControl.setAttribute('aria-pressed', String(upcoming));
+    }
+    const showingUpcoming = supportsUpcoming && upcoming;
     if (!id) return;
     const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     const searchText = search.value;
     const viewer = viewerId();
-    const refreshPending = () => {
+    const refresh = active => {
+      const delay = active ? (document.hidden ? 12000 : 3500) : (document.hidden ? 60000 : 30000);
       listTimer = globalThis.setTimeout(() => {
-        if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
-      }, document.hidden ? 12000 : 3500);
+        if (!listPanel.hidden && workspaceId() === id && viewerId() === viewer &&
+            search.value === searchText && listRequest === seq) void loadList({quiet: true});
+      }, delay);
     };
     const renderItems = items => {
-      const fingerprint = JSON.stringify(items);
+      const visible = showingUpcoming ? upcomingAutomations(items, id) : items;
+      if (showingUpcoming) empty.textContent = searchText.trim() ? '没有匹配的运行计划。' : '当前工作区没有即将运行的自动化。';
+      const fingerprint = JSON.stringify(visible);
       if (!quiet || listFingerprint !== fingerprint) {
         const active = document.activeElement?.dataset;
         const focused = active?.automationToggle || active?.automationId;
         listFingerprint = fingerprint;
-        renderList(items, list, empty, (item, opener) => {
+        renderList(visible, list, empty, (item, opener) => {
           openEditor(item, null, opener);
-          if (native && /^[0-9a-f]{32}$/.test(item.id) && item.workspace_id === id) replaceAutomationLink(item);
+          if (native && EDITOR_ID.test(item.id) && item.workspace_id === id) replaceAutomationLink(item, null, true);
         }, native && viewer ? (item, control) => toggleSchedule(item, control, id, viewer) : null,
-        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)));
+        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)), showingUpcoming);
         if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) {
           const replacement = active?.automationToggle && list.querySelector?.(`[data-automation-toggle="${focused}"]`);
-          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`))?.focus({preventScroll: true});
+          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`)
+            || (showingUpcoming ? upcomingControl : null))?.focus({preventScroll: true});
         }
       }
-      if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
+      const active = visible.some(item => scopedActiveRun(item.active_run, id, item.id));
+      if (active || showingUpcoming) refresh(active);
     };
     if (category === 'work' || category === 'life') {
       const render = () => {
@@ -2118,12 +2348,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
       .catch(() => ({status: 0, body: {}}));
-    if (seq !== listRequest || workspaceId() !== id) return;
+    if (seq !== listRequest || workspaceId() !== id || viewerId() !== viewer) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
       if (quiet && ![401, 403, 404].includes(listed.status)) {
-        refreshPending();
+        refresh(!showingUpcoming);
         return;
       }
       list.textContent = '';
@@ -2131,7 +2361,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       return;
     }
-    empty.textContent = '这个分类下还没有自动化。';
+    empty.textContent = search.value.trim() ? '没有匹配的自动化。' : '这个分类下还没有自动化。';
     renderItems(listed.body.items || []);
   }
 
@@ -2150,6 +2380,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function load() {
+    resetTaskDraft();
+    resetSchedulePreview();
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
     const fragment = new URLSearchParams((view?.location?.hash || '').slice(1));
@@ -2163,16 +2395,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     workspaceStatus.textContent = '';
     if (linkRetry) linkRetry.hidden = true;
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sharedPath = '/v1/workspaces?limit=100';
+    const linkedDirectory = native && /^[0-9a-f]{32}$/.test(wantedWorkspace || '')
+      ? readWorkspaceChoices(request, sharedPath) : null;
     const initialCatalogue = native && !target && !hasWorkspace && !wantedTemplate && category === 'mine' && !search.value.trim()
       ? request('GET', '/v1/workspaces?scope=personal&include=automations').catch(() => null) : null;
     const session = await sessionRequest;
     if (seq !== loadRequest) return;
     if (session.status === 401) {
       currentUser = null;
+      upcoming = false;
       templates = [];
       templateState = 'idle';
       templateRequest = null;
       runSubmissions.clear();
+      tabDrafts.clear();
       watchedRuns.clear();
       stopRunPoll();
       loginPanel.hidden = false;
@@ -2190,10 +2427,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     if (previousViewer && previousViewer !== viewerId()) {
       editorRequest += 1;
+      upcoming = false;
       templates = [];
       templateState = 'idle';
       templateRequest = null;
       runSubmissions.clear();
+      tabDrafts.clear();
       watchedRuns.clear();
       stopRunPoll();
     }
@@ -2203,7 +2442,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const catalog = wantedTemplate ? loadTemplates(seq) : null;
     const linked = native && target?.automation ? readLinkedAutomation(target) : null;
     const personalRequest = initialCatalogue?.then(result => ownedPersonalCatalogue(result, session.body.user));
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    let {initial: space, supplemental} = await (linkedDirectory || readWorkspaceChoices(request, sharedPath, personalRequest));
     if (wantedWorkspace && !space.body?.items?.some(item => item.id === wantedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -2237,6 +2476,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (hasWorkspace) workspaceSelect.value = requestedWorkspace;
+    const catalogue = catalogueState();
+    if (hasWorkspace && catalogue) restoreCatalogue(catalogue);
     void supplemental?.then(result => {
       if (seq !== loadRequest) return;
       if (result.status === 200) fillWorkspaces(result.body.items);
@@ -2292,6 +2533,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   workspaceSelect.addEventListener('change', () => {
+    resetTaskDraft();
+    resetSchedulePreview();
     editorRequest += 1;
     if (editorTargetFromSearch(readSearch())) clearEditorLink();
     else writeWorkspaceLink();
@@ -2315,7 +2558,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   editorOptions?.addEventListener('toggle', () => {
     if (editorOptions.open && !form.hidden) void loadTemplates();
   });
-  search.addEventListener('input', () => loadList());
+  function searchCatalogue() {
+    rememberCatalogue();
+    return loadList();
+  }
+  search.addEventListener('input', searchCatalogue);
+  upcomingControl?.addEventListener('click', () => {
+    upcoming = !upcoming;
+    void searchCatalogue();
+  });
+  clearSearch?.addEventListener('click', () => {
+    search.value = '';
+    search.focus();
+    return searchCatalogue();
+  });
   runHistoryButton?.addEventListener('click', () => {
     if (runPanel?.hidden) void loadRuns({focus: true});
     else showRunHistory();
@@ -2369,9 +2625,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (view && typeof view.addEventListener === 'function') {
     view.addEventListener('popstate', () => {
       const wanted = runFilterFromSearch(readSearch());
-      const linked = automationTargetFromSearch(readSearch());
+      const linked = editorTargetFromSearch(readSearch());
       const target = runScope();
       const inEditor = currentRunScope(target) && linked?.automation === target.automation && linked.workspace === target.workspace;
+      const fragment = new URLSearchParams((view.location?.hash || '').slice(1));
+      const catalogue = catalogueState(linked?.workspace || fragment.get('workspace') || workspaceId());
+      if (catalogue && !linked) {
+        runFilter = wanted;
+        syncRunFilters();
+        if (catalogue.workspace === workspaceId()) {
+          restoreCatalogue(catalogue);
+          void returnToList(catalogue);
+        } else {
+          syncEditorDraft();
+          void load();
+        }
+        return;
+      }
+      if (catalogue && !inEditor && linked?.automation === catalogue.automation && linked.workspace === catalogue.workspace) {
+        runFilter = wanted;
+        syncRunFilters();
+        if (form.hidden && linked.workspace === workspaceId()) void openLinkedAutomation(linked, loadRequest);
+        else {
+          syncEditorDraft();
+          void load();
+        }
+        return;
+      }
       const selectionChanged = inEditor && (selectedRun?.id || linkedRunRequest?.id) !== linked.run;
       if (wanted === runFilter && !selectionChanged) return;
       runIntent += 1;
@@ -2389,6 +2669,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   for (const tab of tabs) {
     tab.addEventListener('click', async () => {
+      resetTaskDraft();
+      resetSchedulePreview();
       editorRequest += 1;
       clearEditorLink();
       selectCategory(tabCategory(tab.dataset.category));
@@ -2401,6 +2683,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
       stopRunPoll();
+      rememberCatalogue();
       await loadList();
     });
   }
@@ -2413,13 +2696,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   scheduleSettings?.addEventListener('input', renderEditorSchedule);
   scheduleSettings?.addEventListener('change', renderEditorSchedule);
 
-  async function returnToList() {
+  async function returnToList(catalogue = null) {
+    resetTaskDraft();
+    resetSchedulePreview();
     const transition = ++editorRequest;
-    const position = listReturn;
+    const position = listReturn || catalogue;
     listReturn = null;
-    clearEditorLink();
     closeConfirm({restoreFocus: false});
-    forgetEditorDraft();
+    if (catalogue) {
+      syncEditorDraft();
+      show('', '');
+    } else {
+      forgetEditorDraft();
+      const depth = catalogueEditorState().automationDepth;
+      if (depth && view.history?.go && view.history.length > depth) {
+        backButton.disabled = true;
+        view.history.go(-depth);
+        return;
+      }
+      clearEditorLink();
+    }
     discardFollowupDraft();
     current = null;
     form.hidden = true;
@@ -2432,7 +2728,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const restore = position?.workspace === workspaceId() && position?.category === category && position?.query === search.value;
     const returnFocus = () => {
       const opener = restore ? position.opener : null;
-      const automation = opener?.dataset.automationId;
+      const automation = opener?.dataset.automationId || (restore && catalogue?.automation);
       const template = opener?.dataset.templateId;
       const resolved = opener?.isConnected ? opener : Array.from(listPanel.querySelectorAll('button[data-automation-id], button[data-template-id]'))
         .find(button => automation ? button.dataset.automationId === automation : template && button.dataset.templateId === template);
@@ -2444,7 +2740,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     returnFocus();
     const focused = document.activeElement;
     await loadList({quiet: restore});
-    if (editorRequest === transition && focused && !focused.isConnected && document.activeElement === document.body) returnFocus();
+    if (editorRequest === transition && (document.activeElement === focused ||
+        (focused && !focused.isConnected && document.activeElement === document.body))) returnFocus();
   }
 
   backButton.addEventListener('click', () => {
@@ -2491,6 +2788,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const values = readEditor(form);
+    const submittedFields = snapshotDraft();
     if (!native) delete values.notification_policy;
     const workspace = workspaceId();
     if (!workspace) {
@@ -2509,7 +2807,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const editor = editorRequest;
     const loadSeq = loadRequest;
     const draftKey = editorDraft?.key;
-    const isCurrent = () => editorRequest === editor && loadRequest === loadSeq && workspaceId() === workspace && !form.hidden;
+    const viewer = viewerId();
+    const isCurrent = () => editorRequest === editor && loadRequest === loadSeq &&
+      viewerId() === viewer && workspaceId() === workspace && !form.hidden;
     if (source) values.enabled = false;
     const path = `/v1/workspaces/${workspace}/automations`;
     const {template_id, ...changes} = values;
@@ -2523,7 +2823,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let result;
     try {
       if (item) {
-        result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
+        const resource = `${path}/${item.id}`;
+        result = await runRequestWithTimeout('POST', resource, {revision: item.revision, changes});
+        if (native && EDITOR_ID.test(workspace) && EDITOR_ID.test(item.id) && isCurrent()) {
+          const incomplete = result.status === 200 &&
+            !matchesAutomationUpdate(result.body.automation, item, workspace, changes);
+          if (incomplete || result.status === 0 || result.status === 408 || result.status >= 500 || result.status === 409) {
+            show('loading', '正在核对已保存的设置…');
+            const verified = await runRequestWithTimeout('GET', resource);
+            if (isCurrent() && verified.status === 200 &&
+                matchesAutomationUpdate(verified.body.automation, item, workspace, changes)) result = verified;
+            else if (incomplete) result = {status:0, body:{}};
+          }
+        }
       } else {
         const ref = source?.target;
         const provenance = ref?.memoryAction ? {source_memory_action: {action_id: ref.memoryAction, revision: ref.revision}}
@@ -2578,7 +2890,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '保存失败。'));
+      const message = result.status === 0 || result.status === 408 || result.status >= 500
+        ? '暂时无法确认保存结果。草稿已保留，请重试。' : '保存失败。';
+      show('error', messageFor(result.body.error, message));
       return;
     }
     if (native && EDITOR_ID.test(workspace) &&
@@ -2587,6 +2901,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '暂时无法确认是否保存成功，请重试。');
       return;
     }
+    const newerFields = editorChanges(snapshotDraft(), submittedFields);
+    const hasNewerFields = Object.keys(newerFields).length > 0;
+    const focusedInput = document.activeElement;
+    const selection = hasNewerFields && form.contains?.(focusedInput) && typeof focusedInput?.selectionStart === 'number'
+      ? [focusedInput.selectionStart, focusedInput.selectionEnd, focusedInput.selectionDirection] : null;
     forgetEditorDraft(draftKey);
     draftSave = null;
     current = result.body.automation;
@@ -2610,6 +2929,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       replaceAutomationLink(current);
     }
     renderFollowupSource(savedFollowupSource(current));
+    resetTaskDraft();
     if (!item) {
       selectCategory('mine');
       search.value = '';
@@ -2620,6 +2940,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.elements.template_id.disabled = true;
     rememberEditorSettings();
     openEditorDraft(current, null);
+    if (hasNewerFields) {
+      applyEditorDraft(newerFields);
+      syncEditorDraft();
+      watchEditorExit();
+      if (selection && document.activeElement === focusedInput) focusedInput.setSelectionRange(...selection);
+    }
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
@@ -2627,11 +2953,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (runHistoryButton) runHistoryButton.hidden = false;
     syncRunControls();
     renderManualRunNote();
-    show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
+    show('ok', hasNewerFields ? '已保存提交的设置。仍有未保存的修改。'
+      : startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'
       : result.body.cancelled_scheduled_runs > 0 ? '已暂停自动运行，排队中的计划运行已取消。'
       : current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
-    await loadRuns({focus: Boolean(startedSample)});
+    await loadRuns({focus: Boolean(startedSample && !hasNewerFields)});
   });
 
   runButton.addEventListener('click', () => {

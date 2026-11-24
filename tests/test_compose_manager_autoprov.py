@@ -95,6 +95,46 @@ class AutoProvisionPollTests(unittest.TestCase):
         manager_cfg = json.loads(self.cfgpath.read_text())
         self.assertNotIn(auto, manager_cfg['instances'])  # never written back
 
+    def test_browser_resumes_the_existing_granted_container_without_auto_adopting_it(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        fixture = self.root / 'stub-engine.json'
+        before = json.loads(fixture.read_text())
+        with self.store.connect() as db:
+            ensure_schema(db)
+
+        readiness, start = '/v1/auth/runtime-readiness', '/v1/auth/runtime-start'
+        self.enable_auto()
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'unavailable')
+        self.assertEqual(self.client.call('POST', start, {})['status'], 409)
+        self.assertEqual(client.assigned(), [])
+
+        self.app.manager_auth = ManagerAuth([
+            self.identity,
+            ManagerIdentity('auto-manager', 'b' * 64, frozenset(), 'compose', True),
+        ])
+        self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='auto-manager', max_instances=3)
+        bound = self.client.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
+        self.assertEqual((bound['state'], bound['instance_id'], bound['readiness']), ('bound', self.iid, 'stopped'))
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'stopped')
+        self.assertEqual(self.client.call('POST', start, {}, csrf=False)['status'], 403)
+        self.assertEqual(self.client.call('POST', start, {'instance_id': 'a' * 32})['status'], 400)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: self.client.call('POST', start, {}), range(2)))
+        self.assertEqual(sorted(reply['status'] for reply in responses), [200, 202])
+        self.assertTrue(all(reply['body'] == {'state': 'starting'} for reply in responses))
+
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+        after = json.loads(fixture.read_text())
+        self.assertEqual((after['id'], after['sentinel']), (before['id'], before['sentinel']))
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM instances').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0], 2)
+            record_upstream(db, self.iid, '10.0.0.1:8080', 'dsh-auth-fixture=' + 'x' * 24, self.now)
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'ready')
+
     def test_pending_owners_use_two_fenced_worker_slots(self):
         self.start_http()
         assigned = [self.auto_instance(name, '127.0.0.' + str(peer))[1]
@@ -127,6 +167,43 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(sorted(started), sorted(assigned))
         self.assertEqual([row['instance_id'] for row in result['results']], sorted(assigned))
+
+    def test_new_signup_uses_the_spare_worker_of_an_active_poll(self):
+        client = self.start_http()
+        _, cold = self.auto_instance()
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['instances'] = {}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        entered, release, late_started = Event(), Event(), Event()
+
+        def hold_start(_worker, iid):
+            claim = client.claim(iid)
+            if iid == cold:
+                entered.set()
+                self.assertTrue(release.wait(6))
+            job = claim['job']
+            client.leased_call(iid, claim, 'observe', observed='running', process_ref='c' * 32)
+            if iid != cold:
+                late_started.set()
+            return {'status': 'observed', 'instance_id': iid, 'observed': 'running'}
+
+        with patch.object(ManagerWorker, 'run_once', new=hold_start), ThreadPoolExecutor(max_workers=1) as poller:
+            future = poller.submit(self.poll)
+            try:
+                self.assertTrue(entered.wait(2))
+                _, late = self.auto_instance('dana', '127.0.0.10')
+                self.assertTrue(late_started.wait(3), 'the new signup waited for another owner')
+                self.assertFalse(future.done())
+            finally:
+                release.set()
+            code, result = future.result(timeout=5)
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual([row['instance_id'] for row in result['results']], [cold, late])
+        with self.store.connect() as db:
+            self.assertEqual([(row['instance_id'], row['status']) for row in db.execute(
+                'SELECT instance_id,status FROM runtime_jobs WHERE instance_id IN (?,?) ORDER BY instance_id',
+                (cold, late))], [(iid, 'succeeded') for iid in sorted((cold, late))])
 
     def test_route_repair_for_a_running_owner_proceeds_during_another_owners_start(self):
         client = self.start_http()
@@ -184,6 +261,17 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(carol.call('GET', f'/v1/instances/{second}')['status'], 404)
         self.assertEqual(dana.call('GET', f'/v1/instances/{first}')['status'], 404)
+        carol_instance = carol.call('GET', f'/v1/instances/{first}')['body']['instance']
+        personal_workspace = carol_instance['workspace_id']
+        old_account_key = 'synthetic-legacy-account-key'
+        old_workspace_key = 'synthetic-legacy-workspace-key'
+        self.put_model_api('account', old_account_key, account_id=carol_instance['owner_id'])
+        workspace_settings = f'/v1/workspaces/{personal_workspace}/model-api'
+        workspace_saved = carol.call('POST', workspace_settings, {'revision': 0, 'changes': {
+            'provider': 'openai', 'base_url': 'https://workspace.example/v1', 'model': 'workspace-model',
+            'api_key': old_workspace_key,
+        }})
+        self.assertEqual(workspace_saved['status'], 200)
 
         def start(iid):
             # The Docker stub keeps a single project's state per fixture directory.
@@ -210,6 +298,16 @@ class AutoProvisionPollTests(unittest.TestCase):
         first_worker, first_secret, first_process = start(first)
         _, second_secret, _ = start(second)
         self.assertNotEqual(first_secret, second_secret)
+        for api, response in (
+            (f'/v1/instances/{first}', 'instance'),
+            (f'/v1/workspaces/{personal_workspace}/instances', 'items'),
+        ):
+            body = carol.call('GET', api)['body']
+            snapshot = body[response][0] if response == 'items' else body[response]
+            self.assertEqual(snapshot['model_api']['source'], 'platform')
+            self.assertNotIn(old_account_key, json.dumps(body))
+            self.assertNotIn(old_workspace_key, json.dumps(body))
+        self.assertEqual(carol.call('POST', workspace_settings, {'revision': 1, 'changes': {'api_key': None}})['status'], 200)
         with self.store.transaction() as db:
             blob = model_api.wrap(model_api.wrapping_key(self.store), rotated)
             db.execute("UPDATE model_api_configs SET key_blob=?, revision=revision+1 WHERE scope='platform'", (blob,))
@@ -234,6 +332,47 @@ class AutoProvisionPollTests(unittest.TestCase):
         provisioning = user.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
         self.assertEqual(provisioning['state'], 'provisioned')
         self.assertEqual(user.call('GET', '/v1/instances/' + provisioning['instance_id'])['body']['instance']['desired'], 'running')
+
+    def test_explicit_workspace_create_honors_auto_capacity_and_queues_the_account_runtime(self):
+        manager = self.start_http()
+        _, first = self.auto_instance()
+        self.app.auto_provision = replace(self.app.auto_provision, max_instances=1)
+        dana = Client(self.app, peer='127.0.0.10')
+        registration = dana.register('dana')
+        self.assertEqual(registration['status'], 201)
+        owner = registration['body']['user']['id']
+        self.assertNotIn('personal_chat', registration['body'])
+        personal = dana.call('GET', '/v1/personal-agent')['body']['personal_agent']
+        personal_workspace = personal['workspace']['id']
+        # An account may ask for an instance from another workspace it owns.
+        # Its canonical runtime still belongs to its own personal space.
+        other_workspace = '9' * 32
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (other_workspace, owner, 'Another workspace', self.now, digest(other_workspace), digest(other_workspace)))
+        api = f'/v1/workspaces/{other_workspace}/instances'
+        headers = {'HTTP_IDEMPOTENCY_KEY': 'explicit-account-create'}
+        full = dana.call('POST', api, {}, headers)
+        self.assertEqual(full['status'], 429, full['body'])
+        self.assertEqual(full['body']['error']['code'], 'quota')
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM instances WHERE owner_id=?', (owner,)).fetchone()[0], 0)
+        self.assertEqual([item['id'] for item in manager.assigned()], [first])
+
+        self.app.auto_provision = replace(self.app.auto_provision, max_instances=2)
+        self.assertEqual(dana.call('POST', api, {})['status'], 400)
+        self.assertEqual(dana.call('POST', f'/v1/workspaces/{self.wid}/instances', {}, headers)['status'], 404)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: dana.call('POST', api, {}, headers), range(2)))
+        self.assertEqual(sorted(result['status'] for result in responses), [200, 201])
+        assigned = responses[0]['body']['instance']
+        self.assertEqual(responses[1]['body']['instance']['id'], assigned['id'])
+        self.assertEqual(assigned['workspace_id'], personal_workspace)
+        self.assertEqual((assigned['desired'], assigned['operation']['type']), ('running', 'start'))
+        self.assertEqual({item['id'] for item in manager.assigned()}, {first, assigned['id']})
+        self.assertEqual(manager.claim(assigned['id'])['job']['operation_type'], 'start')
+        state = dana.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
+        self.assertEqual((state['state'], state['instance_id']), ('existing', assigned['id']))
 
     def test_without_template_auto_instance_is_skipped(self):
         self.start_http()

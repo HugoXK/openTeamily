@@ -290,3 +290,86 @@ test('recent filter delegates the whole seven-day range and clears back to the s
   el('filter-all').handlers.click();
   assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
 });
+
+test('connected memories push a same-workspace page entry and searchable choices omit existing links', async () => {
+  const {doc, el} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const [source, linked, other] = ['b','c','d'].map((char, index) => ({...pages[index], id:char.repeat(32), workspace_id:workspace}));
+  const base = `/v1/workspaces/${workspace}/memory`;
+  const address = id => '/memory?' + new URLSearchParams({workspace,page:id});
+  const visits = [];
+  const view = {location:new URL(address(source.id),'https://memory.test')};
+  view.history = {
+    state:{},
+    replaceState(state, _title, path) { this.state = state; view.location = new URL(path,view.location); },
+    pushState(state, title, path) { visits.push({from:this.state, path}); this.replaceState(state,title,path); },
+  };
+  doc.defaultView = view;
+  await mount(doc, {fetcher:async path => {
+    if (path === '/v1/auth/session') return json(200,{user:{id:'owner',username:'alice'}});
+    if (path === '/v1/workspaces') return json(200,{items:[{id:workspace,name:'Desk'}]});
+    if (path === base + '/graph') return json(200,{nodes:[source,linked,other],topics:[],
+      edges:[{source:source.id,target:linked.id,kind:'mention'}]});
+    if (path.startsWith(base + '?')) return json(200,{items:[source,linked,other],total:3});
+    if (path === base + '/' + source.id || path === base + '/' + linked.id) {
+      return json(200,{page:path.endsWith(source.id) ? source : linked});
+    }
+    return json(200,{items:[]});
+  }});
+  await tick();
+  const link = el('page-links').children[0].children[0];
+  assert.equal(link.href,address(linked.id));
+  assert.deepEqual(el('link-target').options.map(option => option.value),['',other.id]);
+  el('link-search').value = '无匹配';
+  el('link-search').handlers.input({});
+  assert.equal(el('link-target').disabled,true);
+  assert.equal(el('link-target').options[0].textContent,'没有匹配的记忆页');
+  await link.handlers.click({button:0,preventDefault(){}});
+  assert.equal(el('editor-form').elements.title.value,linked.title);
+  assert.equal(visits[0].from.memoryDirectory.reopenPage,true);
+  assert.equal(visits[0].path,address(linked.id));
+  assert.equal(view.history.state.memoryDirectory.returnPage,source.id);
+});
+
+test('memory directory restores a private search only for the matching account and workspace', async () => {
+  const history = {state: {other: 'untouched'}, replaceState(state, _title, url) {
+    this.state = state;
+    assert.equal(url, '/memory');
+  }};
+  const start = async (state = history.state) => {
+    history.state = state;
+    const requests = [];
+    const fixture = fakeDocument();
+    fixture.doc.defaultView = {history, location: {pathname: '/memory', search: ''}};
+    await mount(fixture.doc, {fetcher: directoryFetcher(requests, () => json(200, {items:[], total:0}))});
+    await tick();
+    return {...fixture, requests};
+  };
+  const first = await start();
+  first.el('filter-updated').handlers.click();
+  enterSearch(first.el, '内部会议');
+  await tick();
+  const saved = history.state;
+  assert.equal(saved.other, 'untouched');
+  assert.deepEqual(saved.memoryDirectory, {
+    owner: 'user-1', workspace: 'ws-1', query: '内部会议', filter: 'updated', topic: '', result: false,
+  });
+
+  const same = await start();
+  assert.equal(same.el('search').value, '内部会议');
+  assert.equal(same.el('filter-updated').getAttribute('aria-pressed'), 'true');
+  assert.equal(same.el('memory-directory-reset').hidden, false);
+  assert.ok(same.requests.some(({path}) => path.includes('q=' + encodeURIComponent('内部会议')) && path.includes('updated_after=')));
+  same.el('memory-directory-reset').handlers.click();
+  assert.equal(same.el('search').value, '');
+  assert.equal(same.el('filter-all').getAttribute('aria-pressed'), 'true');
+  assert.equal(same.el('memory-directory-reset').hidden, true);
+  assert.deepEqual(pageTitles(same.el), ['项目简报', '运维手册']);
+
+  for (const scope of [{owner: 'other-user'}, {workspace: 'other-workspace'}]) {
+    const different = await start({...saved, memoryDirectory: {...saved.memoryDirectory, ...scope}});
+    assert.equal(different.el('search').value, '');
+    assert.equal(different.el('filter-all').getAttribute('aria-pressed'), 'true');
+    assert.ok(!different.requests.some(({path}) => path.includes('q=') || path.includes('updated_after=')));
+  }
+});

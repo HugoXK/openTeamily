@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .lifecycle import RuntimeFault
-from .runtime_autoprovision import owned_instance, resumable_instance
+from .runtime_autoprovision import is_parked, owned_instance, resumable_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -87,22 +87,23 @@ MOVED_APIS = (
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9](?:/(?:engagement|remix|comments(?:/otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/(?:like|remove))?))?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:draft|schedule-preview|tick|[0-9a-f]{32}))?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact|studio))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
     (re.compile(r'^/v1/agent-copy-grants(?:/(?:recipients|otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/remix))?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/shares(?:/otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/access(?:/otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/conversations/[0-9a-f]{32}/memory/capture$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/draft$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|reply-stop|messages(?:/[0-9a-f]{32}/(?:artifact|retry|files/[0-3]))?))?)?))?)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$'), 'meetings'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/[0-9]{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|read|pin|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/[0-9]{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/from-(?:chat|meeting)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$'), 'studio'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:document|spreadsheet|slides)/draft)$'), 'artifacts'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
@@ -220,9 +221,9 @@ def _same_origin(method, origin, fetch_site, fetch_mode, upgrade, public_origin)
 def gateway_call(uri, authorization):
     """Map /v1/gateway/* + Bearer ota_<instance>_<secret> to a plugin call.
 
-    The instance id in the key is used only to pick the owner's DS-Bot. The secret
-    is passed in the JSON body so the DS-Bot can verify it; nginx still strips
-    Authorization so the raw key never arrives as a header.
+    The instance id in the key identifies a candidate DS-Bot. The edge checks
+    the current owner binding and forwards the key in a dedicated header for
+    verification inside that DS-Bot.
     """
     parts = urlsplit(uri)
     path = parts.path
@@ -247,7 +248,7 @@ def gateway_call(uri, authorization):
 
 def _upstream_row(db, instance_id):
     row = db.execute(
-        "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
+        "SELECT i.id, u.address, u.auth_cookie, i.owner_id FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
         "WHERE i.id=? AND i.retired_at IS NULL AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
         "AND i.blocked=0 AND i.observed_revision=i.revision",
         (instance_id,)).fetchone()
@@ -256,7 +257,7 @@ def _upstream_row(db, instance_id):
     return row
 
 
-def owner_runtime_readiness(db, user_id, manager_id=None):
+def owner_runtime_readiness(db, user_id, manager_id=None, *, manager_auth=None):
     """The browser receives a state only, never the address or runtime cookie."""
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
         return 'unmanaged'
@@ -266,6 +267,8 @@ def owner_runtime_readiness(db, user_id, manager_id=None):
         return 'unavailable'
     if iid is None:
         return 'setup'
+    if is_parked(db, iid):
+        return 'parked'
     try:
         _upstream_row(db, iid)
     except GatewayError:
@@ -281,7 +284,7 @@ def owner_runtime_readiness(db, user_id, manager_id=None):
             return 'unavailable'
         if state[0] == 'running' or state[3]:
             return 'starting'
-        return 'stopped' if resumable_instance(db, user_id, manager_id) is not None else 'unavailable'
+        return 'stopped' if resumable_instance(db, user_id, manager_id, manager_auth=manager_auth) is not None else 'unavailable'
     return 'ready'
 
 
@@ -296,12 +299,17 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
         raise GatewayError(400, 'upgrade')
     call = gateway_call(uri, authorization)
     if call is not None:
-        # External Agent API: no browser session, no Origin requirement. The key's
-        # instance id picks the owner's DS-Bot; the secret is verified there.
+        # External Agent API: the key can target only its owner's assigned DS-Bot.
         if upgrade:
             raise GatewayError(400, 'upgrade')
         instance_id, endpoint, extra, token = call
         row = _upstream_row(db, instance_id)
+        try:
+            canonical = owned_instance(db, row['owner_id'])
+        except RuntimeFault as error:
+            raise GatewayError(503, 'dsbot_not_ready') from error
+        if canonical != instance_id:
+            raise GatewayError(503, 'dsbot_not_ready')
         address = validate_address(row[1])
         # Path includes the original /v1/gateway/... so the plugin can dispatch;
         # the token travels in a dedicated header (not Authorization; nginx strips that).
@@ -481,6 +489,8 @@ class GatewayApp:
         if env.get('REQUEST_METHOD') != 'GET':
             raise GatewayError(405, 'method')
         with self.store.connect() as db:
+            # Resolve the account binding and upstream from the same snapshot.
+            db.execute('BEGIN')
             return authorize(
                 db, cookie_header=env.get('HTTP_COOKIE', ''), session_cookie=self.session_cookie,
                 method=env.get('HTTP_X_ORIGINAL_METHOD', ''), uri=env.get('HTTP_X_ORIGINAL_URI', ''),
@@ -686,6 +696,9 @@ __DSBOT_LOCATIONS__
   }
   location ^~ /v1/gateway/ {
     auth_request /_ot_authz;
+    error_page 401 = @ot_gateway_unauthorized;
+    error_page 500 = @ot_gateway_error;
+    auth_request_set $ot_gateway_error $upstream_http_x_ot_gateway_error;
     auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
@@ -707,6 +720,18 @@ __DSBOT_LOCATIONS__
     proxy_buffering off;
     proxy_read_timeout 120s;
     proxy_redirect off;
+  }
+  location @ot_gateway_unauthorized {
+    default_type application/json;
+    add_header Cache-Control no-store always;
+    return 401 '{"error":{"code":"unauthorized"}}';
+  }
+  location @ot_gateway_error {
+    default_type application/json;
+    add_header Cache-Control no-store always;
+    if ($ot_gateway_error = dsbot_not_ready) { return 503 '{"error":{"code":"dsbot_not_ready"}}'; }
+    if ($ot_gateway_error = not_found) { return 404 '{"error":{"code":"not_found"}}'; }
+    return 500 '{"error":{"code":"runtime_route_failed"}}';
   }
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;

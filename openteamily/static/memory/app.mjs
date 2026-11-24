@@ -2,18 +2,21 @@ import {mountCandidates, sourceHref} from './candidates.mjs';
 import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
   actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
-import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { editRichTable, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
+import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-export function memoryDirectoryQuery({needle, topic, updatedAfter, cursor} = {}) {
+export function memoryDirectoryQuery({needle, topic, updatedAfter, unread, pinned, cursor} = {}) {
   const params = new URLSearchParams({order: 'recent', limit: '20'});
   if (needle) params.set('q', needle);
   if (topic) params.set('topic', topic);
   if (updatedAfter != null) params.set('updated_after', String(updatedAfter));
+  if (unread) params.set('unread', '1');
+  if (pinned) params.set('pinned', '1');
   if (cursor) params.set('cursor', cursor);
   return '?' + params.toString();
 }
@@ -72,6 +75,13 @@ export function parseTopics(value) {
 }
 
 
+function memoryBlock(kind, selection) {
+  if (kind === 'table') return '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |';
+  if (kind === 'tasks') return (selection.trim() || '待办事项').split(/\r?\n/)
+    .map(line => line.trim()).filter(Boolean).map(line => '- [ ] ' + line).join('\n');
+  return '';
+}
+
 export function applyMarkdown(textarea, kind) {
   if (!textarea) return '';
   const value = textarea.value;
@@ -92,12 +102,18 @@ export function applyMarkdown(textarea, kind) {
     quote: ['> ', '', '引用'],
     link: ['[', '](https://)', '链接文字'],
   };
-  const [pre, post, fallback] = wraps[kind] || ['', '', '文本'];
-  const body = selected || fallback;
-  const next = value.slice(0, start) + pre + body + post + value.slice(end);
+  const block = memoryBlock(kind, selected);
+  const offset = kind === 'table' ? end : start;
+  const before = value.slice(0, offset);
+  const after = value.slice(end);
+  const prefix = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+  const suffix = !after || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n';
+  const [pre, post, fallback] = block ? [prefix, suffix, ''] : wraps[kind] || ['', '', '文本'];
+  const body = block || selected || fallback;
+  const next = before + pre + body + post + after;
   textarea.value = next;
   if (typeof textarea.setSelectionRange === 'function') {
-    textarea.setSelectionRange(start + pre.length, start + pre.length + body.length);
+    textarea.setSelectionRange(offset + pre.length, offset + pre.length + body.length);
   }
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
   return next;
@@ -219,9 +235,9 @@ export function bindGraphNodeGestures(target, node, options = {}) {
   target.addEventListener('click', open);
   target.addEventListener('dblclick', open);
   target.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       if (event.preventDefault) event.preventDefault();
-      open();
+      if (!event.repeat) open();
       return;
     }
     if (event.key === 'Escape') hide();
@@ -332,6 +348,11 @@ export function memoryPageFromSearch(search) {
 
 const MEMORY_ID = /^[0-9a-f]{32}$/;
 
+function memoryRevisionFromSearch(params) {
+  const revision = params.get('revision');
+  return /^[1-9][0-9]{0,7}$/.test(revision || '') ? Number(revision) : undefined;
+}
+
 export function memoryCitationFromSearch(search) {
   const params = new URLSearchParams(search || '');
   const [from] = params.getAll('from');
@@ -387,6 +408,7 @@ function messageFor(error, fallback) {
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+  const nativePins = servedByDsBot(document);
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -395,10 +417,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const emptyEl = document.getElementById('list-empty');
   const searchInput = document.getElementById('search');
   const clearSearch = document.getElementById('memory-search-clear');
+  const resetFilters = document.getElementById('memory-directory-reset');
   const directoryStatus = document.getElementById('memory-directory-status');
   const directoryMore = document.getElementById('memory-load-more');
   const directoryRetry = document.getElementById('memory-directory-retry');
   const editor = document.getElementById('editor-form');
+  const pagePin = document.getElementById('page-pin');
+  const pinnedFilter = document.getElementById('filter-pinned');
+  if (pinnedFilter) pinnedFilter.hidden = !nativePins;
+  const pinWrites = new Set();
   const actionEditor = document.getElementById('action-editor-form');
   const actionSearch = document.getElementById('action-search');
   const actionFilter = document.getElementById('action-filter');
@@ -436,6 +463,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pageChoices = [];
   let browseDirectory = null;
   let activeDirectory = null;
+  let unreadCount = null;
+  let readGeneration = 0;
+  let pageReadQueue = Promise.resolve();
+  const readRevisions = new Map();
   let directoryTimer;
   let workspaceRequest = 0;
   let pageRequest = 0;
@@ -469,6 +500,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  function directoryAddress() {
+    const saved = document.defaultView?.history?.state?.memoryDirectory;
+    return currentUser?.id && workspaceId() && saved?.owner === currentUser.id && saved.workspace === workspaceId()
+      ? saved : null;
+  }
+
+  function writeDirectoryAddress(url, {push = false, result = directoryAddress()?.result === true,
+    reopenPage = directoryAddress()?.reopenPage === true, returnPage = push ? '' : directoryAddress()?.returnPage} = {}) {
+    const view = document.defaultView;
+    const history = view?.history;
+    if (!history?.replaceState || !view.location) return;
+    const method = push && history.pushState ? 'pushState' : 'replaceState';
+    const memoryDirectory = currentUser?.id && workspaceId() ? {
+      owner: currentUser.id, workspace: workspaceId(), query: searchInput.value,
+      filter: listFilter, topic: topicFilter, result: result && (!push || method === 'pushState'),
+      ...(reopenPage && !push ? {reopenPage:true} : {}),
+      ...(MEMORY_ID.test(returnPage || '') && (!push || method === 'pushState') ? {returnPage} : {}),
+    } : null;
+    if (!url) {
+      const previous = history.state?.memoryDirectory;
+      if (!memoryDirectory || (previous && Object.keys(memoryDirectory).every(key => previous[key] === memoryDirectory[key]))) return;
+      const {pathname, search, hash} = view.location;
+      url = (pathname || '/memory') + (search || '') + (hash || '');
+    }
+    history[method]({...history.state, memoryDirectory}, '', url);
+  }
+
+  function restoreDirectoryAddress() {
+    const saved = directoryAddress();
+    searchInput.value = typeof saved?.query === 'string' ? saved.query.slice(0, 80) : '';
+    topicFilter = saved?.filter === 'topics' && typeof saved.topic === 'string' ? saved.topic : '';
+    const filters = nativePins ? ['unread', 'updated', 'topics', 'pinned'] : ['unread', 'updated', 'topics'];
+    setDirectoryFilter(filters.includes(saved?.filter) ? saved.filter : 'all');
+  }
+
   function setCitationStatus(message) {
     if (citationStatus) citationStatus.textContent = message;
   }
@@ -496,9 +562,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? activeCitation : null;
   }
 
-  function syncCitationUrl(params, citation = activeCitation) {
+  function syncCitationUrl(params, citation = activeCitation, address = {result: false}) {
     if (citation) params.set('from', citation.from);
-    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params);
+    writeDirectoryAddress('/memory?' + params, address);
   }
 
   function randomKey() {
@@ -786,7 +852,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meta.textContent = memoryPageMeta(item);
     if (meta.textContent) text.appendChild(meta);
     button.appendChild(text);
-    button.addEventListener('click', () => openPage(item.id));
+    if (item.unread) {
+      const badge = document.createElement('span');
+      badge.className = 'memory-unread-badge';
+      badge.textContent = '未读';
+      button.appendChild(badge);
+    }
+    if (item.pinned === true) {
+      const badge = document.createElement('span');
+      badge.className = 'memory-pin-badge';
+      badge.textContent = '已置顶';
+      button.append(badge);
+    }
+    button.addEventListener('click', () => openPage(item.id, undefined, undefined, {fromDirectory: true}));
     return button;
   }
 
@@ -826,7 +904,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     emptyEl.hidden = !state || rows.length > 0 || busy || Boolean(state.error);
     emptyEl.textContent = state?.needle ? MEMORY_EMPTY_NO_MATCH : state?.topic
       ? '这个标签下还没有记忆页。'
+      : state?.unread ? '没有未读的记忆更新。'
+      : state?.pinned ? '还没有置顶的记忆页。'
       : state?.updatedAfter != null ? '最近 7 天没有更新过的记忆页。' : MEMORY_EMPTY_WORKSPACE;
+    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && !state?.unread && !state?.pinned && state?.updatedAfter == null);
     if (clearSearch) clearSearch.hidden = !searchInput.value;
     if (directoryStatus) {
       directoryStatus.textContent = state?.error || (busy ? (state.needle ? '正在搜索…' : '正在加载记忆…')
@@ -841,6 +922,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (count) {
       count.hidden = browseDirectory?.total == null;
       count.textContent = browseDirectory?.total == null ? '' : String(browseDirectory.total);
+    }
+    const badge = document.getElementById('filter-unread-count');
+    if (badge?.parentElement) {
+      badge.parentElement.hidden = unreadCount == null;
+      badge.hidden = !(unreadCount > 0);
+      badge.textContent = unreadCount > 0 ? String(unreadCount) : '';
     }
     if (selectedRow) focusDirectoryRow(selectedRow);
   }
@@ -877,6 +964,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadDirectoryPage(state, cursor = null, moveFocus = false) {
     if (!state?.workspace || state.controller || !ownsDirectoryWindow(state)) return false;
     const controller = new AbortController();
+    const generation = readGeneration;
     state.controller = controller;
     state.error = '';
     if (activeDirectory === state) renderDirectory();
@@ -890,9 +978,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const {items, total} = response.body;
+    if (generation === readGeneration && Number.isSafeInteger(response.body.unread_total) && response.body.unread_total >= 0) {
+      unreadCount = response.body.unread_total;
+    }
+    for (const item of items) {
+      if ((readRevisions.get(item.id) ?? 0) >= item.revision) item.unread = false;
+    }
     const seen = new Set(cursor ? state.items.map(item => item.id) : []);
     const added = items.filter(item => {
-      if (seen.has(item.id)) return false;
+      if (seen.has(item.id) || (state.unread && item.unread === false)) return false;
       seen.add(item.id);
       return true;
     });
@@ -922,20 +1016,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function searchDirectory({delay = 0, force = false} = {}) {
     if (!browseDirectory?.workspace || browseDirectory.owner !== currentUser) return;
+    writeDirectoryAddress();
     const needle = searchInput.value.trim();
     const topic = listFilter === 'topics' ? topicFilter : '';
     const recent = listFilter === 'updated';
-    if (!needle && !topic && !recent) {
+    const unread = listFilter === 'unread';
+    const pinned = nativePins && listFilter === 'pinned';
+    if (!needle && !topic && !recent && !unread && !pinned) {
       cancelDirectorySearch();
       activeDirectory = browseDirectory;
       renderDirectory();
       return;
     }
     const current = activeDirectory;
-    if (!force && current?.needle === needle && current.topic === topic && (current.updatedAfter != null) === recent) return;
+    if (!force && current?.needle === needle && current.topic === topic && (current.updatedAfter != null) === recent &&
+        Boolean(current.unread) === unread && Boolean(current.pinned) === pinned) return;
     cancelDirectorySearch();
     const updatedAfter = recent ? Math.floor(Date.now() / 1000) - 7 * 86400 : null;
-    const state = directoryWindow({needle, topic, updatedAfter});
+    const state = directoryWindow({needle, topic, updatedAfter, unread, pinned});
     activeDirectory = state;
     renderDirectory();
     if (delay) {
@@ -996,7 +1094,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
     const query = params.toString();
-    view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
+    writeDirectoryAddress((view?.location?.pathname || '/memory') + (query ? '?' + query : ''), {result: false});
   }
 
   let profileRevision = null;
@@ -1509,7 +1607,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const stage = canvas.parentElement;
         const card = document.getElementById('graph-hover-card');
         bindGraphNodeGestures(group, node, {
-          openPage,
+          openPage: id => openPage(id, undefined, id),
           card,
           pointerCoarse: currentPointerIsCoarse(),
           viewportWidth: currentViewportWidth(),
@@ -1545,6 +1643,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentGraph = emptyMemoryGraph;
   let graphRequest = 0;
   let graphWorkspace, graphOwner;
+  const linkSearch = document.getElementById('link-search');
+  const linkTarget = document.getElementById('link-target');
+  const addLink = document.getElementById('add-link');
+  const linksEmpty = document.getElementById('page-links-empty');
+  const linkWrites = new Set();
+  const linkAttempts = new Map();
+  const linkScope = () => JSON.stringify([currentUser?.id, workspaceId(), currentPage?.id]);
 
   async function loadGraph() {
     const id = workspaceId();
@@ -1578,20 +1683,66 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function pageLinks() {
+    if (!currentPage || graphOwner !== currentUser || graphWorkspace !== workspaceId()) return [];
+    return (currentGraph.edges || []).filter(edge => edge.source === currentPage.id || edge.target === currentPage.id);
+  }
+
+  const linkedPageId = edge => edge.source === currentPage.id ? edge.target : edge.source;
+
+  function renderLinkChoices(edges = pageLinks()) {
+    if (!currentPage || !linkTarget) return;
+    const selection = linkTarget.value;
+    const needle = (linkSearch?.value || '').trim().normalize('NFKC').toLowerCase();
+    const used = new Set(edges.map(linkedPageId));
+    used.add(currentPage.id);
+    const candidates = graphOwner === currentUser && graphWorkspace === workspaceId() ? currentGraph.nodes || [] : [];
+    const choices = candidates.filter(page => !used.has(page.id) && typeof page.title === 'string' &&
+      page.title.normalize('NFKC').toLowerCase().includes(needle));
+    linkTarget.replaceChildren();
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = choices.length ? '选择记忆页' : needle ? '没有匹配的记忆页' : '暂无可连接的记忆页';
+    linkTarget.append(empty);
+    for (const page of choices) {
+      const option = document.createElement('option');
+      option.value = page.id;
+      option.textContent = page.title;
+      linkTarget.append(option);
+    }
+    linkTarget.value = choices.some(page => page.id === selection) ? selection : '';
+    const pending = linkWrites.has(linkScope());
+    linkTarget.disabled = !choices.length || pending;
+    if (addLink) addLink.disabled = !linkTarget.value || pending;
+  }
+
   function renderPageLinks() {
     const box = document.getElementById('page-links');
-    const select = document.getElementById('link-target');
     if (!box || !currentPage) return;
     box.replaceChildren();
-    const edges = (currentGraph.edges || []).filter((edge) => edge.source === currentPage.id || edge.target === currentPage.id);
+    const edges = pageLinks();
     for (const edge of edges) {
-      const otherId = edge.source === currentPage.id ? edge.target : edge.source;
+      const otherId = linkedPageId(edge);
       const other = (currentGraph.nodes || []).find((node) => node.id === otherId);
-      const row = document.createElement('p');
-      row.className = 'note';
+      if (!other || !MEMORY_ID.test(otherId)) continue;
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      const workspace = workspaceId();
+      const owner = currentUser;
+      const sourceId = currentPage.id;
+      link.href = '/memory?' + new URLSearchParams({workspace, page:otherId});
+      link.textContent = other.title;
+      link.addEventListener('click', event => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        if (workspaceId() === workspace && currentPage?.id === sourceId && currentUser === owner) {
+          return openPage(otherId, undefined, undefined, {fromConnection:true});
+        }
+      });
       const label = document.createElement('span');
-      label.textContent = `${edge.kind === 'manual' ? '手动连接' : '正文提及'} · ${other ? other.title : otherId}`;
-      row.appendChild(label);
+      label.className = 'note';
+      label.textContent = edge.kind === 'manual' ? '手动连接' : '正文提及';
+      row.append(link, label);
       if (edge.kind === 'manual' && edge.id) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -1601,35 +1752,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       box.appendChild(row);
     }
-    if (select) {
-      const used = new Set(edges.map((edge) => (edge.source === currentPage.id ? edge.target : edge.source)));
-      used.add(currentPage.id);
-      select.replaceChildren();
-      const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = '选择记忆页';
-      select.appendChild(empty);
-      for (const page of currentGraph.nodes || pageChoices) {
-        if (used.has(page.id)) continue;
-        const option = document.createElement('option');
-        option.value = page.id;
-        option.textContent = page.title;
-        select.appendChild(option);
-      }
-    }
+    if (linksEmpty) linksEmpty.hidden = box.children.length > 0;
+    renderLinkChoices(edges);
   }
 
   async function removeLink(linkId) {
     const id = workspaceId();
+    const owner = currentUser;
+    const scope = linkScope();
     if (!id || !linkId) return;
-    const removed = await request('POST', `/v1/workspaces/${id}/memory/links/${linkId}/remove`, {});
+    const removed = await request('POST', `/v1/workspaces/${id}/memory/links/${linkId}/remove`, {}, undefined,
+      AbortSignal.timeout(8000)).catch(() => ({status:0,body:{}}));
+    if (workspaceId() !== id || currentUser !== owner) return;
     if (removed.status !== 200) {
-      show('error', messageFor(removed.body.error, '无法删除连接。'));
+      if (linkScope() === scope) show('error', messageFor(removed.body.error, '无法删除连接。'));
       return;
     }
-    show('ok', '已删除连接。');
+    if (linkScope() === scope) show('ok', '已删除连接。');
     await loadGraph();
-    renderPageLinks();
   }
 
   function fillWorkspaces(items) {
@@ -1698,8 +1838,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
     const actionId = linked.get('action');
     const deepAction = scopedLink && pageId === 'todos' && /^[0-9a-f]{32}$/.test(actionId || '');
-    const linkedRevision = linked.get('revision');
-    const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
+    const revision = memoryRevisionFromSearch(linked);
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
     if (scopedLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
       const shared = await supplemental;
@@ -1766,9 +1905,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     browseDirectory = id ? directoryWindow() : null;
     activeDirectory = browseDirectory;
     if (switched) {
-      searchInput.value = '';
-      topicFilter = '';
-      setDirectoryFilter('all');
+      unreadCount = null;
+      readRevisions.clear();
+      restoreDirectoryAddress();
       currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
       renderGraph(currentGraph);
       renderActions([]);
@@ -1797,11 +1936,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
-  function showPageMode() {
-    if (listPanel.dataset.view !== 'page' && listPanel.dataset.mobileGraph !== 'true') {
+  function showPageMode(graphId) {
+    if (listPanel.dataset.view !== 'page') {
       const scrollers = [document.scrollingElement, document.getElementById('main'), listPanel,
         document.getElementById('memory-dir'), listEl].filter(Boolean);
-      directoryReturn = {state: activeDirectory, scroll: scrollers.map(node => [node, node.scrollTop])};
+      directoryReturn = {
+        state: activeDirectory,
+        scroll: scrollers.map(node => [node, node.scrollTop]),
+        graphId,
+        mobileGraph: listPanel.dataset.mobileGraph === 'true',
+      };
     }
     closeProfilePreview();
     candidates.show(false);
@@ -1826,6 +1970,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // Only an edited rich body is re-serialised, so opening and saving a page
   // without touching the text keeps its stored markdown byte-for-byte.
   let richDirty = false;
+  const tableActions = document.getElementById('editor-table-actions');
+  let activeTableCell;
+  function syncTableActions() {
+    if (!tableActions || !rich) return;
+    const focus = document.getSelection?.()?.focusNode;
+    const cell = (focus?.nodeType === 1 ? focus : focus?.parentElement)?.closest('th, td');
+    if (sourceMode || (activeTableCell && !rich.contains(activeTableCell))) activeTableCell = null;
+    if (!sourceMode && cell && rich.contains(cell) && cell.closest('.chat-markdown-table')) activeTableCell = cell;
+    else if (activeTableCell && !tableActions.contains(document.activeElement)) activeTableCell = null;
+    tableActions.hidden = !activeTableCell;
+    if (!activeTableCell) {
+      tableActions.open = false;
+      return;
+    }
+    const table = activeTableCell.closest('table');
+    const bodyRows = table.tBodies[0]?.rows.length || 0;
+    const columns = table.rows[0].cells.length;
+    tableActions.querySelector('[data-table-edit="add-row"]').disabled = bodyRows >= MAX_TABLE_ROWS;
+    tableActions.querySelector('[data-table-edit="add-column"]').disabled = columns >= MAX_TABLE_COLUMNS;
+    tableActions.querySelector('[data-table-edit="remove-row"]').disabled = activeTableCell.parentElement.rowIndex === 0;
+    tableActions.querySelector('[data-table-edit="remove-column"]').disabled = columns <= 1;
+  }
+
   function syncBodyFromRich() {
     if (!rich || sourceMode || !richDirty) return;
     const markdown = domToMarkdown(rich);
@@ -1840,8 +2007,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   function loadRichBody(markdown) {
     if (!rich) return;
-    renderMarkdown(document, rich, markdown);
+    renderMarkdown(document, rich, markdown, {readTable:readMarkdownTable, renderTable:renderMarkdownTable, interactiveTasks:true});
     richDirty = false;
+    syncTableActions();
   }
   function setSourceMode(next) {
     if (!rich) return;
@@ -1852,11 +2020,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (field) field.hidden = !next;
     rich.hidden = next;
     if (!next) loadRichBody(editor.elements.body.value);
+    if (next) syncTableActions();
     if (sourceToggle) sourceToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
   }
   if (rich) {
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* older engines */ }
     rich.addEventListener('input', () => { richDirty = true; syncBodyFromRich(); });
+    if (tableActions) {
+      document.addEventListener('selectionchange', syncTableActions);
+      editor.addEventListener('focusout', event => {
+        if (!editor.contains(event.relatedTarget)) {
+          activeTableCell = null;
+          tableActions.hidden = true;
+          tableActions.open = false;
+        }
+      });
+    }
     rich.addEventListener('paste', (event) => {
       // Paste as plain text so foreign HTML never enters the page.
       const text = event.clipboardData && event.clipboardData.getData('text/plain');
@@ -2000,6 +2179,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.elements.title.focus();
   });
 
+  function applyTableEdit(action) {
+    if (sourceMode || !rich?.contains(activeTableCell)) return;
+    if (!editRichTable(document, rich, activeTableCell, action)) return;
+    tableActions.open = false;
+    syncTableActions();
+  }
+
+  tableActions?.addEventListener('click', event => {
+    const button = event.target.closest('[data-table-edit]');
+    if (button) applyTableEdit(button.dataset.tableEdit);
+  });
+  tableActions?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !tableActions.open) return;
+    event.preventDefault();
+    tableActions.open = false;
+    tableActions.querySelector('summary').focus();
+  });
+
   function richCommand(kind) {
     if (!rich) return;
     rich.focus();
@@ -2025,6 +2222,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         after.selectNodeContents(code);
         selection.addRange(after);
       }
+    } else if (kind === 'tasks' || kind === 'table') {
+      const selection = document.getSelection();
+      if (!selection?.rangeCount || !rich.contains(selection.anchorNode) || !rich.contains(selection.focusNode)) return;
+      const selected = selection.toString();
+      const generated = document.createElement('div');
+      renderMarkdown(document, generated, memoryBlock(kind, selected),
+        {readTable:readMarkdownTable, renderTable:renderMarkdownTable, interactiveTasks:true});
+      if (kind === 'table') {
+        const range = selection.getRangeAt(0);
+        const block = Array.from(rich.children).find(child => child.contains(range.endContainer));
+        const next = block ? block.nextSibling : rich.childNodes[range.endOffset];
+        const table = generated.firstChild;
+        rich.insertBefore(table, next ?? null);
+        range.selectNodeContents(table.querySelector('th'));
+      } else {
+        // Only the markup produced by the safe Markdown renderer enters the editor.
+        document.execCommand('insertHTML', false, generated.innerHTML);
+      }
     } else if (kind === 'link') {
       const answer = globalThis.prompt ? globalThis.prompt('链接地址（https://、mailto: 或站内 /路径）', 'https://') : '';
       const href = safeHref(answer);
@@ -2033,6 +2248,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     richDirty = true;
     syncBodyFromRich();
+    if (kind === 'table') pageDraftChanged();
   }
 
   const exportButton = document.getElementById('page-export');
@@ -2265,14 +2481,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (Number.isSafeInteger(latest) && latest > revision) {
       citationVersion.textContent += ' · 当前修订 ' + latest;
     }
-    if (version.body.trim()) renderMarkdown(document, citationBody, version.body);
+    if (version.body.trim()) renderMarkdown(document, citationBody, version.body,
+      {readTable:readMarkdownTable, renderTable:renderMarkdownTable});
     else citationBody.textContent = '（空白正文）';
     citationEdit.hidden = false;
     setCitationStatus('');
     citationTitle.focus?.();
   }
 
-  async function openPage(pageId, revision) {
+  async function openPage(pageId, revision, graphId, {fromDirectory = false, fromConnection = false} = {}) {
     if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
@@ -2282,30 +2499,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = workspaceRequest;
     const token = ++pageRequest;
     const owner = currentUser;
+    const returnPage = fromConnection ? currentPage?.id : undefined;
     const citation = citationFor(pageId);
     if (activeCitation !== citation) setCitation(citation);
-    const isCurrent = () => seq === workspaceRequest && token === pageRequest && owner === currentUser;
+    const isCurrent = () => seq === workspaceRequest && token === pageRequest && owner === currentUser &&
+      (!fromConnection || (!editor.hidden && returnPage === currentPage?.id));
     if (citation && revision && citationPreview) return openCitedRevision(citation, revision, isCurrent);
     const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`).catch(() => ({status: 0, body: {}}));
     if (!isCurrent()) return;
-    if (seen.status !== 200 || seen.body.page?.id !== pageId) {
+    if (seen.status !== 200 || seen.body.page?.id !== pageId || (seen.body.page.workspace_id && seen.body.page.workspace_id !== id)) {
       if (citation) unavailableCitation(seen.status, '这条记忆已删除或无法访问。');
       else show('error', messageFor(seen.body.error, '无法打开记忆页。'));
       return;
     }
     const page = seen.body.page;
     hideCitationPreview();
-    showPage(page, revision);
+    if (returnPage) writeDirectoryAddress(undefined,{reopenPage:true});
+    showPage(page, revision, graphId, fromConnection || (fromDirectory && listPanel.dataset.view === 'overview'), returnPage);
+    if (!revision || revision === page.revision) markPageRead(page);
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
+      const listing = openPageHistory({focus:false});
       const preview = historyPreviewToken;
-      await openPageHistory();
+      await listing;
       if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
           && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
     }
   }
 
-  function showPage(page, revision) {
+  function markPageRead(page) {
+    const workspace = workspaceId();
+    const owner = currentUser;
+    const sequence = workspaceRequest;
+    pageReadQueue = pageReadQueue.then(() => savePageRead(page, {workspace, owner, sequence}));
+  }
+
+  async function savePageRead(page, {workspace, owner, sequence}) {
+    const current = () => sequence === workspaceRequest && owner === currentUser && workspace === workspaceId();
+    if (!current()) return;
+    if (unreadCount == null || !MEMORY_ID.test(page.id) || page.workspace_id !== workspace ||
+        !Number.isSafeInteger(page.revision) || page.revision <= (readRevisions.get(page.id) ?? 0)) return;
+    if (browseDirectory?.items.some(item => item.id === page.id && item.revision === page.revision && item.unread === false)) return;
+    const response = await request('POST', `/v1/workspaces/${workspace}/memory/${page.id}/read`,
+      {revision: page.revision}, undefined, AbortSignal.timeout(6000)).catch(() => null);
+    const body = response?.body;
+    if (!current() || response?.status !== 200 ||
+        body?.page_id !== page.id || !Number.isSafeInteger(body.read_revision) || body.read_revision < page.revision ||
+        !Number.isSafeInteger(body.unread_total) || body.unread_total < 0) return;
+    ++readGeneration;
+    unreadCount = body.unread_total;
+    const lastRead = Math.max(body.read_revision, readRevisions.get(page.id) ?? 0);
+    readRevisions.set(page.id, lastRead);
+    for (const state of new Set([browseDirectory, activeDirectory])) {
+      const row = state?.items.find(item => item.id === page.id);
+      if (!row || row.revision > lastRead || row.unread === false) continue;
+      row.unread = false;
+      if (state.unread) {
+        state.items = state.items.filter(item => item !== row);
+        if (state.total > 0) state.total -= 1;
+      }
+    }
+    renderDirectory();
+  }
+
+  function showPage(page, revision, graphId, push = false, returnPage) {
     persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
@@ -2322,23 +2579,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
     resetDream();
-    showPageMode();
+    showPageMode(graphId);
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
     applyPageToEditor(page);
     showPageDraft({restore: true});
     syncExportButton();
-    syncPageUrl(revision);
+    syncPageUrl(revision, push, returnPage);
+    const back = document.getElementById('close-editor');
+    if (back) back.textContent = directoryAddress()?.returnPage ? '‹ 返回上一页' : '‹ 返回列表';
     syncDirectorySelection();
     focusDetailBack('close-editor');
   }
 
-  function syncPageUrl(revision) {
+  function syncPageUrl(revision, push = false, returnPage) {
     const id = workspaceId();
     if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
     const params = new URLSearchParams({workspace:id, page:currentPage.id});
     if (revision) params.set('revision', String(revision));
-    syncCitationUrl(params, citationFor(currentPage.id));
+    const citation = citationFor(currentPage.id);
+    syncCitationUrl(params, citation, {push, returnPage, result: !citation && (push || directoryAddress()?.result === true)});
   }
 
   citationEdit?.addEventListener('click', async () => {
@@ -2378,15 +2638,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const historyPanel = document.getElementById('page-history');
   const historyOpen = document.getElementById('page-history-open');
+  const historyTitle = document.getElementById('page-history-title');
+  const historyBrowse = document.getElementById('page-history-browse');
+  const historyList = document.getElementById('page-history-list');
+  const historyMore = document.getElementById('page-history-more');
+  const historyRetry = document.getElementById('page-history-retry');
+  const historyEmpty = document.getElementById('page-history-empty');
+  const historyListStatus = document.getElementById('page-history-list-status');
+  const historyPreview = document.getElementById('page-history-preview');
+  const historyPreviewTitle = document.getElementById('page-history-preview-title');
+  const historyPreviewBody = document.getElementById('page-history-preview-body');
+  const historyPreviewBack = document.getElementById('page-history-preview-back');
+  const historyPreviewRetry = document.getElementById('page-history-preview-retry');
+  const historyRestore = document.getElementById('page-history-restore');
+  const historyRestoreNote = document.getElementById('page-history-restore-note');
+  const historyStatus = document.getElementById('page-history-status');
+  let historyCursor = null;
+  let historyTarget = 0;
   let historySelection = 0;
   let historyTokens = 0;
   let historyPreviewToken = 0;
+  let historyLoading = false;
+  let historyRestoring = null;
 
   function closePageHistory({restoreFocus = true} = {}) {
     if (!historyPanel || historyPanel.hidden) return;
     historyPanel.hidden = true;
+    historyOpen?.setAttribute('aria-expanded','false');
     historyTokens += 1;
     historyPreviewToken += 1;
+    historyLoading = false;
     historySelection = 0;
     if (restoreFocus) {
       syncPageUrl();
@@ -2395,7 +2676,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function applyPageToEditor(page) {
+    if (linkSearch && currentPage?.id !== page.id) linkSearch.value = '';
+    if (page.pinned === undefined && currentPage?.id === page.id && typeof currentPage.pinned === 'boolean') {
+      page = {...page,pinned:currentPage.pinned};
+    }
     currentPage = page;
+    syncPagePin();
     syncPageSaveButton();
     fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
@@ -2404,85 +2690,179 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
   }
 
-  async function loadPageHistory() {
-    const wid = workspaceId();
-    if (!wid || !currentPage) return;
+  const pinScope = () => JSON.stringify([currentUser?.id, workspaceId(), currentPage?.id]);
+
+  function syncPagePin() {
+    if (!pagePin) return;
+    pagePin.hidden = !nativePins || !currentPage?.id;
+    pagePin.disabled = pinWrites.has(pinScope());
+    pagePin.setAttribute('aria-pressed', String(currentPage?.pinned === true));
+    pagePin.textContent = currentPage?.pinned ? '取消置顶' : '置顶';
+  }
+
+  pagePin?.addEventListener('click', async () => {
+    if (!nativePins || !currentUser || !currentPage || editor.hidden) return;
+    const owner = currentUser, workspace = workspaceId(), id = currentPage.id;
+    const scope = pinScope();
+    if (!MEMORY_ID.test(workspace) || !MEMORY_ID.test(id) || pinWrites.has(scope)) return;
+    const pinned = currentPage.pinned !== true;
+    const path = `/v1/workspaces/${workspace}/memory/${id}`;
+    const activeWorkspace = () => owner === currentUser && workspaceId() === workspace;
+    pinWrites.add(scope);
+    syncPagePin();
+    let result = await request('POST', path + '/pin', {pinned}, undefined, AbortSignal.timeout(8000))
+      .catch(() => ({status:0,body:{}}));
+    let confirmed = result.status === 200 && result.body?.page_id === id && result.body.workspace_id === workspace && result.body.pinned === pinned;
+    if (!confirmed && activeWorkspace() && (!result.status || result.status >= 500 || result.status === 200)) {
+      result = await request('GET', path, undefined, undefined, AbortSignal.timeout(6000)).catch(() => ({status:0,body:{}}));
+      const found = result.body?.page;
+      confirmed = result.status === 200 && found?.id === id && found.workspace_id === workspace && found.pinned === pinned;
+    }
+    pinWrites.delete(scope);
+    if (!activeWorkspace()) return;
+    if (currentPage?.id === id) {
+      if (confirmed) currentPage.pinned = pinned;
+      syncPagePin();
+      show(confirmed ? 'ok' : 'error', confirmed ? (pinned ? '已置顶。' : '已取消置顶。') : '未能确认置顶状态，请重试。');
+    }
+    if (!confirmed || !browseDirectory) return;
+    const wasBrowsing = activeDirectory === browseDirectory;
+    cancelDirectorySearch();
+    browseDirectory.controller?.abort();
+    browseDirectory = directoryWindow();
+    if (wasBrowsing) activeDirectory = browseDirectory;
+    else searchDirectory({force:true});
+    await loadDirectoryPage(browseDirectory);
+  });
+
+  async function loadPageHistory({append = false} = {}) {
+    const wid = workspaceId(), id = currentPage?.id, owner = currentUser?.id;
+    if (!wid || !id || !historyList || (append && (!historyCursor || historyLoading))) return;
+    const cursor = append ? historyCursor : null;
+    const paging = append && document.activeElement === historyMore;
     const token = ++historyTokens;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions`);
-    if (token !== historyTokens || workspaceId() !== wid) return;
-    const list = document.getElementById('page-history-list');
-    const empty = document.getElementById('page-history-empty');
-    const status = document.getElementById('page-history-status');
-    if (!list) return;
-    list.replaceChildren();
-    if (result.status !== 200) {
-      if (status) status.textContent = '历史没有读取成功。';
+    historyLoading = true;
+    historyList.setAttribute('aria-busy','true');
+    historyMore.disabled = true;
+    historyRetry.hidden = true;
+    historyListStatus.textContent = '正在读取版本…';
+    if (!append) {
+      historyCursor = null;
+      historyList.replaceChildren();
+      historyMore.hidden = true;
+      historyEmpty.hidden = true;
+    }
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions${cursor ? '?cursor=' + cursor : ''}`)
+      .catch(() => ({status:0,body:{}}));
+    if (token !== historyTokens || workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner) return;
+    historyLoading = false;
+    historyList.setAttribute('aria-busy','false');
+    historyMore.disabled = false;
+    if (result.status !== 200 || !Array.isArray(result.body.items)) {
+      historyRetry.hidden = append;
+      historyListStatus.textContent = append ? '更早的版本没有读取成功，请重试。' : '历史没有读取成功，请重试。';
       return;
     }
-    const items = result.body.items || [];
-    if (empty) empty.hidden = items.length > 0;
-    if (status) status.textContent = '';
+    const boundary = cursor ?? result.body.current;
+    const items = result.body.items.filter(item => Number.isSafeInteger(item?.revision) &&
+      item.revision > 0 && item.revision < boundary && typeof item.summary === 'string');
+    const next = result.body.cursor;
+    historyCursor = Number.isSafeInteger(next) && next > 0 && next < boundary && next === items.at(-1)?.revision ? next : null;
+    const firstNew = historyList.children.length;
     for (const item of items) {
       const row = document.createElement('li');
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'page-history-item';
       open.dataset.revision = String(item.revision);
+      const title = document.createElement('strong');
       const when = memoryUpdatedLabel(item.created);
-      open.textContent = `修订 ${item.revision} · ${when || '时间未知'} · ${item.summary}`;
+      title.textContent = `修订 ${item.revision}${when ? ' · ' + when : ''}`;
+      const summary = document.createElement('span');
+      summary.textContent = item.summary;
+      open.append(title,summary);
       open.addEventListener('click', () => previewPageVersion(item.revision));
       row.appendChild(open);
-      list.appendChild(row);
+      historyList.appendChild(row);
+    }
+    const focusNew = paging && (document.activeElement === historyMore || document.activeElement === document.body);
+    historyMore.hidden = !historyCursor;
+    historyEmpty.hidden = historyList.children.length > 0;
+    historyListStatus.textContent = '';
+    if (focusNew) {
+      (historyList.children[firstNew]?.firstElementChild || historyList.lastElementChild?.firstElementChild || historyTitle).focus();
     }
   }
 
-  async function openPageHistory() {
+  function showHistoryList({focus = true} = {}) {
+    historyPreviewToken += 1;
+    historySelection = 0;
+    historyPreview.hidden = true;
+    historyBrowse.hidden = false;
+    if (focus) {
+      syncPageUrl();
+      (historyList.querySelector(`button[data-revision="${historyTarget}"]`) || historyTitle).focus();
+    }
+  }
+
+  async function openPageHistory({focus = true} = {}) {
     if (!currentPage || !historyPanel) return;
     historyPanel.hidden = false;
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    if (historyOpen) historyOpen.focus();
+    historyOpen.setAttribute('aria-expanded','true');
+    historyTarget = 0;
+    showHistoryList({focus});
     await loadPageHistory();
   }
 
   async function previewPageVersion(revision) {
     const wid = workspaceId();
     if (!wid || !currentPage) return;
-    const id = currentPage.id;
+    const id = currentPage.id, owner = currentUser?.id;
     const token = ++historyPreviewToken;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`);
-    if (workspaceId() !== wid || currentPage?.id !== id || token !== historyPreviewToken) return;
-    const status = document.getElementById('page-history-status');
-    if (result.status !== 200 || !result.body.version) {
-      if (status) status.textContent = '这一版没有读取成功。';
+    historyTarget = revision;
+    historySelection = 0;
+    historyBrowse.hidden = true;
+    historyPreview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${revision}`;
+    historyPreviewBody.textContent = '';
+    historyRestore.hidden = historyRestoreNote.hidden = historyPreviewRetry.hidden = true;
+    historyStatus.textContent = '正在读取此版本…';
+    historyPreviewTitle.focus();
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`)
+      .catch(() => ({status:0,body:{}}));
+    if (workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner || token !== historyPreviewToken) return;
+    const version = result.body.version;
+    if (result.status !== 200 || version?.revision !== revision || typeof version.body !== 'string' || typeof version.title !== 'string') {
+      historyPreviewRetry.hidden = result.status === 404;
+      historyStatus.textContent = result.status === 404 ? '此版本已不在保留范围内。' : '此版本没有读取成功，请重试。';
       return;
     }
-    const version = result.body.version;
     historySelection = version.revision;
-    document.getElementById('page-history-preview-title').textContent =
-      `修订 ${version.revision} · ${version.created_by}`;
-    document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${version.revision} · ${version.title}`;
+    historyPreviewBody.textContent = version.body || '（空白正文）';
+    historyRestore.hidden = historyRestoreNote.hidden = false;
+    historyRestore.disabled = historyRestoring?.id === id;
     syncPageUrl(revision);
-    if (status) status.textContent = '';
+    historyStatus.textContent = '';
   }
 
   async function restorePageVersion() {
     const wid = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!wid || !editing || !historySelection) return;
+    if (!wid || !editing || !historySelection || historyRestoring?.id === editing.id) return;
     const revision = historySelection;
-    const status = document.getElementById('page-history-status');
     if (!pageMatchesDraft(editing, editorFields())) {
-      if (status) status.textContent = '请先保存或清除当前草稿，再回滚历史版本。';
+      historyStatus.textContent = '请先保存或清除当前草稿，再恢复历史版本。';
       return;
     }
+    const pending = historyRestoring = {id:editing.id};
+    historyRestore.disabled = true;
+    historyStatus.textContent = '正在恢复版本…';
     const result = await request(
       'POST', `/v1/workspaces/${wid}/memory/${editing.id}/versions/${revision}/restore`,
       {revision: editing.revision}).catch(() => ({status:0, body:{}}));
+    if (historyRestoring === pending) historyRestoring = null;
     if (workspaceId() !== wid || currentUser !== owner) return;
     if (currentPage !== editing) {
       if (result.status === 200 && result.body.page) {
@@ -2492,9 +2872,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200 || !result.body.page) {
-      if (status) status.textContent = result.status === 409
-        ? '这一页已在别处更新，重新打开后再回滚。'
-        : '没有回滚成功。';
+      historyRestore.disabled = false;
+      if (!historyPreview.hidden) historyStatus.textContent = result.status === 409
+        ? '这一页已在别处更新，重新打开后再恢复。'
+        : '没有恢复成功，请重试。';
       return;
     }
     persistPageDraft();
@@ -2502,20 +2883,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageDraft();
     rememberPage(result.body.page);
     syncPageUrl();
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    await Promise.all([loadPageHistory(),loadGraph()]);
+    if (!historyPanel.hidden) {
+      historyTarget = 0;
+      showHistoryList();
+      await Promise.all([loadPageHistory(),loadGraph()]);
+    } else await loadGraph();
     if (currentPage === result.body.page && currentUser === owner && workspaceId() === wid) {
-      show('ok', `已回滚到修订 ${revision}，保存为新的修订 ${currentPage.revision}。`);
+      show('ok', `已恢复修订 ${revision}，保存为修订 ${currentPage.revision}。`);
     }
   }
 
   if (historyOpen) historyOpen.addEventListener('click', openPageHistory);
   const historyClose = document.getElementById('page-history-close');
   if (historyClose) historyClose.addEventListener('click', () => closePageHistory());
-  const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
+  historyMore?.addEventListener('click', () => loadPageHistory({append:true}));
+  historyRetry?.addEventListener('click', () => loadPageHistory());
+  historyPreviewBack?.addEventListener('click', () => showHistoryList());
+  historyPreviewRetry?.addEventListener('click', () => previewPageVersion(historyTarget));
 
   function savedActionFollowups() {
     const workspace = workspaceId();
@@ -2992,6 +3377,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
   clearSearch?.addEventListener('click', clearDirectorySearch);
+  resetFilters?.addEventListener('click', () => {
+    topicFilter = '';
+    setDirectoryFilter('all');
+    renderTopicFilters();
+    clearDirectorySearch();
+  });
   directoryMore?.addEventListener('click', () => {
     const state = activeDirectory;
     if (state?.cursor) return loadDirectoryPage(state, state.cursor, document.activeElement === directoryMore);
@@ -3026,14 +3417,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   const memoryWindow = document.defaultView;
+  let directoryBackPending = false;
   if (memoryWindow && memoryWindow.addEventListener) {
     memoryWindow.addEventListener('popstate', () => {
+      directoryBackPending = false;
       const search = memoryWindow.location.search;
       const view = memoryPageFromSearch(search);
-      if (memoryCitationFromSearch(search)) {
+      const params = new URLSearchParams(search);
+      const workspace = params.get('workspace');
+      if (memoryCitationFromSearch(search) || (MEMORY_ID.test(workspace || '') && workspace !== workspaceId())) {
         currentView = view;
         void loadSession();
-      } else showView(view, {sync: false});
+        return;
+      }
+      const saved = directoryAddress();
+      if (view !== 'overview' || !saved || workspace !== workspaceId()) {
+        showView(view, {sync: false});
+        return;
+      }
+      currentView = view;
+      restoreDirectoryAddress();
+      renderTopicFilters();
+      searchDirectory();
+      const page = params.get('page');
+      if ((saved.result || saved.reopenPage) && MEMORY_ID.test(page || '')) void openPage(page, memoryRevisionFromSearch(params));
+      else returnToList({sync: false});
     });
   }
   function setDirectoryFilter(filter) {
@@ -3338,36 +3746,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (parts.cancel) parts.cancel.addEventListener('click', () => closeDeleteConfirm());
   }
 
-  const addLink = document.getElementById('add-link');
+  linkSearch?.addEventListener('input', event => { if (!event.isComposing) renderLinkChoices(); });
+  linkSearch?.addEventListener('compositionend', () => renderLinkChoices());
+  linkSearch?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      if (!linkTarget?.disabled) linkTarget?.focus();
+    }
+  });
+  linkTarget?.addEventListener('change', () => {
+    if (addLink) addLink.disabled = !linkTarget.value || linkWrites.has(linkScope());
+  });
   if (addLink) {
     addLink.addEventListener('click', async () => {
-      const id = workspaceId();
-      const target = document.getElementById('link-target');
-      if (!id || !currentPage || !target || !target.value) return;
-      const created = await fetcher(`/v1/workspaces/${id}/memory/links`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfCookie(document.cookie),
-          'Idempotency-Key': randomKey(),
-        },
-        credentials: 'same-origin',
-        body: JSON.stringify({source: currentPage.id, target: target.value}),
-      });
-      let parsed = {};
-      try { parsed = await created.json(); } catch { parsed = {}; }
-      if (created.status !== 201 && created.status !== 200) {
-        show('error', messageFor(parsed.error, '无法添加连接。'));
-        return;
+      const id = workspaceId(), owner = currentUser;
+      const source = currentPage?.id, target = linkTarget?.value;
+      const scope = linkScope();
+      if (!id || !source || !target || linkWrites.has(scope)) return;
+      const attempt = JSON.stringify([scope,target]);
+      const key = linkAttempts.get(attempt) || randomKey();
+      linkAttempts.set(attempt, key);
+      if (linkAttempts.size > 32) linkAttempts.delete(linkAttempts.keys().next().value);
+      linkWrites.add(scope);
+      renderLinkChoices();
+      const created = await request('POST', `/v1/workspaces/${id}/memory/links`, {source,target},
+        {'Idempotency-Key':key}, AbortSignal.timeout(8000)).catch(() => ({status:0,body:{}}));
+      const saved = created.status === 201 || created.status === 200;
+      if (saved) {
+        linkAttempts.delete(attempt);
+        if (workspaceId() === id && currentUser === owner) await loadGraph();
       }
-      show('ok', '已添加连接。');
-      await loadGraph();
-      renderPageLinks();
+      linkWrites.delete(scope);
+      if (workspaceId() !== id || currentUser !== owner) return;
+      if (linkScope() === scope) {
+        renderLinkChoices();
+        show(saved ? 'ok' : 'error', saved ? '已添加连接。' : messageFor(created.body.error, '无法添加连接，请重试。'));
+      }
     });
   }
 
-  function returnToList() {
+  function returnToList({sync = true} = {}) {
     persistPageDraft();
     const page = currentPage?.id;
     const action = currentAction?.id;
@@ -3378,24 +3796,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     if (groupShareDialog?.open) groupShareDialog.close();
-    setMobileGraph(false);
-    showView(currentView);
+    const returnToGraph = currentView === 'overview' && previous?.mobileGraph === true;
+    setMobileGraph(returnToGraph);
+    showView(currentView, {sync});
     syncExportButton();
     syncDirectorySelection();
     if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
       for (const [node, offset] of previous.scroll) node.scrollTop = offset;
     }
+    const graphNode = currentView === 'overview' && previous?.graphId
+      ? [...document.querySelectorAll('#graph-world [data-id]')].find(node => node.dataset.id === previous.graphId)
+      : null;
     const result = currentView === 'actions' && action
       ? [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
         .find(button => button.dataset.id === action)
-      : currentView === 'overview' ? directoryRow(page) : null;
-    const target = result || (currentView === 'overview' ? searchInput
+      : currentView === 'overview' && !returnToGraph ? directoryRow(page) : null;
+    const target = graphNode || result || (currentView === 'overview' ? (returnToGraph ? mobileGraph : searchInput)
       : document.querySelector('.memory-views [aria-current="page"]'));
     target?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
     target?.focus?.({preventScroll: true});
   }
 
-  document.getElementById('close-editor').addEventListener('click', returnToList);
+  document.getElementById('close-editor').addEventListener('click', () => {
+    if (directoryAddress()?.result && memoryWindow?.history?.back) {
+      if (directoryBackPending) return;
+      directoryBackPending = true;
+      memoryWindow.history.back();
+    } else returnToList();
+  });
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
   const newActionAttempts = new Map();

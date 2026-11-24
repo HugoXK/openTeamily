@@ -53,6 +53,10 @@ ${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
+const WORK_TOPICS = new Set([
+  "productivity", "entertainment", "technology", "beauty", "fashion", "food", "travel", "wellness",
+  "education", "creative", "games", "finance", "career", "life",
+]);
 export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -180,7 +184,7 @@ function publicPage(ot: OtContext, l: any, view: any) {
       : `<li><p class="meta">${escapeHtml(item.author?.name || item.author?.handle || "")}</p><pre>${escapeHtml(item.body)}</pre></li>`).join("");
     const detail = `/login#work-comments=${encodeURIComponent(l.slug)}`;
     const share = `/login#work-detail=${encodeURIComponent(l.slug)}`;
-    const {previous, next} = chronologicalWorkNeighbors(ot, l, PUBLIC_WORK_SCOPE);
+    const {previous, next} = chronologicalWorkNeighbors(ot, l.id, l.updated_at, PUBLIC_WORK_SCOPE);
     const adjacent = (work: WorkNeighbor | null, rel: "prev" | "next", label: string) => work
       ? `<a rel="${rel}" href="/w/${encodeURIComponent(work.slug)}" title="${escapeHtml(work.title)}">${label}</a>`
       : `<span aria-disabled="true">${label}</span>`;
@@ -396,9 +400,13 @@ function publicRemixFile(ot: OtContext, work: {id: string; slug: string; title: 
 }
 
 type FeedScope = { where: string; args: unknown[] };
-type WorkAnchor = { id: string; updated_at: number };
+type ChronologicalFeedScope = FeedScope & { from: string; orderAt: string };
+type WorkAnchor = { id: string };
 type WorkNeighbor = { slug: string; title: string };
-const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
+const LISTING_SOURCE = "ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id";
+const PUBLIC_WORK_SCOPE: ChronologicalFeedScope = {
+  where: "l.listed = 1 AND l.kind = 'work'", args: [], from: LISTING_SOURCE, orderAt: "l.updated_at",
+};
 
 function publicWorkPreview(ot: OtContext, slug: string, input: Record<string, unknown>) {
   assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
@@ -427,11 +435,15 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   const creator = one(input.creator, "creator");
   const term = one(input.q, "q") ?? "";
   const workSearch = kind === "work" ? workSearchQuery(term) : "";
-  assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
+  assert(sort === "latest" || sort === "popular" || sort === "collected", 400, "invalid_request", "unknown discover sort");
   assert(sort !== "popular" || (kind === "work" && tab === "all"), 400, "invalid_request", "popularity sorting applies to the all works feed");
+  assert(sort !== "collected" || (kind === "work" && tab === "collected" && viewer !== null),
+    400, "invalid_request", "collection sorting applies to the viewer's collected works");
 
   const conditions = ["l.listed = 1"];
   const args: unknown[] = [];
+  let from = LISTING_SOURCE;
+  let orderAt = "l.updated_at";
   if (kind) {
     assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work");
     conditions.push("l.kind = ?");
@@ -448,7 +460,11 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
     conditions.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)");
     args.push(viewer);
   } else if (tab === "collected") {
-    conditions.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)");
+    if (sort === "collected") {
+      from += " JOIN ot_collections own_collection ON own_collection.listing_id = l.id";
+      orderAt = "own_collection.created_at";
+      conditions.push("own_collection.owner_id = ?");
+    } else conditions.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)");
     args.push(viewer);
   } else {
     assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
@@ -469,7 +485,7 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
       args.push(search, search, search, search);
     }
   }
-  return {kind, sort, where: conditions.join(" AND "), args, workSearch};
+  return {kind, sort, from, orderAt, where: conditions.join(" AND "), args, workSearch};
 }
 
 function discoverCard(ot: OtContext, row: any, viewer: string | null, search: string) {
@@ -499,29 +515,29 @@ function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
     ...("match" in card && card.match ? {match:card.match} : {})};
 }
 
-function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
+function chronologicalWorkNeighbors(ot: OtContext, id: string, at: number, {from, orderAt, where, args}: ChronologicalFeedScope) {
   const neighbor = (previous: boolean) => {
     const comparison = previous ? ">" : "<";
     const direction = previous ? "ASC" : "DESC";
-    return ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l
-      LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE ${scope.where} AND (l.updated_at, l.id) ${comparison} (?, ?)
-      ORDER BY l.updated_at ${direction}, l.id ${direction} LIMIT 1`,
-    ...scope.args, work.updated_at, work.id) ?? null;
+    return ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ${from}
+      WHERE ${where} AND (${orderAt}, l.id) ${comparison} (?, ?)
+      ORDER BY ${orderAt} ${direction}, l.id ${direction} LIMIT 1`,
+    ...args, at, id) ?? null;
   };
   return {previous: neighbor(true), next: neighbor(false)};
 }
 
-function scopedWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
-  const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-    WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
-  return matches ? chronologicalWorkNeighbors(ot, work, scope) : {previous:null, next:null};
+function scopedWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: ChronologicalFeedScope) {
+  const {from, orderAt, where, args} = scope;
+  const anchor = ot.get<{feed_at:number}>(`SELECT ${orderAt} AS feed_at FROM ${from} WHERE l.id = ? AND ${where}`,
+    work.id, ...args);
+  return anchor ? chronologicalWorkNeighbors(ot, work.id, anchor.feed_at, scope) : {previous:null, next:null};
 }
 
 function publicPreviewNeighbors(ot: OtContext, work: WorkAnchor, input: Record<string, unknown>) {
   try {
     // Public links can carry chronological filters, never a viewer's private feed.
-    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator}, null);
+    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator, category:input.topic}, null);
     return scopedWorkNeighbors(ot, work, scope);
   } catch (error) {
     // An obsolete creator filter or invalid optional query cannot hide the work itself.
@@ -698,7 +714,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const title = text(b.title, "title", { min: 1, max: 80 });
     const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
     const category = b.category == null || b.category === "" ? null : String(b.category);
-    assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
+    assert(category === null || CATEGORIES.includes(category) || (b.kind === "work" && WORK_TOPICS.has(category)),
+      400, "invalid_request", "unknown category");
     let workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
     if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
@@ -807,7 +824,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   });
   const readFeed = (q: Record<string, unknown>, viewer: string | null) => {
     const scope = discoverScope(ot, q, viewer);
-    const {kind, sort, where, args, workSearch} = scope;
+    const {kind, sort, from, orderAt, where, args, workSearch} = scope;
     const cursor = one(q.cursor, "cursor");
     const pagination = one(q.pagination, "pagination");
     const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
@@ -815,27 +832,29 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
       return (viewer === null ? publicPopular : popular)(scope, viewer, limit, cursor);
     }
-    const keyset = pagination === "keyset" && (kind === "work" || viewer === null);
+    const keyset = (pagination === "keyset" && (kind === "work" || viewer === null)) || sort === "collected";
     assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
+    assert(sort !== "collected" || (q.before === undefined && (pagination === undefined || pagination === "keyset")),
+      400, "invalid_request", "collection sorting uses a scoped cursor");
     assert(cursor === undefined || (keyset && q.before === undefined), 400, "invalid_request", "invalid latest works pagination");
     const before = intParam(q.before, "before", 0, Number.MAX_SAFE_INTEGER);
     const boundary: unknown[] = before ? [before] : [];
-    let condition = before ? " AND l.updated_at < ?" : "";
+    let condition = before ? ` AND ${orderAt} < ?` : "";
     const scopeKey = keyset ? hashCode(JSON.stringify([viewer, where, args])).slice(0, 24) : "";
     if (cursor !== undefined) {
       const match = LATEST_WORK_CURSOR.exec(cursor);
       assert(match && Number.isSafeInteger(Number(match[1])), 400, "invalid_request", "invalid latest works cursor");
       assert(match[3] === scopeKey, 400, "invalid_request", "cursor belongs to another feed");
       boundary.push(Number(match[1]), match[2]);
-      condition = " AND (l.updated_at, l.id) < (?, ?)";
+      condition = ` AND (${orderAt}, l.id) < (?, ?)`;
     }
-    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE ${where}${condition} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
+    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS}, ${orderAt} AS feed_at FROM ${from}
+      WHERE ${where}${condition} ORDER BY ${orderAt} DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
     const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch));
-    const last = rows[limit - 1] as WorkAnchor | undefined;
-    const nextBefore = last?.updated_at ?? null;
+    const last = rows[limit - 1] as (WorkAnchor & {feed_at:number}) | undefined;
+    const nextBefore = last?.feed_at ?? null;
     return keyset
-      ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.updated_at}.${last.id}.${scopeKey}` : null}
+      ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.feed_at}.${last.id}.${scopeKey}` : null}
       : {items: cards, next_before: nextBefore};
   };
   app.get("/v1/ot/discover", async (req) => readFeed(query(req), ot.me(req).ownerId));
@@ -845,7 +864,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(directory === "works" || directory === "agents", 404, "listing_not_found", "no such public directory");
     const q = query(req);
     const works = directory === "works";
-    const allowed = works ? ["limit", "cursor", "q", "creator", "sort", "kind"] : ["limit", "cursor", "q", "creator", "category"];
+    const allowed = ["limit", "cursor", "q", "creator", "category", ...(works ? ["sort", "kind"] : [])];
     assert(Object.keys(q).every(key => allowed.includes(key)), 400, "invalid_request", "unknown public directory filter");
     const ranked = q.sort === "popular";
     const result = readFeed({

@@ -50,24 +50,28 @@ export function apply(ctx, config = {}) {
     const { bridge } = startBridge(rt, ctx)
     // Services for @openteamily/web features (chat, skills): native DS-Bot turns in
     // this user's own runtime, serialized per Bot while its part is active.
-    const chatTurn = async (key, text, requestId) => {
+    const chatTurn = async (key, text, requestId, {signal} = {}) => {
+      signal?.throwIfAborted()
       const botId = await bridge.setup()
       return bridge.exclusive(async () => {
+        signal?.throwIfAborted()
         await bridge.prepareModel()
-        await bridge.selectConversation(key)
+        signal?.throwIfAborted()
+        const sessionId = await bridge.selectConversation(key)
+        signal?.throwIfAborted()
         bridge.requireModel(botId)
-        return runTurn(rt, ctx, botId, text, requestId)
+        return runTurn(rt, ctx, botId, text, requestId, undefined, [], {sessionId, signal})
       }, botId)
     }
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
     const prepareMappedChat = async (botId, sessionId) => {
       await bridge.prepareModel()
-      await prepareNativeChat(rt, botId, sessionId)
+      return prepareNativeChat(rt, botId, sessionId)
     }
     const attachmentStore = () => ctx.get?.('attachments')
-    const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
+    const nativeTurn = (botId, savedSessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
       options.signal?.throwIfAborted()
-      await prepareMappedChat(botId, sessionId)
+      const sessionId = await prepareMappedChat(botId, savedSessionId)
       const parts = [], stored = []
       const uploads = ctx.get?.('fileUploads')
       for (const file of options.files || []) {

@@ -1,7 +1,8 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
-import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
+import { canManage } from '../shell/chat-utils.mjs';
+import { confirmSignupSession, csrfCookie, runtimeHoldNotice, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -86,6 +87,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
   const whoami = document.getElementById('whoami');
+  const create = document.getElementById('home-create');
+  const createDialog = document.getElementById('home-create-dialog');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
   const view = document.defaultView ?? globalThis;
@@ -290,7 +293,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         link.setAttribute('aria-disabled', 'true');
       }
     }
+    if (create) create.disabled = !currentUser || !/^[0-9a-f]{32}$/.test(selectedId) ||
+      !workspaces.some(workspace => workspace.id === selectedId);
   }
+
+  create?.addEventListener('click', () => {
+    const workspace = workspaces.find(item => item.id === selectedId);
+    if (!currentUser || !workspace || create.disabled || !createDialog || createDialog.open) return;
+    document.getElementById('home-create-workspace').textContent = workspace.name || workspaceSelect.selectedOptions[0]?.textContent || '当前工作区';
+    const manage = personal?.workspace?.id === selectedId ||
+      (workspace.role ? canManage(workspace.role) : workspace.owner_id === currentUser.id);
+    document.getElementById('home-create-agents').hidden = !manage;
+    for (const link of createDialog.querySelectorAll('[data-home-create-path]')) {
+      link.href = workspaceLink(link.dataset.homeCreatePath, selectedId);
+    }
+    createDialog.showModal();
+  });
 
   function clearOverview() {
     renderConversations([]);
@@ -363,6 +381,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     status.append(retry, back);
   }
 
+  function showPersonalRuntimeRetry(state) {
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    const notice = runtimeHoldNotice(state);
+    const message = notice ? notice.title + '。' + notice.detail
+      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
+        : '暂时无法打开你的工作区，请重试。';
+    show(document, notice ? '' : 'error', message);
+    const retry = element('button', 'public-agent-action', notice ? '重新检查' : '重试');
+    retry.type = 'button';
+    retry.id = 'runtime-startup-retry';
+    retry.addEventListener('click', () => void load());
+    document.getElementById('status')?.append(retry);
+  }
+
   async function initializePersonalAgent(resumePath = '/runtime-starting#home=1') {
     const result = await request('POST', '/v1/personal-agent').catch(() => null);
     const agent = result?.body?.personal_agent;
@@ -385,16 +418,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       view.location.replace(resumePath);
       return null;
     }
-    const message = provisioning?.state === 'capacity'
-      ? '当前运行容量已满，请稍后重试。'
-      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
-        : '暂时无法打开你的工作区，请重试。';
-    show(document, 'error', message);
-    const retry = element('button', 'public-agent-action', '重试');
-    retry.type = 'button';
-    retry.id = 'runtime-startup-retry';
-    retry.addEventListener('click', () => void load());
-    document.getElementById('status')?.append(retry);
+    showPersonalRuntimeRetry(state || provisioning?.readiness || provisioning?.state);
     return null;
   }
 
@@ -492,6 +516,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       document.body?.classList.add('home-signed-in', 'app-primary');
       loginPanel.hidden = true;
       const startup = session.body.home;
+      if (runtimeHoldNotice(startup?.runtime_state)) {
+        showPersonalRuntimeRetry(startup.runtime_state);
+        return;
+      }
       const ready = ['ready', 'unmanaged'].includes(startup?.runtime_state);
       personal = (ready && startup.personal_agent) || await initializePersonalAgent();
       if (!personal) return;

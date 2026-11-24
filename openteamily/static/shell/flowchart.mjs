@@ -212,31 +212,34 @@ function rankNodes(nodes, edges) {
   return {ranks, levels, incoming, outgoing};
 }
 
+function estimatedTextWidth(text) {
+  return [...text].reduce((size, char) => size + (char.codePointAt(0) > 0x2ff ? 13 : 8), 0);
+}
+
 function estimatedLineCount(label, width) {
   return label.split('\n').reduce((total, line) => {
     // Reserve room for wide CJK glyphs and for wrapping at word boundaries.
-    const glyphWidth = [...line].reduce((size, char) => size + (char.codePointAt(0) > 0x2ff ? 13 : 8), 0);
-    return total + Math.max(1, Math.ceil(glyphWidth / (width - 12)));
+    return total + Math.max(1, Math.ceil(estimatedTextWidth(line) / (width - 12)));
   }, 0);
 }
 
-function layoutFlowchart({direction, nodes, edges}) {
+function layoutFlowchart({direction, nodes, edges}, {nodeWidth = 144, gap = 78, inset = 16} = {}) {
   const feedback = findFeedbackEdges(nodes, edges);
   const ranked = rankNodes(nodes, edges.filter(edge => !feedback.has(edge)));
   if (!ranked) return null;
   const {ranks, levels, incoming, outgoing} = ranked;
   const horizontal = direction === 'LR' || direction === 'RL';
   const reverse = direction === 'RL' || direction === 'BT';
-  const nodeWidth = 144;
   const nodeHeight = Math.max(52, ...nodes.map(node => {
     const diamond = node.shape === 'diamond';
-    return estimatedLineCount(node.label, diamond ? 86 : 120) * 19 + (diamond ? 35 : 18);
+    return estimatedLineCount(node.label, nodeWidth - (diamond ? 58 : 24)) * 19 + (diamond ? 35 : 18);
   }));
   const nodeMain = horizontal ? nodeWidth : nodeHeight;
   const nodeCross = horizontal ? nodeHeight : nodeWidth;
-  const mainGap = horizontal ? 78 : 62;
+  const labelGap = nodeWidth < 144 ? Math.max(gap, ...edges.map(edge => Math.min(154, estimatedTextWidth(edge.label) + 16))) : gap;
+  const mainGap = horizontal ? labelGap : 62;
   const crossGap = 32;
-  const mainInset = feedback.size ? 48 : 16;
+  const mainInset = feedback.size ? 48 : inset;
   const flowLength = ranks.length * (nodeMain + mainGap) - mainGap + 2 * mainInset;
   const crossLength = Math.max(...ranks.map(rank => rank.length)) * (nodeCross + crossGap) - crossGap + 32;
   const detours = edges.filter(edge => feedback.has(edge) || levels.get(edge.to) - levels.get(edge.from) > 1);
@@ -325,6 +328,53 @@ function renderEdges(document, stage, edges) {
   }
 }
 
+function drawFlowchart(document, stage, layout) {
+  stage.style.width = `${layout.width}px`;
+  stage.style.height = `${layout.height}px`;
+  renderEdges(document, stage, layout.edges);
+  for (const node of layout.nodes) {
+    const [x, y] = node.center;
+    const tile = positioned(document, 'div', 'chat-flowchart-node', x - layout.nodeWidth / 2, y - layout.nodeHeight / 2);
+    tile.dataset.shape = node.shape;
+    tile.style.width = `${layout.nodeWidth}px`;
+    tile.style.height = `${layout.nodeHeight}px`;
+    const text = document.createElement('span');
+    text.textContent = node.label;
+    tile.append(text);
+    stage.append(tile);
+  }
+}
+
+const fitFlowchart = new WeakMap();
+
+export function observeDiagramSize(diagram, hint) {
+  const ResizeObserver = diagram.ownerDocument?.defaultView?.ResizeObserver;
+  if (!ResizeObserver) return;
+  const observer = new ResizeObserver(([entry]) => {
+    if (!diagram.isConnected) {
+      observer.disconnect();
+      return;
+    }
+    const width = entry.contentRect.width;
+    if (!width) return;
+    const scroller = diagram.closest('#message-scroller');
+    const followsLatest = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    const resized = fitFlowchart.get(diagram)?.(width);
+    const overflows = diagram.scrollWidth > diagram.clientWidth;
+    const wasOverflowing = !hint.hidden;
+    if (wasOverflowing !== overflows || resized) {
+      hint.hidden = !overflows;
+      if (followsLatest) scroller.scrollTop = scroller.scrollHeight;
+    }
+    diagram.tabIndex = overflows ? 0 : -1;
+    if (overflows) {
+      const english = diagram.ownerDocument.documentElement.lang === 'en';
+      diagram.setAttribute('aria-description', english ? 'Use the Left and Right Arrow keys to scroll.' : '可使用左右方向键横向滚动。');
+    } else diagram.removeAttribute('aria-description');
+  });
+  observer.observe(diagram);
+}
+
 export function renderFlowchart(document, source) {
   const graph = parseFlowchart(source);
   const layout = graph && layoutFlowchart(graph);
@@ -338,8 +388,6 @@ export function renderFlowchart(document, source) {
   frame.setAttribute('aria-label', english ? 'Flowchart' : '流程图');
   const stage = document.createElement('div');
   stage.className = 'chat-flowchart-stage';
-  stage.style.width = `${layout.width}px`;
-  stage.style.height = `${layout.height}px`;
   stage.setAttribute('role', 'img');
   const labels = new Map(graph.nodes.map(node => [node.id, node.label.replace(/\s+/g, ' ')]));
   const connected = new Set(graph.edges.flatMap(({from, to}) => [from, to]));
@@ -348,19 +396,29 @@ export function renderFlowchart(document, source) {
     `${labels.get(from)} ${directed ? arrowWords.directed : arrowWords.plain} ${labels.get(to)}${label ? `（${label}）` : ''}`);
   for (const [id, label] of labels) if (!connected.has(id)) summary.push(label);
   stage.setAttribute('aria-label', summary.join('；'));
-  renderEdges(document, stage, layout.edges);
-  for (const node of layout.nodes) {
-    const [x, y] = node.center;
-    const tile = positioned(document, 'div', 'chat-flowchart-node', x - layout.nodeWidth / 2, y - layout.nodeHeight / 2);
-    tile.dataset.shape = node.shape;
-    tile.style.width = `${layout.nodeWidth}px`;
-    tile.style.height = `${layout.nodeHeight}px`;
-    const text = document.createElement('span');
-    text.textContent = node.label;
-    tile.append(text);
-    stage.append(tile);
-  }
+  drawFlowchart(document, stage, layout);
   frame.append(stage);
+  if (graph.direction === 'LR' || graph.direction === 'RL') {
+    // Preserve the frame's natural width so it can expand after a compact render.
+    frame.style.width = `calc(${layout.width}px + 2 * var(--diagram-padding) + 2px)`;
+    let active = layout;
+    let compactLayouts;
+    fitFlowchart.set(frame, width => {
+      let best = layout;
+      if (width < layout.width) {
+        compactLayouts ??= [
+          layoutFlowchart(graph, {nodeWidth:104, gap:40, inset:8}),
+          layoutFlowchart(graph, {nodeWidth:92, gap:28, inset:4}),
+        ];
+        best = compactLayouts.find(candidate => candidate?.width <= width) ?? layout;
+      }
+      if (best === active) return false;
+      active = best;
+      stage.replaceChildren();
+      drawFlowchart(document, stage, best);
+      return true;
+    });
+  }
   return frame;
 }
 
@@ -368,4 +426,52 @@ export function renderMermaidDiagram(document, source) {
   if (typeof source !== 'string' || source.length > MAX_SOURCE) return null;
   const header = source.split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith('%%'));
   return /^sequenceDiagram$/i.test(header || '') ? renderSequenceDiagram(document, source) : renderFlowchart(document, source);
+}
+
+const diagramStyles = new WeakMap();
+
+function readyDiagramStyles(document) {
+  let ready = diagramStyles.get(document);
+  if (!ready) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = new URL('./diagram.css', import.meta.url).href;
+    ready = new Promise(resolve => {
+      link.onload = () => resolve(true);
+      link.onerror = () => {
+        diagramStyles.delete(document);
+        link.remove();
+        resolve(false);
+      };
+    });
+    diagramStyles.set(document, ready);
+    document.head.append(link);
+  }
+  return ready;
+}
+
+export async function replaceMermaidSource(document, container, code, text) {
+  if (!container.isConnected) return;
+  const diagram = renderMermaidDiagram(document, text);
+  if (!diagram || !await readyDiagramStyles(document) || !container.isConnected) return;
+  const english = document.documentElement?.lang === 'en';
+  const scroller = container.closest('#message-scroller');
+  const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  const source = document.createElement('details');
+  const summary = document.createElement('summary');
+  const hint = document.createElement('p');
+  hint.className = 'chat-diagram-scroll-hint';
+  hint.hidden = true;
+  hint.setAttribute('aria-hidden', 'true');
+  hint.textContent = english ? 'Scroll sideways to see the full diagram' : '横向滚动查看完整图表';
+  const focused = code.contains(document.activeElement) ? document.activeElement : null;
+  source.className = 'chat-diagram-source';
+  source.open = Boolean(focused);
+  summary.textContent = english ? 'Diagram source' : '图表源码';
+  source.append(summary, code);
+  container.replaceChildren(diagram, hint, source);
+  observeDiagramSize(diagram, hint);
+  focused?.focus({preventScroll:true});
+  if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+  return diagram;
 }

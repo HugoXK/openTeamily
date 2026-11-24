@@ -31,25 +31,86 @@ function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction, read
   return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
 
+test('signed task drafting uses the scoped native model and returns only editable authoring fields', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const first = Promise.withResolvers()
+  const queried = []
+  const feature = createAutomations({
+    db,
+    turn: () => assert.fail('drafting started an automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+    draftRuntime: () => ({
+      backgroundTextOnly(description, {system}) {
+        queried.push(description)
+        assert.match(system, /do not perform the task/)
+        return queried.length === 1 ? first.promise : 'incomplete JSON'
+      },
+    }),
+  })
+  const context = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const draft = (workspace, description, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/draft`, body:{description},
+  }, context(username))
+  assert.equal((await draft(W, '编写周报', '')).status, 403)
+  assert.equal((await draft('b'.repeat(32), '编写周报')).status, 404)
+  assert.equal((await draft(W, ' ')).status, 400)
+  assert.deepEqual(queried, [])
+  const accepted = draft(W, '  编写周报  ')
+  await flush()
+  assert.equal((await draft(W, '另一个草稿')).status, 429)
+  first.resolve(JSON.stringify({title:'整理周报', prompt:'写一份进展摘要。', schedule:{kind:'daily'}, enabled:true}))
+  assert.deepEqual(await accepted, {status:200,body:{
+    draft:{title:'整理周报',prompt:'写一份进展摘要。'}, workspace_id:W, viewer_username:'alice',
+  }})
+  assert.deepEqual(queried, ['编写周报'])
+  assert.equal((await draft(W, '无效的模型回复')).status, 502)
+  assert.equal((await draft(W, '允许重试')).status, 502)
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
+})
+
 test('meeting follow-up verifies exact source, coalesces concurrent saves, and retains its original action', async () => {
   const MEETING = 'b'.repeat(32)
   const reference = { meeting_id: MEETING, revision: 2, action_index: 0 }
   const snapshot = Promise.withResolvers()
+  const reads = []
+  let nextRead
   const { e, calls } = fixture(undefined, undefined, undefined, async (workspace, ref) => {
+    reads.push({workspace, ref})
     assert.deepEqual(ref, reference)
     if (workspace !== W) return {status: 404}
-    return snapshot.promise
+    const reply = nextRead ?? snapshot.promise
+    nextRead = undefined
+    return reply
   })
   const payload = {workspace_id: W, title: '跟进验收记录', participants: ['alice'], template_id: 'custom',
     schedule: {kind:'now', time_zone:'UTC'}, enabled: true, source_meeting: {...reference, text:'伪造的来源内容'},
     idempotency_key: 'save-meeting-followup-001'}
   const create = options => e['automations/create']({...payload, ...options})
-  const first = create()
-  const duplicate = create({title:'另一份草稿', idempotency_key:'save-meeting-followup-002'})
+  const lookup = (workspace, username) => e['automations/v1']({
+    method:'GET', path:`/v1/workspaces/${workspace}/automations?meeting=${MEETING}&revision=2&action=0`,
+  }, {request:new Request('https://example.test', {headers:{'x-ot-owner-username':username}})})
+  assert.equal((await lookup(W, '')).status, 403)
+  assert.equal(reads.length, 0)
+  const draft = lookup(W, 'alice')
   snapshot.resolve({status: 200, body: {
     meeting: {id: MEETING, workspace_id: W, revision: 2, title:'交付例会', transcript:'逐字稿不用于跟进'},
-    action: {text:'核对回执', owner:'Alice', done:false},
+    action: {text:'核对回执', owner:'Alice', done:false, extra:'不应回传的字段'},
   }})
+  assert.deepEqual(await draft, {status:200, body:{
+    automation:null, viewer_username:'alice',
+    meeting:{id:MEETING, workspace_id:W, revision:2, title:'交付例会'},
+    action:{index:0, text:'核对回执', owner:'Alice', done:false},
+  }})
+  assert.equal(reads.length, 1)
+  const staleSource = Promise.withResolvers()
+  nextRead = staleSource.promise
+  const loading = lookup(W, 'alice')
+  assert.equal(reads.length, 2)
+  const first = create()
+  const duplicate = create({title:'另一份草稿', idempotency_key:'save-meeting-followup-002'})
   const [saved, replay] = await Promise.all([first, duplicate])
   assert.equal(saved.status, 201)
   assert.equal(replay.status, 200)
@@ -57,10 +118,14 @@ test('meeting follow-up verifies exact source, coalesces concurrent saves, and r
   assert.equal(replay.automation.title, payload.title)
   assert.equal(saved.automation.enabled, false)
   assert.deepEqual(saved.automation.source_meeting, {...reference, title:'交付例会', text:'核对回执', owner:'Alice'})
+  staleSource.resolve({status:409})
+  assert.deepEqual(await loading, {status:200, body:{automation:saved.automation, viewer_username:'alice'}})
   assert.deepEqual(e['automations/list']({workspace_id:W}).items, [saved.automation])
   const item = e['automations/update']({workspace_id:W, id:saved.automation.id, revision:1, changes:{title:'处理验收回执'}}).automation
-  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:W, ...reference}), {automation:item})
-  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:'c'.repeat(32), ...reference}), {automation:null})
+  const beforeExisting = reads.length
+  assert.deepEqual(await lookup(W, 'alice'), {status:200, body:{automation:item, viewer_username:'alice'}})
+  assert.equal(reads.length, beforeExisting)
+  assert.equal((await lookup('c'.repeat(32), 'alice')).status, 404)
   await assert.rejects(create({workspace_id:'c'.repeat(32)}), {status:404, code:'automations/meeting_source_unavailable'})
   assert.equal(calls.length, 0)
 })
@@ -149,6 +214,44 @@ test('a scoped memory action prepares one durable follow-up for its reviewed rev
   assert.deepEqual(calls.map(call => call.prompt), [`[OpenTeamily 自动化 · ${saved.title}]\n${saved.prompt}`])
   assert.deepEqual(e['automations/run']({workspace_id: W, id: saved.id, run_id: manual.body.run.id}).run.result,
     {text: 'DS-Bot did it', model: 'm'})
+})
+
+test('the signed recurring preview uses scheduler dates and clock changes without saving or running', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const epoch = text => Date.parse(text) / 1000
+  let current = epoch('2026-03-07T05:00:00Z')
+  const feature = createAutomations({
+    db, clock:() => current,
+    turn:() => assert.fail('schedule preview ran the automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+  })
+  const scope = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const preview = (schedule, workspace = W, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/schedule-preview`, body:{schedule},
+  }, scope(username))
+  const schedule = {kind:'daily', time:'02:30', time_zone:'America/New_York'}
+  assert.equal((await preview(schedule, W, '')).status, 403)
+  assert.equal((await preview(schedule, 'b'.repeat(32))).status, 404)
+  assert.equal((await preview({...schedule, time_zone:'not-a-zone'})).status, 400)
+  const spring = await preview(schedule)
+  assert.deepEqual(spring, {status:200, body:{time_zone:schedule.time_zone, workspace_id:W, viewer_username:'alice', slots:[
+    {at:epoch('2026-03-07T07:30:00Z'), date:'2026-03-07', weekday:6, time:'02:30'},
+    {at:epoch('2026-03-08T07:30:00Z'), date:'2026-03-08', weekday:7, time:'03:30', clock_change:'forward'},
+    {at:epoch('2026-03-09T06:30:00Z'), date:'2026-03-09', weekday:1, time:'02:30'},
+  ]}})
+  current = epoch('2026-10-31T23:00:00Z')
+  const autumn = (await preview({...schedule, time:'01:30'})).body.slots
+  assert.deepEqual(autumn.map(slot => slot.at), [
+    epoch('2026-11-01T05:30:00Z'), epoch('2026-11-02T06:30:00Z'), epoch('2026-11-03T06:30:00Z'),
+  ])
+  assert.equal(autumn[0].clock_change, 'first')
+  current = epoch('2026-02-01T05:00:00Z')
+  const months = (await preview({...schedule,kind:'monthly',day:31})).body.slots
+  assert.deepEqual(months.map(slot=>slot.date), ['2026-03-31','2026-05-31','2026-07-31'])
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
 })
 
 test('next recurring slot follows local weekdays, month lengths and DST', () => {
@@ -690,7 +793,7 @@ test('manual execution queues only the named automation and leaves its scheduled
   assert.equal(e['automations/runs']({workspace_id: W, id: target.id}).items.length, 2)
 })
 
-test('retry is idempotent and a running turn cannot be cancelled or duplicated', async () => {
+test('retry is idempotent and a running turn cannot be duplicated', async () => {
   let fail = true
   let release
   const { e, feature } = fixture(async () => {
@@ -726,7 +829,6 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   const running = {workspace_id: W, id: automation.id, run_id: retried.run.id}
   assert.equal(e['automations/run'](running).run.status, 'running')
   assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
-  assert.throws(() => e['automations/cancel'](running), error => error.status === 409)
   release()
   await Promise.all(feature.inflight.values())
   assert.equal(e['automations/run'](running).run.status, 'succeeded')
@@ -753,6 +855,53 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   assert.equal((await read(runs+'/'+retried.run.id)).body.run.retry_of,undefined)
 })
 
+test('stopping a running automation is exact and keeps the native queue held until its turn ends', async () => {
+  const stopObserved = Promise.withResolvers()
+  const finishStoppedTurn = Promise.withResolvers()
+  const calls = []
+  const {e,feature} = fixture(async ({requestId,signal}) => {
+    calls.push(requestId)
+    if (calls.length !== 1) return {text:'Next turn completed'}
+    signal.addEventListener('abort', stopObserved.resolve, {once:true})
+    await finishStoppedTurn.promise
+    return {text:'A late result from the stopped turn'}
+  })
+  const create = (title, key) => e['automations/create']({workspace_id:W, title, template_id:'custom', prompt:'do it',
+    schedule:{kind:'now',time_zone:'UTC'}, participants:['alice'], enabled:false, idempotency_key:key.repeat(16)}).automation
+  const first = create('Stop this turn','a'), second = create('Run afterwards','b')
+  const start = (automation, key) => e['automations/runNow']({workspace_id:W, id:automation.id, idempotency_key:key.repeat(16)}).run
+  const running = start(first,'c'), queued = start(second,'d')
+  const path = `/v1/workspaces/${W}/automations/${first.id}/runs/${running.id}`
+  const work = feature.inflight.get(running.id)
+  const cancel = path => e['automations/v1']({method:'POST',path:path+'/cancel',body:{}})
+  await flush()
+  try {
+    assert.deepEqual(calls,[`ot-automation:${running.id}`])
+    assert.equal(queued.status,'queued')
+    assert.equal((await cancel(path.replace(W,'f'.repeat(32)))).status,404)
+    assert.equal((await cancel(path.replace(first.id,second.id))).status,404)
+    const accepted = await cancel(path)
+    assert.equal(accepted.status,202)
+    assert.equal(accepted.body.run.status,'running')
+    assert.equal(accepted.body.run.stop_requested,true)
+    await stopObserved.promise
+    assert.deepEqual(await cancel(path),accepted)
+    assert.equal(e['automations/runs']({workspace_id:W,id:first.id,status:'active'}).active_run.stop_requested,true)
+    assert.equal(e['automations/run']({workspace_id:W,id:second.id,run_id:queued.id}).run.status,'queued')
+  } finally {
+    finishStoppedTurn.resolve()
+  }
+  await work
+  await Promise.all(feature.inflight.values())
+  const stopped = e['automations/run']({workspace_id:W,id:first.id,run_id:running.id}).run
+  assert.equal(stopped.status,'cancelled')
+  assert.equal(stopped.stop_requested,undefined)
+  assert.deepEqual(stopped.result,{cancelled:true})
+  assert.equal((await cancel(path)).body.run.status,'cancelled')
+  assert.equal(e['automations/run']({workspace_id:W,id:second.id,run_id:queued.id}).run.status,'succeeded')
+  assert.deepEqual(calls,[`ot-automation:${running.id}`,`ot-automation:${queued.id}`])
+})
+
 test('startup interrupts claimed turns and resumes only previously unclaimed runs', async t => {
   const {e, feature, dbPath, clock} = fixture()
   const draft = {workspace_id: W, template_id: 'custom', prompt: 'Respond once', participants: ['alice'],
@@ -760,13 +909,17 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   const {automation: first} = e['automations/create']({...draft, title: 'Interrupted', idempotency_key: 'i'.repeat(16)})
   const {automation: second} = e['automations/create']({...draft, title: 'Waiting', idempotency_key: 'w'.repeat(16)})
   const {automation: third} = e['automations/create']({...draft, title: 'Cancelled', idempotency_key: 'c'.repeat(16)})
+  const {automation: fourth} = e['automations/create']({...draft, title: 'Stop already requested', idempotency_key: 's'.repeat(16)})
   const claimedId = 'c'.repeat(32), queuedId = 'd'.repeat(32), cancelledId = 'e'.repeat(32)
+  const stoppingId = 'f'.repeat(32)
   const insert = feature.db.prepare(`INSERT INTO ot_automation_runs
     (id,automation_id,workspace_id,due_at,started,status,dispatch,claimed_at)
     VALUES(?,?,?,0,?,'queued','{"backend":"ds-bot"}',?)`)
   insert.run(claimedId, first.id, W, clock.now, clock.now)
   insert.run(queuedId, second.id, W, clock.now, null)
   insert.run(cancelledId, third.id, W, clock.now, null)
+  insert.run(stoppingId, fourth.id, W, clock.now, clock.now)
+  feature.db.prepare('UPDATE ot_automation_runs SET stop_requested_at=? WHERE id=?').run(clock.now,stoppingId)
   feature.db.close()
 
   clock.now += 20
@@ -783,6 +936,7 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   assert.equal(queued.id, queuedId)
   assert.equal(queued.automation_revision,undefined)
   assert.equal(restored.ops.cancel({workspace_id: W, id: third.id, run_id: cancelledId}).run.status, 'cancelled')
+  assert.equal(restored.ops.run({workspace_id: W, id: fourth.id, run_id: stoppingId}).run.status, 'cancelled')
   restored.start()
   restored.start()
   await Promise.all(restored.inflight.values())
@@ -1023,7 +1177,8 @@ test('older pending native rows have unknown delivery and become interrupted aft
   feature.db.exec(`DROP TRIGGER ot_automation_notice_on_finish; DROP INDEX ot_automation_unclaimed_work;
     ALTER TABLE ot_automation_runs DROP COLUMN claimed_at;
     ALTER TABLE ot_automation_runs DROP COLUMN automation_revision;
-    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt`)
+    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt;
+    ALTER TABLE ot_automation_runs DROP COLUMN stop_requested_at`)
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()
