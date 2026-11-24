@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {renderRunMarkdown} from '../openteamily/static/automations/result-markdown.mjs';
+import {upcomingAutomations} from '../openteamily/static/automations/app.mjs';
 import { automationEditionDraft, automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -28,6 +30,18 @@ test('listQuery encodes tab and search', () => {
   assert.equal(listQuery('work', '  brief '), '?category=work&q=brief');
   assert.equal(tabCategory('life'), 'life');
   assert.equal(tabCategory('other'), 'mine');
+});
+
+test('upcoming automation catalogue uses native slots and excludes inactive and foreign rows', () => {
+  const first = {title:'First', workspace_id:'workspace', enabled:true, schedule_status:{state:'scheduled', at:10}};
+  const later = {...first, title:'Later', schedule_status:{state:'scheduled', at:20}};
+  const due = {...first, title:'Due now', schedule_status:{state:'due'}};
+  const items = [later, first, due, {...first, enabled:false}, {...first, workspace_id:'other'},
+    {...first, schedule_status:{state:'once_triggered'}}, {...first, schedule_status:{state:'once_cancelled'}},
+    {...first, schedule_status:{state:'scheduled', at:0}}, {...first, schedule_status:{state:'paused', at:1}},
+    {...first, schedule_status:null}];
+  assert.deepEqual(upcomingAutomations(items, 'workspace'), [due, first, later]);
+  assert.equal(items[0], later);
 });
 
 test('an onboarding link must name exactly one saved automation and its workspace', () => {
@@ -111,6 +125,7 @@ test('runStatusLabel and runResultText describe durable run rows', () => {
   assert.equal(runStatusLabel({status: 'queued', error_code: 'no_agent'}), '等待已连接的代理');
   assert.equal(runStatusLabel({status: 'queued'}), '已排队');
   assert.equal(runStatusLabel({status: 'running'}), '运行中');
+  assert.equal(runStatusLabel({status: 'running', stop_requested:true}), '正在停止');
   assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
   assert.equal(runStatusLabel({status: 'failed', error_code: 'interrupted'}), '运行中断');
   assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
@@ -183,6 +198,10 @@ class FakeNode {
     return this._elements;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  get childNodes() { return this.children; }
+  get firstChild() { return this.children[0] || null; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
   appendChild(child) {
     this.children.push(child);
     child.parentNode = this;
@@ -214,6 +233,7 @@ function fakeDocument() {
       return elements.get(id);
     },
     createElement(tag) { return new FakeNode(tag); },
+    createTextNode(text) { return Object.assign(new FakeNode('#text'), {textContent:text}); },
     querySelectorAll() { return []; },
     querySelector() { return new FakeNode(); },
   };
@@ -282,6 +302,33 @@ const projectedOwner = 'b'.repeat(32);
 const projectedAutomation = 'c'.repeat(32);
 const projectedPath = '/v1/workspaces?scope=personal&include=automations';
 const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
+
+test('a catalogue history entry restores its search only for the signed-in account and selected workspace', async () => {
+  const privateQuery = '本人工作区搜索';
+  const other = 'e'.repeat(32);
+  for (const [viewer, workspace, expected] of [
+    [projectedOwner, projectedWorkspace, privateQuery],
+    ['d'.repeat(32), projectedWorkspace, ''],
+    [projectedOwner, other, ''],
+  ]) {
+    const {doc, elements} = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {
+      location: {pathname:'/automations', search:'', hash:'#workspace=' + workspace},
+      history: {state:{automationCatalogue:{owner:projectedOwner, workspace:projectedWorkspace,
+        category:'mine', query:privateQuery, automation:projectedAutomation}}},
+    };
+    const queries = [];
+    await mount(doc, {fetcher:async path => {
+      if (path === '/v1/auth/session') return respond({user:{id:viewer, username:'alice'}});
+      if (path.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace, name:'工作区'}]});
+      queries.push(path);
+      return respond({items:[]});
+    }});
+    assert.equal(elements.get('search').value, expected);
+    assert.deepEqual(queries, [`/v1/workspaces/${workspace}/automations${listQuery('mine', expected)}`]);
+  }
+});
 
 test('a new automation restores the same account and workspace draft without a write', async () => {
   const storage = new Map();
@@ -521,7 +568,11 @@ test('a native result link reads the item early and opens only once its workspac
   }});
   try {
     await flush();
-    assert.deepEqual(calls, [['GET','/v1/auth/session']]);
+    assert.deepEqual(calls, [
+      ['GET','/v1/auth/session'],
+      ['GET','/v1/workspaces?limit=100'],
+      ['GET','/v1/workspaces?scope=personal'],
+    ]);
     session.resolve(respond({user:{id:projectedOwner, username:'alice'}}));
     await flush();
     assert.ok(calls.some(([,path]) => path === exactPath));
@@ -790,6 +841,80 @@ for (const [outcome, committed, receiptWorkspace, expectedStatus] of [
   });
 }
 
+for (const outcome of ['confirmed', 'different schedule', 'wrong workspace']) {
+  test(`a lost settings acknowledgment handles ${outcome} and keeps newer typing`, async t => {
+    const {doc, elements} = fakeDocument();
+    const workspace = 'a'.repeat(32), automation = 'b'.repeat(32), owner = 'c'.repeat(32);
+    const path = `/v1/workspaces/${workspace}/automations/${automation}`;
+    const scheduled = {kind:'weekly', weekday:2, time:'09:00', time_zone:'Asia/Shanghai'};
+    const initial = {id:automation, workspace_id:workspace, title:'发布检查', revision:4,
+      template_id:'custom', prompt:'保存前', schedule:scheduled, participants:[{username:'alice'}], agents:[],
+      intent:'', scope:'once', enabled:false, notification_policy:'scheduled'};
+    const response = Promise.withResolvers();
+    const stored = new Map();
+    const requests = [];
+    let latest = initial;
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {location:{search:`?workspace=${workspace}&automation=${automation}`,pathname:'/automations'},
+      sessionStorage:{getItem:key => stored.get(key), setItem:(key,value) => stored.set(key,value),
+        removeItem:key => stored.delete(key)}};
+    const originalFormData = globalThis.FormData;
+    globalThis.FormData = class {
+      constructor(form) { this.elements = form.elements; }
+      get(name) { return this.elements[name]?.value || ''; }
+      has(name) { return Boolean(this.elements[name]?.checked); }
+    };
+    t.after(() => { globalThis.FormData = originalFormData; });
+    await mount(doc, {fetcher:async (target, options = {}) => {
+      if (target === '/v1/auth/session') return respond({user:{id:owner,username:'alice'}});
+      if (target.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace,name:'空间'}]});
+      if (target.startsWith(path + '/runs?')) return respond({items:[]});
+      if (target === path && options.method === 'GET') {
+        requests.push('GET');
+        return respond({automation:latest});
+      }
+      if (target === path && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        requests.push(body.revision);
+        const {participants, ...settings} = body.changes;
+        latest = {...initial, ...settings, revision:body.revision+1, participants:participants.map(username => ({username}))};
+        if (requests.length === 2) {
+          if (outcome === 'wrong workspace') latest.workspace_id = 'd'.repeat(32);
+          if (outcome === 'different schedule') latest.schedule = {...scheduled, weekday:3};
+          await response.promise;
+          throw new TypeError('response lost after commit');
+        }
+        return respond({automation:latest});
+      }
+      assert.fail('Unexpected request '+target);
+    }});
+    const form = elements.get('editor-form');
+    const submit = () => form.handlers.submit[0]({preventDefault() {}});
+    form.elements.prompt.value = '提交的指令';
+    form.handlers.input[0]();
+    const saving = submit();
+    form.elements.prompt.value = '等待期间输入的指令';
+    form.handlers.input[0]();
+    response.resolve();
+    await saving;
+    assert.deepEqual(requests, ['GET', 4, 'GET']);
+    assert.equal(form.elements.prompt.value, '等待期间输入的指令');
+    if (outcome === 'confirmed') {
+      assert.equal(elements.get('status').textContent, '已保存提交的设置。仍有未保存的修改。');
+      const draft = JSON.parse([...stored.values()][0]);
+      assert.equal(draft.revision, 5);
+      assert.deepEqual(draft.values,{prompt:'等待期间输入的指令'});
+      await submit();
+      assert.deepEqual(requests, ['GET', 4, 'GET', 5]);
+      assert.equal(latest.prompt, '等待期间输入的指令');
+      assert.equal(stored.size,0);
+    } else {
+      assert.equal(elements.get('status').textContent, '暂时无法确认保存结果。草稿已保留，请重试。');
+      assert.equal(JSON.parse([...stored.values()][0]).revision,4);
+    }
+  });
+}
+
 test('exact failure and retry links are scoped and render without waiting for filtered history', async () => {
   const {doc, elements} = fakeDocument();
   const workspace = 'a'.repeat(32);
@@ -829,7 +954,7 @@ const SOURCE_PATH = `/v1/workspaces/${SOURCE_WORKSPACE}/meetings/${SOURCE_MEETIN
 const SOURCE_LOOKUP = `/v1/workspaces/${SOURCE_WORKSPACE}/automations?meeting=${SOURCE_MEETING}&revision=4&action=1`;
 const SOURCE = {
   meeting: {id: SOURCE_MEETING, workspace_id: SOURCE_WORKSPACE, title: '交付例会', revision: 4, transcript: '会议私有全文'},
-  action: {text: '列出待核对的交付项', owner: 'Bob', done: false},
+  action: {index: 1, text: '列出待核对的交付项', owner: 'Bob', done: false},
   viewer_username: 'alice',
 };
 const respond = (body, status = 200) => ({status, json: async () => body});
@@ -912,7 +1037,7 @@ test('a different viewer or changed memory action never populates the editor', a
   }
 });
 
-function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, saveStatus = 201,
+function mountFollowUp(t, {readFollowup = () => respond(SOURCE), saveStatus = 201,
   workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
   const {doc, elements} = fakeDocument();
   const view = {location: {search: SOURCE_LINK, pathname: '/automations'}, history: {
@@ -930,14 +1055,13 @@ function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, sa
   };
   t.after(() => { globalThis.document = saved; globalThis.FormData = savedFormData; });
   const mounted = mount(doc, {fetcher: async (target, options) => {
-    const {method, body, headers} = options;
-    calls.push({target, method, body: body && JSON.parse(body), headers});
+    const {method, body, headers, signal} = options;
+    calls.push({target, method, body: body && JSON.parse(body), headers, signal});
     if (target === '/v1/auth/session') return respond({user: {username: 'alice'}});
     if (target === '/v1/workspaces?scope=personal') return respond({items: workspaces});
     if (target === '/v1/workspaces?limit=100') return respond({items: workspaces});
     if (target === '/v1/automation-templates') return respond({items: []});
-    if (target === SOURCE_PATH) return readSource();
-    if (target === SOURCE_LOOKUP) return respond({automation: lookup, viewer_username: 'alice'});
+    if (target === SOURCE_LOOKUP) return readFollowup();
     if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items: []});
     if (target === `/v1/workspaces/${SOURCE_WORKSPACE}/automations` && method === 'POST') {
       if (saveStatus !== 201) return respond({error: {code: 'meeting_source_unavailable'}}, saveStatus);
@@ -957,7 +1081,7 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   assert.equal(elements.get('meeting-action-source-title').textContent, '交付例会');
   assert.equal(elements.get('meeting-action-source-text').textContent, '列出待核对的交付项');
   assert.equal(elements.get('meeting-action-source-owner').textContent, '原负责人：Bob');
-  assert.equal(elements.get('meeting-action-source-link').href, `/meetings#workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}`);
+  assert.equal(elements.get('meeting-action-source-link').href, '/meetings#' + SOURCE_LINK.slice(1));
   assert.equal(form.elements.title.value, '会议跟进：交付例会 · 行动项 2');
   assert.match(form.elements.prompt.value, /列出待核对的交付项/);
   assert.doesNotMatch(form.elements.prompt.value, /会议私有全文/);
@@ -969,7 +1093,10 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   form.elements.enabled.checked = true;
   await form.handlers.submit[0]({preventDefault() {}});
   const writes = calls.filter(({method}) => method === 'POST');
-  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 1);
+  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 0);
+  const reads = calls.filter(({target}) => target === SOURCE_LOOKUP);
+  assert.equal(reads.length, 1);
+  assert.ok(reads[0].signal instanceof AbortSignal);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].target, `/v1/workspaces/${SOURCE_WORKSPACE}/automations`);
   assert.equal(writes[0].body.enabled, false);
@@ -995,7 +1122,9 @@ test('meeting follow-up blocks a completed action or changed revision before sav
 
 test('an older exact meeting-action link resumes the saved follow-up even after the meeting changes', async t => {
   const lookup = {id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 3, enabled: true, title: '跟进原行动项', source_meeting: SAVED_SOURCE};
-  const {mounted, elements, calls, view} = mountFollowUp(t, {lookup, readSource: () => respond({}, 409)});
+  const {mounted, elements, calls, view} = mountFollowUp(t, {
+    readFollowup: () => respond({automation:lookup, viewer_username:'alice'}),
+  });
   await mounted;
   assert.equal(elements.get('editor-form').elements.title.value, '跟进原行动项');
   assert.equal(elements.get('editor-form').elements.enabled.checked, true);
@@ -1012,24 +1141,31 @@ test('meeting follow-up never asks for a meeting from an unverified workspace', 
   await mounted;
   assert.equal(elements.get('editor-form').hidden, true);
   assert.match(elements.get('status').textContent, /会议行动项链接已不可用/);
-  assert.equal(calls.some(({target}) => target.includes('/meetings/')), false);
+  assert.equal(calls.some(({target}) => [SOURCE_PATH, SOURCE_LOOKUP].includes(target)), false);
 });
 
-test('a meeting response for a different viewer cannot populate the editor', async t => {
-  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => respond({...SOURCE, viewer_username: 'other'})});
-  await mounted;
-  assert.equal(elements.get('editor-form').hidden, true);
-  assert.equal(elements.get('editor-form').elements.prompt.value, '');
-  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+test('a response for a different viewer or action cannot populate the meeting follow-up editor', async t => {
+  for (const [field, reply] of [
+    ['viewer', {...SOURCE, viewer_username:'other'}],
+    ['action', {...SOURCE, action:{...SOURCE.action, index:0}}],
+  ]) {
+    await t.test(field, async sub => {
+      const {mounted, elements, calls} = mountFollowUp(sub, {readFollowup: () => respond(reply)});
+      await mounted;
+      assert.equal(elements.get('editor-form').hidden, true);
+      assert.equal(elements.get('editor-form').elements.prompt.value, '');
+      assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+    });
+  }
 });
 
 test('switching workspaces drops a meeting follow-up still loading', async t => {
   const source = Promise.withResolvers();
   const different = 'd'.repeat(32);
-  const {mounted, view, elements, calls} = mountFollowUp(t, {readSource: () => source.promise,
+  const {mounted, view, elements, calls} = mountFollowUp(t, {readFollowup: () => source.promise,
     workspaces: [{id: SOURCE_WORKSPACE, name: '个人空间'}, {id: different, name: '另一工作区'}]});
   await flush();
-  assert.ok(calls.some(call => call.target === SOURCE_PATH));
+  assert.ok(calls.some(call => call.target === SOURCE_LOOKUP));
   const workspace = elements.get('workspace');
   workspace.value = different;
   workspace.handlers.change[0]();
@@ -1801,6 +1937,22 @@ test('a succeeded run expands to its summary and the model that wrote it', () =>
     {label: '摘要', value: '今天的简报'},
     {label: '模型', value: 'deepseek-v4'},
   ]);
+  assert.deepEqual(runDetailFields(succeeded, {includeResult:false}), [{label:'模型', value:'deepseek-v4'}]);
+});
+
+test('an automation result renders its saved Markdown into headings, tables and fenced code', () => {
+  const {doc} = fakeDocument();
+  const target = doc.createElement('div');
+  const fence = String.fromCharCode(96).repeat(3);
+  const source = ['# 本次结果', '', '| 事项 | 状态 |', '| --- | --- |', '| 核对 | 完成 |', '',
+    fence+'text', '保持内容', fence].join('\n');
+  renderRunMarkdown(doc, target, source);
+  const [heading, table, code] = target.children;
+  assert.equal(heading.tagName, 'H4');
+  assert.equal(heading.children[0].textContent, '本次结果');
+  assert.equal(table.children[0].tagName, 'TABLE');
+  assert.equal(code.children[0].textContent, '保持内容');
+  assert.equal(target.dataset.rendered, 'true');
 });
 
 test('recorded trigger and execution location distinguish manual, scheduled and retried runs', () => {

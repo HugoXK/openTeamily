@@ -282,8 +282,26 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
   assert.match(exported.text, /^# 周会/)
   assert.match(exported.text, /- \[x\] 订会议室（bob）/)
 
-  assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
+  const remove = base(meeting.id) + '/remove'
+  assert.equal((await call('POST', remove, {})).status, 400)
+  assert.equal((await call('POST', remove, {revision:1})).status, 409)
+  assert.equal((await call('GET', base(meeting.id))).body.meeting.revision, 2)
+  const removed = await call('POST', remove, {revision:2})
+  assert.equal(removed.status, 200)
+  assert.equal(removed.body.removed.revision, 2)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('concurrent edits cannot share a meeting revision', async () => {
+  const bot = await boot()
+  const {body:{meeting}} = await bot.call('meetings', 'POST', base(), body, key())
+  const path = base(meeting.id)
+  const edits = await Promise.all(['first edit', 'second edit'].map(summary =>
+    bot.call('meetings', 'POST', path, {revision:meeting.revision, changes:{summary}})))
+  assert.deepEqual(edits.map(edit => edit.status).sort(), [200, 409])
+  const saved = edits.find(edit => edit.status === 200).body.meeting
+  assert.equal(saved.revision, meeting.revision + 1)
+  assert.deepEqual((await bot.call('meetings', 'GET', path)).body.meeting, saved)
 })
 
 test('meeting creation replays an omitted start time across clock changes', async t => {
@@ -614,7 +632,7 @@ test('meeting shares publish only the saved summary and action items through the
   assert.match(calls.at(-1).path,new RegExp('source_id='+meeting.id))
   assert.equal((await call('GET','shared?limit=100')).body.items[0].id,receiptId)
   assert.equal((await call('GET',`shared/${receiptId}`)).body.meeting.summary,body.summary)
-  assert.equal((await call('POST',`${meeting.id}/remove`,{})).status,200)
+  assert.equal((await call('POST',`${meeting.id}/remove`,{revision:meeting.revision})).status,200)
   assert.equal((await call('GET','shared?sent=1')).body.items[0].id,receiptId)
   assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
   assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})
@@ -628,19 +646,27 @@ test('received meeting actions are copied once into personal memory and every re
   const meeting = {id:shareId, title:'周会', revision:3, shared:true, action_items:[
     {text,owner:'Alice',due_date:'2032-02-29',done:false}, {text:'已确认的事项',done:true},
   ]}
+  const assigned = {share_id:shareId, revision:3, action_index:0, text, owner:'Alice', meeting_title:meeting.title}
+  const another = {...assigned, share_id:'d'.repeat(32)}
   let received = true, revoked = false
   setSharedBotSocial({async request(method, path) {
     assert.equal(method, 'GET')
+    if (path.includes('/meeting-shares?view=actions')) return {items:revoked ? [another] : [assigned,another],cursor:null}
     assert.equal(path, `/v1/ot/workspaces/${team}/meeting-shares/${shareId}`)
     if (revoked) throw Object.assign(new Error('Meeting share not found'), {status:404,code:'social/not_found'})
     return {meeting, received}
   }})
   t.after(() => setSharedBotSocial(undefined))
   const receipt = base('shared/' + shareId, team)
+  const list = base('shared?view=actions&limit=2', team)
+  const gateway = new Request('http://fixture', {headers:{'x-ot-owner-username':'Alice'}})
+  const loadActions = () => bot.features.table['meetings/v1']({method:'GET',path:list}, {request:gateway})
   const copy = (input) => bot.call('meetings', 'POST', receipt + '/action', input)
   const actions = '/v1/workspaces/' + WS + '/memory/actions'
   const item = {revision:3,index:0}
   assert.equal((await bot.endpoint('memory/saveSharedMeetingAction', {})).ok,false)
+  assert.equal((await bot.endpoint('memory/sharedMeetingActions', {})).ok,false)
+  assert.deepEqual((await loadActions()).body.items,[assigned,another])
   assert.equal((await copy({...item,workspace_id:team})).status,400)
   assert.equal((await copy({...item,revision:2})).status,409)
   assert.equal((await copy({...item,index:1})).status,409)
@@ -653,19 +679,27 @@ test('received meeting actions are copied once into personal memory and every re
   const action = copied[0].body.action
   assert.deepEqual(copied[1].body.action,action)
   assert.equal(action.workspace_id,WS)
+  assert.equal(action.status,'open')
   const privatePath = actions + '/' + action.id
   const saved = (await bot.call('memory','GET',privatePath)).body.action
   assert.match(saved.notes,/在周五前确认议程/)
   assert.equal(saved.due_at,Date.parse('2032-02-29') / 1000)
   assert.deepEqual(saved.source,{kind:'shared_meeting',workspace_id:team,share_id:shareId,revision:3,action_index:0})
-  await bot.call('memory','POST',privatePath,{revision:1,changes:{status:'done',notes:'已自行处理'}})
-  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...action}])
-  assert.equal((await copy(item)).status,200)
+  const updated = (await bot.call('memory','POST',privatePath,
+    {revision:action.revision,changes:{status:'done',notes:'已自行处理'}})).body.action
+  const completed = {...action,status:'done',revision:updated.revision}
+  assert.ok(completed.revision > action.revision)
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...completed}])
+  assert.deepEqual((await loadActions()).body.items,[{...assigned,saved_action:completed},another])
+  const replay = await copy(item)
+  assert.equal(replay.status,200)
+  assert.deepEqual(replay.body.action,completed)
   assert.equal((await bot.call('memory','GET',privatePath)).body.action.notes,'已自行处理')
   assert.equal((await bot.call('memory','GET',actions.replace(WS,team))).body.items.length,0)
   assert.deepEqual((await bot.call('meetings','GET',receipt)).body.meeting,meeting)
   revoked = true
   assert.equal((await copy(item)).status,404)
+  assert.deepEqual((await loadActions()).body.items,[another])
   assert.equal((await bot.call('memory','GET',actions)).body.items.length,1)
 })
 

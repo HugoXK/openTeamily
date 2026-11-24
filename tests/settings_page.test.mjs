@@ -448,9 +448,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.equal((html.match(/class="connector-row"/g) || []).length, 39);
   // Before the signed-in Composio state loads, every row is disabled: 31 rows
   // map to a Composio toolkit and say 未配置 Composio, 8 have no toolkit (未接通).
-  assert.equal((html.match(/<span class="connector-status" data-state="unconfigured">未配置 Composio<\/span>/g) || []).length, 31);
+  assert.equal((html.match(/<span class="connector-status" data-state="loading">正在读取…<\/span>/g) || []).length, 31);
   assert.equal((html.match(/<span class="connector-status" data-state="unavailable">未接通<\/span>/g) || []).length, 8);
-  assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
+  assert.equal((html.match(/data-composio-action="connect" disabled title="正在读取连接配置。">\+ 连接<\/button>/g) || []).length, 31);
   assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
   assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
   assert.match(html, /id="connectors-key-jump" href="#composio-key-input" hidden/);
@@ -701,6 +701,50 @@ async function mountSettingsPage({secrets} = {}) {
     status: doc.getElementById('status'),
   };
 }
+
+test('failed model status can be rechecked once without reloading settings', async () => {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const retry = doc.getElementById('retry-model-api');
+  const readCount = {models: 0, settings: 0};
+  let finishRetry;
+  const fetcher = (path, options) => {
+    if (path === '/v1/model-api') {
+      readCount.models += 1;
+      if (readCount.models === 1) return settingsJson(503, {});
+      return new Promise(resolve => { finishRetry = resolve; });
+    }
+    if (path === '/v1/settings') readCount.settings += 1;
+    return api.fetcher(path, options);
+  };
+  stubFormData(doc.getElementById('settings-form'));
+  const restoreListeners = stubWindowListeners();
+  try {
+    await mount(doc, {fetcher});
+    await settleSettings();
+    assert.equal(retry.hidden, false);
+    assert.equal(doc.getElementById('model-key-state').textContent, '读取失败');
+    assert.equal(doc.getElementById('model-api-fields').disabled, true);
+    retry.focus();
+    doc.fire('click', {target:retry});
+    doc.fire('click', {target:retry});
+    assert.equal(retry.disabled, true);
+    assert.deepEqual(readCount, {models:2, settings:1});
+    finishRetry(settingsJson(200, {
+      model_api:{revision:4, api_key_set:false},
+      effective:{source:'platform', model:'shared-model'},
+    }));
+    await settleSettings();
+    assert.equal(retry.hidden, true);
+    assert.equal(doc.getElementById('model-api-fields').disabled, false);
+    assert.equal(doc.getElementById('model-effective-model').textContent, ' (shared-model)');
+    assert.equal(doc.activeElement, doc.getElementById('model-api-override-title'));
+    assert.deepEqual(readCount, {models:2, settings:1});
+  } finally {
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+});
 
 test('notification settings load native values, save only the changed switch and restore it on failure', async () => {
   const {doc} = settingsDocument();
@@ -1010,6 +1054,12 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(amap.button.disabled, true);
   assert.equal(count.textContent, '1 个已连接');
   assert.equal(count.hidden, false);
+  applyComposioRows(document, true, [], 'error');
+  assert.equal(github.status.textContent, '状态暂不可用');
+  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.attrs['data-connection-id'], undefined);
+  assert.equal(amap.status.textContent, '未接通');
+  assert.equal(count.hidden, true);
   applyComposioRows(document, false, []);
   assert.equal(github.status.textContent, '未配置 Composio');
   assert.equal(github.button.disabled, false);

@@ -236,6 +236,8 @@ body.app-workspace:has(#profile-home:not([hidden])) > main > #main-panel {
   flex: none;
 }
 
+#profile-agent-list .look-avatar { width: 1.85rem; height: 1.85rem; }
+
 .profile-agents-all {
   margin: 0.75rem 0 0;
   align-self: center;
@@ -873,4 +875,25 @@ html[data-theme-resolved="dark"]
   .profile-tabs { margin-top: .4rem; }
   .profile-feed { padding: .9rem .85rem; }
   .profile-dialog-search input { font-size: 1rem; }
+}
+
+body.app-workspace .profile-hero {
+  background-image: var(--ot-canvas-wash);
+}
+
+body.app-workspace .profile-modal .profile-dialog-head h2 {
+  font-size: 1.15rem;
+  font-weight: 660;
+  letter-spacing: -.015em;
+}
+
+body.app-workspace .profile-modal .profile-dialog-tabs {
+  border-radius: .85rem;
+  background: var(--ot-grouped-fill);
+}
+
+body.app-workspace .profile-modal .profile-dialog-tabs [aria-selected="true"] {
+  border-radius: .65rem;
+  background: var(--ot-select-gradient);
+  box-shadow: var(--ot-segment-shadow);
 }

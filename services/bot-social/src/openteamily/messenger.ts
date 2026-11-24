@@ -25,6 +25,9 @@ import { GROUP_INVITES_SCHEMA, registerGroupInvites } from "./group-invites.js";
 import { agentInboxWake } from "./agent-inbox-wake.js";
 
 const AGENT_INBOX_MAX_WAIT_MS = 10_000;
+const NATIVE_GROUP_PROGRESS_MS = 6_000;
+const NATIVE_GROUP_TURN_TIMEOUT_MS = 240_000;
+const NATIVE_GROUP_TURN_LIMIT = 64;
 const SHARED_GROUP_ID = /^otc_[0-9A-HJKMNP-TV-Z]{26}$/;
 const SHARED_GROUP_PAGE = 30;
 
@@ -67,6 +70,23 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT, forwarded_author TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_native_group_rounds (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, body TEXT NOT NULL, agent_mentions TEXT NOT NULL, text_only INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','finished'))
+);
+CREATE INDEX IF NOT EXISTS ot_native_group_rounds_owner ON ot_native_group_rounds(owner_id,state,conversation_id);
+CREATE INDEX IF NOT EXISTS ot_native_group_rounds_conversation ON ot_native_group_rounds(conversation_id,state,owner_id);
+CREATE TABLE IF NOT EXISTS ot_native_group_turns (
+  id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES ot_native_group_rounds(message_id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, call_key TEXT NOT NULL, prompt TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','finished')),
+  outcome TEXT CHECK (outcome IN ('message','pass','failed')), result_text TEXT,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, published_message_id TEXT REFERENCES ot_messages(id) ON DELETE SET NULL,
+  UNIQUE(message_id,call_key)
+);
+CREATE INDEX IF NOT EXISTS ot_native_group_turns_inbox ON ot_native_group_turns(owner_id,state,expires_at);
 CREATE TABLE IF NOT EXISTS ot_group_memories (
   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
   author_id TEXT NOT NULL, client_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
@@ -713,10 +733,47 @@ function ordinaryAgentGroup(conv: {kind: string; dm_key?: string | null; group_a
   return conv.kind === "group" && !conv.group_archived_at && !fixedPublicThread(conv);
 }
 
+function nativeGroupHost(ot: OtContext, conv: Group, roster = conversationAgents(ot, conv.id)) {
+  const owner = groupOwner(conv);
+  // Each Bot runs under its own owner. The active group owner coordinates the native room.
+  if (ordinaryAgentGroup(conv) && managedGroup(conv) && readGroupReplyPolicy(conv).mode !== "mentions" &&
+      roster.length >= 2 && roster.length <= 12 && roster.every(agent => !agent.direct_grant_id) &&
+      (roster.some(agent => agent.owner_id === owner) || ot.get(`SELECT 1 FROM ot_conversation_members host
+        WHERE host.conversation_id=? AND host.owner_id=? AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM ot_team_members active WHERE active.team_id=? AND active.owner_id=host.owner_id AND active.suspended=0))`,
+      conv.id, owner, conv.team_id, conv.team_id))) {
+    return owner;
+  }
+}
+
+const ORIGINAL_NATIVE_SOURCE = (message: string, room: string) => `${message}.author_kind='member'
+  AND ${message}.retracted=0 AND ${message}.revision=1 AND EXISTS (
+    SELECT 1 FROM ot_conversation_members source_member
+    WHERE source_member.conversation_id=${room}.id AND source_member.owner_id=${message}.author_id
+      AND source_member.created_at<=${message}.created_at AND (${room}.team_id IS NULL OR EXISTS (
+        SELECT 1 FROM ot_team_members source_team WHERE source_team.team_id=${room}.team_id
+          AND source_team.owner_id=source_member.owner_id AND source_team.suspended=0 AND source_team.created_at<=${message}.created_at)))`;
+const REQUIRES_NATIVE_TEXT_ONLY = (round: string, room: string) => `(${round}.text_only=1 OR ${room}.team_id IS NOT NULL OR EXISTS (
+  SELECT 1 FROM ot_conversation_members native_peer
+  WHERE native_peer.conversation_id=${room}.id AND native_peer.owner_id<>${round}.owner_id))`;
+const ACTIVE_NATIVE_TURN_SEAT = (turn: string, room: string) => `EXISTS (
+  SELECT 1 FROM ot_conversation_agents native_seat
+  JOIN ot_conversation_members native_guest ON native_guest.conversation_id=native_seat.conversation_id AND native_guest.owner_id=native_seat.owner_id
+  WHERE native_seat.conversation_id=${room}.id AND native_seat.owner_id=${turn}.owner_id AND native_seat.agent_ref=${turn}.agent_ref
+    AND native_seat.created_at<=${turn}.created_at AND native_guest.created_at<=${turn}.created_at
+    AND (${room}.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members native_team
+      WHERE native_team.team_id=${room}.team_id AND native_team.owner_id=native_guest.owner_id
+        AND native_team.suspended=0 AND native_team.created_at<=${turn}.created_at)))`;
+
 function selectedLead(policy: ReturnType<typeof readGroupReplyPolicy>, agents: ConversationAgent[]) {
   return policy.mode === "lead"
     ? agents.find(agent => agent.owner_id === policy.lead.owner_id && agent.agent_ref === policy.lead.agent_id)
     : undefined;
+}
+
+function nativeRoomOpeningOrder(agents: ConversationAgent[], policy: ReturnType<typeof readGroupReplyPolicy>) {
+  const admin = selectedLead(policy, agents);
+  return admin ? [admin, ...agents.filter(agent => agent !== admin)] : agents;
 }
 
 function groupHasOtherMember(ot: OtContext, conv: Group, viewer: string) {
@@ -729,21 +786,21 @@ function groupHasOtherMember(ot: OtContext, conv: Group, viewer: string) {
 function groupAgentRouting(ot: OtContext, conv: Group, viewer: string, agents: ConversationAgent[]) {
   const policy = readGroupReplyPolicy(conv);
   const current = policy.mode === "lead" && !selectedLead(policy, agents) ? {...policy, lead_unavailable: true} : policy;
-  const access = {policy: current, can_edit: managedGroup(conv) && groupOwner(conv) === viewer};
+  const host = nativeGroupHost(ot, conv, agents);
+  const access = {policy: current, can_edit: managedGroup(conv) && groupOwner(conv) === viewer,
+    ...(host ? {native_group_host:host,...(host === viewer ? {native_group_coordinator:true} : {})} : {})};
   if (groupHasOtherMember(ot, conv, viewer)) return {mode: "shared" as const, ...access};
   return {mode: "personal" as const, default: agents.some(agent => agent.auto_reply) ? "auto" as const : "all" as const, ...access};
 }
 
 function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typeof replyOriginal>,
   policy: ReturnType<typeof readGroupReplyPolicy>) {
-  if (!agents.length) return {agents, discretionary: false};
+  if (policy.mode === "mentions" || !agents.length) return {agents: [], discretionary: false};
   if (quote?.author_kind === "agent") {
     return {agents: agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref), discretionary: false};
   }
-  if (policy.mode === "lead") {
-    const lead = selectedLead(policy, agents);
-    if (lead) return {agents: [lead], discretionary: true};
-  }
+  const admin = selectedLead(policy, agents);
+  if (admin) return {agents: [admin], discretionary: true};
   // Keep the existing opt-in auto inbox and its rate limit. With no opt-ins,
   // the DS-Bot workers decide whether the ordinary message warrants a reply.
   if (policy.mode === "default" && agents.some(agent => agent.auto_reply)) return undefined;
@@ -760,7 +817,7 @@ function explicitAgentKey(target: any) {
 function agentMessageRequest(b: any, clientKey: string | null, replyTo: string | null, scope: "group" | "direct") {
   const flag = scope === "direct" ? "direct_agent_request" : "group_agent_request";
   if (b[flag] === undefined) return null;
-  const extra = scope === "direct" ? ["workspace"] : ["workspace", "studio_reference"];
+  const extra = scope === "direct" ? ["workspace"] : ["workspace", "studio_reference", "native_round"];
   assert(b[flag] === true && clientKey && (scope === "direct" ? b.direct === true : b.direct === undefined || typeof b.direct === "boolean")
     && Array.isArray(b.agent_mentions) && b.agent_mentions.length >= 1 && b.agent_mentions.length <= 5
     && Object.keys(b).every(key => ["body","direct","agent_mentions","client_key","reply_to",flag,...extra].includes(key)),
@@ -978,6 +1035,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
+  const nativeRoundCols = new Set(ot.all<{name:string}>("PRAGMA table_info(ot_native_group_rounds)").map(col => col.name));
+  if (!nativeRoundCols.has("text_only")) ot.run("ALTER TABLE ot_native_group_rounds ADD COLUMN text_only INTEGER NOT NULL DEFAULT 0");
   const jobCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_agent_reply_jobs)").map(c => c.name));
   if (!jobCols.has("direct_grant_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN direct_grant_id TEXT");
   if (!jobCols.has("source_revision")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN source_revision INTEGER");
@@ -1003,6 +1062,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   registerDirectAgentRevocation(ot);
   registerAgentAccess(app,ot);
   const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
+  const nativeGroupProgress = new Map<string, {messageId:string; ownerId:string; refs:string[]; expires:number}>();
   const inboxWake = agentInboxWake();
   app.addHook("preClose", async () => inboxWake.close());
 
@@ -1435,9 +1495,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const replyTo = optText(b.reply_to, "reply_to", {min: 1, max: 80}) ?? null;
+    const nativeRound = b.native_round === true;
     const groupRequest = agentMessageRequest(b, clientKey, replyTo, "group");
     const directRequest = agentMessageRequest(b, clientKey, replyTo, "direct");
     const studio = studioMessageRequest(b, clientKey, replyTo);
+    if (nativeRound) assert(clientKey && !replyTo && !sourceConversation && b.voice === undefined &&
+      b.attachment === undefined && !studio && !directRequest && typeof b.body === "string",
+    400, "invalid_request", "A native group round requires a plain text message with a request key");
     const wakeOwners = new Set<string>();
     const msg = ot.tx(() => {
       const direct = b.direct === true;
@@ -1470,6 +1534,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
             "group_agent_request_conflict", "这次发送已用于不同的智能体请求。");
           const prior = ot.get<{request_hash: string}>("SELECT request_hash FROM ot_studio_message_references WHERE message_id=?", previous.id);
           assert(prior?.request_hash === studio?.fingerprint, 409, "studio_reference_changed", "这次发送已用于不同的消息。");
+          if (nativeRound) assert(ot.get("SELECT 1 FROM ot_native_group_rounds WHERE message_id=?", previous.id),
+            409, "native_round_conflict", "This message was sent through a different reply route");
           return previous;
         }
       }
@@ -1507,22 +1573,32 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       }
       const addressText = conv.kind === "group" ? mentionText(file && !hasCaption ? "" : bodyText) : bodyText;
       const parsed = parseMentions(ot, conv, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
-      const addressed = selected !== undefined || parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
+      const nativeHost = nativeRound ? nativeGroupHost(ot, conv, roster) : undefined;
+      assert(!nativeRound || nativeHost, 409, "native_round_unavailable", "This conversation is unavailable for a native group round");
       const canQueueGroup = group && !voice && !sourceConversation && (!file || captionCanMentionAgents);
       const allPeople = group && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
+      const addressed = selected !== undefined || parsed.agents.length > 0 ||
+        parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(addressText));
       const unaddressed = canQueueGroup && !file && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
-      const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
+      const targets = explicitlyAll ? nativeRoomOpeningOrder(roster, policy) : unaddressed?.agents ?? parsed.agents;
       const suppressed = canQueueGroup && !file && targets.length === 0 &&
         (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
+      if (nativeHost) {
+        const picked = selected === undefined ? [] : parsed.agents.map(agent => ({owner_id:agent.owner_id, agent_id:agent.agent_ref}));
+        const restricted = Boolean(conv.team_id) || groupHasOtherMember(ot, conv, nativeHost);
+        ot.run("INSERT INTO ot_native_group_rounds(message_id,conversation_id,owner_id,body,agent_mentions,text_only) VALUES(?,?,?,?,?,?)",
+          m.id, conv.id, nativeHost, bodyText, JSON.stringify(picked), Number(restricted));
+        wakeOwners.add(nativeHost);
+      }
       if (groupRequest) ot.run("INSERT INTO ot_group_agent_message_requests VALUES (?,?)", m.id, groupRequest);
       if (directRequest) ot.run("INSERT INTO ot_direct_agent_message_requests VALUES (?,?,?)", m.id, directRequest, quote?.revision ?? null);
-      if (suppressed) ot.run("INSERT INTO ot_group_reply_suppressions(message_id) VALUES (?)", m.id);
+      if (suppressed || nativeRound) ot.run("INSERT INTO ot_group_reply_suppressions(message_id) VALUES (?)", m.id);
       if (studio) ot.run("INSERT INTO ot_studio_message_references VALUES (?,?,?,?)",
         m.id, studio.document_id, studio.revision, studio.fingerprint);
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
@@ -1538,7 +1614,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           for (const recipient of recipients) ot.notify(recipient.owner_id, "artifact.shared", notice);
         }
       }
-      if (directRequest || canQueueGroup) {
+      if (!nativeRound && (directRequest || canQueueGroup)) {
         for (const agent of targets) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at,direct_grant_id,discretionary)
             VALUES (?,?,?,?,?,'queued',?,?,?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now(), agent.direct_grant_id,
@@ -1546,7 +1622,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           wakeOwners.add(agent.owner_id);
         }
       }
-      if (!voice && !file && !groupRequest && !studio && !suppressed &&
+      if (!nativeRound && !voice && !file && !groupRequest && !studio && !suppressed &&
           (fixedPublicThread(conv) || (!addressed && targets.length === 0))) {
         for (const {owner_id} of legacyWakeOwners(conv, m.seq)) wakeOwners.add(owner_id);
       }
@@ -1780,7 +1856,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         assert(directAgentPeer(ot, conv, me.ownerId), 404, "conversation_not_found", "no such direct conversation");
         requireDirectReach(ot, conv, me.ownerId);
         grantDirectAgent(ot,conv.id,me.ownerId,ref,name);
-        return conversationView(ot, conv, me.ownerId);
+        return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
       });
     }
     assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
@@ -1790,7 +1866,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         auto_reply_after_seq=CASE WHEN ot_conversation_agents.auto_reply=0 AND excluded.auto_reply=1
           THEN excluded.auto_reply_after_seq ELSE ot_conversation_agents.auto_reply_after_seq END`,
     conv.id, ref, me.ownerId, name, b.auto_reply === true ? 1 : 0, conv.last_seq, ot.now());
-    return conversationView(ot, conv, me.ownerId);
+    return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
   });
   app.patch("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
@@ -1820,11 +1896,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return ot.tx(() => {
         if (input.workspace !== undefined) workspaceConversation(ot, text(input.workspace,"workspace",{min:32,max:32}), conv.id, me.ownerId);
         removeDirectAgent(ot,conv.id,owner,params(req).agent);
-        return conversationView(ot, conv, me.ownerId);
+        return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
       });
     }
     ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, params(req).agent, me.ownerId);
-    return conversationView(ot, conv, me.ownerId);
+    return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
   });
   app.post("/v1/ot/conversations/:id/messages/:message/agent-retry", async req => {
     const me = ot.me(req);
@@ -1932,7 +2008,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (state === "passed") return {ok: true};
         ot.run("UPDATE ot_agent_reply_jobs SET status='replied',passed=1,updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       } else {
-        assert(state === "running" && job.claim_id === claim, 409, "reply_job_unavailable", "这次回复的状态已更新。");
+        // The native turn can end while delivery is offline. Allow that exact
+        // claim to settle after expiry unless the sender has already retried.
+        const sameFailure = job.status === "failed" && claim !== null && job.claim_id === claim
+          && job.available && job.studio_available && job.source_revision === job.current_revision;
+        assert(sameFailure || currentRunningClaim(job, claim) || (state === "running" && job.claim_id === claim),
+          409, "reply_job_unavailable", "这次回复的状态已更新。");
+        if (sameFailure) return {ok: true};
         ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);
@@ -1980,7 +2062,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const {workspace, id} = params(req);
     const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv : memberOf(ot, id, me.ownerId);
     const direct = directAgentPeer(ot, conv, me.ownerId);
-    assert(direct || (conv.kind === "group" && !fixedPublicThread(conv) && (workspace || conv.account_group === 1)),
+    const nativeTeam = !workspace && conv.team_id && nativeGroupHost(ot, conv);
+    assert(direct || (conv.kind === "group" && !fixedPublicThread(conv) && (workspace || conv.account_group === 1 || nativeTeam)),
       404, "conversation_not_found", "no such group conversation");
     assert(Object.keys(query(req)).length === 0, 400, "invalid_request", "Unexpected reply progress query");
     const now = ot.now();
@@ -1989,7 +2072,32 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       AND (j.source_revision IS NULL OR j.source_revision=src.revision)
       AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=? AND h.message_id=src.id)
       ORDER BY src.seq DESC,j.rowid DESC LIMIT ?`, conv.id, now - REPLY_JOB_QUEUE_MS, now, me.ownerId, REPLY_PROGRESS_PAGE);
-    return {items: jobs.map(job => {
+    const native = nativeGroupProgress.get(conv.id);
+    if (native && native.expires <= now) nativeGroupProgress.delete(conv.id);
+    const remote = ordinaryAgentGroup(conv) ? ot.all<{owner_id:string;agent_ref:string;host_id:string}>(`SELECT t.owner_id,t.agent_ref,r.owner_id AS host_id
+      FROM ot_native_group_turns t JOIN ot_native_group_rounds r ON r.message_id=t.message_id
+      JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+      WHERE c.id=? AND r.text_only=1 AND r.state='running' AND t.state='running' AND t.expires_at>?
+        AND r.owner_id=COALESCE(c.group_owner_id,c.created_by) AND ${ORIGINAL_NATIVE_SOURCE("m", "c")}
+        AND ${ACTIVE_NATIVE_TURN_SEAT("t", "c")} AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=? AND h.message_id=m.id)`, conv.id, now, me.ownerId) : [];
+    let working: {id:string; name:string}[] = [];
+    let host: string | undefined;
+    if ((native && native.expires > now) || remote.length) {
+      const roster = conversationAgents(ot, conv.id);
+      host = nativeGroupHost(ot, conv, roster);
+      const localRefs = native && native.expires > now && native.ownerId === host && ot.get(`SELECT 1 FROM ot_native_group_rounds r
+        JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+        WHERE r.message_id=? AND r.owner_id=? AND c.id=? AND r.state='running' AND ${ORIGINAL_NATIVE_SOURCE("m", "c")}
+          AND (r.text_only=1 OR NOT ${REQUIRES_NATIVE_TEXT_ONLY("r", "c")}) AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=? AND h.message_id=m.id)`,
+      native.messageId, native.ownerId, conv.id, me.ownerId) ? new Set(native.refs) : new Set<string>();
+      const remoteKeys = new Set(remote.filter(turn => turn.host_id === host).map(turn => agentMentionKey(turn.owner_id,turn.agent_ref)));
+      working = roster.flatMap(agent => {
+        if (agent.owner_id === host) return localRefs.has(agent.agent_ref) ? [{id:agent.agent_ref,name:agent.name}] : [];
+        return remoteKeys.has(agentMentionKey(agent.owner_id,agent.agent_ref))
+          ? [{id:agent.owner_id + "/" + agent.agent_ref,name:agent.name}] : [];
+      });
+    }
+    return {...(working.length && host ? {working_bots:working, native_group_host:host} : {}), items: jobs.map(job => {
       const snapshot = replyProgress.get(job.id);
       return {id: job.id, message_id: job.message_id, attempt: job.attempt, status: job.status,
         text: job.status === "running" && snapshot?.attempt === job.attempt && snapshot.expires > now ? snapshot.text : ""};
@@ -2097,6 +2205,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_studio_message_references r WHERE r.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_group_agent_message_requests r WHERE r.message_id=m.id)
+        AND NOT EXISTS (SELECT 1 FROM ot_native_group_rounds r WHERE r.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_group_reply_suppressions s WHERE s.message_id=m.id)
         AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
         AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
@@ -2210,6 +2319,285 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     return {...readAgentInbox(me.ownerId, after, limit, managed), wake_supported: true};
   });
+  type NativeRound = {message_id:string; conversation_id:string; body:string; seq:number; author_id:string;
+    state:"queued"|"running"|"finished"; agent_mentions:string; source_valid:number; text_only:number; requires_text_only:number};
+  type NativeTurnOutcome = "message" | "pass" | "failed";
+  type NativeTurn = {id:string; message_id:string; owner_id:string; agent_ref:string; call_key:string; prompt:string;
+    state:"queued"|"running"|"finished"; outcome:NativeTurnOutcome|null; result_text:string|null; expires_at:number;
+    published_message_id:string|null};
+  type NativeTurnInbox = NativeTurn & {conversation_id:string; host_id:string};
+  const nativeTurnId = /^otnt_[0-9A-HJKMNP-TV-Z]{26}$/;
+  const expiredNativeTurn = (row: NativeTurn) => row.state !== "finished" && row.expires_at <= ot.now();
+  function nativeTurnView(row: NativeTurn, seatActive = true) {
+    const ended = expiredNativeTurn(row) || (row.state !== "finished" && !seatActive);
+    const outcome = ended ? "failed" : row.outcome;
+    return {id:row.id,owner_id:row.owner_id,agent_ref:row.agent_ref,call_key:row.call_key,
+      state:ended ? "finished" as const : row.state,
+      ...(outcome ? {result:{outcome,...(outcome === "message" ? {text:row.result_text} : {})}} : {})};
+  }
+  function findNativeRound(conv: Group, messageId: string, ownerId: string) {
+    const round = ot.get<NativeRound>(`SELECT r.*,m.seq,m.author_id,(${ORIGINAL_NATIVE_SOURCE("m", "c")}) AS source_valid,
+      ${REQUIRES_NATIVE_TEXT_ONLY("r", "c")} AS requires_text_only FROM ot_native_group_rounds r JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+      WHERE r.message_id=? AND r.conversation_id=? AND r.owner_id=? AND m.retracted=0`, messageId, conv.id, ownerId);
+    assert(groupOwner(conv) === ownerId && round, 404, "native_round_not_found", "Native group round was not found");
+    return round;
+  }
+  function requireNativeRound(conv: Group, round: NativeRound, host: string, roster?: ConversationAgent[]) {
+    assert(round.source_valid === 1 && nativeGroupHost(ot, conv, roster) === host &&
+      !(round.state === "running" && round.requires_text_only === 1 && round.text_only !== 1),
+    409, "native_round_unavailable", "This conversation is unavailable for a native group round");
+  }
+  function activeNativeTurnSeat(turnId: string, roomId: string) {
+    return ot.get(`SELECT 1 FROM ot_native_group_turns t JOIN ot_conversations c ON c.id=?
+      WHERE t.id=? AND ${ACTIVE_NATIVE_TURN_SEAT("t", "c")}`, roomId,turnId);
+  }
+  function readNativeGroupTurns(ownerId: string) {
+    const current = (state: "running" | "queued") => ot.all<NativeTurnInbox>(`SELECT t.*,c.id AS conversation_id,r.owner_id AS host_id
+      FROM ot_native_group_turns t JOIN ot_native_group_rounds r ON r.message_id=t.message_id
+      JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+      WHERE t.owner_id=? AND t.state=? AND t.expires_at>? AND r.state='running' AND r.text_only=1
+        AND c.group_archived_at IS NULL AND r.owner_id=COALESCE(c.group_owner_id,c.created_by) AND ${ORIGINAL_NATIVE_SOURCE("m", "c")}
+        AND ${ACTIVE_NATIVE_TURN_SEAT("t", "c")}
+      ORDER BY t.rowid ${state === "queued" ? "LIMIT 24" : ""}`, ownerId, state, ot.now());
+    const hostForRoom = new Map<string, string | undefined>();
+    return [...current("running"), ...current("queued")].flatMap(turn => {
+      if (!hostForRoom.has(turn.conversation_id)) {
+        const room = ot.get<Group>("SELECT * FROM ot_conversations WHERE id=?", turn.conversation_id);
+        hostForRoom.set(turn.conversation_id, room && nativeGroupHost(ot, room));
+      }
+      if (hostForRoom.get(turn.conversation_id) !== turn.host_id) return [];
+      const {id,owner_id,agent_ref,call_key,state,conversation_id,message_id,prompt} = turn;
+      return [{id,owner_id,agent_ref,call_key,state,conversation_id,message_id,prompt}];
+    });
+  }
+  function readNativeGroupInbox(ownerId: string) {
+    const pending = (state:"running"|"queued") => ot.all<Omit<NativeRound,"source_valid">>(`SELECT r.*,m.seq,m.author_id,
+      ${REQUIRES_NATIVE_TEXT_ONLY("r", "c")} AS requires_text_only FROM ot_native_group_rounds r
+      JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+      JOIN ot_conversation_members member ON member.conversation_id=c.id AND member.owner_id=r.owner_id
+      WHERE r.owner_id=? AND r.state=? AND ${ORIGINAL_NATIVE_SOURCE("m", "c")}
+        AND c.kind='group' AND c.dm_key IS NULL AND (c.account_group=1 OR c.team_id IS NOT NULL) AND c.group_archived_at IS NULL
+        AND COALESCE(c.group_owner_id,c.created_by)=r.owner_id AND (c.team_id IS NULL OR EXISTS (
+          SELECT 1 FROM ot_team_members active WHERE active.team_id=c.team_id AND active.owner_id=r.owner_id AND active.suspended=0))
+      ORDER BY m.rowseq ${state === "queued" ? "LIMIT 60" : ""}`, ownerId, state);
+    return {turns:readNativeGroupTurns(ownerId),items:[...pending("running"), ...pending("queued")].map(({message_id,conversation_id,body,state,seq,agent_mentions,author_id,requires_text_only}) => {
+      const {display_name} = ot.profileView(author_id);
+      return {message_id,conversation_id,body,state,seq,agent_mentions:JSON.parse(agent_mentions),
+        author:{owner_id:author_id,display_name},text_only:requires_text_only === 1};
+    })};
+  }
+
+  app.get("/v1/ot/native-group-inbox", async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const input = query(req);
+    const wait = one(input.wait_ms, "wait_ms");
+    const waitMs = wait === undefined ? 0 : Number(wait);
+    assert(Object.keys(input).every(key => key === "wait_ms") &&
+      (wait === undefined || (/^[0-9]{1,5}$/.test(wait) && waitMs <= AGENT_INBOX_MAX_WAIT_MS)),
+    400, "invalid_request", "Native agent inbox wait_ms must be 0–10000");
+    const current = readNativeGroupInbox(ownerId);
+    if (!waitMs || current.items.length || current.turns.length) return current;
+    // The queue is durable. The signal shortens an idle poll after a different
+    // member sends a message to this host while no room turn is running.
+    const waiting = inboxWake.wait(ownerId, waitMs, reply.raw);
+    if (!waiting) return current;
+    await waiting;
+    return reply.raw.destroyed ? current : readNativeGroupInbox(ot.me(req).ownerId);
+  });
+
+  app.post("/v1/ot/conversations/:id/native-rounds/:messageId", {bodyLimit:1024}, async req => {
+    const {ownerId} = ot.me(req);
+    const {id,messageId} = params(req);
+    const data = body(req);
+    const start = data.action === "start" && Object.keys(data).every(key => key === "action" || key === "text_only") &&
+      (data.text_only === undefined || data.text_only === true);
+    const finish = data.action === "finish" && Object.keys(data).length === 1;
+    assert(start || finish, 400, "invalid_request", "Invalid native group action");
+    return ot.tx(() => {
+      const conv = memberOf(ot, id, ownerId);
+      const round = findNativeRound(conv, messageId, ownerId);
+      if (finish) {
+        if (round.state !== "finished") ot.run("UPDATE ot_native_group_rounds SET state='finished' WHERE message_id=?", round.message_id);
+        if (nativeGroupProgress.get(id)?.messageId === messageId) nativeGroupProgress.delete(id);
+        return {state:"finished"};
+      }
+      requireNativeRound(conv, round, ownerId);
+      if (round.state === "finished") return {started:false,state:"finished"};
+      assert(round.requires_text_only !== 1 || data.text_only === true,
+        409, "native_round_text_only", "This native group round requires text-only execution");
+      const restricted = data.text_only === true;
+      if (round.state === "running") return {started:false,state:"running",...(round.text_only === 1 ? {text_only:true} : {})};
+      assert(!ot.get(`SELECT 1 FROM ot_native_group_rounds older JOIN ot_messages source ON source.id=older.message_id
+        JOIN ot_messages current ON current.id=? JOIN ot_conversations c ON c.id=older.conversation_id
+        WHERE older.conversation_id=? AND older.owner_id=? AND older.state<>'finished' AND source.seq<current.seq
+          AND ${ORIGINAL_NATIVE_SOURCE("source", "c")}`, round.message_id, conv.id, ownerId),
+      409, "native_round_busy", "A previous native group round is still active");
+      ot.run("UPDATE ot_native_group_rounds SET state='running',text_only=? WHERE message_id=?", Number(restricted), round.message_id);
+      return {started:true,state:"running",...(restricted ? {text_only:true} : {})};
+    });
+  });
+
+  app.post("/v1/ot/conversations/:id/native-rounds/:messageId/progress", {bodyLimit:2048}, async req => {
+    const {ownerId} = ot.me(req);
+    const {id,messageId} = params(req);
+    const data = body(req);
+    const requested: unknown = data.working_agent_refs;
+    assert(Object.keys(data).length === 1 && Array.isArray(requested) && requested.length <= 12 &&
+        requested.every(ref => typeof ref === "string" && AGENT_REF.test(ref)), 400, "invalid_request", "Invalid native group activity");
+    const conv = memberOf(ot, id, ownerId);
+    const round = findNativeRound(conv, messageId, ownerId);
+    assert(round.state === "running", 409, "native_round_unavailable", "The native group round is no longer active");
+    const roster = conversationAgents(ot, id);
+    requireNativeRound(conv, round, ownerId, roster);
+    const refs = [...new Set<string>(requested)];
+    const seats = new Set(roster.filter(agent => agent.owner_id === ownerId).map(agent => agent.agent_ref));
+    assert(refs.every(ref => seats.has(ref)), 404, "agent_not_found", "This Bot is no longer in the native group");
+    if (refs.length) {
+      const now = ot.now();
+      if (!nativeGroupProgress.has(id) && nativeGroupProgress.size >= REPLY_PROGRESS_CAPACITY) {
+        for (const [room, state] of nativeGroupProgress) if (state.expires <= now) nativeGroupProgress.delete(room);
+        assert(nativeGroupProgress.size < REPLY_PROGRESS_CAPACITY, 429, "reply_progress_busy", "Native group activity is busy");
+      }
+      nativeGroupProgress.set(id, {messageId,ownerId,refs,expires:now + NATIVE_GROUP_PROGRESS_MS});
+    } else if (nativeGroupProgress.get(id)?.messageId === messageId) nativeGroupProgress.delete(id);
+    return {ok:true};
+  });
+
+  const nativeTurnsPath = "/v1/ot/conversations/:id/native-rounds/:messageId/turns";
+  app.post(nativeTurnsPath, {bodyLimit:393216}, async req => {
+    const {ownerId} = ot.me(req);
+    const {id,messageId} = params(req);
+    const data = body(req);
+    assert(Object.keys(data).length === 4 && ["owner_id","agent_ref","call_key","prompt"].every(key => Object.hasOwn(data,key)),
+      400, "invalid_request", "Invalid native group turn");
+    const target = text(data.owner_id, "owner_id", {min:1,max:80});
+    const agentRef = text(data.agent_ref, "agent_ref", {min:1,max:80});
+    const callKey = text(data.call_key, "call_key", {min:1,max:160});
+    const prompt = text(data.prompt, "prompt", {min:1,max:64000,multiline:true});
+    assert(target !== ownerId, 400, "invalid_request", "Local Bots run in the native room directly");
+    const turn = ot.tx(() => {
+      const conv = memberOf(ot, id, ownerId);
+      const round = findNativeRound(conv, messageId, ownerId);
+      const roster = conversationAgents(ot, conv.id);
+      requireNativeRound(conv, round, ownerId, roster);
+      assert(round.state === "running" && round.text_only === 1, 409, "native_round_unavailable", "This round cannot ask a remote Bot");
+      assert(roster.some(agent => agent.owner_id === target && agent.agent_ref === agentRef),
+        404, "agent_not_found", "This Bot is no longer in the native group");
+      const prior = ot.get<NativeTurn>("SELECT * FROM ot_native_group_turns WHERE message_id=? AND call_key=?", messageId, callKey);
+      if (prior) {
+        assert(prior.owner_id === target && prior.agent_ref === agentRef && prior.prompt === prompt,
+          409, "native_turn_conflict", "This native turn key was already used");
+        return prior;
+      }
+      const count = ot.get<{total:number}>("SELECT COUNT(*) AS total FROM ot_native_group_turns WHERE message_id=?", messageId)!.total;
+      assert(count < NATIVE_GROUP_TURN_LIMIT, 429, "native_turn_limit", "This native group round reached its Bot turn limit");
+      const turnId = newId("otnt");
+      const now = ot.now();
+      ot.run("INSERT INTO ot_native_group_turns(id,message_id,owner_id,agent_ref,call_key,prompt,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+        turnId,messageId,target,agentRef,callKey,prompt,now,now + NATIVE_GROUP_TURN_TIMEOUT_MS);
+      return ot.get<NativeTurn>("SELECT * FROM ot_native_group_turns WHERE id=?", turnId)!;
+    });
+    const active = Boolean(activeNativeTurnSeat(turn.id,id));
+    if (active && turn.state === "queued") inboxWake.notify(target);
+    return nativeTurnView(turn,active);
+  });
+  app.get(nativeTurnsPath, async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const {ownerId} = ot.me(req);
+    const {id,messageId} = params(req);
+    const conv = memberOf(ot, id, ownerId);
+    const round = findNativeRound(conv, messageId, ownerId);
+    requireNativeRound(conv, round, ownerId);
+    const turns = ot.all<NativeTurn & {seat_active:number}>(`SELECT t.*,(${ACTIVE_NATIVE_TURN_SEAT("t", "c")}) AS seat_active
+      FROM ot_native_group_turns t JOIN ot_conversations c ON c.id=? WHERE t.message_id=? ORDER BY t.rowid`,id,messageId);
+    return {items:turns.map(turn => nativeTurnView(turn,turn.seat_active === 1))};
+  });
+
+  app.post("/v1/ot/native-group-turns/:turnId", {bodyLimit:32768}, async req => {
+    const {ownerId} = ot.me(req);
+    const {turnId} = params(req);
+    const data = body(req);
+    const start = data.action === "start" && Object.keys(data).length === 1;
+    const finish = data.action === "finish" && Object.keys(data).every(key => ["action","outcome","text"].includes(key)) &&
+      (data.outcome === "message" || ((data.outcome === "pass" || data.outcome === "failed") && data.text === undefined));
+    assert(nativeTurnId.test(turnId) && (start || finish),400,"invalid_request","Invalid native group turn action");
+    const outcome = finish ? data.outcome as NativeTurnOutcome : null;
+    const resultText = outcome === "message" ? text(data.text,"text",{min:1,max:BODY_MAX,multiline:true}) : null;
+    return ot.tx(() => {
+      const turn = ot.get<NativeTurnInbox>(`SELECT t.*,r.conversation_id,r.owner_id AS host_id
+        FROM ot_native_group_turns t JOIN ot_native_group_rounds r ON r.message_id=t.message_id
+        WHERE t.id=? AND t.owner_id=?`,turnId,ownerId);
+      assert(turn, 404, "native_turn_not_found", "Native group turn was not found");
+      const conv = memberOf(ot, turn.conversation_id, ownerId);
+      const round = findNativeRound(conv, turn.message_id, turn.host_id);
+      const roster = conversationAgents(ot, conv.id);
+      requireNativeRound(conv, round, turn.host_id, roster);
+      assert(activeNativeTurnSeat(turn.id, conv.id), 404, "agent_not_found", "This Bot is no longer in the native group");
+      if (turn.state === "finished" || expiredNativeTurn(turn)) {
+        if (finish && turn.state === "finished") assert(turn.outcome === outcome && turn.result_text === resultText,
+          409, "native_turn_conflict", "This native group turn already finished");
+        return {state:"finished",...(start ? {started:false} : {}),result:nativeTurnView(turn).result};
+      }
+      assert(round.state === "running" && round.text_only === 1, 409, "native_round_unavailable", "The native group round is no longer active");
+      if (start) {
+        const changed = ot.run("UPDATE ot_native_group_turns SET state='running' WHERE id=? AND state='queued'", turnId).changes === 1;
+        return {state:"running",started:changed};
+      }
+      assert(turn.state === "running", 409, "native_turn_unavailable", "Start the native group turn first");
+      ot.run("UPDATE ot_native_group_turns SET state='finished',outcome=?,result_text=? WHERE id=?", outcome,resultText,turnId);
+      return {state:"finished",result:{outcome,...(resultText === null ? {} : {text:resultText})}};
+    });
+  });
+
+  app.post("/v1/ot/conversations/:id/native-rounds/:messageId/lines", {bodyLimit:32768}, async (req, reply) => {
+    const {ownerId} = ot.me(req);
+    const {id,messageId} = params(req);
+    const data = body(req);
+    assert(Object.keys(data).every(key => ["agent_ref","body","client_key","agent_owner_id","turn_id"].includes(key)) &&
+      ["agent_ref","body","client_key"].every(key => Object.hasOwn(data,key)), 400, "invalid_request", "Invalid native group line");
+    const agentRef = text(data.agent_ref, "agent_ref", {min:1,max:80});
+    const author = data.agent_owner_id === undefined ? ownerId : text(data.agent_owner_id, "agent_owner_id", {min:1,max:80});
+    const guest = author !== ownerId;
+    const turnId = data.turn_id;
+    assert(guest ? typeof turnId === "string" && nativeTurnId.test(turnId) : turnId === undefined,
+      400, "invalid_request", "Remote Bot lines require a native turn receipt");
+    const localText = text(data.body, "body", {min:1,max:BODY_MAX,multiline:true});
+    const key = text(data.client_key, "client_key", {min:1,max:80});
+    const clientKey = guest ? null : "native:" + createHash("sha256").update(key).digest("hex");
+    const result = ot.tx(() => {
+      const conv = memberOf(ot, id, ownerId);
+      const round = findNativeRound(conv, messageId, ownerId);
+      let output = localText;
+      let prior;
+      if (guest) {
+        const receipt = ot.get<NativeTurn>(`SELECT * FROM ot_native_group_turns WHERE id=? AND message_id=? AND owner_id=?
+          AND agent_ref=? AND state='finished' AND outcome='message'`, turnId, round.message_id, author, agentRef);
+        assert(receipt?.result_text, 404, "native_turn_not_found", "This remote Bot has no completed native reply");
+        output = receipt.result_text;
+        assert(activeNativeTurnSeat(receipt.id, conv.id), 404, "agent_not_found", "This Bot is no longer in the native group");
+        if (receipt.published_message_id) prior = ot.get("SELECT * FROM ot_messages WHERE id=? AND conversation_id=?", receipt.published_message_id, conv.id);
+      } else {
+        prior = ot.get("SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, author, clientKey);
+      }
+      if (prior) {
+        assert(prior.author_kind === "agent" && prior.agent_ref === agentRef && prior.reply_to === round.message_id && prior.body === output,
+          409, "native_line_conflict", "This native line key was already used");
+        return prior;
+      }
+      assert(round.state === "running", 409, "native_round_unavailable", "The native group round is no longer active");
+      const roster = conversationAgents(ot, conv.id);
+      requireNativeRound(conv, round, ownerId, roster);
+      const agent = roster.find(item => item.agent_ref === agentRef && item.owner_id === author);
+      assert(agent, 404, "agent_not_found", "This Bot is no longer in the native group");
+      const posted = insertMessage(ot, conv, {author,kind:"agent",agentRef,agentName:agent.name,
+        body:output,mentions:[],replyTo:round.message_id,clientKey});
+      if (guest) ot.run("UPDATE ot_native_group_turns SET published_message_id=? WHERE id=?", posted.id,turnId);
+      return posted;
+    });
+    return reply.status(201).send(messageView(ot, result, ownerId));
+  });
+
   app.post("/v1/ot/conversations/:id/agent-messages", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);

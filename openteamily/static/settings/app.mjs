@@ -265,10 +265,14 @@ export function pickConnection(items, toolkit) {
   return best;
 }
 
-export function composioRowState(row, configured, connection) {
+export function composioRowState(row, configured, connection, readState = 'ready') {
   if (!row || !row.toolkit) {
     return {state: 'unavailable', status: '未接通', button: '+ 连接', disabled: true, action: '',
             title: '未接通：Composio 没有这个应用，暂时不能连接。'};
+  }
+  if (readState !== 'ready') {
+    const status = readState === 'loading' ? '正在读取…' : '状态暂不可用';
+    return {state:readState, status, button:'+ 连接', disabled:true, action:'', title:status};
   }
   if (!configured) {
     return {state: 'unconfigured', status: '未配置 Composio', button: '配置密钥', disabled: false, action: 'focus-key',
@@ -296,14 +300,14 @@ export function composioRowState(row, configured, connection) {
           title: '通过你的 Composio 项目授权连接。'};
 }
 
-export function applyComposioRows(document, configured, items) {
+export function applyComposioRows(document, configured, items, readState = 'ready') {
   const list = document.getElementById('connectors-catalog');
   if (!list) return [];
   const applied = [];
   for (const node of list.querySelectorAll('[data-connector-id]')) {
     const row = {toolkit: node.getAttribute('data-composio-toolkit'), managed: node.getAttribute('data-composio-managed')};
     const connection = row.toolkit ? pickConnection(items, row.toolkit) : null;
-    const view = composioRowState(row, configured, connection);
+    const view = composioRowState(row, configured, connection, readState);
     const status = node.querySelector('.connector-status');
     const button = node.querySelector('button');
     if (status) {
@@ -323,7 +327,7 @@ export function applyComposioRows(document, configured, items) {
   const connectedCount = document.getElementById('connectors-connected-count');
   if (connectedCount) {
     connectedCount.textContent = applied.filter(row => row.state === 'connected').length + ' 个已连接';
-    connectedCount.hidden = false;
+    connectedCount.hidden = readState !== 'ready';
   }
   return applied;
 }
@@ -407,7 +411,7 @@ export function renderModelApi(document, form, data, failed = false) {
   const effective = data?.effective;
   const platform = effective?.source === 'platform';
   const account = effective?.source === 'account';
-  const state = platform ? 'platform' : account ? 'account' : (values || failed) ? 'unavailable' : 'loading';
+  const state = platform ? 'platform' : account ? 'account' : failed ? 'read-failed' : values ? 'unavailable' : 'loading';
   const source = platform ? 'platform-active' : account ? 'account-active' :
     failed ? 'load-error' : values ? 'none' : 'loading';
 
@@ -426,6 +430,8 @@ export function renderModelApi(document, form, data, failed = false) {
   document.getElementById('model-platform-ready').hidden = !platform;
   document.getElementById('model-key-state-detail').hidden = !values?.api_key_set;
   document.getElementById('restore-platform-model').hidden = !values?.api_key_set;
+  const retry = document.getElementById('retry-model-api');
+  if (retry) retry.hidden = !failed;
   const override = document.getElementById('model-api-override');
   override.hidden = !values;
   override.open = account;
@@ -597,6 +603,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
   const modelFields = modelForm && document.getElementById('model-api-fields');
+  const modelRetry = document.getElementById('retry-model-api');
   const imageForm = document.getElementById('image-api-form');
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
@@ -777,11 +784,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+  async function loadModelStatus(sequence, pending) {
+    const model = await pending;
+    if (sequence !== loadSequence) return false;
+    const values = model?.status === 200 && model.body?.model_api;
+    modelRevision = Number.isInteger(values?.revision) ? values.revision : null;
+    const loaded = modelRevision !== null;
+    renderModelApi(document, modelForm, loaded ? model.body : null, !loaded);
+    return loaded;
+  }
+
   async function load() {
     const sequence = ++loadSequence;
     prepareNotificationPrefs();
+    if (composioCard) {
+      composioItems = [];
+      renderComposio(null, 'loading');
+    }
     if (modelForm) {
       modelRevision = null;
+      if (modelRetry) modelRetry.disabled = false;
       renderModelApi(document, modelForm);
     }
     if (languageSave) {
@@ -827,13 +849,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     refreshAppearance();
     renderView();
     void renderNotificationPrefs(sequence, prefsRead);
-    if (modelRead) {
-      const model = await modelRead;
-      if (sequence !== loadSequence) return;
-      const values = model?.status === 200 && model.body?.model_api;
-      if (values && Number.isInteger(values.revision)) modelRevision = values.revision;
-      renderModelApi(document, modelForm, modelRevision === null ? null : model.body, modelRevision === null);
-    }
+    if (modelRead) await loadModelStatus(sequence, modelRead);
+    if (sequence !== loadSequence) return;
     await renderSkillSecrets();
     await syncComposio();
   }
@@ -896,7 +913,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200) {
-      if (language) form.elements.language.value = current.language;
+      const latest = readForm(form);
+      for (const [name, value] of Object.entries(selected)) {
+        if (latest[name] !== value) continue;
+        const control = form.elements[name];
+        if (control?.type === 'checkbox') {
+          control.checked = Boolean(current[name]);
+          if (control.getAttribute('role') === 'switch') control.setAttribute('aria-checked', String(control.checked));
+        } else if (control) control.value = current[name] ?? '';
+      }
+      refreshAppearance();
       show('error', uiText(document, 'settings.save.error'));
       return;
     }
@@ -1093,6 +1119,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
   if (modelForm) {
+    modelRetry?.addEventListener('click', async () => {
+      if (modelRetry.hidden || modelRetry.disabled) return;
+      const sequence = loadSequence;
+      const focused = document.activeElement === modelRetry;
+      modelRetry.disabled = true;
+      const loaded = await loadModelStatus(sequence, request('GET', '/v1/model-api').catch(() => null));
+      if (sequence !== loadSequence) return;
+      modelRetry.disabled = false;
+      if (focused && (document.activeElement === modelRetry || document.activeElement === document.body)) {
+        const target = loaded ? document.getElementById('model-api-override-title') : modelRetry;
+        target?.focus({preventScroll:true});
+      }
+    });
+
     async function saveModelApi(changes, success) {
       if (modelRevision === null || modelFields.disabled) return;
       const sequence = loadSequence;
@@ -1141,9 +1181,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   const composioCard = document.getElementById('composio-key-card');
+  const composioRetry = document.getElementById('composio-retry');
   let composioConfigured = false;
   let composioItems = [];
   let composioPoll = null;
+  let composioRead;
+  let composioReadState = 'loading';
 
   function composioNote(kind, text) {
     const node = document.getElementById('composio-key-message');
@@ -1163,47 +1206,78 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     focusComposioKey();
   });
 
-  function renderComposio(view) {
-    composioConfigured = Boolean(view && view.configured);
+  function renderComposio(view, readState, message = '') {
+    composioConfigured = view?.configured === true;
+    composioReadState = readState;
     const badge = document.getElementById('composio-key-state');
     const input = document.getElementById('composio-key-input');
+    const save = document.getElementById('composio-key-save');
     const remove = document.getElementById('composio-key-remove');
+    const status = document.getElementById('composio-read-message');
     if (badge) {
-      badge.textContent = composioConfigured ? '已保存 ' + (view.key_hint || '') : '未配置 Composio';
-      badge.setAttribute('data-state', composioConfigured ? 'configured' : 'unconfigured');
+      badge.textContent = view ? (composioConfigured ? '已保存 ' + (view.key_hint || '') : '未配置 Composio')
+        : readState === 'loading' ? '正在读取配置…' : '状态暂不可用';
+      badge.setAttribute('data-state', view ? (composioConfigured ? 'configured' : 'unconfigured') : readState);
     }
-    if (input) input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
+    if (input) {
+      input.disabled = !view;
+      input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
+    }
+    if (status) {
+      status.textContent = message;
+      status.dataset.kind = readState === 'error' ? 'error' : '';
+    }
+    if (save) save.disabled = !view;
     if (remove) remove.hidden = !composioConfigured;
-    if (keyJump) keyJump.hidden = composioConfigured;
-    applyComposioRows(document, composioConfigured, composioItems);
+    if (keyJump) keyJump.hidden = !view || composioConfigured;
+    if (composioRetry) composioRetry.hidden = readState !== 'error';
+    applyComposioRows(document, composioConfigured, composioItems, readState);
   }
 
-  async function syncComposio() {
-    if (!composioCard) return;
+  async function syncComposio({refresh = false} = {}) {
+    const sequence = loadSequence;
+    if (!composioCard || (!refresh && composioRead?.sequence === sequence)) return;
+    const read = composioRead = {sequence};
+    const active = () => composioRead === read && sequence === loadSequence;
+    let config;
+    composioItems = [];
+    renderComposio(null, 'loading');
     try {
       const view = await request('GET', '/v1/composio');
-      if (view.status !== 200) return;
-      composioItems = [];
-      if (view.body.composio.configured) {
-        const listed = await request('GET', '/v1/composio/connections');
-        if (listed.status === 200) {
-          composioItems = listed.body.items || [];
-          if (listed.body.sync === 'failed') composioNote('error', '暂时读不到 Composio 上的最新状态，显示的是本地记录。');
-        } else {
-          composioNote('error', composioMessage(listed.body.error, '无法读取连接状态。'));
-        }
+      if (!active()) return;
+      if (view.status !== 200 || typeof view.body?.composio?.configured !== 'boolean') {
+        renderComposio(null, 'error', '暂时无法读取 Composio 配置。');
+        return;
       }
-      renderComposio(view.body.composio);
+      config = view.body.composio;
+      let cached = '';
+      if (config.configured) {
+        const listed = await request('GET', '/v1/composio/connections');
+        if (!active()) return;
+        if (listed.status !== 200 || !Array.isArray(listed.body?.items)) {
+          renderComposio(config, 'error', '暂时无法读取应用连接状态。');
+          return;
+        }
+        composioItems = listed.body.items;
+        if (listed.body.sync === 'failed') cached = '暂时读不到 Composio 上的最新状态，显示的是本地记录。';
+      }
+      renderComposio(config, 'ready', cached);
+      if (cached && composioRetry) composioRetry.hidden = false;
       if (composioItems.some(item => item.state === 'connecting')) startComposioPoll();
-    } catch (error) {
-      composioNote('error', '无法读取 Composio 配置。');
+    } catch {
+      if (active()) renderComposio(config, 'error', config ? '暂时无法读取应用连接状态。' : '暂时无法读取 Composio 配置。');
+    } finally {
+      if (composioRead === read) composioRead = null;
     }
   }
+
+  composioRetry?.addEventListener('click', () => void syncComposio());
 
   function startComposioPoll() {
     if (composioPoll || typeof globalThis.setInterval !== 'function') return;
     let rounds = 0;
     composioPoll = globalThis.setInterval(async () => {
+      const sequence = loadSequence;
       rounds += 1;
       const pending = composioItems.filter(item => item.state === 'connecting');
       if (!pending.length || rounds > 100) {
@@ -1213,13 +1287,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       for (const item of pending) {
         const result = await request('GET', '/v1/composio/connections/' + item.id);
+        if (sequence !== loadSequence) return;
         if (result.status === 200) {
           composioItems = composioItems.map(old => old.id === item.id ? result.body.connection : old);
         } else if (result.status === 404) {
           composioItems = composioItems.filter(old => old.id !== item.id);
         }
       }
-      applyComposioRows(document, composioConfigured, composioItems);
+      applyComposioRows(document, composioConfigured, composioItems, composioReadState);
     }, 3000);
   }
 
@@ -1228,6 +1303,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composioForm.addEventListener('submit', async event => {
       event.preventDefault();
       const input = document.getElementById('composio-key-input');
+      if (input?.disabled) return;
       const value = input ? String(input.value || '').trim() : '';
       if (!value) {
         composioNote('error', '请先粘贴你的 Composio API key。');
@@ -1240,7 +1316,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       composioNote('ok', '已保存你的 Composio API key（原文不会再显示）。');
-      await syncComposio();
+      await syncComposio({refresh:true});
     });
   }
   const composioRemove = document.getElementById('composio-key-remove');
@@ -1252,7 +1328,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       composioNote('ok', '已移除 Composio API key。本地连接记录已清除，Composio 项目里的账号不会被删除。');
-      await syncComposio();
+      await syncComposio({refresh:true});
     });
   }
   const composioList = document.getElementById('connectors-catalog');
@@ -1275,11 +1351,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (result.status !== 201) {
           if (popup) popup.close();
           composioNote('error', composioMessage(result.body.error, '无法开始连接。'));
-          applyComposioRows(document, composioConfigured, composioItems);
+          applyComposioRows(document, composioConfigured, composioItems, composioReadState);
           return;
         }
         composioItems = composioItems.concat([result.body.connection]);
-        applyComposioRows(document, composioConfigured, composioItems);
+        applyComposioRows(document, composioConfigured, composioItems, composioReadState);
         composioNote('ok', '已打开 Composio 授权页。完成授权后这里会自动更新状态。');
         if (popup) {
           popup.opener = null;
@@ -1295,11 +1371,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const result = await request('POST', '/v1/composio/connections/' + id + '/disconnect', {});
         if (result.status !== 200 && result.status !== 404) {
           composioNote('error', composioMessage(result.body.error, '无法断开连接。'));
-          applyComposioRows(document, composioConfigured, composioItems);
+          applyComposioRows(document, composioConfigured, composioItems, composioReadState);
           return;
         }
         composioItems = composioItems.filter(item => item.id !== id);
-        applyComposioRows(document, composioConfigured, composioItems);
+        applyComposioRows(document, composioConfigured, composioItems, composioReadState);
         composioNote('ok', '已断开。');
       }
     });

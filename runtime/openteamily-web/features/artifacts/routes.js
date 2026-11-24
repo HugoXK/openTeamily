@@ -3,8 +3,8 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { digest, FeatureError, nowSeconds, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
-  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
-  load, mediaDigests, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
+  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, detailView, documentTree, duplicateArtifact, exportResult, HEX32, listShares, listing,
+  load, mediaDigests, moveDocument, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
   uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
@@ -47,7 +47,7 @@ function activity(req, workspaceId) {
 }
 
 const FILE_TYPES = new Set([
-  'document', 'website', 'image', 'video', 'audio', 'model3d',
+  'document', 'website', 'image', 'video', 'audio', 'model3d', 'file',
   'whiteboard', 'spreadsheet', 'slides', 'dashboard', 'messages',
 ])
 
@@ -99,9 +99,9 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     const raw = await req.json(4 * 1024 * 1024)
     if (raw?._multipart) {
       const upload = decodeUpload(raw)
-      const mime = undefined
       return createMedia(context, workspaceId, {
-        title: upload.fields.title, data: upload.data, filename: upload.filename, mime, key: req.headers.get('idempotency-key'),
+        title: upload.fields.title, data: upload.data, filename: upload.filename,
+        allowFile: upload.fields.allow_file === '1', key: req.headers.get('idempotency-key'),
       })
     }
     if (raw.duplicate_from !== undefined) {
@@ -109,7 +109,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
       const source = requireBodyKeys(duplicate_from,['artifact_id','revision'])
       return duplicateArtifact(context,workspaceId,{...source,title},req.headers.get('idempotency-key'))
     }
-    const body = requireBodyKeys(raw, ['title', 'body', 'kind', 'board', 'slides', 'dashboard', 'spreadsheet', 'source'])
+    const body = requireBodyKeys(raw, ['title', 'body', 'kind', 'board', 'slides', 'dashboard', 'spreadsheet', 'source', 'parent_id'])
     return createArtifact(context, workspaceId, body, req.headers.get('idempotency-key'))
   }
   if (!artifactId) refuse(400, 'invalid', 'Invalid artifact request')
@@ -169,7 +169,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to, req.headers.get('idempotency-key'))
   }
   if (action) refuse(400, 'invalid', 'Invalid artifact request')
-  if (req.method === 'GET' && !req.queryString) return { body: { artifact: view(row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: { artifact: detailView(req.store, row) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
   if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to change this document')
   const limit = publicKind(row) === 'spreadsheet' ? 1024 * 1024 : 70000
@@ -403,6 +403,17 @@ export async function shares(req, workspaceId, artifactId, shareId, action) {
 
 const activeDrafts = new WeakSet()
 const drafts = {
+  document: {
+    name: '文档',
+    instructions: [
+      'Draft an editable Markdown document from the supplied description. Return one JSON object and no other output.',
+      'Use {"title":"…","markdown":"…"}. Write in the language of the description.',
+      'Keep the title at most 80 characters and the Markdown body at most 8,000 characters.',
+      'Use headings, lists and tables where they make the document clearer. Do not include raw HTML.',
+      'Do not invent facts. Use clearly marked placeholders if required information is missing.',
+    ],
+    normalize(value) { return validBody(value?.markdown) && value.markdown.trim() ? value.markdown : null },
+  },
   spreadsheet: {
     name: '表格',
     instructions: [
@@ -501,11 +512,28 @@ async function artifactDraft(req, workspaceId, kind) {
   }
 }
 
+const documentId = value => typeof value === 'string' && HEX32.test(value)
+const parentId = value => value === null || documentId(value)
+
+async function documentTreeRequest(req, workspace) {
+  if (!req.queryString) {
+    if (req.method === 'GET') return {body: {items: documentTree(req.store, workspace)}}
+    if (req.method === 'POST') {
+      const body = requireBodyKeys(await req.json(2048), ['artifact_id', 'parent_id', 'expected_parent_id'])
+      if (documentId(body.artifact_id) && parentId(body.parent_id) && parentId(body.expected_parent_id)) {
+        return {body: moveDocument(req.store, workspace, body.artifact_id, body.parent_id, body.expected_parent_id)}
+      }
+    }
+  }
+  refuse(400, 'invalid', '无效的文档树请求。')
+}
+
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/document-tree$/, handle: documentTreeRequest },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
-  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(document|spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/(?:revoke|link))?)?$/, handle: shares },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/studio-copy$/, handle: copyToStudio },
