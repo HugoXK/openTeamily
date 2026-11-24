@@ -268,13 +268,13 @@ export function createAgents({ db, host }) {
     return binding ? readPrivateProfile() : null
   }
 
-  function observeAgent(row, bot, rosterAttached) {
+  function observeAgent(row, bot, rosterAttached, rt) {
     if (bot) {
-      // The Personal Agent's native Chief is the user's main assistant; its
-      // instructions and hidden flag are not this agent's saved data. Other
-      // agents keep reflecting native edits.
-      const chiefMapping = row.id && row.workspace_id && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?',
-        row.id, row.workspace_id)
+      // Only the Personal Agent mapped to the native Chief is read without the
+      // Chief's instructions and hidden flag; every other agent keeps reflecting
+      // native edits exactly as before.
+      const chiefMapping = rt?.isMain?.(bot.id) === true && row.id && row.workspace_id
+        && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?', row.id, row.workspace_id)
       return {...row,
         name: row.native_name && bot.name !== row.native_name ? bot.name : row.name,
         ...(chiefMapping ? {} : {instructions: bot.instructions || '', archived: Number(Boolean(bot.hidden))}),
@@ -321,7 +321,7 @@ export function createAgents({ db, host }) {
         }
       }
       const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped?.get(row.id)
-      yield observeAgent(row, bot, rosterAttached)
+      yield observeAgent(row, bot, rosterAttached, rt)
     }
   }
 
@@ -753,7 +753,7 @@ export function createAgents({ db, host }) {
         FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id WHERE a.workspace_id=?`, workspaceId)
       const items = []
       for (const row of rows) {
-        const observed = observeAgent(row, rt.botOf(row.native_bot_id), true)
+        const observed = observeAgent(row, rt.botOf(row.native_bot_id), true, rt)
         if (!names.has(row.name) && !names.has(observed.name)) continue
         const agent = await native.ensure(row)
         if (names.has(agent.name)) items.push({
@@ -940,7 +940,7 @@ export function createAgents({ db, host }) {
       const conversations = rows.map(row => {
         if (!items.has(row.agent_id)) {
           const agent = observeAgent({id:row.agent_id,workspace_id:workspaceId,name:row.agent_name,archived:row.agent_archived,
-            native_bot_id:row.native_bot_id,native_name:row.native_name}, row.native_bot_id && rt?.botOf?.(row.native_bot_id), attached)
+            native_bot_id:row.native_bot_id,native_name:row.native_name}, row.native_bot_id && rt?.botOf?.(row.native_bot_id), attached, rt)
           items.set(row.agent_id,{id:row.agent_id,workspace_id:workspaceId,name:agent.name,
             archived:agent.archived ? 1 : 0,native_deleted:!!agent.native_deleted,served_by:'ds-bot'})
         }
@@ -1086,7 +1086,7 @@ export function createAgents({ db, host }) {
       const runtime = host.currentRuntime?.()
       const rt = runtime?.rt
       const observed = mapped ? observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
-        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
+        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function', rt) : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
       if (snapshot && mapped && historyProjection.requiresEarlierRecovery(runtime,mapped,row.id)) {
         fail('snapshot-unavailable', 'Open this conversation to load its earlier history', 409)
