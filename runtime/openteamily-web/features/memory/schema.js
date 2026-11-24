@@ -115,6 +115,8 @@ CREATE INDEX memory_pins_by_user ON memory_page_pins(user_id, page_id);
 export const IMPORT_TABLES = {
   ot_users: ['id', 'username', 'is_owner'],
   memory_pages: ['id', 'workspace_id', 'title', 'title_hash', 'body', 'revision', 'created', 'updated', 'created_by', 'updated_by', 'key_hash', 'request_hash'],
+  memory_page_reads: ['page_id', 'user_id', 'revision'],
+  memory_page_pins: ['page_id', 'user_id'],
   memory_page_versions: ['page_id', 'workspace_id', 'revision', 'title', 'body', 'created', 'created_by'],
   memory_page_topics: ['page_id', 'workspace_id', 'name', 'name_hash'],
   memory_links: ['id', 'workspace_id', 'left_id', 'right_id', 'created', 'created_by', 'key_hash', 'request_hash'],
