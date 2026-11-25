@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
  created_by TEXT NOT NULL REFERENCES users(id),
  PRIMARY KEY (artifact_id, revision));
 CREATE INDEX IF NOT EXISTS artifact_version_item ON artifact_versions(artifact_id, revision);
+CREATE TABLE IF NOT EXISTS artifact_document_parents (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ parent_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ CHECK (artifact_id <> parent_id));
+CREATE INDEX IF NOT EXISTS artifact_document_parent ON artifact_document_parents(parent_id);
 '''
 
 KINDS = ('document', 'website', 'whiteboard', 'media')
